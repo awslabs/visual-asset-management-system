@@ -21,6 +21,7 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import { IsaacLabTrainingFunctions } from "../lambdaBuilder/isaacLabTrainingFunctions";
 import * as Config from "../../../../../../config/config";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import * as path from "path";
@@ -244,6 +245,11 @@ export class IsaacLabTrainingConstruct extends Construct {
         s3AssetBuckets.getS3AssetBucketRecords().forEach((record) => {
             record.bucket.grantReadWrite(jobRole);
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(jobRole);
 
         // Grant VAMS auxiliary bucket read/write access (for intermediate storage if needed)
         props.storageResources.s3.assetAuxiliaryBucket.grantReadWrite(jobRole);

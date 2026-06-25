@@ -64,6 +64,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CDK** Partition-aware service endpoint table (`infra/lib/helper/const.ts`) regenerated from the upstream botocore endpoints file. Added the `aws-eusc` (AWS European Sovereign Cloud) partition across existing services, filled in services added to the `aws`, `aws-cn`, `aws-us-gov`, `aws-iso`, `aws-iso-b`, `aws-iso-e`, and `aws-iso-f` partitions over time, and added newly published services. The generator (`infra/gen/genEndpoints.ts`) now performs a non-destructive merge that preserves existing entries and hand-tuned values.
 -   **Tooling** The OpenSearch reindex utility (`infra/deploymentDataMigration/tools/reindex_utility.py`) now supports a `--mode` flag with `lambda` (default, unchanged behavior — invokes the deployed reindexer Lambda) and `direct` (runs the backend reindexer handler locally with no execution-time limit). Direct mode targets large asset repositories where the Lambda would exceed its 15-minute maximum and leave records unindexed.
 -   **CDK** Enabling a feature that requires a VPC while `app.useGlobalVpc.enabled` is `false` now fails configuration validation with an explicit error that lists the offending features, instead of silently auto-enabling the VPC. This removes a confusing implicit topology change where the VPC turned on without the operator setting it.
+-   **CDK** Updated external S3 deployment configuration logic and documentation to better support cross-AWS account S3 buckets. This includes new additional CDK config fields to define accountId, region, and optionalKms keys for those external S3 buckets.
 
 ### Bug Fixes
 
@@ -89,6 +90,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Fixed bug in the OpenSearch reindexer (`crReindexer`) where files that did not yet have `assetid`/`databaseid` S3 object metadata (e.g. files never processed by the `sqsBucketSync` bucket-sync flow) were silently skipped during file reindexing, this includes syncing new buckets added to VAMS. Files whose key does not resolve to a valid, active asset location for the bucket are ignored.
 -   Standardize system user across the backend to use "SYSTEM" (uppercase), previously was a combination of lowercase and uppercase variations.
 -   The S3 file versions in the file versions API call now properly show up for past archived file versions, previously they wouldn't show up anymore if looking at a file that was unarchived
+-   **CDK** Fixed configuration check bug that didn't allow you to deploy without a ALB or Cloudfront (despite the error saying you can)
 
 ### Chores
 

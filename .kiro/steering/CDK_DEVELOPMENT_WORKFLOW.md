@@ -1017,6 +1017,12 @@ grantReadPermissionsToAllAssetBuckets(lambdaFunction);
 // Grant read/write permissions to all asset buckets
 grantReadWritePermissionsToAllAssetBuckets(lambdaFunction);
 
+// Grant access to external asset bucket customer managed KMS keys (no-op when
+// no external bucket declares a bucketKmsKeyArn). The grant*AssetBuckets helpers
+// above already call this; call it directly for locally-built container/Batch/
+// ECS/EKS/Step Functions roles that read or write asset buckets.
+grantExternalAssetBucketKmsKeys(roleOrFunction);
+
 // Add KMS permissions for encryption/decryption
 kmsKeyLambdaPermissionAddToResourcePolicy(lambdaFunction, storageResources.encryption.kmsKey);
 

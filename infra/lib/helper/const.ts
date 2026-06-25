@@ -725,7 +725,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:access-analyzer:{region}:{account-id}:{resource-id}",
-            principal: "access-analyzer.amazonaws.eu",
+            principal: "access-analyzer.amazonaws.com",
             hostname: "access-analyzer.{region}.amazonaws.eu",
             fipsHostname: "access-analyzer-fips.{region}.amazonaws.eu",
         },
@@ -789,7 +789,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:acm:{region}:{account-id}:{resource-id}",
-            principal: "acm.amazonaws.eu",
+            principal: "acm.amazonaws.com",
             hostname: "acm.{region}.amazonaws.eu",
             fipsHostname: "acm-fips.{region}.amazonaws.eu",
         },
@@ -833,7 +833,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:acm-pca:{region}:{account-id}:{resource-id}",
-            principal: "acm-pca.amazonaws.eu",
+            principal: "acm-pca.amazonaws.com",
             hostname: "acm-pca.{region}.amazonaws.eu",
             fipsHostname: "acm-pca-fips.{region}.amazonaws.eu",
         },
@@ -865,7 +865,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:agreement-marketplace:{region}:{account-id}:{resource-id}",
-            principal: "agreement-marketplace.amazonaws.eu",
+            principal: "agreement-marketplace.amazonaws.com",
             hostname: "agreement-marketplace.{region}.amazonaws.eu",
             fipsHostname: "agreement-marketplace-fips.{region}.amazonaws.eu",
         },
@@ -981,7 +981,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:api.ecr:{region}:{account-id}:{resource-id}",
-            principal: "api.ecr.amazonaws.eu",
+            principal: "api.ecr.amazonaws.com",
             hostname: "api.ecr.{region}.amazonaws.eu",
             fipsHostname: "api.ecr-fips.{region}.amazonaws.eu",
         },
@@ -1073,7 +1073,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:api.pricing:{region}:{account-id}:{resource-id}",
-            principal: "api.pricing.amazonaws.eu",
+            principal: "api.pricing.amazonaws.com",
             hostname: "api.pricing.{region}.amazonaws.eu",
             fipsHostname: "api.pricing-fips.{region}.amazonaws.eu",
         },
@@ -1123,7 +1123,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:api.sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "api.sagemaker.amazonaws.eu",
+            principal: "api.sagemaker.amazonaws.com",
             hostname: "api.sagemaker.{region}.amazonaws.eu",
             fipsHostname: "api.sagemaker-fips.{region}.amazonaws.eu",
         },
@@ -1187,7 +1187,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:apigateway:{region}:{account-id}:{resource-id}",
-            principal: "apigateway.amazonaws.eu",
+            principal: "apigateway.amazonaws.com",
             hostname: "apigateway.{region}.amazonaws.eu",
             fipsHostname: "apigateway-fips.{region}.amazonaws.eu",
         },
@@ -1245,7 +1245,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:appconfig:{region}:{account-id}:{resource-id}",
-            principal: "appconfig.amazonaws.eu",
+            principal: "appconfig.amazonaws.com",
             hostname: "appconfig.{region}.amazonaws.eu",
             fipsHostname: "appconfig-fips.{region}.amazonaws.eu",
         },
@@ -1295,7 +1295,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:appconfigdata:{region}:{account-id}:{resource-id}",
-            principal: "appconfigdata.amazonaws.eu",
+            principal: "appconfigdata.amazonaws.com",
             hostname: "appconfigdata.{region}.amazonaws.eu",
             fipsHostname: "appconfigdata-fips.{region}.amazonaws.eu",
         },
@@ -1353,7 +1353,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:application-autoscaling:{region}:{account-id}:{resource-id}",
-            principal: "application-autoscaling.amazonaws.eu",
+            principal: "application-autoscaling.amazonaws.com",
             hostname: "application-autoscaling.{region}.amazonaws.eu",
             fipsHostname: "application-autoscaling-fips.{region}.amazonaws.eu",
         },
@@ -1493,7 +1493,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:arc-zonal-shift:{region}:{account-id}:{resource-id}",
-            principal: "arc-zonal-shift.amazonaws.eu",
+            principal: "arc-zonal-shift.amazonaws.com",
             hostname: "arc-zonal-shift.{region}.amazonaws.eu",
             fipsHostname: "arc-zonal-shift-fips.{region}.amazonaws.eu",
         },
@@ -1543,7 +1543,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:athena:{region}:{account-id}:{resource-id}",
-            principal: "athena.amazonaws.eu",
+            principal: "athena.amazonaws.com",
             hostname: "athena.{region}.amazonaws.eu",
             fipsHostname: "athena-fips.{region}.amazonaws.eu",
         },
@@ -1601,7 +1601,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:autoscaling:{region}:{account-id}:{resource-id}",
-            principal: "autoscaling.amazonaws.eu",
+            principal: "autoscaling.amazonaws.com",
             hostname: "autoscaling.{region}.amazonaws.eu",
             fipsHostname: "autoscaling-fips.{region}.amazonaws.eu",
         },
@@ -1665,7 +1665,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:backup:{region}:{account-id}:{resource-id}",
-            principal: "backup.amazonaws.eu",
+            principal: "backup.amazonaws.com",
             hostname: "backup.{region}.amazonaws.eu",
             fipsHostname: "backup-fips.{region}.amazonaws.eu",
         },
@@ -1749,7 +1749,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:batch:{region}:{account-id}:{resource-id}",
-            principal: "batch.amazonaws.eu",
+            principal: "batch.amazonaws.com",
             hostname: "batch.{region}.amazonaws.eu",
             fipsHostname: "batch-fips.{region}.amazonaws.eu",
         },
@@ -1787,7 +1787,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:bedrock:{region}:{account-id}:{resource-id}",
-            principal: "bedrock.amazonaws.eu",
+            principal: "bedrock.amazonaws.com",
             hostname: "bedrock.{region}.amazonaws.eu",
             fipsHostname: "bedrock-fips.{region}.amazonaws.eu",
         },
@@ -1983,7 +1983,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:cloudcontrolapi:{region}:{account-id}:{resource-id}",
-            principal: "cloudcontrolapi.amazonaws.eu",
+            principal: "cloudcontrolapi.amazonaws.com",
             hostname: "cloudcontrolapi.{region}.amazonaws.eu",
             fipsHostname: "cloudcontrolapi-fips.{region}.amazonaws.eu",
         },
@@ -2047,7 +2047,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:cloudformation:{region}:{account-id}:{resource-id}",
-            principal: "cloudformation.amazonaws.eu",
+            principal: "cloudformation.amazonaws.com",
             hostname: "cloudformation.{region}.amazonaws.eu",
             fipsHostname: "cloudformation-fips.{region}.amazonaws.eu",
         },
@@ -2147,7 +2147,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:cloudtrail:{region}:{account-id}:{resource-id}",
-            principal: "cloudtrail.amazonaws.eu",
+            principal: "cloudtrail.amazonaws.com",
             hostname: "cloudtrail.{region}.amazonaws.eu",
             fipsHostname: "cloudtrail-fips.{region}.amazonaws.eu",
         },
@@ -2291,7 +2291,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:codedeploy:{region}:{account-id}:{resource-id}",
-            principal: "codedeploy.amazonaws.eu",
+            principal: "codedeploy.amazonaws.com",
             hostname: "codedeploy.{region}.amazonaws.eu",
             fipsHostname: "codedeploy-fips.{region}.amazonaws.eu",
         },
@@ -2389,7 +2389,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:cognito-identity:{region}:{account-id}:{resource-id}",
-            principal: "cognito-identity.amazonaws.eu",
+            principal: "cognito-identity.amazonaws.com",
             hostname: "cognito-identity.{region}.amazonaws.eu",
             fipsHostname: "cognito-identity-fips.{region}.amazonaws.eu",
         },
@@ -2409,7 +2409,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:cognito-idp:{region}:{account-id}:{resource-id}",
-            principal: "cognito-idp.amazonaws.eu",
+            principal: "cognito-idp.amazonaws.com",
             hostname: "cognito-idp.{region}.amazonaws.eu",
             fipsHostname: "cognito-idp-fips.{region}.amazonaws.eu",
         },
@@ -2495,7 +2495,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:compute-optimizer:{region}:{account-id}:{resource-id}",
-            principal: "compute-optimizer.amazonaws.eu",
+            principal: "compute-optimizer.amazonaws.com",
             hostname: "compute-optimizer.{region}.amazonaws.eu",
             fipsHostname: "compute-optimizer-fips.{region}.amazonaws.eu",
         },
@@ -2545,7 +2545,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:config:{region}:{account-id}:{resource-id}",
-            principal: "config.amazonaws.eu",
+            principal: "config.amazonaws.com",
             hostname: "config.{region}.amazonaws.eu",
             fipsHostname: "config-fips.{region}.amazonaws.eu",
         },
@@ -2595,7 +2595,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:controltower:{region}:{account-id}:{resource-id}",
-            principal: "controltower.amazonaws.eu",
+            principal: "controltower.amazonaws.com",
             hostname: "controltower.{region}.amazonaws.eu",
             fipsHostname: "controltower-fips.{region}.amazonaws.eu",
         },
@@ -2621,7 +2621,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:cost-optimization-hub:{region}:{account-id}:{resource-id}",
-            principal: "cost-optimization-hub.amazonaws.eu",
+            principal: "cost-optimization-hub.amazonaws.com",
             hostname: "cost-optimization-hub.{region}.amazonaws.eu",
             fipsHostname: "cost-optimization-hub-fips.{region}.amazonaws.eu",
         },
@@ -2783,7 +2783,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:datasync:{region}:{account-id}:{resource-id}",
-            principal: "datasync.amazonaws.eu",
+            principal: "datasync.amazonaws.com",
             hostname: "datasync.{region}.amazonaws.eu",
             fipsHostname: "datasync-fips.{region}.amazonaws.eu",
         },
@@ -2809,7 +2809,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:datazone:{region}:{account-id}:{resource-id}",
-            principal: "datazone.amazonaws.eu",
+            principal: "datazone.amazonaws.com",
             hostname: "datazone.{region}.amazonaws.eu",
             fipsHostname: "datazone-fips.{region}.amazonaws.eu",
         },
@@ -2889,7 +2889,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:directconnect:{region}:{account-id}:{resource-id}",
-            principal: "directconnect.amazonaws.eu",
+            principal: "directconnect.amazonaws.com",
             hostname: "directconnect.{region}.amazonaws.eu",
             fipsHostname: "directconnect-fips.{region}.amazonaws.eu",
         },
@@ -2947,7 +2947,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:dlm:{region}:{account-id}:{resource-id}",
-            principal: "dlm.amazonaws.eu",
+            principal: "dlm.amazonaws.com",
             hostname: "dlm.{region}.amazonaws.eu",
             fipsHostname: "dlm-fips.{region}.amazonaws.eu",
         },
@@ -2997,7 +2997,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:dms:{region}:{account-id}:{resource-id}",
-            principal: "dms.amazonaws.eu",
+            principal: "dms.amazonaws.com",
             hostname: "dms.{region}.amazonaws.eu",
             fipsHostname: "dms-fips.{region}.amazonaws.eu",
         },
@@ -3037,7 +3037,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:drs:{region}:{account-id}:{resource-id}",
-            principal: "drs.amazonaws.eu",
+            principal: "drs.amazonaws.com",
             hostname: "drs.{region}.amazonaws.eu",
             fipsHostname: "drs-fips.{region}.amazonaws.eu",
         },
@@ -3087,7 +3087,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ds:{region}:{account-id}:{resource-id}",
-            principal: "ds.amazonaws.eu",
+            principal: "ds.amazonaws.com",
             hostname: "ds.{region}.amazonaws.eu",
             fipsHostname: "ds-fips.{region}.amazonaws.eu",
         },
@@ -3137,7 +3137,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:dynamodb:{region}:{account-id}:{resource-id}",
-            principal: "dynamodb.amazonaws.eu",
+            principal: "dynamodb.amazonaws.com",
             hostname: "dynamodb.{region}.amazonaws.eu",
             fipsHostname: "dynamodb-fips.{region}.amazonaws.eu",
         },
@@ -3187,7 +3187,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ebs:{region}:{account-id}:{resource-id}",
-            principal: "ebs.amazonaws.eu",
+            principal: "ebs.amazonaws.com",
             hostname: "ebs.{region}.amazonaws.eu",
             fipsHostname: "ebs-fips.{region}.amazonaws.eu",
         },
@@ -3237,7 +3237,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ec2:{region}:{account-id}:{resource-id}",
-            principal: "ec2.amazonaws.eu",
+            principal: "ec2.amazonaws.com",
             hostname: "ec2.{region}.amazonaws.eu",
             fipsHostname: "ec2-fips.{region}.amazonaws.eu",
         },
@@ -3287,7 +3287,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ecr-dkr:{region}:{account-id}:{resource-id}",
-            principal: "ecr-dkr.amazonaws.eu",
+            principal: "ecr-dkr.amazonaws.com",
             hostname: "ecr-dkr.{region}.amazonaws.eu",
             fipsHostname: "ecr-dkr-fips.{region}.amazonaws.eu",
         },
@@ -3337,7 +3337,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ecs:{region}:{account-id}:{resource-id}",
-            principal: "ecs.amazonaws.eu",
+            principal: "ecs.amazonaws.com",
             hostname: "ecs.{region}.amazonaws.eu",
             fipsHostname: "ecs-fips.{region}.amazonaws.eu",
         },
@@ -3387,7 +3387,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ecs-tasks:{region}:{account-id}:{resource-id}",
-            principal: "ecs-tasks.amazonaws.eu",
+            principal: "ecs-tasks.amazonaws.com",
             hostname: "ecs-tasks.{region}.amazonaws.eu",
             fipsHostname: "ecs-tasks-fips.{region}.amazonaws.eu",
         },
@@ -3445,7 +3445,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:eks:{region}:{account-id}:{resource-id}",
-            principal: "eks.amazonaws.eu",
+            principal: "eks.amazonaws.com",
             hostname: "eks.{region}.amazonaws.eu",
             fipsHostname: "eks-fips.{region}.amazonaws.eu",
         },
@@ -3471,7 +3471,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:eks-auth:{region}:{account-id}:{resource-id}",
-            principal: "eks-auth.amazonaws.eu",
+            principal: "eks-auth.amazonaws.com",
             hostname: "eks-auth.{region}.amazonaws.eu",
             fipsHostname: "eks-auth-fips.{region}.amazonaws.eu",
         },
@@ -3521,7 +3521,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:elasticache:{region}:{account-id}:{resource-id}",
-            principal: "elasticache.amazonaws.eu",
+            principal: "elasticache.amazonaws.com",
             hostname: "elasticache.{region}.amazonaws.eu",
             fipsHostname: "elasticache-fips.{region}.amazonaws.eu",
         },
@@ -3591,7 +3591,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:elasticfilesystem:{region}:{account-id}:{resource-id}",
-            principal: "elasticfilesystem.amazonaws.eu",
+            principal: "elasticfilesystem.amazonaws.com",
             hostname: "elasticfilesystem.{region}.amazonaws.eu",
             fipsHostname: "elasticfilesystem-fips.{region}.amazonaws.eu",
         },
@@ -3641,7 +3641,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:elasticloadbalancing:{region}:{account-id}:{resource-id}",
-            principal: "elasticloadbalancing.amazonaws.eu",
+            principal: "elasticloadbalancing.amazonaws.com",
             hostname: "elasticloadbalancing.{region}.amazonaws.eu",
             fipsHostname: "elasticloadbalancing-fips.{region}.amazonaws.eu",
         },
@@ -3691,7 +3691,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:elasticmapreduce:{region}:{account-id}:{resource-id}",
-            principal: "elasticmapreduce.amazonaws.eu",
+            principal: "elasticmapreduce.amazonaws.com",
             hostname: "elasticmapreduce.{region}.amazonaws.eu",
             fipsHostname: "elasticmapreduce-fips.{region}.amazonaws.eu",
         },
@@ -3719,7 +3719,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:email:{region}:{account-id}:{resource-id}",
-            principal: "email.amazonaws.eu",
+            principal: "email.amazonaws.com",
             hostname: "email.{region}.amazonaws.eu",
             fipsHostname: "email-fips.{region}.amazonaws.eu",
         },
@@ -3785,7 +3785,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:entitlement.marketplace:{region}:{account-id}:{resource-id}",
-            principal: "entitlement.marketplace.amazonaws.eu",
+            principal: "entitlement.marketplace.amazonaws.com",
             hostname: "entitlement.marketplace.{region}.amazonaws.eu",
             fipsHostname: "entitlement.marketplace-fips.{region}.amazonaws.eu",
         },
@@ -3835,7 +3835,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:es:{region}:{account-id}:{resource-id}",
-            principal: "opensearchservice.amazonaws.eu",
+            principal: "opensearchservice.amazonaws.com",
             hostname: "opensearchservice.{region}.amazonaws.eu",
             fipsHostname: "opensearchservice-fips.{region}.amazonaws.eu",
         },
@@ -3885,7 +3885,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:events:{region}:{account-id}:{resource-id}",
-            principal: "events.amazonaws.eu",
+            principal: "events.amazonaws.com",
             hostname: "events.{region}.amazonaws.eu",
             fipsHostname: "events-fips.{region}.amazonaws.eu",
         },
@@ -3943,7 +3943,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:execute-api:{region}:{account-id}:{resource-id}",
-            principal: "execute-api.amazonaws.eu",
+            principal: "execute-api.amazonaws.com",
             hostname: "execute-api.{region}.amazonaws.eu",
             fipsHostname: "execute-api-fips.{region}.amazonaws.eu",
         },
@@ -4009,7 +4009,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:firehose:{region}:{account-id}:{resource-id}",
-            principal: "firehose.amazonaws.eu",
+            principal: "firehose.amazonaws.com",
             hostname: "firehose.{region}.amazonaws.eu",
             fipsHostname: "firehose-fips.{region}.amazonaws.eu",
         },
@@ -4097,7 +4097,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:fsx:{region}:{account-id}:{resource-id}",
-            principal: "fsx.amazonaws.eu",
+            principal: "fsx.amazonaws.com",
             hostname: "fsx.{region}.amazonaws.eu",
             fipsHostname: "fsx-fips.{region}.amazonaws.eu",
         },
@@ -4137,7 +4137,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:gameliftstreams:{region}:{account-id}:{resource-id}",
-            principal: "gameliftstreams.amazonaws.eu",
+            principal: "gameliftstreams.amazonaws.com",
             hostname: "gameliftstreams.{region}.amazonaws.eu",
             fipsHostname: "gameliftstreams-fips.{region}.amazonaws.eu",
         },
@@ -4249,7 +4249,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:glue:{region}:{account-id}:{resource-id}",
-            principal: "glue.amazonaws.eu",
+            principal: "glue.amazonaws.com",
             hostname: "glue.{region}.amazonaws.eu",
             fipsHostname: "glue-fips.{region}.amazonaws.eu",
         },
@@ -4335,7 +4335,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:guardduty:{region}:{account-id}:{resource-id}",
-            principal: "guardduty.amazonaws.eu",
+            principal: "guardduty.amazonaws.com",
             hostname: "guardduty.{region}.amazonaws.eu",
             fipsHostname: "guardduty-fips.{region}.amazonaws.eu",
         },
@@ -4373,7 +4373,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:health:{region}:{account-id}:{resource-id}",
-            principal: "health.amazonaws.eu",
+            principal: "health.amazonaws.com",
             hostname: "health.{region}.amazonaws.eu",
             fipsHostname: "health-fips.{region}.amazonaws.eu",
         },
@@ -4467,7 +4467,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:identitystore:{region}:{account-id}:{resource-id}",
-            principal: "identitystore.amazonaws.eu",
+            principal: "identitystore.amazonaws.com",
             hostname: "identitystore.{region}.amazonaws.eu",
             fipsHostname: "identitystore-fips.{region}.amazonaws.eu",
         },
@@ -4549,7 +4549,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:internetmonitor:{region}:{account-id}:{resource-id}",
-            principal: "internetmonitor.amazonaws.eu",
+            principal: "internetmonitor.amazonaws.com",
             hostname: "internetmonitor.{region}.amazonaws.eu",
             fipsHostname: "internetmonitor-fips.{region}.amazonaws.eu",
         },
@@ -4765,7 +4765,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:kafka:{region}:{account-id}:{resource-id}",
-            principal: "kafka.amazonaws.eu",
+            principal: "kafka.amazonaws.com",
             hostname: "kafka.{region}.amazonaws.eu",
             fipsHostname: "kafka-fips.{region}.amazonaws.eu",
         },
@@ -4825,7 +4825,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:kendra-ranking:{region}:{account-id}:{resource-id}",
-            principal: "kendra-ranking.amazonaws.eu",
+            principal: "kendra-ranking.amazonaws.com",
             hostname: "kendra-ranking.{region}.amazonaws.eu",
             fipsHostname: "kendra-ranking-fips.{region}.amazonaws.eu",
         },
@@ -4875,7 +4875,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:kinesis:{region}:{account-id}:{resource-id}",
-            principal: "kinesis.amazonaws.eu",
+            principal: "kinesis.amazonaws.com",
             hostname: "kinesis.{region}.amazonaws.eu",
             fipsHostname: "kinesis-fips.{region}.amazonaws.eu",
         },
@@ -4913,7 +4913,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:kinesisanalytics:{region}:{account-id}:{resource-id}",
-            principal: "kinesisanalytics.amazonaws.eu",
+            principal: "kinesisanalytics.amazonaws.com",
             hostname: "kinesisanalytics.{region}.amazonaws.eu",
             fipsHostname: "kinesisanalytics-fips.{region}.amazonaws.eu",
         },
@@ -4989,7 +4989,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:kms:{region}:{account-id}:{resource-id}",
-            principal: "kms.amazonaws.eu",
+            principal: "kms.amazonaws.com",
             hostname: "kms.{region}.amazonaws.eu",
             fipsHostname: "kms-fips.{region}.amazonaws.eu",
         },
@@ -5039,7 +5039,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:lakeformation:{region}:{account-id}:{resource-id}",
-            principal: "lakeformation.amazonaws.eu",
+            principal: "lakeformation.amazonaws.com",
             hostname: "lakeformation.{region}.amazonaws.eu",
             fipsHostname: "lakeformation-fips.{region}.amazonaws.eu",
         },
@@ -5089,7 +5089,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:lambda:{region}:{account-id}:{resource-id}",
-            principal: "lambda.amazonaws.eu",
+            principal: "lambda.amazonaws.com",
             hostname: "lambda.{region}.amazonaws.eu",
             fipsHostname: "lambda-fips.{region}.amazonaws.eu",
         },
@@ -5139,7 +5139,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:license-manager:{region}:{account-id}:{resource-id}",
-            principal: "license-manager.amazonaws.eu",
+            principal: "license-manager.amazonaws.com",
             hostname: "license-manager.{region}.amazonaws.eu",
             fipsHostname: "license-manager-fips.{region}.amazonaws.eu",
         },
@@ -5231,7 +5231,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:logs:{region}:{account-id}:{resource-id}",
-            principal: "logs.amazonaws.eu",
+            principal: "logs.amazonaws.com",
             hostname: "logs.{region}.amazonaws.eu",
             fipsHostname: "logs-fips.{region}.amazonaws.eu",
         },
@@ -5497,7 +5497,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:metering.marketplace:{region}:{account-id}:{resource-id}",
-            principal: "metering.marketplace.amazonaws.eu",
+            principal: "metering.marketplace.amazonaws.com",
             hostname: "metering.marketplace.{region}.amazonaws.eu",
             fipsHostname: "metering.marketplace-fips.{region}.amazonaws.eu",
         },
@@ -5547,7 +5547,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:metrics.sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "metrics.sagemaker.amazonaws.eu",
+            principal: "metrics.sagemaker.amazonaws.com",
             hostname: "metrics.sagemaker.{region}.amazonaws.eu",
             fipsHostname: "metrics.sagemaker-fips.{region}.amazonaws.eu",
         },
@@ -5671,7 +5671,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:monitoring:{region}:{account-id}:{resource-id}",
-            principal: "monitoring.amazonaws.eu",
+            principal: "monitoring.amazonaws.com",
             hostname: "monitoring.{region}.amazonaws.eu",
             fipsHostname: "monitoring-fips.{region}.amazonaws.eu",
         },
@@ -5703,7 +5703,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:mq:{region}:{account-id}:{resource-id}",
-            principal: "mq.amazonaws.eu",
+            principal: "mq.amazonaws.com",
             hostname: "mq.{region}.amazonaws.eu",
             fipsHostname: "mq-fips.{region}.amazonaws.eu",
         },
@@ -5769,7 +5769,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:network-firewall:{region}:{account-id}:{resource-id}",
-            principal: "network-firewall.amazonaws.eu",
+            principal: "network-firewall.amazonaws.com",
             hostname: "network-firewall.{region}.amazonaws.eu",
             fipsHostname: "network-firewall-fips.{region}.amazonaws.eu",
         },
@@ -5817,7 +5817,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:notifications:{region}:{account-id}:{resource-id}",
-            principal: "notifications.amazonaws.eu",
+            principal: "notifications.amazonaws.com",
             hostname: "notifications.{region}.amazonaws.eu",
             fipsHostname: "notifications-fips.{region}.amazonaws.eu",
         },
@@ -5883,7 +5883,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:oam:{region}:{account-id}:{resource-id}",
-            principal: "oam.amazonaws.eu",
+            principal: "oam.amazonaws.com",
             hostname: "oam.{region}.amazonaws.eu",
             fipsHostname: "oam-fips.{region}.amazonaws.eu",
         },
@@ -5909,7 +5909,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:oidc:{region}:{account-id}:{resource-id}",
-            principal: "oidc.amazonaws.eu",
+            principal: "oidc.amazonaws.com",
             hostname: "oidc.{region}.amazonaws.eu",
             fipsHostname: "oidc-fips.{region}.amazonaws.eu",
         },
@@ -6097,7 +6097,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:pi:{region}:{account-id}:{resource-id}",
-            principal: "pi.amazonaws.eu",
+            principal: "pi.amazonaws.com",
             hostname: "pi.{region}.amazonaws.eu",
             fipsHostname: "pi-fips.{region}.amazonaws.eu",
         },
@@ -6163,7 +6163,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:polly:{region}:{account-id}:{resource-id}",
-            principal: "polly.amazonaws.eu",
+            principal: "polly.amazonaws.com",
             hostname: "polly.{region}.amazonaws.eu",
             fipsHostname: "polly-fips.{region}.amazonaws.eu",
         },
@@ -6189,7 +6189,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:portal.sso:{region}:{account-id}:{resource-id}",
-            principal: "portal.sso.amazonaws.eu",
+            principal: "portal.sso.amazonaws.com",
             hostname: "portal.sso.{region}.amazonaws.eu",
             fipsHostname: "portal.sso-fips.{region}.amazonaws.eu",
         },
@@ -6239,7 +6239,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:qbusiness:{region}:{account-id}:{resource-id}",
-            principal: "qbusiness.amazonaws.eu",
+            principal: "qbusiness.amazonaws.com",
             hostname: "qbusiness.{region}.amazonaws.eu",
             fipsHostname: "qbusiness-fips.{region}.amazonaws.eu",
         },
@@ -6337,7 +6337,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ram:{region}:{account-id}:{resource-id}",
-            principal: "ram.amazonaws.eu",
+            principal: "ram.amazonaws.com",
             hostname: "ram.{region}.amazonaws.eu",
             fipsHostname: "ram-fips.{region}.amazonaws.eu",
         },
@@ -6387,7 +6387,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:rbin:{region}:{account-id}:{resource-id}",
-            principal: "rbin.amazonaws.eu",
+            principal: "rbin.amazonaws.com",
             hostname: "rbin.{region}.amazonaws.eu",
             fipsHostname: "rbin-fips.{region}.amazonaws.eu",
         },
@@ -6437,7 +6437,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:rds:{region}:{account-id}:{resource-id}",
-            principal: "rds.amazonaws.eu",
+            principal: "rds.amazonaws.com",
             hostname: "rds.{region}.amazonaws.eu",
             fipsHostname: "rds-fips.{region}.amazonaws.eu",
         },
@@ -6495,7 +6495,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:redshift:{region}:{account-id}:{resource-id}",
-            principal: "redshift.amazonaws.eu",
+            principal: "redshift.amazonaws.com",
             hostname: "redshift.{region}.amazonaws.eu",
             fipsHostname: "redshift-fips.{region}.amazonaws.eu",
         },
@@ -6637,7 +6637,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:resource-groups:{region}:{account-id}:{resource-id}",
-            principal: "resource-groups.amazonaws.eu",
+            principal: "resource-groups.amazonaws.com",
             hostname: "resource-groups.{region}.amazonaws.eu",
             fipsHostname: "resource-groups-fips.{region}.amazonaws.eu",
         },
@@ -6683,7 +6683,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:rolesanywhere:{region}:{account-id}:{resource-id}",
-            principal: "rolesanywhere.amazonaws.eu",
+            principal: "rolesanywhere.amazonaws.com",
             hostname: "rolesanywhere.{region}.amazonaws.eu",
             fipsHostname: "rolesanywhere-fips.{region}.amazonaws.eu",
         },
@@ -6781,7 +6781,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:route53profiles:{region}:{account-id}:{resource-id}",
-            principal: "route53profiles.amazonaws.eu",
+            principal: "route53profiles.amazonaws.com",
             hostname: "route53profiles.{region}.amazonaws.eu",
             fipsHostname: "route53profiles-fips.{region}.amazonaws.eu",
         },
@@ -6831,7 +6831,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:route53resolver:{region}:{account-id}:{resource-id}",
-            principal: "route53resolver.amazonaws.eu",
+            principal: "route53resolver.amazonaws.com",
             hostname: "route53resolver.{region}.amazonaws.eu",
             fipsHostname: "route53resolver-fips.{region}.amazonaws.eu",
         },
@@ -6851,7 +6851,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:rum:{region}:{account-id}:{resource-id}",
-            principal: "rum.amazonaws.eu",
+            principal: "rum.amazonaws.com",
             hostname: "rum.{region}.amazonaws.eu",
             fipsHostname: "rum-fips.{region}.amazonaws.eu",
         },
@@ -6923,7 +6923,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:runtime.sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "runtime.sagemaker.amazonaws.eu",
+            principal: "runtime.sagemaker.amazonaws.com",
             hostname: "runtime.sagemaker.{region}.amazonaws.eu",
             fipsHostname: "runtime.sagemaker-fips.{region}.amazonaws.eu",
         },
@@ -6973,7 +6973,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:s3:{region}:{account-id}:{resource-id}",
-            principal: "s3.amazonaws.eu",
+            principal: "s3.amazonaws.com",
             hostname: "s3.{region}.amazonaws.eu",
             fipsHostname: "s3-fips.{region}.amazonaws.eu",
         },
@@ -7011,7 +7011,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:s3-control:{region}:{account-id}:{resource-id}",
-            principal: "s3-control.amazonaws.eu",
+            principal: "s3-control.amazonaws.com",
             hostname: "s3-control.{region}.amazonaws.eu",
             fipsHostname: "s3-control-fips.{region}.amazonaws.eu",
         },
@@ -7087,7 +7087,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:sagemaker:{region}:{account-id}:{resource-id}",
-            principal: "sagemaker.amazonaws.eu",
+            principal: "sagemaker.amazonaws.com",
             hostname: "sagemaker.{region}.amazonaws.eu",
             fipsHostname: "sagemaker-fips.{region}.amazonaws.eu",
         },
@@ -7171,7 +7171,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:scheduler:{region}:{account-id}:{resource-id}",
-            principal: "scheduler.amazonaws.eu",
+            principal: "scheduler.amazonaws.com",
             hostname: "scheduler.{region}.amazonaws.eu",
             fipsHostname: "scheduler-fips.{region}.amazonaws.eu",
         },
@@ -7261,7 +7261,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:secretsmanager:{region}:{account-id}:{resource-id}",
-            principal: "secretsmanager.amazonaws.eu",
+            principal: "secretsmanager.amazonaws.com",
             hostname: "secretsmanager.{region}.amazonaws.eu",
             fipsHostname: "secretsmanager-fips.{region}.amazonaws.eu",
         },
@@ -7305,7 +7305,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:securityhub:{region}:{account-id}:{resource-id}",
-            principal: "securityhub.amazonaws.eu",
+            principal: "securityhub.amazonaws.com",
             hostname: "securityhub.{region}.amazonaws.eu",
             fipsHostname: "securityhub-fips.{region}.amazonaws.eu",
         },
@@ -7429,7 +7429,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:servicediscovery:{region}:{account-id}:{resource-id}",
-            principal: "servicediscovery.amazonaws.eu",
+            principal: "servicediscovery.amazonaws.com",
             hostname: "servicediscovery.{region}.amazonaws.eu",
             fipsHostname: "servicediscovery-fips.{region}.amazonaws.eu",
         },
@@ -7479,7 +7479,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:servicequotas:{region}:{account-id}:{resource-id}",
-            principal: "servicequotas.amazonaws.eu",
+            principal: "servicequotas.amazonaws.com",
             hostname: "servicequotas.{region}.amazonaws.eu",
             fipsHostname: "servicequotas-fips.{region}.amazonaws.eu",
         },
@@ -7521,7 +7521,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:signer:{region}:{account-id}:{resource-id}",
-            principal: "signer.amazonaws.eu",
+            principal: "signer.amazonaws.com",
             hostname: "signer.{region}.amazonaws.eu",
             fipsHostname: "signer-fips.{region}.amazonaws.eu",
         },
@@ -7575,7 +7575,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:sms-voice:{region}:{account-id}:{resource-id}",
-            principal: "sms-voice.amazonaws.eu",
+            principal: "sms-voice.amazonaws.com",
             hostname: "sms-voice.{region}.amazonaws.eu",
             fipsHostname: "sms-voice-fips.{region}.amazonaws.eu",
         },
@@ -7657,7 +7657,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:sns:{region}:{account-id}:{resource-id}",
-            principal: "sns.amazonaws.eu",
+            principal: "sns.amazonaws.com",
             hostname: "sns.{region}.amazonaws.eu",
             fipsHostname: "sns-fips.{region}.amazonaws.eu",
         },
@@ -7707,7 +7707,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:sqs:{region}:{account-id}:{resource-id}",
-            principal: "sqs.amazonaws.eu",
+            principal: "sqs.amazonaws.com",
             hostname: "sqs.{region}.amazonaws.eu",
             fipsHostname: "sqs-fips.{region}.amazonaws.eu",
         },
@@ -7757,7 +7757,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:ssm:{region}:{account-id}:{resource-id}",
-            principal: "ssm.amazonaws.eu",
+            principal: "ssm.amazonaws.com",
             hostname: "ssm.{region}.amazonaws.eu",
             fipsHostname: "ssm-fips.{region}.amazonaws.eu",
         },
@@ -7815,7 +7815,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:sso:{region}:{account-id}:{resource-id}",
-            principal: "sso.amazonaws.eu",
+            principal: "sso.amazonaws.com",
             hostname: "sso.{region}.amazonaws.eu",
             fipsHostname: "sso-fips.{region}.amazonaws.eu",
         },
@@ -7865,7 +7865,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:states:{region}:{account-id}:{resource-id}",
-            principal: "states.amazonaws.eu",
+            principal: "states.amazonaws.com",
             hostname: "states.{region}.amazonaws.eu",
             fipsHostname: "states-fips.{region}.amazonaws.eu",
         },
@@ -7903,7 +7903,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:storagegateway:{region}:{account-id}:{resource-id}",
-            principal: "storagegateway.amazonaws.eu",
+            principal: "storagegateway.amazonaws.com",
             hostname: "storagegateway.{region}.amazonaws.eu",
             fipsHostname: "storagegateway-fips.{region}.amazonaws.eu",
         },
@@ -7953,7 +7953,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:streams.dynamodb:{region}:{account-id}:{resource-id}",
-            principal: "streams.dynamodb.amazonaws.eu",
+            principal: "streams.dynamodb.amazonaws.com",
             hostname: "streams.dynamodb.{region}.amazonaws.eu",
             fipsHostname: "streams.dynamodb-fips.{region}.amazonaws.eu",
         },
@@ -8003,7 +8003,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:sts:{region}:{account-id}:{resource-id}",
-            principal: "sts.amazonaws.eu",
+            principal: "sts.amazonaws.com",
             hostname: "sts.{region}.amazonaws.eu",
             fipsHostname: "sts-fips.{region}.amazonaws.eu",
         },
@@ -8093,7 +8093,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:swf:{region}:{account-id}:{resource-id}",
-            principal: "swf.amazonaws.eu",
+            principal: "swf.amazonaws.com",
             hostname: "swf.{region}.amazonaws.eu",
             fipsHostname: "swf-fips.{region}.amazonaws.eu",
         },
@@ -8143,7 +8143,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:synthetics:{region}:{account-id}:{resource-id}",
-            principal: "synthetics.amazonaws.eu",
+            principal: "synthetics.amazonaws.com",
             hostname: "synthetics.{region}.amazonaws.eu",
             fipsHostname: "synthetics-fips.{region}.amazonaws.eu",
         },
@@ -8193,7 +8193,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:tagging:{region}:{account-id}:{resource-id}",
-            principal: "tagging.amazonaws.eu",
+            principal: "tagging.amazonaws.com",
             hostname: "tagging.{region}.amazonaws.eu",
             fipsHostname: "tagging-fips.{region}.amazonaws.eu",
         },
@@ -8333,7 +8333,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:transfer:{region}:{account-id}:{resource-id}",
-            principal: "transfer.amazonaws.eu",
+            principal: "transfer.amazonaws.com",
             hostname: "transfer.{region}.amazonaws.eu",
             fipsHostname: "transfer-fips.{region}.amazonaws.eu",
         },
@@ -8385,7 +8385,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:trustedadvisor:{region}:{account-id}:{resource-id}",
-            principal: "trustedadvisor.amazonaws.eu",
+            principal: "trustedadvisor.amazonaws.com",
             hostname: "trustedadvisor.{region}.amazonaws.eu",
             fipsHostname: "trustedadvisor-fips.{region}.amazonaws.eu",
         },
@@ -8495,7 +8495,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:wafv2:{region}:{account-id}:{resource-id}",
-            principal: "wafv2.amazonaws.eu",
+            principal: "wafv2.amazonaws.com",
             hostname: "wafv2.{region}.amazonaws.eu",
             fipsHostname: "wafv2-fips.{region}.amazonaws.eu",
         },
@@ -8623,7 +8623,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-eusc": {
             arn: "arn:aws-eusc:xray:{region}:{account-id}:{resource-id}",
-            principal: "xray.amazonaws.eu",
+            principal: "xray.amazonaws.com",
             hostname: "xray.{region}.amazonaws.eu",
             fipsHostname: "xray-fips.{region}.amazonaws.eu",
         },

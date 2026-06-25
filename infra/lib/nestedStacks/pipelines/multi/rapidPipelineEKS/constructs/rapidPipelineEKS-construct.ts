@@ -20,6 +20,7 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as Config from "../../../../../../config/config";
 import * as cr from "aws-cdk-lib/custom-resources";
 import {
@@ -354,14 +355,18 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Add S3 access using new pattern
         assetBucketRecords.forEach((record) => {
             const prefix = record.prefix || "/";
+            // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+            // leading slash from the prefix so the '/' separator after the bucket
+            // ARN is always present (root prefix yields {bucketArn}/*).
             const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+            const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
             nodeGroupRole.addToPolicy(
                 new iam.PolicyStatement({
                     actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
                     resources: [
                         record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                        `${record.bucket.bucketArn}/${objectPrefix}*`,
                     ],
                 })
             );
@@ -377,6 +382,11 @@ export class RapidPipelineEKSConstruct extends Construct {
                 ],
             })
         );
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(nodeGroupRole);
 
         // 3. Add node group for pipeline processing
         cluster.addNodegroupCapacity("WorkerNodeGroup", {
@@ -410,14 +420,18 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Add S3 access for the service account using new pattern
         assetBucketRecords.forEach((record) => {
             const prefix = record.prefix || "/";
+            // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+            // leading slash from the prefix so the '/' separator after the bucket
+            // ARN is always present (root prefix yields {bucketArn}/*).
             const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+            const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
             serviceAccount.role.addToPrincipalPolicy(
                 new iam.PolicyStatement({
                     actions: ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
                     resources: [
                         record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                        `${record.bucket.bucketArn}/${objectPrefix}*`,
                     ],
                 })
             );
@@ -441,6 +455,11 @@ export class RapidPipelineEKSConstruct extends Construct {
                 resources: ["*"],
             })
         );
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(serviceAccount.role);
 
         // Define a unique state machine name
         const stateMachineName = `rapid-pipeline-eks-${stackIdentifier}`;

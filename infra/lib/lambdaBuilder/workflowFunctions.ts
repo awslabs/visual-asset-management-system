@@ -30,6 +30,7 @@ import {
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
+    grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
@@ -460,15 +461,18 @@ export function buildWorkflowRole(
             // Add permissions for all asset buckets from the global array
             ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                 const prefix = record.prefix || "/";
-                // Ensure the prefix ends with a slash for proper path construction
+                // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                // leading slash from the prefix so the '/' separator after the bucket
+                // ARN is always present (root prefix yields {bucketArn}/*).
                 const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                 return new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["s3:ListBucket", "s3:PutObject", "s3:GetObject"],
                     resources: [
                         record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                        `${record.bucket.bucketArn}/${objectPrefix}*`,
                     ],
                 });
             }),
@@ -529,6 +533,11 @@ export function buildWorkflowRole(
             ),
         ],
     });
+
+    // Grant access to any external asset bucket customer managed KMS keys so the
+    // workflow role can read/write objects in cross-account encrypted buckets
+    // (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(role);
 
     return role;
 }

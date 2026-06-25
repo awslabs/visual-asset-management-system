@@ -25,6 +25,7 @@ import {
     suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     kmsKeyPolicyStatementGenerator,
+    grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 
@@ -143,8 +144,12 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
                     // Add permissions for all asset buckets from the global array
                     ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                         const prefix = record.prefix || "/";
-                        // Ensure the prefix ends with a slash for proper path construction
-                        const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                        // Build the object-level resource as {bucketArn}/{prefix}*.
+                        // The object ARN always needs a '/' separator after the bucket
+                        // ARN; strip any leading slash from the prefix so the root
+                        // prefix ('/') yields {bucketArn}/* and a non-root prefix
+                        // ('vams-assets/') yields {bucketArn}/vams-assets/*.
+                        const objectPrefix = prefix.replace(/^\/+/, "");
 
                         return new iam.PolicyStatement({
                             effect: iam.Effect.ALLOW,
@@ -157,7 +162,7 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
                             ],
                             resources: [
                                 record.bucket.bucketArn,
-                                `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                                `${record.bucket.bucketArn}/${objectPrefix}*`,
                             ],
                         });
                     }),
@@ -173,6 +178,10 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
     if (kmsKey) {
         newPipelineLambdaRole.addToPolicy(kmsKeyPolicyStatementGenerator(kmsKey));
     }
+
+    // Grant access to any external asset bucket customer managed KMS keys
+    // (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(newPipelineLambdaRole);
 
     return newPipelineLambdaRole;
 }

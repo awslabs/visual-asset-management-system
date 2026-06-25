@@ -150,7 +150,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             schemas.fields.length > 0 &&
             !hasInitializedSchemas.current
         ) {
-            console.log("[MetadataContainer] Offline mode - initializing from schemas:", schemas);
+            //console.log("[MetadataContainer] Offline mode - initializing from schemas:", schemas);
 
             // Check if we already have initial data
             if (initialData.length === 0) {
@@ -177,10 +177,10 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                     metadataSchemaMultiFieldConflict: field.hasConflict,
                 }));
 
-                console.log(
-                    "[MetadataContainer] Initializing rows from schema records:",
-                    schemaRecords
-                );
+                // console.log(
+                //     "[MetadataContainer] Initializing rows from schema records:",
+                //     schemaRecords
+                // );
                 initializeRows(schemaRecords);
                 hasInitializedSchemas.current = true;
             }
@@ -188,37 +188,37 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     }, [mode, schemas, initialData, initializeRows]);
 
     useEffect(() => {
-        console.log(
-            "[MetadataContainer] useEffect called - mode:",
-            mode,
-            "hasInitializedData:",
-            hasInitializedData.current
-        );
+        // console.log(
+        //     "[MetadataContainer] useEffect called - mode:",
+        //     mode,
+        //     "hasInitializedData:",
+        //     hasInitializedData.current
+        // );
 
         // For offline mode, DON'T use initialData in dependencies
         // The useMetadataState hook handles initialization from initialData
         if (mode === "offline") {
-            console.log(
-                "[MetadataContainer] Offline mode - skipping (useMetadataState handles initialization)"
-            );
+            // console.log(
+            //     "[MetadataContainer] Offline mode - skipping (useMetadataState handles initialization)"
+            // );
             return;
         }
 
         // For online mode, only initialize when data actually changes OR when forced
         const dataStr = JSON.stringify(data);
         const dataChanged = dataStr !== lastDataRef.current;
-        console.log(
-            "[MetadataContainer] Online mode check - dataChanged:",
-            dataChanged,
-            "forceRefresh:",
-            forceRefreshFlag.current
-        );
+        // console.log(
+        //     "[MetadataContainer] Online mode check - dataChanged:",
+        //     dataChanged,
+        //     "forceRefresh:",
+        //     forceRefreshFlag.current
+        // );
 
         if (dataChanged || forceRefreshFlag.current) {
-            console.log(
-                "[MetadataContainer] Data changed or forced refresh, initializing rows:",
-                data
-            );
+            // console.log(
+            //     "[MetadataContainer] Data changed or forced refresh, initializing rows:",
+            //     data
+            // );
             initializeRows(data);
             lastDataRef.current = dataStr;
             forceRefreshFlag.current = false;
@@ -227,7 +227,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
             const hasSchemaFields = data.some((record) => record.metadataSchemaField === true);
             setHasSchemas(hasSchemaFields);
         } else {
-            console.log("[MetadataContainer] Online mode - skipping initialization (no changes)");
+            //console.log("[MetadataContainer] Online mode - skipping initialization (no changes)");
         }
     }, [data, mode]);
 
@@ -368,7 +368,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle key change - only update editKey, metadataKey updates on commit
     const handleKeyChange = useCallback(
         (index: number, key: string) => {
-            console.log("[MetadataContainer] handleKeyChange called - index:", index, "key:", key);
+            //console.log("[MetadataContainer] handleKeyChange called - index:", index, "key:", key);
             updateRow(index, {
                 editKey: key,
                 hasChanges: true,
@@ -380,12 +380,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle type change - only update editType, metadataValueType updates on commit
     const handleTypeChange = useCallback(
         (index: number, type: MetadataValueType) => {
-            console.log(
-                "[MetadataContainer] handleTypeChange called - index:",
-                index,
-                "type:",
-                type
-            );
+            // console.log(
+            //     "[MetadataContainer] handleTypeChange called - index:",
+            //     index,
+            //     "type:",
+            //     type
+            // );
 
             const row = rows[index];
             const currentValue = row.editValue;
@@ -398,14 +398,14 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                 if (validation.isValid) {
                     // Value validates against new type, keep it
                     newValue = currentValue;
-                    console.log(
-                        "[MetadataContainer] Value validates against new type, preserving:",
-                        currentValue
-                    );
+                    // console.log(
+                    //     "[MetadataContainer] Value validates against new type, preserving:",
+                    //     currentValue
+                    // );
                 } else {
-                    console.log(
-                        "[MetadataContainer] Value does not validate against new type, clearing"
-                    );
+                    // console.log(
+                    //     "[MetadataContainer] Value does not validate against new type, clearing"
+                    // );
                 }
             }
 
@@ -421,12 +421,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle value change - only update editValue, metadataValue updates on commit
     const handleValueChange = useCallback(
         (index: number, value: string) => {
-            console.log(
-                "[MetadataContainer] handleValueChange called - index:",
-                index,
-                "value:",
-                value
-            );
+            // console.log(
+            //     "[MetadataContainer] handleValueChange called - index:",
+            //     index,
+            //     "value:",
+            //     value
+            // );
             const row = rows[index];
 
             // Check if value actually changed from original
@@ -445,7 +445,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle validation error change from inline components
     const handleValidationError = useCallback(
         (index: number, error: string | undefined) => {
-            console.log(
+            console.error(
                 "[MetadataContainer] handleValidationError called - index:",
                 index,
                 "error:",

@@ -34,6 +34,7 @@ import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
 
 export interface PcPotreeViewerConstructProps extends cdk.StackProps {
@@ -84,8 +85,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -98,7 +102,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -170,6 +174,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         /**
          * AWS Batch Job Definition & Compute Env for PDAL Container
