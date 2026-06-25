@@ -46,6 +46,11 @@ export interface FileInfo {
     filename: string;
     key: string;
     isDirectory: boolean;
+    /** Per-file owning asset (Decision #3). Optional: when absent, the viewer falls back to
+     *  the top-level assetId/databaseId passed to FileViewerModal/DynamicViewer. */
+    assetId?: string;
+    /** Per-file owning database (Decision #3). See assetId note above. */
+    databaseId?: string;
     versionId?: string;
     size?: number;
     dateCreatedCurrentVersion?: string;
