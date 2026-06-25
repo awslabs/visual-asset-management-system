@@ -813,7 +813,9 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 <Button
                                     variant="icon"
                                     iconName="view-full"
-                                    ariaLabel={`Preview ${item.str_key}`}
+                                    ariaLabel={`Preview ${
+                                        item.str_key || item.str_fileext || "file"
+                                    }`}
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         openViewer([searchRowToFileInfo(item)]);
@@ -991,6 +993,7 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 type: "set-selected-items",
                                 selectedItems: detail.selectedItems,
                             });
+                            // Viewer-selection is an ACCUMULATE-ONLY running set that persists across searches/pagination (Decision #4). Unchecking a row here does NOT remove it; users remove via Clear selection / Exit. Dedup-by-key is handled in the reducer.
                             if (isFileMode && state?.viewerSelectMode) {
                                 const additions = detail.selectedItems
                                     .filter((r: any) => isViewableExtension(r.str_fileext))
