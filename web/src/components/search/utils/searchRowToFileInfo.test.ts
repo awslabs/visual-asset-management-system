@@ -44,9 +44,10 @@ describe("searchRowToFileInfo", () => {
     });
 
     it("derives filename from the last path segment", () => {
-        expect(searchRowToFileInfo({ str_key: "a/b/c.png", str_assetid: "x", str_databaseid: "d" }).filename).toBe(
-            "c.png"
-        );
+        expect(
+            searchRowToFileInfo({ str_key: "a/b/c.png", str_assetid: "x", str_databaseid: "d" })
+                .filename
+        ).toBe("c.png");
     });
 });
 

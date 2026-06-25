@@ -20,7 +20,7 @@ export function searchRowToFileInfo(row: Record<string, any>): FileInfo {
         isDirectory: false,
         assetId: row.str_assetid,
         databaseId: row.str_databaseid,
-        size: row.num_filesize,
+        size: row.num_filesize || row.num_size,
         dateCreatedCurrentVersion: row.date_lastmodified,
         isArchived: row.bool_archived === true,
         primaryType: row.str_primarytype ?? null,
