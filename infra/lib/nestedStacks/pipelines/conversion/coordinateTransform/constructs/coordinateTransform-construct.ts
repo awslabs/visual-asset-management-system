@@ -46,11 +46,7 @@ export interface CoordinateTransformConstructProps extends cdk.StackProps {
 export class CoordinateTransformConstruct extends Construct {
     public readonly pipelineVamsLambdaFunctionName: string;
 
-    constructor(
-        parent: Construct,
-        name: string,
-        props: CoordinateTransformConstructProps
-    ) {
+    constructor(parent: Construct, name: string, props: CoordinateTransformConstructProps) {
         super(parent, name);
 
         const region = cdk.Stack.of(this).region;
@@ -107,65 +103,46 @@ export class CoordinateTransformConstruct extends Construct {
                         "states:SendTaskFailure",
                         "states:SendTaskHeartbeat",
                     ],
-                    resources: [
-                        `arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`,
-                    ],
+                    resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
                 }),
             ],
         });
 
         // Container execution role
-        const containerExecutionRole = new iam.Role(
-            this,
-            "CoordTransformContainerExecutionRole",
-            {
-                assumedBy: Service("ECS_TASKS").Principal,
-                inlinePolicies: {
-                    InputBucketPolicy: inputBucketPolicy,
-                    OutputBucketPolicy: outputBucketPolicy,
-                    StateTaskPolicy: stateTaskPolicy,
-                },
-                managedPolicies: [
-                    iam.ManagedPolicy.fromAwsManagedPolicyName(
-                        "service-role/AmazonECSTaskExecutionRolePolicy"
-                    ),
-                    iam.ManagedPolicy.fromAwsManagedPolicyName(
-                        "AWSXrayWriteOnlyAccess"
-                    ),
-                ],
-            }
-        );
+        const containerExecutionRole = new iam.Role(this, "CoordTransformContainerExecutionRole", {
+            assumedBy: Service("ECS_TASKS").Principal,
+            inlinePolicies: {
+                InputBucketPolicy: inputBucketPolicy,
+                OutputBucketPolicy: outputBucketPolicy,
+                StateTaskPolicy: stateTaskPolicy,
+            },
+            managedPolicies: [
+                iam.ManagedPolicy.fromAwsManagedPolicyName(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
+            ],
+        });
 
         // Container job role
-        const containerJobRole = new iam.Role(
-            this,
-            "CoordTransformContainerJobRole",
-            {
-                assumedBy: Service("ECS_TASKS").Principal,
-                inlinePolicies: {
-                    InputBucketPolicy: inputBucketPolicy,
-                    OutputBucketPolicy: outputBucketPolicy,
-                    StateTaskPolicy: stateTaskPolicy,
-                },
-                managedPolicies: [
-                    iam.ManagedPolicy.fromAwsManagedPolicyName(
-                        "service-role/AmazonECSTaskExecutionRolePolicy"
-                    ),
-                    iam.ManagedPolicy.fromAwsManagedPolicyName(
-                        "AWSXrayWriteOnlyAccess"
-                    ),
-                ],
-            }
-        );
+        const containerJobRole = new iam.Role(this, "CoordTransformContainerJobRole", {
+            assumedBy: Service("ECS_TASKS").Principal,
+            inlinePolicies: {
+                InputBucketPolicy: inputBucketPolicy,
+                OutputBucketPolicy: outputBucketPolicy,
+                StateTaskPolicy: stateTaskPolicy,
+            },
+            managedPolicies: [
+                iam.ManagedPolicy.fromAwsManagedPolicyName(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
+            ],
+        });
 
         // CodeBuild-based container build (when useCodeBuild is true)
-        let codeBuildConstruct:
-            | CoordinateTransformCodeBuildConstruct
-            | undefined;
-        if (
-            props.config.app.pipelines.useConversionCoordinateTransform
-                ?.useCodeBuild === true
-        ) {
+        let codeBuildConstruct: CoordinateTransformCodeBuildConstruct | undefined;
+        if (props.config.app.pipelines.useConversionCoordinateTransform?.useCodeBuild === true) {
             codeBuildConstruct = new CoordinateTransformCodeBuildConstruct(
                 this,
                 "CoordTransformCodeBuild",
@@ -239,14 +216,10 @@ export class CoordinateTransformConstruct extends Construct {
         );
 
         // Step Functions state machine
-        const constructPipelineTask = new tasks.LambdaInvoke(
-            this,
-            "ConstructPipelineTask",
-            {
-                lambdaFunction: constructPipelineFunction,
-                outputPath: "$.Payload",
-            }
-        );
+        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
+            lambdaFunction: constructPipelineFunction,
+            outputPath: "$.Payload",
+        });
 
         const pipelineEndFunction = buildPipelineEndFunction(
             this,
@@ -258,15 +231,11 @@ export class CoordinateTransformConstruct extends Construct {
             props.kmsKey
         );
 
-        const pipelineEndTask = new tasks.LambdaInvoke(
-            this,
-            "PipelineEndTask",
-            {
-                lambdaFunction: pipelineEndFunction,
-                inputPath: "$",
-                outputPath: "$.Payload",
-            }
-        );
+        const pipelineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
+            lambdaFunction: pipelineEndFunction,
+            inputPath: "$",
+            outputPath: "$.Payload",
+        });
 
         const successState = new sfn.Succeed(this, "PipelineSuccess");
         const failState = new sfn.Fail(this, "PipelineFailed", {
@@ -284,27 +253,18 @@ export class CoordinateTransformConstruct extends Construct {
             resultPath: "$",
         }).next(pipelineEndTask);
 
-        const coordTransformBatchJob = new tasks.LambdaInvoke(
-            this,
-            "CoordTransformBatchJob",
-            {
-                lambdaFunction: executeBatchJobFunction,
-                integrationPattern:
-                    sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
-                payload: sfn.TaskInput.fromObject({
-                    taskToken: sfn.JsonPath.taskToken,
-                    "jobName.$": "$.jobName",
-                    "definition.$": "$.definition",
-                }),
-                resultPath: "$.batchResult",
-                taskTimeout: sfn.Timeout.duration(
-                    cdk.Duration.hours(4)
-                ),
-                heartbeatTimeout: sfn.Timeout.duration(
-                    cdk.Duration.minutes(30)
-                ),
-            }
-        )
+        const coordTransformBatchJob = new tasks.LambdaInvoke(this, "CoordTransformBatchJob", {
+            lambdaFunction: executeBatchJobFunction,
+            integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
+            payload: sfn.TaskInput.fromObject({
+                taskToken: sfn.JsonPath.taskToken,
+                "jobName.$": "$.jobName",
+                "definition.$": "$.definition",
+            }),
+            resultPath: "$.batchResult",
+            taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(4)),
+            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.minutes(30)),
+        })
             .addCatch(handleBatchError, {
                 resultPath: "$.error",
             })
@@ -312,14 +272,10 @@ export class CoordinateTransformConstruct extends Construct {
 
         const definition = constructPipelineTask.next(coordTransformBatchJob);
 
-        const stateMachine = new sfn.StateMachine(
-            this,
-            "CoordTransformProcessing-StateMachine",
-            {
-                definitionBody: sfn.DefinitionBody.fromChainable(definition),
-                timeout: cdk.Duration.hours(4),
-            }
-        );
+        const stateMachine = new sfn.StateMachine(this, "CoordTransformProcessing-StateMachine", {
+            definitionBody: sfn.DefinitionBody.fromChainable(definition),
+            timeout: cdk.Duration.hours(4),
+        });
 
         // Open pipeline Lambda
         const allowedExtensions = ".e57,.las,.laz,.ply";
@@ -350,56 +306,53 @@ export class CoordinateTransformConstruct extends Construct {
 
         // Auto-register with VAMS
         if (
-            props.config.app.pipelines.useConversionCoordinateTransform
-                ?.autoRegisterWithVAMS === true
+            props.config.app.pipelines.useConversionCoordinateTransform?.autoRegisterWithVAMS ===
+            true
         ) {
             const currentTimestamp = new Date().toISOString();
 
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
+                    props.importGlobalPipelineWorkflowFunctionName
+                }`
             );
 
             const importProvider = new cr.Provider(this, "ImportProvider", {
                 onEventHandler: importFunction,
             });
 
-            new cdk.CustomResource(
-                this,
-                "CoordinateTransformPipelineWorkflow",
-                {
-                    serviceToken: importProvider.serviceToken,
-                    properties: {
-                        timestamp: currentTimestamp,
-                        pipelineId: "conversion-coordinate-transform",
-                        pipelineDescription:
-                            "Coordinate Transform Pipeline - Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems",
-                        pipelineType: "standardFile",
-                        pipelineExecutionType: "Lambda",
-                        assetType: ".all",
-                        outputType: ".laz",
-                        waitForCallback: "Enabled",
-                        lambdaName: vamsExecuteFunction.functionName,
-                        taskTimeout: "14400",
-                        taskHeartbeatTimeout: "",
-                        inputParameters: JSON.stringify({
-                            sourceCrs: "EPSG:4326",
-                            targetCrs: "EPSG:27700",
-                            outputFormats: ["laz"],
-                        }),
-                        workflowId: "conversion-coordinate-transform",
-                        workflowDescription:
-                            "Coordinate transformation for point cloud data between CRS systems",
-                        autoTriggerOnFileExtensionsUpload:
-                            props.config.app.pipelines
-                                .useConversionCoordinateTransform
-                                ?.autoRegisterAutoTriggerOnFileUpload === true
-                                ? ".e57,.las,.laz,.ply"
-                                : "",
-                    },
-                }
-            );
+            new cdk.CustomResource(this, "CoordinateTransformPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "conversion-coordinate-transform",
+                    pipelineDescription:
+                        "Coordinate Transform Pipeline - Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".laz",
+                    waitForCallback: "Enabled",
+                    lambdaName: vamsExecuteFunction.functionName,
+                    taskTimeout: "14400",
+                    taskHeartbeatTimeout: "",
+                    inputParameters: JSON.stringify({
+                        sourceCrs: "EPSG:4326",
+                        targetCrs: "EPSG:27700",
+                        outputFormats: ["laz"],
+                    }),
+                    workflowId: "conversion-coordinate-transform",
+                    workflowDescription:
+                        "Coordinate transformation for point cloud data between CRS systems",
+                    autoTriggerOnFileExtensionsUpload:
+                        props.config.app.pipelines.useConversionCoordinateTransform
+                            ?.autoRegisterAutoTriggerOnFileUpload === true
+                            ? ".e57,.las,.laz,.ply"
+                            : "",
+                },
+            });
         }
 
         // CDK Nag suppressions

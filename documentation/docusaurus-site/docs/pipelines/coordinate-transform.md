@@ -4,12 +4,12 @@ The Coordinate Transform pipeline reprojects point cloud files between coordinat
 
 ## Supported Formats
 
-| Format | Extension | Notes                                                     |
-| :----- | :-------- | :-------------------------------------------------------- |
-| E57    | `.e57`    | ASTM standard for 3D imaging data                         |
-| LAS    | `.las`    | ASPRS LiDAR data exchange format                          |
-| LAZ    | `.laz`    | Compressed LAS format                                     |
-| PLY    | `.ply`    | Polygon File Format (point cloud variant)                 |
+| Format | Extension | Notes                                     |
+| :----- | :-------- | :---------------------------------------- |
+| E57    | `.e57`    | ASTM standard for 3D imaging data         |
+| LAS    | `.las`    | ASPRS LiDAR data exchange format          |
+| LAZ    | `.laz`    | Compressed LAS format                     |
+| PLY    | `.ply`    | Polygon File Format (point cloud variant) |
 
 ## Architecture
 
@@ -71,12 +71,12 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                                                                                                 |
-| :------------------------------------ | :------ | :------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`                             | `false` | Deploy the coordinate transform pipeline infrastructure. Enables the global VPC.                                                            |
-| `useCodeBuild`                        | `true`  | Build the container image via AWS CodeBuild during deployment. When enabled, CodeBuild runs outside the VPC to pull public base images.     |
-| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow in the global VAMS database during CDK deployment.                                         |
-| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when E57, LAS, LAZ, or PLY files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.            |
+| Option                                | Default | Description                                                                                                                             |
+| :------------------------------------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the coordinate transform pipeline infrastructure. Enables the global VPC.                                                        |
+| `useCodeBuild`                        | `true`  | Build the container image via AWS CodeBuild during deployment. When enabled, CodeBuild runs outside the VPC to pull public base images. |
+| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow in the global VAMS database during CDK deployment.                                     |
+| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when E57, LAS, LAZ, or PLY files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.        |
 
 ## Input Parameters
 
@@ -87,30 +87,30 @@ The pipeline accepts transform parameters that control the coordinate reprojecti
 
 ### Parameter Reference
 
-| Parameter              | Type    | Required | Default | Description                                                              |
-| :--------------------- | :------ | :------- | :------ | :----------------------------------------------------------------------- |
-| `sourceCrs`            | string  | Yes      | --      | Source coordinate reference system (EPSG code, WKT, or PROJ string)      |
-| `targetCrs`            | string  | Yes      | --      | Target coordinate reference system (EPSG code, WKT, or PROJ string)      |
-| `outputFormats`        | array   | No       | `[laz]` | Output format(s): `laz`, `las`, `e57`, `ply`                             |
-| `sourceScaleFactor`    | number  | No       | `1.0`   | Scale factor for source grid                                             |
-| `targetScaleFactor`    | number  | No       | `1.0`   | Scale factor for target grid                                             |
-| `applyScaleCorrection` | boolean | No       | `true`  | Whether to apply scale factor correction during transformation           |
-| `combinedScaleFactor`  | number  | No       | --      | Override: apply a single combined scale factor directly                   |
-| `chunkSize`            | number  | No       | 1000000 | Number of points per processing chunk                                    |
-| `enforceSourceCrs`     | boolean | No       | `true`  | Block processing if detected CRS does not match configured source CRS    |
-| `onMismatch`           | string  | No       | `warn`  | Action on CRS mismatch: `error`, `warn`, or `skip`                       |
-| `compressLaz`          | boolean | No       | `true`  | Whether to compress LAZ output                                           |
+| Parameter              | Type    | Required | Default | Description                                                           |
+| :--------------------- | :------ | :------- | :------ | :-------------------------------------------------------------------- |
+| `sourceCrs`            | string  | Yes      | --      | Source coordinate reference system (EPSG code, WKT, or PROJ string)   |
+| `targetCrs`            | string  | Yes      | --      | Target coordinate reference system (EPSG code, WKT, or PROJ string)   |
+| `outputFormats`        | array   | No       | `[laz]` | Output format(s): `laz`, `las`, `e57`, `ply`                          |
+| `sourceScaleFactor`    | number  | No       | `1.0`   | Scale factor for source grid                                          |
+| `targetScaleFactor`    | number  | No       | `1.0`   | Scale factor for target grid                                          |
+| `applyScaleCorrection` | boolean | No       | `true`  | Whether to apply scale factor correction during transformation        |
+| `combinedScaleFactor`  | number  | No       | --      | Override: apply a single combined scale factor directly               |
+| `chunkSize`            | number  | No       | 1000000 | Number of points per processing chunk                                 |
+| `enforceSourceCrs`     | boolean | No       | `true`  | Block processing if detected CRS does not match configured source CRS |
+| `onMismatch`           | string  | No       | `warn`  | Action on CRS mismatch: `error`, `warn`, or `skip`                    |
+| `compressLaz`          | boolean | No       | `true`  | Whether to compress LAZ output                                        |
 
 ### Supported CRS Formats
 
 The `sourceCrs` and `targetCrs` parameters accept the following coordinate reference system formats. The pipeline resolves them in priority order:
 
-| Format | Syntax | Example | Notes |
-| :----- | :----- | :------ | :---- |
-| Custom named grid | Grid name string | `local+sizewell` | Matched against `custom_grids` in pipeline config. Source CRS only. |
-| EPSG code | `EPSG:<numeric_code>` | `EPSG:27700`, `EPSG:4326` | Standard EPSG registry codes |
-| PROJ string | Starts with `+proj` | `+proj=lcc +lat_1=33 +lat_2=45 +datum=NAD83 +units=m` | Full PROJ.4 projection definition |
-| Well-Known Text (WKT) | OGC WKT string | `GEOGCS["WGS 84",DATUM["WGS_1984",...]]` | Fallback — any string not matching the above is parsed as WKT |
+| Format                | Syntax                | Example                                               | Notes                                                               |
+| :-------------------- | :-------------------- | :---------------------------------------------------- | :------------------------------------------------------------------ |
+| Custom named grid     | Grid name string      | `local+sizewell`                                      | Matched against `custom_grids` in pipeline config. Source CRS only. |
+| EPSG code             | `EPSG:<numeric_code>` | `EPSG:27700`, `EPSG:4326`                             | Standard EPSG registry codes                                        |
+| PROJ string           | Starts with `+proj`   | `+proj=lcc +lat_1=33 +lat_2=45 +datum=NAD83 +units=m` | Full PROJ.4 projection definition                                   |
+| Well-Known Text (WKT) | OGC WKT string        | `GEOGCS["WGS 84",DATUM["WGS_1984",...]]`              | Fallback — any string not matching the above is parsed as WKT       |
 
 :::note[Resolution Order]
 The pipeline checks CRS strings in this order: custom named grid → EPSG code → PROJ string → WKT. The first successful match is used.
@@ -179,19 +179,19 @@ This allows you to set different source and target CRS values for individual ass
 
 The following metadata key names are recognized (case-insensitive):
 
-| Metadata Key           | Maps To                | Notes                                                  |
-| :--------------------- | :--------------------- | :----------------------------------------------------- |
-| `sourceCrs`            | `sourceCrs`            | EPSG code, WKT, or PROJ string                         |
-| `targetCrs`            | `targetCrs`            | EPSG code, WKT, or PROJ string                         |
-| `outputFormats`        | `outputFormats`        | Comma-separated string (for example, `laz,e57`)        |
-| `sourceScaleFactor`    | `sourceScaleFactor`    | Numeric value                                          |
-| `targetScaleFactor`    | `targetScaleFactor`    | Numeric value                                          |
-| `applyScaleCorrection` | `applyScaleCorrection` | `true` or `false`                                      |
-| `combinedScaleFactor`  | `combinedScaleFactor`  | Numeric value                                          |
-| `chunkSize`            | `chunkSize`            | Numeric value                                          |
-| `enforceSourceCrs`     | `enforceSourceCrs`     | `true` or `false`                                      |
-| `onMismatch`           | `onMismatch`           | `error`, `warn`, or `skip`                             |
-| `compressLaz`          | `compressLaz`          | `true` or `false`                                      |
+| Metadata Key           | Maps To                | Notes                                           |
+| :--------------------- | :--------------------- | :---------------------------------------------- |
+| `sourceCrs`            | `sourceCrs`            | EPSG code, WKT, or PROJ string                  |
+| `targetCrs`            | `targetCrs`            | EPSG code, WKT, or PROJ string                  |
+| `outputFormats`        | `outputFormats`        | Comma-separated string (for example, `laz,e57`) |
+| `sourceScaleFactor`    | `sourceScaleFactor`    | Numeric value                                   |
+| `targetScaleFactor`    | `targetScaleFactor`    | Numeric value                                   |
+| `applyScaleCorrection` | `applyScaleCorrection` | `true` or `false`                               |
+| `combinedScaleFactor`  | `combinedScaleFactor`  | Numeric value                                   |
+| `chunkSize`            | `chunkSize`            | Numeric value                                   |
+| `enforceSourceCrs`     | `enforceSourceCrs`     | `true` or `false`                               |
+| `onMismatch`           | `onMismatch`           | `error`, `warn`, or `skip`                      |
+| `compressLaz`          | `compressLaz`          | `true` or `false`                               |
 
 :::tip[Per-Asset CRS Configuration]
 Set `sourceCrs` and `targetCrs` as metadata on each asset to define the correct coordinate systems for that specific scan. This is particularly useful when a database contains point clouds from multiple survey sites with different native coordinate systems.
@@ -200,7 +200,7 @@ Set `sourceCrs` and `targetCrs` as metadata on each asset to define the correct 
 ### Example Workflow
 
 1. Upload a LAS file captured in British National Grid:
-   - Set asset metadata: `sourceCrs` = `EPSG:27700`
+    - Set asset metadata: `sourceCrs` = `EPSG:27700`
 2. Configure the pipeline default `targetCrs` as `EPSG:4326` (WGS84).
 3. When the workflow triggers, the pipeline reads `sourceCrs` from asset metadata and `targetCrs` from pipeline defaults.
 4. The output LAZ file is reprojected to WGS84.
@@ -219,14 +219,14 @@ When `useCodeBuild` is enabled, the CodeBuild project runs **outside the VPC** t
 
 The following AWS resources are created when this pipeline is enabled:
 
-| Resource                     | Service            | Purpose                                                           |
-| :--------------------------- | :----------------- | :---------------------------------------------------------------- |
-| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                    |
-| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                 |
-| Job Definition               | AWS Batch          | Container configuration (60 GiB ephemeral storage)                |
-| Container Repository         | Amazon ECR         | Stores the coordinate transform container image                   |
-| CodeBuild Project            | AWS CodeBuild      | Builds and pushes the container image to Amazon ECR               |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration with 4-hour timeout                        |
+| Resource                     | Service            | Purpose                                                                           |
+| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------- |
+| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                    |
+| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                 |
+| Job Definition               | AWS Batch          | Container configuration (60 GiB ephemeral storage)                                |
+| Container Repository         | Amazon ECR         | Stores the coordinate transform container image                                   |
+| CodeBuild Project            | AWS CodeBuild      | Builds and pushes the container image to Amazon ECR                               |
+| Step Functions State Machine | AWS Step Functions | Workflow orchestration with 4-hour timeout                                        |
 | Lambda Functions (4)         | AWS Lambda         | Pipeline coordination (vamsExecute, openPipeline, constructPipeline, pipelineEnd) |
 
 ## Troubleshooting
@@ -258,9 +258,13 @@ Ensure at least one source provides both CRS values.
 
 If `enforceSourceCrs` is `true` (default) and the file's embedded CRS does not match the configured `sourceCrs`, the pipeline behavior depends on the `onMismatch` setting:
 
-- `error` -- Pipeline fails immediately
-- `warn` -- Pipeline continues with a warning in the output report
-- `skip` -- File is skipped without processing
+-   `error` -- Pipeline fails immediately
+-   `warn` -- Pipeline continues with a warning in the output report
+-   `skip` -- File is skipped without processing
+
+## Third-Party Library Licenses
+
+The container performs LAS/LAZ reading and writing with the open-source [laspy](https://github.com/laspy/laspy) library, which is distributed under a 3-clause BSD license (BSD-3-Clause). This is a standard permissive license — its terms are equivalent to the MIT and Apache-2.0 licenses used elsewhere in VAMS (use, modification, and redistribution with attribution and no warranty), plus the standard third clause prohibiting use of the copyright holders' names to endorse derived products. It carries no copyleft obligations. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed. See [Notices](../additional/notices.md) for the full third-party software notice.
 
 ## Related Resources
 

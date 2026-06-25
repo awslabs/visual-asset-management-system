@@ -185,12 +185,13 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes twelve built-in processing pipelines, each deployable through configuration flags:
+VAMS includes thirteen built-in processing pipelines, each deployable through configuration flags:
 
 | Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
 | ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender                                                                                                                                                   | Enabled  |
 | CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery                                                                                                                                                  | Disabled |
+| Coordinate Transform         | `useConversionCoordinateTransform`       | Point cloud coordinate reference system reprojection using PDAL and pyproj                                                                                                                    | Disabled |
 | Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming                                                                                                                                                | Disabled |
 | Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files                                                                                                                                                 | Disabled |
 | GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock                                                                                                                                               | Disabled |

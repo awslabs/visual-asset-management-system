@@ -209,7 +209,7 @@ This software includes third party software subject to the following copyrights:
 | trimesh  | >=4.5.0  | MIT                 | Mesh loading (GLB, GLTF, OBJ, FBX, PLY, STL, DRC) |
 | numpy    | >=1.26.4 | BSD-3-Clause        | Numerical computing                               |
 | scipy    | >=1.14.0 | BSD-3-Clause        | Scientific computing (used by trimesh)            |
-| laspy    | >=2.5.4  | BSD-2-Clause        | LAS/LAZ point cloud format support                |
+| laspy    | >=2.5.4  | BSD-3-Clause        | LAS/LAZ point cloud format support                |
 | pye57    | >=0.4.17 | MIT                 | E57 point cloud format support                    |
 | cadquery | >=2.4.0  | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                    |
 | imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
@@ -218,6 +218,32 @@ This software includes third party software subject to the following copyrights:
 | open3d   | >=0.19.0 | MIT                 | PCD and FARO point cloud format support           |
 | usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
 | boto3    | >=1.35.0 | Apache-2.0          | AWS SDK for Python                                |
+
+### Coordinate Transform Pipeline
+
+**Coordinate Transform Pipeline Dependencies**
+
+| Name      | Version | License        | Notes                                    |
+| :-------- | :------ | :------------- | :--------------------------------------- |
+| pyproj    | >=3.6   | MIT            | Coordinate reference system reprojection |
+| numpy     | >=1.26  | BSD-3-Clause   | Numerical computing                      |
+| pye57     | >=0.4   | MIT            | E57 point cloud format support           |
+| laspy     | >=2.5   | BSD-3-Clause   | LAS/LAZ point cloud format support       |
+| open3d    | >=0.18  | MIT            | Point cloud I/O and processing           |
+| pyyaml    | >=6.0   | MIT            | Pipeline configuration parsing           |
+| structlog | >=24.0  | Apache-2.0/MIT | Structured logging                       |
+| boto3     | latest  | Apache-2.0     | AWS SDK for Python                       |
+
+**laspy License Notice**
+
+laspy is distributed under a 3-clause BSD license (BSD-3-Clause), a standard permissive license functionally equivalent to the MIT and Apache-2.0 licenses with no copyleft obligations:
+
+```
+Copyright (c) 2012, Grant Brown, grant.brown73 at gmail.com
+Copyright (c) 2012, Howard Butler, hobu.inc at gmail.com
+Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
+All rights reserved.
+```
 
 ### Isaac Lab Training Pipeline
 

@@ -399,13 +399,6 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterAutoTriggerOnFileUpload: false,
         };
     }
-    if (
-        config.app.pipelines.useConversionCoordinateTransform.useCodeBuild ==
-        undefined
-    ) {
-        config.app.pipelines.useConversionCoordinateTransform.useCodeBuild =
-            false;
-    }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
         config.app.authProvider.useExternalOAuthIdp.enabled = false;

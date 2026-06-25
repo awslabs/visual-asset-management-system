@@ -68,13 +68,10 @@ export class BatchFargatePipelineConstruct extends Construct {
         // Container image: use ECR repository if provided, otherwise build locally
         const containerImage = props.ecrRepository
             ? ecs.ContainerImage.fromEcrRepository(props.ecrRepository, "latest")
-            : ecs.AssetImage.fromAsset(
-                  path.join(__dirname, props.imageAssetPath),
-                  {
-                      file: props.dockerfileName,
-                      platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
-                  }
-              );
+            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+                  file: props.dockerfileName,
+                  platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+              });
 
         const batchJobName =
             props.batchJobDefinitionName +

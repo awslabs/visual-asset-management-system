@@ -272,7 +272,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 );
             }
 
-            if (props.config.app.pipelines.useConversionCoordinateTransform?.enabled) {
+            if (props.config.app.pipelines.useConversionCoordinateTransform.enabled) {
                 const coordinateTransformPipelineNestedStack =
                     new CoordinateTransformBuilderNestedStack(
                         this,
@@ -284,8 +284,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
                             pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                             pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                             lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                            assetAuxiliaryBucket:
-                                props.storageResources.s3.assetAuxiliaryBucket,
+                            assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
                             kmsKey: props.storageResources.encryption.kmsKey,
                             importGlobalPipelineWorkflowFunctionName:
                                 props.importGlobalPipelineWorkflowFunctionName,

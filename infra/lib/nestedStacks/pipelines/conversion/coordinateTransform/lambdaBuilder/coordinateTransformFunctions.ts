@@ -117,9 +117,7 @@ export function buildOpenPipelineFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: [
-                `arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`,
-            ],
+            resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
         })
     );
 
@@ -171,9 +169,7 @@ export function buildPipelineEndFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: [
-                `arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`,
-            ],
+            resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
         })
     );
 
@@ -250,19 +246,16 @@ export function buildExecuteBatchJobFunction(
         timeout: Duration.minutes(5),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
-            config.app.useGlobalVpc.enabled &&
-            config.app.useGlobalVpc.useForAllLambdas
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc
                 : undefined,
         vpcSubnets:
-            config.app.useGlobalVpc.enabled &&
-            config.app.useGlobalVpc.useForAllLambdas
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
         environment: {
             BATCH_JOB_QUEUE: batchJobQueue.jobQueueName,
-            BATCH_JOB_DEFINITION:
-                batchJobDefinition.jobDefinitionName,
+            BATCH_JOB_DEFINITION: batchJobDefinition.jobDefinitionName,
         },
     });
 
@@ -270,8 +263,12 @@ export function buildExecuteBatchJobFunction(
         new iam.PolicyStatement({
             actions: ["batch:SubmitJob", "batch:DescribeJobs"],
             resources: [
-                `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-queue/${batchJobQueue.jobQueueName}`,
-                `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${batchJobDefinition.jobDefinitionName}*`,
+                `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-queue/${
+                    batchJobQueue.jobQueueName
+                }`,
+                `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${
+                    batchJobDefinition.jobDefinitionName
+                }*`,
             ],
         })
     );

@@ -15,8 +15,7 @@ import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 
-export interface CoordinateTransformCodeBuildConstructProps
-    extends cdk.StackProps {
+export interface CoordinateTransformCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
@@ -38,89 +37,67 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
-        this.repository = new ecr.Repository(
-            this,
-            "EcrRepo-CoordTransform",
-            {
-                removalPolicy: RemovalPolicy.DESTROY,
-                emptyOnDelete: true,
-                imageScanOnPush: true,
-                lifecycleRules: [
-                    {
-                        maxImageCount: 10,
-                        description:
-                            "Keep last 10 images for coordinate-transform",
+        this.repository = new ecr.Repository(this, "EcrRepo-CoordTransform", {
+            removalPolicy: RemovalPolicy.DESTROY,
+            emptyOnDelete: true,
+            imageScanOnPush: true,
+            lifecycleRules: [
+                {
+                    maxImageCount: 10,
+                    description: "Keep last 10 images for coordinate-transform",
+                },
+            ],
+        });
+
+        const sourceAsset = new s3assets.Asset(this, "Source-CoordTransform", {
+            path: path.join(
+                __dirname,
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "backendPipelines",
+                "conversion",
+                "coordinateTransform",
+                "container"
+            ),
+            exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env"],
+        });
+
+        const project = new codebuild.Project(this, "CodeBuild-CoordTransform", {
+            description: "Build Coordinate Transform container image and push to ECR",
+            environment: {
+                buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+                computeType: codebuild.ComputeType.LARGE,
+                privileged: true,
+                environmentVariables: {
+                    ECR_REPO_URI: {
+                        value: this.repository.repositoryUri,
                     },
-                ],
-            }
-        );
-
-        const sourceAsset = new s3assets.Asset(
-            this,
-            "Source-CoordTransform",
-            {
-                path: path.join(
-                    __dirname,
-                    "..",
-                    "..",
-                    "..",
-                    "..",
-                    "..",
-                    "..",
-                    "..",
-                    "backendPipelines",
-                    "conversion",
-                    "coordinateTransform",
-                    "container"
-                ),
-                exclude: [
-                    ".git",
-                    "*.pyc",
-                    "__pycache__",
-                    ".venv",
-                    "node_modules",
-                    ".env",
-                ],
-            }
-        );
-
-        const project = new codebuild.Project(
-            this,
-            "CodeBuild-CoordTransform",
-            {
-                description:
-                    "Build Coordinate Transform container image and push to ECR",
-                environment: {
-                    buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-                    computeType: codebuild.ComputeType.LARGE,
-                    privileged: true,
-                    environmentVariables: {
-                        ECR_REPO_URI: {
-                            value: this.repository.repositoryUri,
-                        },
-                        AWS_ACCOUNT_ID: {
-                            value: account,
-                        },
-                        AWS_DEFAULT_REGION: {
-                            value: region,
-                        },
+                    AWS_ACCOUNT_ID: {
+                        value: account,
+                    },
+                    AWS_DEFAULT_REGION: {
+                        value: region,
                     },
                 },
-                // CodeBuild runs outside the VPC to pull public base images.
-                // It accesses ECR and S3 via IAM (no VPC endpoints needed).
-                source: codebuild.Source.s3({
-                    bucket: sourceAsset.bucket,
-                    path: sourceAsset.s3ObjectKey,
-                }),
-                buildSpec:
-                    codebuild.BuildSpec.fromSourceFilename("buildspec.yml"),
-                timeout: Duration.hours(1),
-                cache: codebuild.Cache.local(
-                    codebuild.LocalCacheMode.DOCKER_LAYER,
-                    codebuild.LocalCacheMode.CUSTOM
-                ),
-            }
-        );
+            },
+            // CodeBuild runs outside the VPC to pull public base images.
+            // It accesses ECR and S3 via IAM (no VPC endpoints needed).
+            source: codebuild.Source.s3({
+                bucket: sourceAsset.bucket,
+                path: sourceAsset.s3ObjectKey,
+            }),
+            buildSpec: codebuild.BuildSpec.fromSourceFilename("buildspec.yml"),
+            timeout: Duration.hours(1),
+            cache: codebuild.Cache.local(
+                codebuild.LocalCacheMode.DOCKER_LAYER,
+                codebuild.LocalCacheMode.CUSTOM
+            ),
+        });
 
         this.repository.grantPullPush(project);
         sourceAsset.grantRead(project);
@@ -132,14 +109,11 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
             })
         );
 
-        const triggerFunction = new cdk.aws_lambda.Function(
-            this,
-            "BuildTrigger-CoordTransform",
-            {
-                runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
-                handler: "index.handler",
-                timeout: Duration.minutes(1),
-                code: cdk.aws_lambda.Code.fromInline(`
+        const triggerFunction = new cdk.aws_lambda.Function(this, "BuildTrigger-CoordTransform", {
+            runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            timeout: Duration.minutes(1),
+            code: cdk.aws_lambda.Code.fromInline(`
 import boto3
 import cfnresponse
 
@@ -157,8 +131,7 @@ def handler(event, context):
     except Exception as e:
         cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
 `),
-            }
-        );
+        });
 
         triggerFunction.addToRolePolicy(
             new iam.PolicyStatement({
@@ -167,13 +140,9 @@ def handler(event, context):
             })
         );
 
-        const triggerProvider = new cr.Provider(
-            this,
-            "BuildProvider-CoordTransform",
-            {
-                onEventHandler: triggerFunction,
-            }
-        );
+        const triggerProvider = new cr.Provider(this, "BuildProvider-CoordTransform", {
+            onEventHandler: triggerFunction,
+        });
 
         new cdk.CustomResource(this, "BuildTriggerCR-CoordTransform", {
             serviceToken: triggerProvider.serviceToken,
