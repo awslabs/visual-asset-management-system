@@ -38,20 +38,17 @@ export class VPCBuilderNestedStack extends NestedStack {
         props = { ...defaultProps, ...props };
 
         //Set how many AZ's we need. Note: GovCloud only has max 3 AZs as of 11/09/2023
-        //VisualizerPipelineReqs - 1Az - Private Subnet (Each)
-        //ALBReqs or All Lambdas or EKS - 2AZ - Private or PublicSubnet (Each)
-        //OpenSearchProvisioned - 3AZ - Private Subnet (Each)
+        //Baseline - 2AZ - any subnet type is created across at least 2 AZs for resiliency and to
+        //keep the synthesized subnet set stable across feature toggles (avoids subnet add/remove churn).
+        //OpenSearchProvisioned - configurable (2 or 3) - Private Subnet (Each)
+        //OpenSearchServerless (non-public) - 2 AZs - the AOSS VPC endpoint is placed across 2 AZs for high availability.
         if (props.config.app.openSearch.useProvisioned.enabled) {
-            this.azCount = 3;
-        } else if (
-            props.config.app.useAlb.enabled ||
-            props.config.app.useGlobalVpc.useForAllLambdas ||
-            props.config.app.pipelines.useRapidPipeline.useEks.enabled
-        ) {
+            this.azCount = props.config.app.openSearch.useProvisioned.availabilityZoneCount;
+        } else {
+            //2 AZs covers the baseline as well as a non-public Serverless collection, whose VPC endpoint
+            //requires at least 2 Availability Zones.
             this.azCount = 2;
         }
-        //Visualizer pipeline only
-        else this.azCount = 1;
 
         console.log("VPC AZ Count: ", this.azCount);
 
@@ -280,10 +277,11 @@ export class VPCBuilderNestedStack extends NestedStack {
 
                 if (
                     props.config.app.openSearch.useProvisioned.enabled &&
-                    this.isolatedSubnets.length < 3
+                    this.isolatedSubnets.length <
+                        props.config.app.openSearch.useProvisioned.availabilityZoneCount
                 ) {
                     throw new Error(
-                        "Existing VPC and provided subnets must have at least 3 private subnets in different AZs already setup when using OpenSearch provisioned!"
+                        `Existing VPC and provided subnets must have at least ${props.config.app.openSearch.useProvisioned.availabilityZoneCount} private subnets in different AZs already setup when using OpenSearch provisioned!`
                     );
                 }
 

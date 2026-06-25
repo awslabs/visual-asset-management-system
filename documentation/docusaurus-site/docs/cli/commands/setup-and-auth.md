@@ -182,6 +182,44 @@ vamscli auth clear-override
 
 ---
 
+## auth routes list
+
+List all available VAMS API routes with their HTTP methods and categories from the deployment's master route definitions. Useful when authoring API authorization constraints (`route__path` values).
+
+```bash
+vamscli auth routes list [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--json-output` | FLAG | No       | Output raw JSON response |
+
+```bash
+vamscli auth routes list
+vamscli auth routes list --json-output
+```
+
+---
+
+## auth routes allowed
+
+List the VAMS API routes (and the HTTP methods on each) the current user is authorized to call, based on the user's authorization constraints.
+
+```bash
+vamscli auth routes allowed [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--json-output` | FLAG | No       | Output raw JSON response |
+
+```bash
+vamscli auth routes allowed
+vamscli auth routes allowed --json-output
+```
+
+---
+
 ## features list
 
 List all enabled feature switches for the current profile.

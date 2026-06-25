@@ -15,7 +15,8 @@ def get_tags_event():
     return {
         'requestContext': {
             'http': {
-                'method': 'GET'
+                'method': 'GET',
+                'path': '/tags'
             }
         },
         'queryStringParameters': {

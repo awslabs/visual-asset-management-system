@@ -15,6 +15,10 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import (
+    API_ASSET_LINK_METADATA, API_ASSET_METADATA,
+    API_FILE_METADATA, API_DATABASE_METADATA,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -555,7 +559,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -753,7 +757,7 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 raise PermissionError("Not authorized to update metadata for this asset link")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -1717,7 +1721,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -1909,7 +1913,7 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 raise PermissionError("Not authorized to update metadata for this asset")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -2898,7 +2902,7 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -3083,7 +3087,7 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 raise PermissionError("Not authorized to update metadata for this file")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -3947,7 +3951,7 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
             # Continue without limit check if it fails
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -4102,7 +4106,7 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 raise PermissionError("Not authorized to update metadata for this database")
         
         # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["system"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
         # Schema validation for non-SYSTEM users
@@ -4706,9 +4710,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route to appropriate handler based on path
+        # Route to appropriate handler based on the master API route definitions
         # Asset Link Metadata Routes
-        if '/asset-links/' in path and '/metadata' in path:
+        if API_ASSET_LINK_METADATA.matches(path):
             if method == 'GET':
                 return handle_asset_link_metadata_get(event)
             elif method == 'POST':
@@ -4717,9 +4721,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_asset_link_metadata_put(event)
             elif method == 'DELETE':
                 return handle_asset_link_metadata_delete(event)
-        
+
         # File Metadata/Attribute Routes
-        elif '/database/' in path and '/assets/' in path and '/metadata/file' in path:
+        elif API_FILE_METADATA.matches(path):
             if method == 'GET':
                 return handle_file_metadata_get(event)
             elif method == 'POST':
@@ -4728,9 +4732,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_file_metadata_put(event)
             elif method == 'DELETE':
                 return handle_file_metadata_delete(event)
-        
+
         # Asset Metadata Routes (not file metadata)
-        elif '/database/' in path and '/assets/' in path and '/metadata' in path:
+        elif API_ASSET_METADATA.matches(path):
             if method == 'GET':
                 return handle_asset_metadata_get(event)
             elif method == 'POST':
@@ -4739,9 +4743,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return handle_asset_metadata_put(event)
             elif method == 'DELETE':
                 return handle_asset_metadata_delete(event)
-        
+
         # Database Metadata Routes
-        elif '/database/' in path and '/metadata' in path and '/assets/' not in path:
+        elif API_DATABASE_METADATA.matches(path):
             if method == 'GET':
                 return handle_database_metadata_get(event)
             elif method == 'POST':

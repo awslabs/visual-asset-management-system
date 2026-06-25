@@ -94,6 +94,23 @@ kms:CreateGrant
 | `app.govCloud.enabled`      | boolean | `false` | Enables AWS GovCloud deployment mode. Enforces: VPC must be enabled, Amazon CloudFront must be disabled, Amazon Location Service must be disabled. |
 | `app.govCloud.il6Compliant` | boolean | `false` | Reserved for future use. Not yet fully implemented.                                                                                                |
 
+:::note[AWS European Sovereign Cloud]
+For now, also set `app.govCloud.enabled = true` when deploying to the AWS European Sovereign Cloud (Region `eusc-de-east-1`). The European Sovereign Cloud is a separate, isolated partition (`aws-eusc`) with the same constraints that the GovCloud mode already enforces — VPC required, no Amazon CloudFront (use the ALB web deployment), and no Amazon Location Service — so the existing GovCloud guardrails apply. A dedicated EU Sovereign Cloud deployment mode may be introduced in a future release; until then, the GovCloud flag is the supported way to enable these constraints, and the [`config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json) template sets it accordingly.
+:::
+
+### IAM role customization (`app.iamRoleConfig`)
+
+These options support environments that restrict or centrally manage AWS Identity and Access Management (IAM) role creation. Both default to `false`, and when both are `false` VAMS manages all IAM roles itself (the recommended default). Each flag toggles whether VAMS reads its corresponding mappings from the separate `infra/config/policy/iamRoleConfig.json` file, keeping the long role ARNs and construct-path maps out of the main configuration.
+
+| Field                                       | Type    | Default | Description                                                                                                                                                                                  |
+| ------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.iamRoleConfig.useCustomBootstrapRoles` | boolean | `false` | When `true`, VAMS configures the CDK stack synthesizer from the `bootstrap` section of `iamRoleConfig.json` to use pre-created CDK bootstrap roles (or no bootstrap roles at all).           |
+| `app.iamRoleConfig.useCustomVamsStackRoles` | boolean | `false` | When `true`, VAMS applies `iam.Role.customizeRoles` using the `vamsStacks` section of `iamRoleConfig.json` to generate an IAM policy report and/or substitute pre-created application roles. |
+
+:::warning[Advanced configuration]
+Letting VAMS manage IAM roles is the recommended default — grants stay automatically in sync with the resources they protect. Use these options only in environments where IAM role creation is centralized or restricted. See [Advanced IAM role customization](#advanced-iam-role-customization-appiamroleconfig) for the full workflow, the structure of `iamRoleConfig.json`, and how the settings apply across the VAMS WAF stack, core stack, and nested stacks.
+:::
+
 ## VPC (`app.useGlobalVpc`)
 
 | Field                                                | Type    | Default       | Description                                                                                                                                                                    |
@@ -117,17 +134,20 @@ The following table shows which VPC resources are created based on enabled featu
 
 #### Subnet Requirements
 
-| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs | Notes                           |
-| ---------------------------------------------------- | -------------------------- | -------------- | ------- | ------------------------------- |
-| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2       | Public subnets for ALB          |
-| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2       | Batch compute                   |
-| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2       | EKS cluster                     |
-| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 1       | Batch compute                   |
-| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 1       | Batch compute                   |
-| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 1       | Batch compute                   |
-| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 1       | Batch compute + EFS + CodeBuild |
-| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | 3       | Requires 3 AZs for cluster      |
-| All other features                                   | Isolated only              | No             | 1       | Lambda VPC endpoints            |
+VAMS provisions every subnet type across a fixed Availability Zone count (a baseline of 2) so that toggling individual features does not add or remove subnets between deployments. Amazon OpenSearch Service (Provisioned) sets the count from `availabilityZoneCount` (2 or 3).
+
+| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs                          | Notes                           |
+| ---------------------------------------------------- | -------------------------- | -------------- | -------------------------------- | ------------------------------- |
+| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2                                | Public subnets for ALB          |
+| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2                                | Batch compute                   |
+| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2                                | EKS cluster                     |
+| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 2                                | Batch compute                   |
+| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 2                                | Batch compute                   |
+| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
+| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| NVIDIA Gr00t (`useNvidiaGr00t`)                      | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | `availabilityZoneCount` (2 or 3) | Zone-aware Multi-AZ domain      |
+| All other features                                   | Isolated only              | No             | 2                                | Lambda VPC endpoints            |
 
 #### VPC Interface Endpoints
 
@@ -166,21 +186,54 @@ Only one Amazon ECS interface endpoint can exist per VPC when private DNS is ena
 
 ## Amazon OpenSearch Service (`app.openSearch`)
 
-| Field                                                  | Type    | Default            | Description                                                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------ | ------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.openSearch.useServerless.enabled`                 | boolean | `false`            | Deploys Amazon OpenSearch Serverless for pay-per-use search capability.                                                                                                                                                                                                                               |
-| `app.openSearch.useProvisioned.enabled`                | boolean | `false`            | Deploys a provisioned Amazon OpenSearch Service domain. Requires VPC with 3+ Availability Zones.                                                                                                                                                                                                      |
-| `app.openSearch.useProvisioned.dataNodeInstanceType`   | string  | `r6g.large.search` | Instance type for the 2 data nodes in the provisioned domain.                                                                                                                                                                                                                                         |
-| `app.openSearch.useProvisioned.masterNodeInstanceType` | string  | `r6g.large.search` | Instance type for the 3 dedicated master nodes.                                                                                                                                                                                                                                                       |
-| `app.openSearch.useProvisioned.ebsInstanceNodeSizeGb`  | number  | `120`              | Amazon EBS volume size in GB per data node.                                                                                                                                                                                                                                                           |
-| `app.openSearch.reindexOnCdkDeploy`                    | boolean | `false`            | Triggers automatic reindexing of all assets and files during deployment via a CloudFormation custom resource. **Important:** Enable only for a second deployment after initial deployment or version upgrade, then set back to `false`. Can be overridden with CDK context `reindexOnCdkDeploy=true`. |
+| Field                                                    | Type    | Default            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.openSearch.useServerless.enabled`                   | boolean | `false`            | Deploys Amazon OpenSearch Serverless for pay-per-use search capability.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `app.openSearch.useServerless.nextGen`                   | boolean | `true`             | Sets the generation of the Serverless collection group. `true` uses the `NEXTGEN` generation, which supports scaling compute to zero (a minimum OCU of `0`); `false` uses the `CLASSIC` generation. The collection is placed in a collection group in both cases. Defaults to `true` for commercial partitions and must be `false` for AWS GovCloud and the AWS European Sovereign Cloud, where the next-generation generation is not available.                                                                                                                                                                                                                                                                                                                                      |
+| `app.openSearch.useServerless.allowPublic`               | boolean | `true`             | Controls whether the Serverless collection accepts public network access. When `true`, the collection is reachable over the public internet (subject to data-access policies). When `false`, the collection is reachable only through a VPC endpoint, which requires `app.useGlobalVpc.enabled` to be `true`. As with provisioned OpenSearch, only the OpenSearch-facing Lambda functions (search and indexers) are placed in the VPC — `app.useGlobalVpc.useForAllLambdas` does **not** need to be `true`. Set to `false` for production deployments. A fully network-isolated deployment (`app.useGlobalVpc.enabled` and `app.useGlobalVpc.useForAllLambdas` both `true`) must set `allowPublic` to `false`; configuration validation rejects a public collection in that topology. |
+| `app.openSearch.useServerless.enableStandbyReplicas`     | boolean | tracks `nextGen`   | Enables standby replicas on the collection group for cross-Availability-Zone redundancy. **Required** for the `NEXTGEN` generation — when `nextGen` is `true`, this must be `true` (OpenSearch Serverless rejects a `NEXTGEN` collection group with standby replicas disabled), and configuration validation enforces it. For the `CLASSIC` generation it is optional: `false` favors lower cost, `true` adds production high availability. Defaults to the value of `nextGen` (`true` for `NEXTGEN`, `false` for `CLASSIC`).                                                                                                                                                                                                                                                         |
+| `app.openSearch.useServerless.minIndexingOcu`            | number  | `2`                | Minimum indexing capacity in OpenSearch Compute Units (OCU) for the collection group. Must be one of the allowed OCU values: `0`, `2`, `4`, `8`, `16`, or any multiple of `16`. A value of `0` enables scale-to-zero and is supported only when `nextGen` is `true` (the `NEXTGEN` generation).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `app.openSearch.useServerless.maxIndexingOcu`            | number  | `16`               | Maximum indexing capacity in OCU for the collection group. Must be one of the allowed OCU values: `2`, `4`, `8`, `16`, or any multiple of `16` (and at least `minIndexingOcu`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `app.openSearch.useServerless.minSearchOcu`              | number  | `2`                | Minimum search capacity in OCU for the collection group. Must be one of the allowed OCU values: `0`, `2`, `4`, `8`, `16`, or any multiple of `16`. A value of `0` enables scale-to-zero and is supported only when `nextGen` is `true` (the `NEXTGEN` generation).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `app.openSearch.useServerless.maxSearchOcu`              | number  | `16`               | Maximum search capacity in OCU for the collection group. Must be one of the allowed OCU values: `2`, `4`, `8`, `16`, or any multiple of `16` (and at least `minSearchOcu`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `app.openSearch.useServerless.deployDeferredIndexSchema` | boolean | `false`            | Used only to finish a **deferred** private next-gen setup (a deployment made with `allowPublic=false`, `nextGen=true`, and `app.useGlobalVpc.addVpcEndpoints=false`, where VAMS skipped index creation). After you manually create the `aoss-data` VPC endpoint and network policy, set this to `true` for one deployment so the schema-deploy resource creates the index mappings against the now-reachable collection, then set it back to `false`. Ignored when `addVpcEndpoints=true` (nothing is deferred). Can be overridden with CDK context `deployDeferredIndexSchema=true`. See [OpenSearch — deferred next-gen setup](../developer/opensearch.md#deferred-next-gen-setup-manual-vpc-endpoint).                                                                             |
+| `app.openSearch.useProvisioned.enabled`                  | boolean | `false`            | Deploys a provisioned Amazon OpenSearch Service domain. Requires a VPC with at least `availabilityZoneCount` Availability Zones.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `app.openSearch.useProvisioned.availabilityZoneCount`    | number  | `2`                | Number of Availability Zones the zone-aware provisioned domain and its VPC subnets span (one data node per zone). Must be `2` or `3`. At `2` the domain runs Multi-AZ **without** Standby; at `3` it runs Multi-AZ **with** Standby (the asset/file indexes are created with two replicas to give the multiple-of-three copies Standby requires). Switching an existing domain to `3` in place is rejected by the service — a 3-AZ Standby domain must be created fresh (disable and re-enable OpenSearch, then reindex). Keep `2` for Regions or partitions that expose only two Availability Zones, such as the AWS European Sovereign Cloud Region `eusc-de-east-1`.                                                                                                               |
+| `app.openSearch.useProvisioned.numberOfShards`           | number  | `1`                | Number of primary shards per provisioned OpenSearch index (asset and file). Must be an integer of `1` or greater. Defaults to `1`. Increase for large indexes — as a guideline, an index expected to exceed roughly 60 GB (about 3 million asset or file records for VAMS) should use more than one shard. Changing this value requires re-creating the index: disable and re-enable OpenSearch (or otherwise recreate the domain), then reindex. Existing indexes are not re-sharded in place.                                                                                                                                                                                                                                                                                       |
+| `app.openSearch.useProvisioned.dataNodeInstanceType`     | string  | `r6g.large.search` | Instance type for the data nodes in the provisioned domain (one data node per Availability Zone by default).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `app.openSearch.useProvisioned.masterNodeInstanceType`   | string  | `r6g.large.search` | Instance type for the 3 dedicated master nodes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `app.openSearch.useProvisioned.ebsInstanceNodeSizeGb`    | number  | `120`              | Amazon EBS volume size in GB per data node.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `app.openSearch.reindexOnCdkDeploy`                      | boolean | `false`            | Triggers automatic reindexing of all assets and files during deployment via a CloudFormation custom resource. **Important:** Enable only for a second deployment after initial deployment or version upgrade, then set back to `false`. Can be overridden with CDK context `reindexOnCdkDeploy=true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 :::note[Mutual exclusion]
 You cannot enable both OpenSearch Serverless and OpenSearch Provisioned simultaneously. Enable at most one option, or disable both to deploy without search functionality.
 :::
 
+:::tip[Scale-to-zero and cold starts]
+On next-generation Serverless, setting `minIndexingOcu` and `minSearchOcu` to `0` lets the collection scale its compute down to zero when idle, which removes the standing OCU cost of an always-on collection. The trade-off is a cold start: after roughly 10 minutes without activity, the first search or indexing request incurs an added latency of about 10–20 seconds while capacity scales back up. Keep the minimums at `1` or greater to avoid cold starts when consistent low latency matters more than cost.
+:::
+
+:::warning[Private Serverless requires a VPC across two Availability Zones]
+A private collection (`allowPublic=false`) is reachable only through its VPC endpoint, which is placed across two Availability Zones for high availability. A private Serverless deployment therefore requires `app.useGlobalVpc.enabled` to be `true`, and the VPC provides at least two Availability Zones. As with provisioned OpenSearch, only the OpenSearch-facing Lambda functions (search and indexers) are placed in the VPC, so `app.useGlobalVpc.useForAllLambdas` does not need to be enabled. Configuration validation rejects a private collection when `app.useGlobalVpc.enabled` is `false`.
+
+The VPC endpoint type is selected automatically by the collection generation, because the two generations expose different collection endpoint hostnames. A next-generation collection (`nextGen=true`) serves its endpoint on `\{collection-id\}.aoss.\{region\}.on.aws` and is reached through a standard AWS PrivateLink interface endpoint (service `com.amazonaws.\{region\}.aoss-data`) with private DNS enabled. A classic collection (`nextGen=false`) serves its endpoint on `\{collection-id\}.\{region\}.aoss.amazonaws.com` and is reached through the Amazon OpenSearch Serverless-managed VPC endpoint, which provisions its own Amazon Route 53 private hosted zone. VAMS creates the correct endpoint type for the configured generation; the in-VPC Lambda functions connect over private DNS on port 443 using SigV4 signing with service name `aoss`.
+
+The next-generation endpoint is a standard Amazon EC2 interface endpoint, so it follows `app.useGlobalVpc.addVpcEndpoints` like every other interface endpoint: when that is `false`, VAMS does not create the endpoint or the collection's VPC network access policy, and you must create them manually after deployment (the classic managed endpoint is not governed by this flag and is always created). See [OpenSearch — deferred next-gen setup](../developer/opensearch.md#deferred-next-gen-setup-manual-vpc-endpoint) for the manual setup procedure.
+:::
+
 :::tip[OpenSearch Provisioned first deployment]
 OpenSearch Provisioned creates service-linked roles that may not propagate immediately. If you encounter the error _"Before you can proceed, you must enable a service-linked role"_, wait 5 minutes and redeploy. See [Common deployment errors](deploy-the-solution.md#common-deployment-errors) for additional troubleshooting.
+:::
+
+:::warning[OpenSearch Provisioned is for advanced deployments]
+Amazon OpenSearch Serverless is the recommended option for most VAMS deployments. The provisioned option is intended for advanced deployments that require dedicated capacity, custom instance sizing, or features unsupported by Serverless, and it introduces several operational considerations that can disrupt AWS CloudFormation stack deployments:
+
+-   **VPC requirement** -- A VPC with at least 3 Availability Zones must already exist or be created by the same deploy.
+-   **Fragile AWS CloudFormation updates** -- Domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the AWS CloudFormation custom-resource timeout. Major engine-version upgrades (for example 2.7 to 3.5 in v2.6) sometimes fail in place and require redeploying with OpenSearch disabled, then re-enabling, before the upgrade succeeds.
+-   **Service-linked role propagation** -- First-time deploys may fail with a service-linked-role error and require waiting 5 minutes before retrying.
+-   **Reindex required after index-name or schema bumps** -- Provisioned domains do not auto-populate new indexes; you must run the version-specific data migration script to repopulate them. See [Update the solution](update-the-solution.md) and the migration READMEs under `infra/deploymentDataMigration/`.
+
+If you do not have a specific requirement that mandates Provisioned, prefer `app.openSearch.useServerless.enabled = true`.
 :::
 
 ## Amazon Location Service (`app.useLocationService`)
@@ -412,12 +465,13 @@ Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketpl
 
 NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Requires VPC.**
 
-| Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                  |
-| -------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.pipelines.useIsaacLabTraining.enabled`              | boolean | `false` | Enables the Isaac Lab training pipeline.                                                                                                                                                                                                                     |
-| `app.pipelines.useIsaacLabTraining.acceptNvidiaEula`     | boolean | `false` | **Required when enabled.** Confirms acceptance of the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Deployment fails if not set to `true` when the pipeline is enabled. |
-| `app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers training and evaluation workflows during deployment.                                                                                                                                                                                 |
-| `app.pipelines.useIsaacLabTraining.keepWarmInstance`     | boolean | `false` | Keeps a warm AWS Batch compute instance running to reduce cold start times. **Warning:** Incurs continuous compute costs even when no jobs are running.                                                                                                      |
+| Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useIsaacLabTraining.enabled`              | boolean | `false` | Enables the Isaac Lab training pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `app.pipelines.useIsaacLabTraining.acceptNvidiaEula`     | boolean | `false` | **Required when enabled.** Confirms acceptance of the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Deployment fails if not set to `true` when the pipeline is enabled.                                                                                                                                                                                                                                                                                   |
+| `app.pipelines.useIsaacLabTraining.useCodeBuild`         | boolean | `false` | When true, the Isaac Lab container is built using AWS CodeBuild in the cloud and pushed to ECR. When false (default), the container is built locally during CDK deployment using DockerImageAsset. CodeBuild runs in the same private VPC subnets as the pipeline Batch compute environments, with NAT Gateway egress for internet access, and forwards the `acceptNvidiaEula` flag as the `ACCEPT_EULA` Docker build argument. CodeBuild builds run asynchronously — if a build fails, check the CodeBuild project name in CDK stack outputs. |
+| `app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers training and evaluation workflows during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `app.pipelines.useIsaacLabTraining.keepWarmInstance`     | boolean | `false` | Keeps a warm AWS Batch compute instance running to reduce cold start times. **Warning:** Incurs continuous compute costs even when no jobs are running.                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ### NVIDIA Cosmos Predict (`app.pipelines.useNvidiaCosmos`)
 
@@ -529,6 +583,7 @@ For complete configuration examples, see the template files in the repository:
 
 -   **Commercial:** [`infra/config/config.template.commercial.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.commercial.json)
 -   **GovCloud:** [`infra/config/config.template.govcloud.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.govcloud.json)
+-   **AWS European Sovereign Cloud:** [`infra/config/config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json)
 
 ### AWS GovCloud deployment
 
@@ -543,7 +598,7 @@ Key differences from the commercial template:
         "govCloud": { "enabled": true, "il6Compliant": false },
         "useGlobalVpc": {
             "enabled": true,
-            "useForAllLambdas": true,
+            "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "vpcCidrRange": "10.1.0.0/16"
         },
@@ -562,8 +617,50 @@ Key differences from the commercial template:
 }
 ```
 
-:::tip[VPC auto-enablement]
-When any container-based pipeline is enabled, the VPC is automatically enabled even if `useGlobalVpc.enabled` is set to `false` in your configuration.
+:::note[Running all Lambda functions inside the VPC]
+The GovCloud template sets `useGlobalVpc.useForAllLambdas` to `false`, so only the AWS Lambda functions that strictly require the VPC run inside it. Set `useGlobalVpc.useForAllLambdas` to `true` to place **all** VAMS Lambda functions inside the VPC (with the required VPC interface endpoints) when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
+:::
+
+:::warning[VPC is required for some features]
+Some features require a VPC and `app.useGlobalVpc.enabled` must be `true` when they are enabled. If one is enabled while `app.useGlobalVpc.enabled` is `false`, configuration validation fails with an error that lists the offending features; set `app.useGlobalVpc.enabled` to `true` (or disable those features). VPC-requiring features are: ALB deployment (`useAlb`), OpenSearch Provisioned (`openSearch.useProvisioned`), and the container-based pipelines (Potree viewer, 3D preview thumbnail, GenAI labeling, Gaussian splatting, RapidPipeline ECS/EKS, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Gr00t).
+:::
+
+### AWS European Sovereign Cloud deployment
+
+The AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`) is a separate, isolated partition. For now, deploy to it using the GovCloud guardrails: set `app.govCloud.enabled = true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service). The European Sovereign Cloud Region currently exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`.
+
+Key differences from the commercial template (see [`config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json)):
+
+```json
+{
+    "env": { "region": "eusc-de-east-1" },
+    "app": {
+        "useWaf": true,
+        "useKmsCmkEncryption": { "enabled": true },
+        "govCloud": { "enabled": true, "il6Compliant": false },
+        "useGlobalVpc": {
+            "enabled": true,
+            "useForAllLambdas": false,
+            "addVpcEndpoints": true,
+            "vpcCidrRange": "10.1.0.0/16"
+        },
+        "openSearch": {
+            "useProvisioned": { "enabled": true, "availabilityZoneCount": 2 }
+        },
+        "useLocationService": { "enabled": false },
+        "useAlb": {
+            "enabled": true,
+            "usePublicSubnet": false,
+            "domainHost": "vams.example.eu",
+            "certificateArn": "arn:aws-eusc:acm:REGION:ACCOUNT:certificate/ID"
+        },
+        "useCloudFront": { "enabled": false }
+    }
+}
+```
+
+:::note[Running all Lambda functions inside the VPC]
+The European Sovereign Cloud template sets `useGlobalVpc.useForAllLambdas` to `false`, so only the AWS Lambda functions that strictly require the VPC run inside it. Set `useGlobalVpc.useForAllLambdas` to `true` to place **all** VAMS Lambda functions inside the VPC (with the required VPC interface endpoints) when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
 :::
 
 ## Additional configuration files
@@ -573,6 +670,7 @@ Beyond `config.json`, VAMS supports several supplementary configuration files:
 | File                                                         | Purpose                                                                                                                                                                                             |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `infra/config/policy/s3AdditionalBucketPolicyConfig.json`    | Additional IAM policy statements applied to all Amazon S3 buckets. Controls presigned URL and STS credential access restrictions.                                                                   |
+| `infra/config/policy/iamRoleConfig.json`                     | Pre-created IAM role mappings for restricted environments. Read only when `app.iamRoleConfig.useCustomBootstrapRoles` or `app.iamRoleConfig.useCustomVamsStackRoles` is `true`.                     |
 | `infra/config/csp/cspAdditionalConfig.json`                  | Additional Content Security Policy (CSP) sources for external APIs, scripts, images, media, fonts, and styles.                                                                                      |
 | `infra/config/saml-config.ts`                                | SAML identity provider settings for Amazon Cognito federation. Required when `authProvider.useCognito.useSaml` is `true`. See [Security Architecture](../architecture/security.md#saml-federation). |
 | `infra/config/docker/Dockerfile-customDependencyBuildConfig` | Custom Docker build configuration for Lambda layer packaging. Useful for adding custom SSL certificates for HTTPS proxy environments.                                                               |
@@ -627,6 +725,105 @@ The total IAM role name character count limit is 64 characters. Long prefixes ma
     }
 }
 ```
+
+## Advanced IAM role customization (`app.iamRoleConfig`)
+
+Some organizations centrally provision IAM roles and do not allow deployment processes to create them. VAMS supports two independent, opt-in mechanisms for these environments. Both are disabled by default; when both are off, VAMS manages all IAM roles itself, which is the recommended approach because grants stay automatically in sync with the resources they protect.
+
+Each mechanism is toggled by a boolean in `config.json` under `app.iamRoleConfig`, while the actual mappings (role ARNs, construct-path-to-role-name maps) live in the separate `infra/config/policy/iamRoleConfig.json` file. This keeps the verbose values out of the main configuration and lets a central IAM team own that file.
+
+| `app.iamRoleConfig` flag  | Mappings source (section in `iamRoleConfig.json`) | Controls                                                                                                             |
+| ------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `useCustomBootstrapRoles` | `bootstrap`                                       | The CDK bootstrap roles assumed during deployment (deploy, CloudFormation execution, lookup, file/image publishing). |
+| `useCustomVamsStackRoles` | `vamsStacks`                                      | The application roles VAMS constructs create inside the stacks (Lambda execution roles, and so on).                  |
+
+:::info[How this relates to `environments.aws`]
+The `environments.aws` settings in `cdk.json` (role name prefix and permission boundary) constrain roles that VAMS **creates**. `app.iamRoleConfig` instead lets VAMS **avoid creating** bootstrap and/or application roles by pointing at pre-created ones. The two are complementary: use `environments.aws` when VAMS may create roles within guardrails, and `app.iamRoleConfig` when it may not create them at all.
+:::
+
+### Bootstrap role customization (`bootstrap`)
+
+By default, `cdk bootstrap` creates five roles per account and Region (for example, `cdk-hnb659fds-deploy-role-<account>-<region>`). When `useCustomBootstrapRoles` is `true`, VAMS configures its stack synthesizer from the `bootstrap` section. This applies to both the VAMS WAF stack and the VAMS core stack; nested stacks inherit the synthesizer from their parent automatically.
+
+| Field in `bootstrap`             | Description                                                                                                                                                                                                            |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useCliCredentialsSynthesizer`   | When `true`, no bootstrap IAM roles are used at all. Deployments run under the caller's own credentials and only require the staging bucket and ECR repo. Does not support cross-account deployments or CDK Pipelines. |
+| `qualifier`                      | Bootstrap qualifier, if you bootstrapped with a non-default qualifier. Leave empty for the CDK default (`hnb659fds`).                                                                                                  |
+| `deployRoleArn`                  | ARN of the pre-created deploy role assumed by the CDK CLI. Empty fields fall back to the CDK default name.                                                                                                             |
+| `cloudFormationExecutionRoleArn` | ARN of the pre-created role AWS CloudFormation uses to execute the deployment.                                                                                                                                         |
+| `lookupRoleArn`                  | ARN of the pre-created role used for environment context lookups.                                                                                                                                                      |
+| `fileAssetPublishingRoleArn`     | ARN of the pre-created role used to publish file assets to the staging bucket.                                                                                                                                         |
+| `imageAssetPublishingRoleArn`    | ARN of the pre-created role used to publish Docker image assets to the staging ECR repository.                                                                                                                         |
+| `fileAssetsBucketName`           | Staging bucket name, only if your customized bootstrap template renamed it.                                                                                                                                            |
+| `imageAssetsRepositoryName`      | Staging ECR repository name, only if your customized bootstrap template renamed it.                                                                                                                                    |
+
+Any field left empty keeps the corresponding CDK default. ARNs may use the `${AWS::Partition}`, `${AWS::AccountId}`, and `${AWS::Region}` placeholders, which resolve at deployment time. To discover the required permissions for each role, export the default bootstrap template with `cdk bootstrap --show-template > bootstrap-template.yaml` and copy the role policies into your role-provisioning process.
+
+:::tip[Simpler middle ground]
+If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
+:::
+
+### VAMS stack role customization (`vamsStacks`)
+
+When `useCustomVamsStackRoles` is `true`, VAMS calls `iam.Role.customizeRoles` at the CDK app level. Because it is applied at the app level, a single IAM policy report covers the VAMS WAF stack, the core stack, and every nested stack.
+
+| Field in `vamsStacks` | Description                                                                                                                                                                                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generateReportOnly`  | When `true` (discovery mode), VAMS still creates roles during synthesis but also writes `iam-policy-report.txt` and `iam-policy-report.json` to `cdk.out`. When `false`, role synthesis is prevented and any role not listed in `precreatedRoles` causes synthesis to fail. |
+| `precreatedRoles`     | JSON object mapping each role's construct path to a pre-created IAM role name (`"<construct path>": "<role name>"`). The construct paths come from the generated report. See [`iamRoleConfig.json` format](#iamroleconfigjson-format) below for a complete example.         |
+
+**Recommended workflow:**
+
+1. Set `useCustomVamsStackRoles` to `true` and `generateReportOnly` to `true` in the `vamsStacks` section.
+2. Run `cd infra && npx cdk synth`. VAMS writes `cdk.out/iam-policy-report.txt` (and `.json`) listing every role it would create, each with its trust policy and required permissions.
+3. Hand the report to whoever pre-creates IAM roles in your organization. They create the roles outside of VAMS.
+4. Populate `precreatedRoles` with a `"<construct path>": "<pre-created role name>"` entry for every role in the report, then set `generateReportOnly` to `false`.
+5. Synthesize and deploy. Once every role is mapped, the synthesized templates reference the existing roles and contain no `AWS::IAM::Role` resources.
+
+:::warning[Map every role]
+With `generateReportOnly` set to `false`, synthesis fails if any role the constructs need is not present in `precreatedRoles`. Re-run the report whenever you enable a new VAMS feature or pipeline, since new features introduce new roles.
+:::
+
+#### `iamRoleConfig.json` format
+
+The `precreatedRoles` field is a JSON object (a map), **not** an array. Each key is the **construct path** of a role exactly as it appears in the generated `iam-policy-report.txt` (the value shown in parentheses after `<missing role>`), and each value is the **name** of the IAM role you pre-created in your account. The key is a path string, not an ARN; the value is a plain role name, not an ARN.
+
+The report lists each role like this:
+
+```
+<missing role> (vams-core-prod-us-east-1/StorageResourcesBuilder/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role)
+```
+
+You take the text in parentheses as the key and map it to your pre-created role name. A complete `infra/config/policy/iamRoleConfig.json` with mock values looks like this:
+
+```json
+{
+    "bootstrap": {
+        "useCliCredentialsSynthesizer": false,
+        "qualifier": "",
+        "deployRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-deploy-role",
+        "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-cfn-exec-role",
+        "lookupRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-lookup-role",
+        "fileAssetPublishingRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-file-publishing-role",
+        "imageAssetPublishingRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/my-org-cdk-image-publishing-role",
+        "fileAssetsBucketName": "",
+        "imageAssetsRepositoryName": ""
+    },
+    "vamsStacks": {
+        "generateReportOnly": false,
+        "precreatedRoles": {
+            "vams-core-prod-us-east-1/StorageResourcesBuilder/BucketNotificationsHandler050a0587b7544547bf325f094a3db834/Role": "my-org-vams-storage-bucketnotify-role",
+            "vams-core-prod-us-east-1/ApiBuilder/VAMSWorkflowIAMRole/Resource": "my-org-vams-workflow-role",
+            "vams-core-prod-us-east-1/AuthBuilder/Cognito/.../ServiceRole": "my-org-vams-auth-service-role",
+            "vams-waf-prod-us-east-1/Wafv2CF/.../ServiceRole": "my-org-vams-waf-service-role"
+        }
+    }
+}
+```
+
+:::note[Keys are deployment-specific]
+The construct path keys begin with your full stack name (for example, `vams-core-prod-us-east-1`), which is derived from `name`, `app.baseStackName`, and the Region. If you change any of those values, the keys change and the report must be regenerated. Always copy the exact paths from your own `iam-policy-report.txt` rather than from this example. The values (`my-org-vams-*` above) are placeholders for whatever role names your IAM team assigns.
+:::
 
 ### Amazon S3 additional bucket policy (`infra/config/policy/s3AdditionalBucketPolicyConfig.json`)
 

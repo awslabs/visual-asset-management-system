@@ -16,11 +16,11 @@ import { Construct } from "constructs";
 import { LayerVersion, Runtime } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { Stack } from "aws-cdk-lib";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../config/config";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import { getS3AssetBucketRecords } from "../../../../../helper/s3AssetBuckets";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import {
     buildConstructPipelineFunction,
@@ -64,17 +64,25 @@ export class CoordinateTransformConstruct extends Construct {
             "s3:GetBucketLocation",
         ];
 
-        const assetBucketArns: string[] = [];
-        for (const record of getS3AssetBucketRecords()) {
-            assetBucketArns.push(record.bucket.bucketArn);
-            assetBucketArns.push(record.bucket.bucketArn + "/*");
-        }
-
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
-                new iam.PolicyStatement({
-                    actions: s3BucketActions,
-                    resources: assetBucketArns,
+                // Add permissions for all asset buckets from the global array
+                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                    const prefix = record.prefix || "/";
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
+                    const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
+
+                    return new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: s3BucketActions,
+                        resources: [
+                            record.bucket.bucketArn,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
+                        ],
+                    });
                 }),
             ],
         });

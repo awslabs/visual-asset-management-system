@@ -11,6 +11,8 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
@@ -68,6 +70,11 @@ export interface storageResources {
         actions: logs.LogGroup;
         errors: logs.LogGroup;
     };
+    eventBridge: {
+        orchestrationBus: events.EventBus;
+        orchestrationBusAuditLogGroup: logs.LogGroup;
+        eventSourcePrefix: string;
+    };
     dynamo: {
         appFeatureEnabledStorageTable: dynamodb.Table;
         assetLinksStorageTableV2: dynamodb.Table;
@@ -84,6 +91,7 @@ export interface storageResources {
         metadataSchemaStorageTableV2: dynamodb.Table;
         databaseMetadataStorageTable: dynamodb.Table;
         assetFileMetadataStorageTable: dynamodb.Table;
+        assetFileVersionHistoryStorageTable: dynamodb.Table;
         fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
@@ -300,7 +308,14 @@ export function storageResourcesBuilder(
                         s3.HttpMethods.POST,
                         s3.HttpMethods.HEAD,
                     ],
-                    exposedHeaders: ["ETag"],
+                    // Expose range/streaming headers for file streaming
+                    exposedHeaders: [
+                        "ETag",
+                        "Accept-Ranges",
+                        "Content-Range",
+                        "Content-Length",
+                        "Content-Encoding",
+                    ],
                 },
             ],
             lifecycleRules: [
@@ -605,6 +620,55 @@ export function storageResourcesBuilder(
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
     };
+
+    /**
+     * Create EventBridge Orchestration Bus
+     */
+
+    // Deployment-unique bus name and event source prefix so multiple deployments can coexist in a region
+    const orchestrationBusName = `${config.name}-${config.app.baseStackName}-orchestration`;
+    const eventSourcePrefix = `${config.name}.${config.app.baseStackName}`;
+
+    const orchestrationBus = new events.EventBus(scope, "OrchestrationBus", {
+        eventBusName: orchestrationBusName,
+    });
+
+    // KMS encryption is only settable on the underlying CfnEventBus
+    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey) {
+        const cfnBus = orchestrationBus.node.defaultChild as events.CfnEventBus;
+        cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
+    }
+
+    // Audit log group for the orchestration bus
+    const orchestrationBusAuditLogGroup = new logs.LogGroup(
+        scope,
+        "OrchestrationBusAuditLogGroup",
+        {
+            logGroupName:
+                "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSOrchestrationBusAudit",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }
+    );
+
+    // Audit rule: route all events from this deployment's sources to the audit log group
+    const orchestrationBusAuditRule = new events.Rule(scope, "OrchestrationBusAuditRule", {
+        eventBus: orchestrationBus,
+        eventPattern: {
+            source: events.Match.prefix(eventSourcePrefix),
+        },
+    });
+
+    orchestrationBusAuditRule.addTarget(
+        new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
+    );
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
@@ -911,6 +975,42 @@ export function storageResourcesBuilder(
         },
         sortKey: {
             name: "metadataKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Asset File Version History — one record per (file, S3 version) change event.
+    // Captures change provenance (who/what/how) stamped as vams-change* S3
+    // metadata and ingested by sqsBucketSync. PK is the composite
+    // databaseId:assetId:filePath (matching the AssetFileMetadata convention);
+    // SK is the S3 VersionId ("null" for non-versioned buckets). The
+    // DatabaseIdAssetIdIndex GSI supports "all history for an asset" lookups.
+    const assetFileVersionHistoryStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileVersionHistoryStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId:assetId:filePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "versionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSI for querying all version-history records across an asset.
+    assetFileVersionHistoryStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "versionId",
             type: dynamodb.AttributeType.STRING,
         },
         projectionType: dynamodb.ProjectionType.ALL,
@@ -1420,6 +1520,11 @@ export function storageResourcesBuilder(
             databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
         },
         cloudWatchAuditLogGroups: auditLogGroups,
+        eventBridge: {
+            orchestrationBus: orchestrationBus,
+            orchestrationBusAuditLogGroup: orchestrationBusAuditLogGroup,
+            eventSourcePrefix: eventSourcePrefix,
+        },
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
             assetLinksStorageTableV2: assetLinksStorageTableV2,
@@ -1438,6 +1543,7 @@ export function storageResourcesBuilder(
             metadataSchemaStorageTableV2: metadataSchemaStorageTableV2,
             databaseMetadataStorageTable: databaseMetadataStorageTable,
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,
+            assetFileVersionHistoryStorageTable: assetFileVersionHistoryStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             tagStorageTable: tagStorageTable,

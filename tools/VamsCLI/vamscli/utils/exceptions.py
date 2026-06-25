@@ -519,6 +519,12 @@ class TemplateImportError(ConstraintError):
     pass
 
 
+# Auth routes-related business logic exceptions
+class AuthRoutesError(BusinessLogicError):
+    """Base class for auth routes listing errors."""
+    pass
+
+
 # API key-related business logic exceptions
 class ApiKeyError(BusinessLogicError):
     """Base class for API key errors."""

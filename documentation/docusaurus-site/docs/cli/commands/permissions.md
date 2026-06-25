@@ -173,6 +173,25 @@ Updates replace the entire constraint. Use `--json-input` for complex updates to
 vamscli role constraint delete -c old-constraint --confirm
 ```
 
+### List constraint permission objects
+
+List the constraint object types and their valid fields, the criteria operators, the permissions (HTTP actions), and the permission types.
+
+```bash
+vamscli role constraint permission-objects [--json-output]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--json-output` | flag | No       | Output raw JSON response |
+
+Example:
+
+```bash
+vamscli role constraint permission-objects
+vamscli role constraint permission-objects --json-output
+```
+
 ---
 
 ## Constraint Template Import

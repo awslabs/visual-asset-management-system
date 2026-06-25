@@ -61,6 +61,8 @@ A role is a named permission group. Users are assigned to roles, and roles have 
 
 :::note[MFA-aware roles]
 Roles can be configured with `mfaRequired: true`. When MFA is required, the role's constraints are only active when the user's session includes a valid MFA claim. If MFA is not present, the role is treated as if it does not exist for that session.
+
+MFA enforcement requires the authorization Lambda functions to reach Amazon Cognito, which is not possible from a VPC isolated subnet (Amazon Cognito has no VPC interface endpoint). In deployment topologies that place those Lambda functions in the VPC, the MFA check is disabled and `mfaRequired` has no effect. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for the exact conditions.
 :::
 
 ### Constraints
@@ -72,7 +74,15 @@ A constraint is a policy rule that defines what a role can do. Each constraint s
 -   **Permissions** -- The HTTP methods allowed or denied (`GET`, `PUT`, `POST`, `DELETE`).
 -   **Permission type** -- Whether the constraint is an `allow` or `deny` rule.
 
-Constraints use `criteriaAnd` (all conditions must match) and `criteriaOr` (at least one condition must match) to build complex matching rules.
+Constraints use `criteriaAnd` (all conditions must match) and `criteriaOr` (at least one condition must match) to build complex matching rules. When a constraint defines both, they combine within the same rule: access matches only if **all** `criteriaAnd` conditions are true **and at least one** `criteriaOr` condition is true.
+
+:::warning[Constraint management is an administrative operation]
+The ability to create, modify, or delete constraints is itself a privileged capability. Constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, and `/auth/constraintsTemplateImport`) are gated at Tier 1 by the `api` object type and, in the default deployment, are granted only to the `admin` role.
+
+A role that can manage constraints can grant itself or others access to any resource in VAMS — for example, by creating an `allow` constraint with a broad `databaseId contains .*` rule. This is equivalent to granting AWS Identity and Access Management (IAM) policy-editing permissions: the holder effectively controls all authorization decisions. Constraints are configuration objects and do not have their own per-object (Tier 2) restrictions.
+
+Only grant access to the constraint management routes to fully trusted administrators. Do not delegate `api` access to `/auth/constraints` (or the constraint web route `/auth/constraints`) to roles intended for general or untrusted users. Treat any change to who can manage constraints as a privileged administrative change and review it accordingly.
+:::
 
 ## Casbin policy model
 
@@ -102,6 +112,8 @@ Each object type supports specific constraint fields that can be used in criteri
 | `tagType`        | `tagTypeName`                                                       | Tag type CRUD operations.                           |
 | `role`           | `roleName`                                                          | Role management.                                    |
 | `userRole`       | `roleName`, `userId`                                                | User-to-role assignment management.                 |
+
+This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
 
 ## Constraint criteria operators
 

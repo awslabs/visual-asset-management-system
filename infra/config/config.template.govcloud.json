@@ -14,6 +14,10 @@
         },
         "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
+        "iamRoleConfig": {
+            "useCustomBootstrapRoles": false,
+            "useCustomVamsStackRoles": false
+        },
         "useFips": true,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
@@ -27,7 +31,7 @@
         },
         "useGlobalVpc": {
             "enabled": true,
-            "useForAllLambdas": true,
+            "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
             "optionalExternalIsolatedSubnetIds": null,
@@ -37,10 +41,20 @@
         },
         "openSearch": {
             "useServerless": {
-                "enabled": false
+                "enabled": false,
+                "nextGen": false,
+                "allowPublic": false,
+                "enableStandbyReplicas": false,
+                "minIndexingOcu": 2,
+                "maxIndexingOcu": 16,
+                "minSearchOcu": 2,
+                "maxSearchOcu": 16,
+                "deployDeferredIndexSchema": false
             },
             "useProvisioned": {
                 "enabled": true,
+                "availabilityZoneCount": 2,
+                "numberOfShards": 1,
                 "dataNodeInstanceType": "r6g.large.search",
                 "masterNodeInstanceType": "r6g.large.search",
                 "ebsInstanceNodeSizeGb": 120
@@ -138,6 +152,7 @@
             "useIsaacLabTraining": {
                 "enabled": false,
                 "acceptNvidiaEula": false,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true,
                 "keepWarmInstance": false
             },

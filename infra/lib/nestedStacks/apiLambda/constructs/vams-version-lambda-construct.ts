@@ -13,6 +13,7 @@ import { Construct } from "constructs";
 import { Service } from "../../../helper/service-helper";
 import * as Config from "../../../../config/config";
 import { VAMS_VERSION } from "../../../../config/config";
+import { suppressCdkNagLambda } from "../../../helper/security";
 
 interface InlineLambdaProps {
     /**
@@ -62,6 +63,8 @@ export class VamsVersionLambdaConstruct extends Construct {
 
         // add lambda policies
         lambdaFn.grantInvoke(Service("APIGATEWAY").Principal);
+
+        suppressCdkNagLambda(lambdaFn);
 
         // add lambda integration
         const lambdaFnIntegration = new apigwIntegrations.HttpLambdaIntegration(

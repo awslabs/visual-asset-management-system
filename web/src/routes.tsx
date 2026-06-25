@@ -5,7 +5,7 @@
 
 import React, { Suspense, useEffect, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { webRoutes } from "./services/APIService";
+import { checkWebRoutesAllowed } from "./services/webRoutesCheck";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import { Navigation } from "./layout/Navigation";
 import LandingPage from "./pages/LandingPage";
@@ -254,13 +254,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
 
         try {
-            webRoutes({ routes: allRoutes })
-                .then((value) => {
-                    if (value[0] === false) {
-                        throw new Error("webRoutes - " + value[1]);
-                    }
-
-                    for (const allowedRoute of value.allowedRoutes) {
+            checkWebRoutesAllowed(allRoutes)
+                .then((allowed) => {
+                    for (const allowedRoute of allowed) {
                         allAllowedRoutes.push(allowedRoute.route__path);
                     }
 

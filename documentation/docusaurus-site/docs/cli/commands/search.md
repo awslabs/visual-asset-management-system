@@ -21,21 +21,25 @@ Search across all assets with advanced filtering, metadata search, and sorting.
 vamscli search assets [OPTIONS]
 ```
 
-| Option                                 | Type    | Description                                                            |
-| -------------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `-q`, `--query`                        | TEXT    | General text search query (AND with filters)                           |
-| `--filters`                            | TEXT    | Advanced filters (query string or JSON format)                         |
-| `--metadata-query`                     | TEXT    | Metadata search query (AND with query/filters; supports AND/OR within) |
-| `--metadata-mode`                      | CHOICE  | Search mode: `key`, `value`, or `both` (default)                       |
-| `--include-metadata` / `--no-metadata` | Flag    | Include metadata in general search                                     |
-| `--explain-results`                    | Flag    | Include match explanations                                             |
-| `--sort-field`                         | TEXT    | Field to sort by                                                       |
-| `--sort-desc` / `--sort-asc`           | Flag    | Sort direction                                                         |
-| `--from`                               | INTEGER | Pagination start offset                                                |
-| `--size`                               | INTEGER | Results per page (max 2000)                                            |
-| `--include-archived`                   | Flag    | Include archived assets                                                |
-| `--output-format`                      | CHOICE  | `table`, `json`, or `csv`                                              |
-| `--jsonOutput`                         | Flag    | Raw API response as JSON                                               |
+| Option                                 | Type    | Description                                                                |
+| -------------------------------------- | ------- | -------------------------------------------------------------------------- |
+| `-q`, `--query`                        | TEXT    | General text search query (AND with filters)                               |
+| `--filters`                            | TEXT    | Advanced filters (query string or JSON format)                             |
+| `--metadata-query`                     | TEXT    | Metadata search query (AND with query/filters; supports AND/OR within)     |
+| `--metadata-mode`                      | CHOICE  | Search mode: `key`, `value`, or `both` (default)                           |
+| `--include-metadata` / `--no-metadata` | Flag    | Include metadata in general search                                         |
+| `--explain-results`                    | Flag    | Include match explanations                                                 |
+| `--sort-field`                         | TEXT    | Field to sort by                                                           |
+| `--sort-desc` / `--sort-asc`           | Flag    | Sort direction                                                             |
+| `--from`                               | INTEGER | Pagination start offset                                                    |
+| `--size`                               | INTEGER | Results per page (max 2000)                                                |
+| `--include-archived`                   | Flag    | Include archived assets                                                    |
+| `--geo-point`                          | TEXT    | Geo filter as `lat,lon` or `lat,lon,radiusMeters`                          |
+| `--geo-bbox`                           | TEXT    | Geo filter as `topLeftLat,topLeftLon,bottomRightLat,bottomRightLon`        |
+| `--geo-geojson`                        | PATH    | Path to a GeoJSON file (Geometry, Feature, or FeatureCollection)           |
+| `--geo-relation`                       | CHOICE  | Spatial relation: `intersects` (default), `within`, `contains`, `disjoint` |
+| `--output-format`                      | CHOICE  | `table`, `json`, or `csv`                                                  |
+| `--jsonOutput`                         | Flag    | Raw API response as JSON                                                   |
 
 ### Filter syntax
 
@@ -78,6 +82,24 @@ vamscli search assets --metadata-query "MD_str_color:red OR MD_str_color:blue"
 vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
 ```
 
+### Geospatial filtering
+
+The `--geo-*` options filter results by the derived `geo_MD_location` field on each indexed document. The indexer populates that field from a `location` metadata key (GeoJSON or `{latitude, longitude, altitude}` payload) or from individual `latitude` / `longitude` / `altitude` metadata fields. Provide exactly one of `--geo-point`, `--geo-bbox`, or `--geo-geojson`.
+
+```bash
+# Within 5 km of Seattle (point + radius)
+vamscli search assets --geo-point "47.6062,-122.3321,5000"
+
+# Inside a bounding box, requiring full containment
+vamscli search assets --geo-bbox "47.7,-122.5,47.5,-122.2" --geo-relation within
+
+# Inside an arbitrary GeoJSON polygon stored on disk
+vamscli search assets --geo-geojson ./aoi.geojson
+
+# Combined with text + metadata filters
+vamscli search assets -q "tower" --metadata-query "MD_str_status:active" --geo-point "47.6,-122.3,2000"
+```
+
 ### Examples
 
 ```bash
@@ -97,13 +119,14 @@ Search across all asset files with file-specific filtering.
 vamscli search files [OPTIONS]
 ```
 
-Supports all the same options as `search assets`. Common file-specific filters:
+Supports all the same options as `search assets`, including the `--geo-point`, `--geo-bbox`, `--geo-geojson`, and `--geo-relation` geospatial flags. Common file-specific filters:
 
 ```bash
 vamscli search files --filters 'str_fileext:"gltf"'
 vamscli search files --filters 'str_fileext:"png" AND str_databaseid:"my-database"'
 vamscli search files --filters '[{"range": {"num_filesize": {"lte": 1048576}}}]'
 vamscli search files --metadata-query "MD_str_format:GLTF2.0"
+vamscli search files --geo-bbox "47.7,-122.5,47.5,-122.2" --geo-relation within
 ```
 
 ---
@@ -116,23 +139,27 @@ Simplified search interface with user-friendly parameters.
 vamscli search simple [OPTIONS]
 ```
 
-| Option               | Type    | Description                                |
-| -------------------- | ------- | ------------------------------------------ |
-| `-q`, `--query`      | TEXT    | General keyword search                     |
-| `--asset-name`       | TEXT    | Search by asset name                       |
-| `--asset-id`         | TEXT    | Search by asset ID                         |
-| `--asset-type`       | TEXT    | Filter by asset type                       |
-| `--file-key`         | TEXT    | Search by file key                         |
-| `--file-ext`         | TEXT    | Filter by file extension                   |
-| `-d`, `--database`   | TEXT    | Filter by database ID                      |
-| `--tags`             | TEXT    | Filter by tags (comma-separated)           |
-| `--metadata-key`     | TEXT    | Search metadata field names                |
-| `--metadata-value`   | TEXT    | Search metadata field values               |
-| `--entity-types`     | TEXT    | `asset`, `file`, or `asset,file` (default) |
-| `--include-archived` | Flag    | Include archived items                     |
-| `--from`             | INTEGER | Pagination offset                          |
-| `--size`             | INTEGER | Results per page (max 1000)                |
-| `--output-format`    | CHOICE  | `table`, `json`, or `csv`                  |
+| Option               | Type    | Description                                              |
+| -------------------- | ------- | -------------------------------------------------------- |
+| `-q`, `--query`      | TEXT    | General keyword search                                   |
+| `--asset-name`       | TEXT    | Search by asset name                                     |
+| `--asset-id`         | TEXT    | Search by asset ID                                       |
+| `--asset-type`       | TEXT    | Filter by asset type                                     |
+| `--file-key`         | TEXT    | Search by file key                                       |
+| `--file-ext`         | TEXT    | Filter by file extension                                 |
+| `-d`, `--database`   | TEXT    | Filter by database ID                                    |
+| `--tags`             | TEXT    | Filter by tags (comma-separated)                         |
+| `--metadata-key`     | TEXT    | Search metadata field names                              |
+| `--metadata-value`   | TEXT    | Search metadata field values                             |
+| `--entity-types`     | TEXT    | `asset`, `file`, or `asset,file` (default)               |
+| `--include-archived` | Flag    | Include archived items                                   |
+| `--geo-point`        | TEXT    | `lat,lon` or `lat,lon,radiusMeters`                      |
+| `--geo-bbox`         | TEXT    | `topLeftLat,topLeftLon,bottomRightLat,bottomRightLon`    |
+| `--geo-geojson`      | PATH    | Path to a GeoJSON file                                   |
+| `--geo-relation`     | CHOICE  | `intersects` (default), `within`, `contains`, `disjoint` |
+| `--from`             | INTEGER | Pagination offset                                        |
+| `--size`             | INTEGER | Results per page (max 1000)                              |
+| `--output-format`    | CHOICE  | `table`, `json`, or `csv`                                |
 
 ```bash
 vamscli search simple -q "training" --entity-types asset
@@ -157,14 +184,15 @@ Use this to discover available field names and types for building filter queries
 
 ## Search Field Reference
 
-| Prefix   | Type     | Example Fields                                              |
-| -------- | -------- | ----------------------------------------------------------- |
-| `str_*`  | String   | `str_assetname`, `str_databaseid`, `str_fileext`, `str_key` |
-| `num_*`  | Numeric  | `num_filesize`                                              |
-| `date_*` | Date     | `date_lastmodified`                                         |
-| `bool_*` | Boolean  | `bool_isdistributable`, `bool_archived`                     |
-| `list_*` | List     | `list_tags`                                                 |
-| `MD_*`   | Metadata | `MD_str_product`, `MD_num_version`                          |
+| Prefix            | Type      | Example Fields                                                        |
+| ----------------- | --------- | --------------------------------------------------------------------- |
+| `str_*`           | String    | `str_assetname`, `str_databaseid`, `str_fileext`, `str_key`           |
+| `num_*`           | Numeric   | `num_filesize`                                                        |
+| `date_*`          | Date      | `date_lastmodified`                                                   |
+| `bool_*`          | Boolean   | `bool_isdistributable`, `bool_archived`                               |
+| `list_*`          | List      | `list_tags`                                                           |
+| `MD_*`            | Metadata  | `MD_str_product`, `MD_num_version`                                    |
+| `geo_MD_location` | geo_shape | Derived from `location` or `latitude`/`longitude`/`altitude` metadata |
 
 ## Related Pages
 

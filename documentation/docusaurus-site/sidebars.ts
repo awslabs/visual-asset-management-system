@@ -88,6 +88,7 @@ const sidebars: SidebarsConfig = {
                 "developer/backend",
                 "developer/frontend",
                 "developer/cdk",
+                "developer/opensearch",
                 "developer/viewer-plugins",
                 "developer/audit-logging",
                 "developer/permissions",

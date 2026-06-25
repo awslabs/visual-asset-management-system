@@ -21,6 +21,7 @@ import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 
 export function buildVamsExecuteModelOpsFunction(
@@ -61,6 +62,7 @@ export function buildVamsExecuteModelOpsFunction(
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -116,6 +118,7 @@ export function buildOpenPipelineFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -168,6 +171,7 @@ export function buildConstructPipelineFunction(
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -222,5 +226,6 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

@@ -55,6 +55,10 @@ Executes a search query across the asset and file indexes with full control over
     "includeMetadataInSearch": true,
     "explainResults": false,
     "includeHighlights": true,
+    "geoSearch": {
+        "relation": "intersects",
+        "point": { "lat": 47.6062, "lon": -122.3321, "radiusMeters": 5000 }
+    },
     "from": 0,
     "size": 100
 }
@@ -75,6 +79,7 @@ Executes a search query across the asset and file indexes with full control over
 | `includeMetadataInSearch` | boolean | `true`       | Include metadata fields in the general `query` search.                                                                       |
 | `explainResults`          | boolean | `false`      | Include match explanations in results.                                                                                       |
 | `includeHighlights`       | boolean | `true`       | Include highlighted matching text in results.                                                                                |
+| `geoSearch`               | object  | --           | Geospatial filter against the `geo_MD_location` field. See [Geospatial Search](#geospatial-search).                          |
 | `from`                    | integer | `0`          | Starting offset for pagination (0-10,000).                                                                                   |
 | `size`                    | integer | `100`        | Number of results to return (1-2,000).                                                                                       |
 
@@ -390,37 +395,110 @@ When sorting by indexed fields, use the prefixed field names (e.g., `str_assetna
 
 ---
 
+## Geospatial Search
+
+VAMS indexes a derived `geo_MD_location` field of OpenSearch type `geo_shape` on every asset and file document. The indexer populates it from each entity's metadata using the following priority:
+
+1. A metadata key named `location` (case-insensitive) containing either:
+    - A GeoJSON Geometry, Feature, or FeatureCollection (Point, Polygon, MultiPolygon, etc.).
+    - A JSON object with `latitude` / `longitude` and optional `altitude` keys.
+    - A `"lat,lon"` or `"lat,lon,altitude"` string.
+2. Individual `latitude`, `longitude`, and optional `altitude` metadata fields.
+
+If neither is present, the document has no `geo_MD_location` and is excluded from geospatial filters.
+
+To filter search results by location, supply a `geoSearch` object on the request body. Provide **exactly one** of `point`, `bbox`, or `geoJson`:
+
+```json
+{
+    "geoSearch": {
+        "relation": "intersects",
+        "point": { "lat": 47.6062, "lon": -122.3321, "radiusMeters": 5000 }
+    }
+}
+```
+
+```json
+{
+    "geoSearch": {
+        "relation": "within",
+        "bbox": {
+            "topLeft": { "lat": 47.7, "lon": -122.5 },
+            "bottomRight": { "lat": 47.5, "lon": -122.2 }
+        }
+    }
+}
+```
+
+```json
+{
+    "geoSearch": {
+        "relation": "intersects",
+        "geoJson": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [-122.5, 47.7],
+                    [-122.2, 47.7],
+                    [-122.2, 47.5],
+                    [-122.5, 47.5],
+                    [-122.5, 47.7]
+                ]
+            ]
+        }
+    }
+}
+```
+
+| Field                | Type   | Description                                                                                                                                            |
+| -------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `relation`           | string | `"intersects"` (default), `"within"`, `"contains"`, or `"disjoint"`. Spatial relation between the input shape and the indexed `geo_MD_location` shape. |
+| `point.lat`          | number | Latitude in decimal degrees (-90 to 90).                                                                                                               |
+| `point.lon`          | number | Longitude in decimal degrees (-180 to 180).                                                                                                            |
+| `point.radiusMeters` | number | Optional radius around the point. When provided, the input is treated as a circle.                                                                     |
+| `bbox.topLeft`       | object | Northwest corner of the bounding box (`{lat, lon}`).                                                                                                   |
+| `bbox.bottomRight`   | object | Southeast corner of the bounding box.                                                                                                                  |
+| `geoJson`            | object | Arbitrary GeoJSON Geometry, Feature, or FeatureCollection.                                                                                             |
+
+:::note[Backward Compatibility]
+Documents indexed before the introduction of `geo_MD_location` will not match geospatial filters until reindexed. Map views in the web UI continue to render points and shapes from legacy `MD_.location` and `MD_.latitude` / `MD_.longitude` metadata as a fallback.
+:::
+
+---
+
 ## Available Search Fields
 
 ### Asset Index Fields
 
-| Field                  | Type    | Description                      |
-| ---------------------- | ------- | -------------------------------- |
-| `_rectype`             | keyword | Always `"asset"`.                |
-| `str_databaseid`       | keyword | Database identifier.             |
-| `str_assetid`          | keyword | Asset identifier.                |
-| `str_assetname`        | keyword | Asset display name.              |
-| `str_assettype`        | keyword | File type classification.        |
-| `str_description`      | keyword | Asset description.               |
-| `list_tags`            | keyword | Asset tags (array).              |
-| `bool_isdistributable` | boolean | Whether asset can be downloaded. |
-| `date_lastmodified`    | date    | Last modification date.          |
-| `str_asset_version_id` | keyword | Current asset version ID.        |
+| Field                  | Type      | Description                                                                       |
+| ---------------------- | --------- | --------------------------------------------------------------------------------- |
+| `_rectype`             | keyword   | Always `"asset"`.                                                                 |
+| `str_databaseid`       | keyword   | Database identifier.                                                              |
+| `str_assetid`          | keyword   | Asset identifier.                                                                 |
+| `str_assetname`        | keyword   | Asset display name.                                                               |
+| `str_assettype`        | keyword   | File type classification.                                                         |
+| `str_description`      | keyword   | Asset description.                                                                |
+| `list_tags`            | keyword   | Asset tags (array).                                                               |
+| `bool_isdistributable` | boolean   | Whether asset can be downloaded.                                                  |
+| `date_lastmodified`    | date      | Last modification date.                                                           |
+| `str_asset_version_id` | keyword   | Current asset version ID.                                                         |
+| `geo_MD_location`      | geo_shape | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
 
 ### File Index Fields
 
-| Field               | Type    | Description                         |
-| ------------------- | ------- | ----------------------------------- |
-| `_rectype`          | keyword | Always `"file"`.                    |
-| `str_databaseid`    | keyword | Database identifier.                |
-| `str_assetid`       | keyword | Parent asset identifier.            |
-| `str_assetname`     | keyword | Parent asset name.                  |
-| `str_key`           | keyword | S3 object key (relative file path). |
-| `str_fileext`       | keyword | File extension.                     |
-| `num_size`          | long    | File size in bytes.                 |
-| `str_etag`          | keyword | S3 ETag.                            |
-| `str_s3_version_id` | keyword | S3 version ID.                      |
-| `date_lastmodified` | date    | Last modification date.             |
+| Field               | Type      | Description                                                                       |
+| ------------------- | --------- | --------------------------------------------------------------------------------- |
+| `_rectype`          | keyword   | Always `"file"`.                                                                  |
+| `str_databaseid`    | keyword   | Database identifier.                                                              |
+| `str_assetid`       | keyword   | Parent asset identifier.                                                          |
+| `str_assetname`     | keyword   | Parent asset name.                                                                |
+| `str_key`           | keyword   | S3 object key (relative file path).                                               |
+| `str_fileext`       | keyword   | File extension.                                                                   |
+| `num_size`          | long      | File size in bytes.                                                               |
+| `str_etag`          | keyword   | S3 ETag.                                                                          |
+| `str_s3_version_id` | keyword   | S3 version ID.                                                                    |
+| `date_lastmodified` | date      | Last modification date.                                                           |
+| `geo_MD_location`   | geo_shape | GeoJSON shape derived from metadata. See [Geospatial Search](#geospatial-search). |
 
 ### Metadata Fields
 

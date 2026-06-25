@@ -416,16 +416,23 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             fontSize: "13px",
         };
         if (isFileMode && navigate && !isArchived) {
+            // Encode the file path in BOTH the href (`?filePath=`) and the
+            // router state. The href is what right-click → "Open in new
+            // tab" copies, so it must carry enough information to reach
+            // the target file on a fresh page load. The state remains
+            // for the in-app left-click path so we don't have to re-parse
+            // the URL on the receiving side.
+            const filePathQuery = `?filePath=${encodeURIComponent(value)}`;
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
                         <span style={pathStyle}>
                             <Link
-                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
+                                href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`}
                                 onFollow={(event) => {
                                     event.preventDefault();
                                     navigate(
-                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`,
+                                        `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`,
                                         {
                                             state: { filePathToNavigate: value },
                                         }
@@ -821,8 +828,8 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
     }
 
     // Add or remove map thumbnail column based on showMapThumbnails toggle
-    // Only for assets when maps are enabled
-    if (state.showMapThumbnails && state.useMapView && state.filters._rectype.value === "asset") {
+    // Available for both asset and file results when maps are enabled
+    if (state.showMapThumbnails && state.useMapView) {
         const config = appCache.getItem("config");
         const mapStyleUrl = config?.locationServiceApiUrl;
 
@@ -837,14 +844,31 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
             enhancedColumnDefinitions.splice(insertIndex, 0, {
                 id: "mapThumbnail",
                 header: "Map",
-                cell: (item: any) => (
-                    <MapThumbnail
-                        assetData={item}
-                        mapStyleUrl={mapStyleUrl}
-                        width={200}
-                        height={150}
-                    />
-                ),
+                cell: (item: any) => {
+                    const source = item?._source ?? item;
+                    const isFile = source?._rectype === "file";
+                    const expandHeader =
+                        source?.str_assetname ||
+                        (isFile ? source?.str_key : undefined) ||
+                        "Map preview";
+                    // Stable id used to stagger polygon colors so adjacent rows differ
+                    // even when each row only contains a single polygon.
+                    const colorKey =
+                        item?._id ||
+                        source?.str_assetid ||
+                        source?.str_key ||
+                        source?.str_databaseid;
+                    return (
+                        <MapThumbnail
+                            assetData={item}
+                            mapStyleUrl={mapStyleUrl}
+                            width={200}
+                            height={150}
+                            expandHeader={expandHeader}
+                            colorKey={colorKey}
+                        />
+                    );
+                },
                 sortingField: undefined, // Not sortable - client-side column
                 isRowHeader: false,
                 width: 230,

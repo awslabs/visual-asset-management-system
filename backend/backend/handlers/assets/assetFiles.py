@@ -14,6 +14,33 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    VAMS_PRIMARY_TYPE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
+    VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
+    VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY,
+    VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY,
+    VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY,
+    VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_FILE_COPY,
+    VAMS_CHANGE_SOURCE_FILE_MOVE,
+    VAMS_CHANGE_SOURCE_FILE_RENAME,
+    VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
+    VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+    VAMS_CHANGE_SOURCE_FILE_REVERT,
+    normalize_history_file_path,
+)
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import (
+    API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
+    API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_FILE,
+    API_DELETE_ASSET_PREVIEW, API_DELETE_AUXILIARY_PREVIEW,
+    API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
+)
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
@@ -55,6 +82,7 @@ try:
     asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
     asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
     file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
+    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
     send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -66,13 +94,64 @@ asset_table = dynamodb.Table(asset_database_table_name)
 asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
 file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribute_table_name else None
+asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name) if asset_file_version_history_table_name else None
 
 # Define allowed extensions
-allowed_previewFile_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+allowed_previewFile_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
+
+# Change-provenance columns surfaced on file version-history entries.
+CHANGE_HISTORY_COLUMNS = (
+    "changeSource", "changeUserId", "changeWorkflowId",
+    "changeWorkflowExecutionId", "changeAssetIdFrom",
+    "changeDatabaseIdFrom", "changeAssetFilePathFrom",
+    "changeAssetFileVersionFrom",
+)
 
 #######################
 # Utility Functions
 #######################
+
+
+def query_asset_version_history_map(database_id, asset_id):
+    """Fetch all change-history records for an asset, keyed by (filePath, versionId).
+
+    Single bulk read on the DatabaseIdAssetIdIndex GSI so per-version enrichment is
+    an in-memory lookup (no N+1). Returns {} if the table is unconfigured or empty.
+    Best-effort: never raises.
+    """
+    if not asset_file_version_history_table:
+        return {}
+    result = {}
+    try:
+        query_kwargs = {
+            "IndexName": "DatabaseIdAssetIdIndex",
+            "KeyConditionExpression": Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+        }
+        while True:
+            resp = asset_file_version_history_table.query(**query_kwargs)
+            for item in resp.get("Items", []):
+                result[(item.get("filePath"), item.get("versionId"))] = item
+            if "LastEvaluatedKey" in resp:
+                query_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+            else:
+                break
+    except Exception as e:
+        logger.exception(f"Failed querying version history for {database_id}:{asset_id}: {e}")
+        return {}
+    return result
+
+
+def apply_change_fields_to_version(version_dict, history_item):
+    """Overlay change-provenance columns from a history record onto a version dict.
+
+    Missing history_item leaves all fields as None (legacy/unknown data).
+    """
+    if not history_item:
+        return version_dict
+    for col in CHANGE_HISTORY_COLUMNS:
+        if history_item.get(col):
+            version_dict[col] = history_item[col]
+    return version_dict
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -306,9 +385,44 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
         logger.exception(f"Error checking destination file {key} in bucket {bucket}: {e}")
         raise VAMSGeneralErrorResponse(f"Error accessing destination path. Please verify the folder exists.")
 
-def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None) -> bool:
+def build_change_metadata(change_source, user_id, from_db=None, from_asset=None, from_path=None, from_version=None):
+    """Build a full change-provenance metadata dict for a new file version.
+
+    Every provenance key is set explicitly (relevant ones filled, the rest blank)
+    so stale values from a prior version never carry forward on a REPLACE copy.
+
+    Args:
+        change_source: One of the VAMS change source values.
+        user_id: Acting user id; None falls back to "SYSTEM".
+        from_db/from_asset/from_path: Source provenance for copy/move/rename.
+        from_version: Source S3 version id for copy/move/rename/revert.
+
+    Returns:
+        Dict of all vams-change* keys.
+    """
+    # Source path as a leading-slash asset-relative path (blank when not provided).
+    normalized_from_path = normalize_history_file_path(from_path) if from_path else ""
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: change_source,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM",
+        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "",
+        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "",
+        VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY: from_asset or "",
+        VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY: from_db or "",
+        VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY: normalized_from_path,
+        VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY: from_version or "",
+    }
+
+
+def classify_move_change_source(source_path, dest_path):
+    """Return fileRename if the parent directory is unchanged, else fileMove."""
+    src_parent = source_path.rsplit("/", 1)[0] if "/" in source_path else ""
+    dest_parent = dest_path.rsplit("/", 1)[0] if "/" in dest_path else ""
+    return VAMS_CHANGE_SOURCE_FILE_RENAME if src_parent == dest_parent else VAMS_CHANGE_SOURCE_FILE_MOVE
+
+def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None, change_source: str = None, change_user_id: str = None, source_rel_path: str = None) -> bool:
     """Copy an S3 object from one location to another, handling large files with multipart copy
-    
+
     Args:
         source_bucket: Source bucket
         source_key: Source key
@@ -318,25 +432,41 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         source_database_id: Source database ID (optional)
         dest_asset_id: Destination asset ID (optional)
         dest_database_id: Destination database ID (optional)
-        
+        change_source: Change source for provenance tracking (optional)
+        change_user_id: User ID for provenance tracking (optional)
+        source_rel_path: Source relative path for provenance tracking (optional)
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Check if we need to update metadata (when copying to a different asset)
-        if (source_asset_id and dest_asset_id and source_asset_id != dest_asset_id) or \
+        # Check if we need to update metadata (when copying to a different asset or tracking provenance)
+        if change_source or \
+           (source_asset_id and dest_asset_id and source_asset_id != dest_asset_id) or \
            (source_database_id and dest_database_id and source_database_id != dest_database_id):
-            
+
             # Get existing metadata from source object
             source_object = s3_client.head_object(Bucket=source_bucket, Key=source_key)
-            metadata = source_object.get('Metadata', {})
-            
+            metadata = source_object.get('Metadata', {}).copy()
+
             # Update assetid and databaseid fields while preserving other metadata
             if dest_asset_id:
-                metadata['assetid'] = dest_asset_id
+                metadata[ASSET_ID_METADATA_KEY] = dest_asset_id
             if dest_database_id:
-                metadata['databaseid'] = dest_database_id
-            
+                metadata[DATABASE_ID_METADATA_KEY] = dest_database_id
+
+            # Overlay change provenance metadata last (so new values win over stale ones)
+            if change_source:
+                provenance = build_change_metadata(
+                    change_source,
+                    change_user_id,
+                    from_db=source_database_id,
+                    from_asset=source_asset_id,
+                    from_path=source_rel_path,
+                    from_version=source_object.get('VersionId')
+                )
+                metadata.update(provenance)
+
             # Copy with updated metadata - uses managed transfer which handles multipart for large files
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
@@ -478,11 +608,11 @@ def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
 
 def delete_s3_object(bucket: str, key: str) -> bool:
     """Permanently delete an S3 object (current version only)
-    
+
     Args:
         bucket: The S3 bucket
         key: The S3 object key
-        
+
     Returns:
         True if successful, False otherwise
     """
@@ -495,6 +625,31 @@ def delete_s3_object(bucket: str, key: str) -> bool:
     except Exception as e:
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
+
+def archive_s3_object(bucket: str, key: str) -> Optional[str]:
+    """Archive an S3 object (soft delete) and return the new delete-marker VersionId.
+
+    On a versioned bucket, deleting the current version creates a delete marker;
+    its VersionId is returned so callers (e.g. change-history) can key provenance to
+    the exact version that represents the archive. Returns "null" on success when the
+    bucket is not versioned (no marker id), or None on failure.
+
+    Args:
+        bucket: The S3 bucket
+        key: The S3 object key
+
+    Returns:
+        The delete-marker VersionId, "null" if versioning is off, or None on failure.
+    """
+    try:
+        response = s3_client.delete_object(
+            Bucket=bucket,
+            Key=key
+        )
+        return response.get('VersionId', 'null')
+    except Exception as e:
+        logger.exception(f"Error archiving S3 object {key}: {e}")
+        return None
 
 def delete_s3_object_all_versions(bucket: str, key: str) -> bool:
     """Permanently delete an S3 object and all its versions
@@ -649,38 +804,41 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
-def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -> List[str]:
+def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -> Dict[str, str]:
     """Archive all objects under a prefix
-    
+
     Args:
         bucket: The S3 bucket
         prefix: The S3 key prefix
         databaseId: The database ID
         assetId: The asset ID
-        
+
     Returns:
-        List of archived file keys
+        Dict mapping each archived file key to its new delete-marker VersionId
+        ("null" when the bucket is not versioned). Insertion order is preserved.
     """
-    archived_files = []
-    
+    archived_files: Dict[str, str] = {}
+
     try:
         # List all objects with the prefix
         paginator = s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
-                
+
                 # Process folder markers separately
                 if key.endswith('/'):
                     # Archive the folder marker
-                    if delete_s3_object(bucket, key):
-                        archived_files.append(key)
+                    marker_version_id = archive_s3_object(bucket, key)
+                    if marker_version_id is not None:
+                        archived_files[key] = marker_version_id
                     continue
-                
+
                 # Archive the object
-                if delete_s3_object(bucket, key):
-                    archived_files.append(key)
-        
+                marker_version_id = archive_s3_object(bucket, key)
+                if marker_version_id is not None:
+                    archived_files[key] = marker_version_id
+
         # Check if the prefix folder itself exists and archive it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
@@ -688,16 +846,17 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
             # Check if the folder marker exists
             s3_client.head_object(Bucket=bucket, Key=folder_prefix)
             # Archive the folder marker if it exists
-            if delete_s3_object(bucket, folder_prefix):
-                archived_files.append(folder_prefix)
+            marker_version_id = archive_s3_object(bucket, folder_prefix)
+            if marker_version_id is not None:
+                archived_files[folder_prefix] = marker_version_id
         except ClientError as e:
             # If the folder doesn't exist, that's fine
             if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
                 logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
-    
+
     except Exception as e:
         logger.exception(f"Error archiving files under prefix {prefix}: {e}")
-    
+
     return archived_files
 
 def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claims_and_roles: Dict) -> bool:
@@ -732,32 +891,63 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
     
     return False
 
-def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str) -> bool:
+def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, change_source: str = None, change_user_id: str = None, from_db: str = None, from_asset: str = None, from_path: str = None) -> bool:
     """Move an S3 object from one location to another
-    
+
     Args:
         source_bucket: Source bucket
         source_key: Source key
         dest_bucket: Destination bucket
         dest_key: Destination key
-        
+        change_source: Change source for provenance tracking (optional)
+        change_user_id: User ID for provenance tracking (optional)
+        from_db/from_asset/from_path: Source provenance for move/rename (optional)
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Copy the object to the new location using managed transfer for large files
-        s3_resource.meta.client.copy(
-            CopySource={'Bucket': source_bucket, 'Key': source_key},
-            Bucket=dest_bucket,
-            Key=dest_key
-        )
-        
+        # Check if we need to update metadata for provenance tracking
+        if change_source:
+            # Get existing metadata from source object
+            source_object = s3_client.head_object(Bucket=source_bucket, Key=source_key)
+            metadata = source_object.get('Metadata', {}).copy()
+
+            # Overlay change provenance metadata last (so new values win over stale ones)
+            provenance = build_change_metadata(
+                change_source,
+                change_user_id,
+                from_db=from_db,
+                from_asset=from_asset,
+                from_path=from_path,
+                from_version=source_object.get('VersionId')
+            )
+            metadata.update(provenance)
+
+            # Copy with updated metadata - uses managed transfer which handles multipart for large files
+            s3_resource.meta.client.copy(
+                CopySource={'Bucket': source_bucket, 'Key': source_key},
+                Bucket=dest_bucket,
+                Key=dest_key,
+                ExtraArgs={
+                    'Metadata': metadata,
+                    'MetadataDirective': 'REPLACE'
+                }
+            )
+        else:
+            # Standard copy with preserved metadata - uses managed transfer which handles multipart for large files
+            s3_resource.meta.client.copy(
+                CopySource={'Bucket': source_bucket, 'Key': source_key},
+                Bucket=dest_bucket,
+                Key=dest_key
+            )
+
         # Delete the original object
         s3_client.delete_object(
             Bucket=source_bucket,
             Key=source_key
         )
-        
+
         return True
     except Exception as e:
         logger.exception(f"Error moving S3 object from {source_key} to {dest_key}: {e}")
@@ -862,22 +1052,22 @@ def process_preview_files(
 
 def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False) -> Dict:
     """Get detailed metadata for an S3 object
-    
+
     Args:
         bucket: The S3 bucket
         key: The S3 object key
         include_versions: Whether to include version history
-        
+
     Returns:
         Dictionary containing object metadata and versions if requested
-        
+
     Raises:
         VAMSGeneralErrorResponse: If object not found or error retrieving metadata
     """
     try:
         # Get object metadata
         response = s3_client.head_object(Bucket=bucket, Key=key)
-        
+
         # Extract basic metadata
         result = {
             'fileName': os.path.basename(key),
@@ -892,13 +1082,21 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
             'isArchived': is_file_archived(bucket, key)
         }
         
-        # Add primaryType from S3 metadata (only for non-folder objects)
+        # Add primaryType and current-version change provenance from S3 metadata
+        # (only for non-folder objects). changeSource/changeUserId come straight from
+        # the live object metadata already fetched here — no extra DynamoDB read.
         if not result['isFolder']:
             metadata = response.get('Metadata', {})
-            primary_type = metadata.get('vams-primarytype', '')
+            primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
             result['primaryType'] = primary_type if primary_type else None
+            change_source = metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY, '')
+            result['changeSource'] = change_source if change_source else None
+            change_user_id = metadata.get(VAMS_CHANGE_USER_ID_METADATA_KEY, '')
+            result['changeUserId'] = change_user_id if change_user_id else None
         else:
             result['primaryType'] = None
+            result['changeSource'] = None
+            result['changeUserId'] = None
         
         # Include version history if requested
         if include_versions:
@@ -909,18 +1107,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                     MaxKeys=100  # Limit to 100 versions
                 )
                 
-                # Build a set of delete marker version IDs from the SAME response
-                # to avoid redundant list_object_versions calls per version
-                delete_marker_version_ids = {
-                    marker['VersionId']
-                    for marker in versions_response.get('DeleteMarkers', [])
-                    if marker['Key'] == key
-                }
-
                 versions = []
+                # Content versions
                 for version in versions_response.get('Versions', []):
                     if version['Key'] == key:
-                        # Check archive status against pre-built set (O(1) lookup)
                         version_info = {
                             'versionId': version['VersionId'],
                             'lastModified': version['LastModified'].isoformat(),
@@ -928,7 +1118,23 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                             'isLatest': version['IsLatest'],
                             'storageClass': version.get('StorageClass', 'STANDARD'),
                             'etag': version.get('ETag', '').strip('"'),
-                            'isArchived': version['VersionId'] in delete_marker_version_ids
+                            'isArchived': False
+                        }
+                        versions.append(version_info)
+
+                # Delete markers (intermediate archive points). These must be included
+                # even for a currently-live file so the full archive/unarchive history
+                # is visible, not only when the file is currently archived.
+                for marker in versions_response.get('DeleteMarkers', []):
+                    if marker['Key'] == key:
+                        version_info = {
+                            'versionId': marker['VersionId'],
+                            'lastModified': marker['LastModified'].isoformat(),
+                            'size': 0,
+                            'isLatest': marker['IsLatest'],
+                            'storageClass': 'STANDARD',
+                            'etag': None,
+                            'isArchived': True
                         }
                         versions.append(version_info)
 
@@ -1095,10 +1301,12 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
                 'storageClass': obj.get('StorageClass', 'STANDARD')
             }
-            
-            # Add size for non-folders
+
+            # ETag comes straight from the S3 list response, so it is populated in
+            # both basic and full modes.
             if not is_folder:
                 item['size'] = obj['Size']
+                item['etag'] = obj.get('ETag', '').strip('"') or None
             
             if basic_mode:
                 # Basic mode: Skip expensive head_object calls
@@ -1128,8 +1336,13 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     item['versionId'] = version_info.get('VersionId', 'null')
                     if not is_folder:
                         metadata = version_info.get('Metadata', {})
-                        primary_type = metadata.get('vams-primarytype', '')
+                        primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
                         item['primaryType'] = primary_type if primary_type else None
+                        # Current-version change provenance from live S3 metadata (no DynamoDB read)
+                        ct = metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY)
+                        item['changeSource'] = ct if ct else None
+                        cu = metadata.get(VAMS_CHANGE_USER_ID_METADATA_KEY)
+                        item['changeUserId'] = cu if cu else None
                     else:
                         item['primaryType'] = None
                 except Exception as e:
@@ -1210,10 +1423,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                             'isArchived': True
                         }
                         
-                        # Add size if we found a version
+                        # Add size and ETag if we found a version
                         if latest_version:
                             item['size'] = latest_version.get('Size', 0)
-                        
+                            item['etag'] = latest_version.get('ETag', '').strip('"') or None
+
                         # Add to results
                         result["items"].append(item)
                         existing_keys.add(key)
@@ -1244,7 +1458,7 @@ def is_preview_file(file_path: str) -> bool:
         True if the file is a preview file, False otherwise
     """
     # Check if the file path contains the preview file pattern
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_for_preview(preview_file_path: str) -> str:
     """Get the base file path for a preview file
@@ -1256,7 +1470,7 @@ def get_base_file_for_preview(preview_file_path: str) -> str:
         The base file path
     """
     # Remove the .previewFile.X suffix
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def is_allowed_preview_extension(file_path: str) -> bool:
     """Check if a preview file has an allowed extension
@@ -1269,8 +1483,8 @@ def is_allowed_preview_extension(file_path: str) -> bool:
     """
     
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1]
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1]
         return extension.lower() in allowed_previewFile_extensions
     
     return False
@@ -1296,7 +1510,7 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
         prefix = f"{directory}/" if directory else ""
         
         # Create the pattern to match preview files for this base file
-        pattern = f"{filename}.previewFile."
+        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
         
         logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
         logger.info(f"Looking for pattern: {pattern}")
@@ -1341,7 +1555,7 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
         prefix = f"{directory}/" if directory else ""
         
         # Create the pattern to match preview files for this base file
-        pattern = f"{filename}.previewFile."
+        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
         
         logger.info(f"Searching for preview files (including archived) in bucket {bucket} with prefix {prefix}")
         logger.info(f"Looking for pattern: {pattern}")
@@ -1955,6 +2169,40 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         affectedFiles=affected_files
     )
 
+def build_archive_history_record(database_id, asset_id, relative_file_path, version_id, user_id):
+    """Build a fileArchive change-history record.
+
+    Archive soft-deletes via an S3 delete marker, which carries no metadata, so
+    sqsBucketSync cannot derive this provenance. archive_file writes it directly.
+    version_id is the delete-marker VersionId when known, else "null".
+    """
+    relative_file_path = normalize_history_file_path(relative_file_path)
+    return {
+        "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{relative_file_path}",
+        "versionId": version_id or "null",
+        "databaseId:assetId": f"{database_id}:{asset_id}",
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "filePath": relative_file_path,
+        "changeSource": VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
+        "changeUserId": user_id or "SYSTEM",
+        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "s3LastModified": "",
+    }
+
+
+def write_archive_history(database_id, asset_id, relative_file_path, version_id, user_id):
+    """Best-effort direct write of a fileArchive history record."""
+    if not asset_file_version_history_table:
+        return
+    try:
+        asset_file_version_history_table.put_item(
+            Item=build_archive_history_record(database_id, asset_id, relative_file_path, version_id, user_id)
+        )
+    except Exception as e:
+        logger.exception(f"Failed writing archive history for {relative_file_path}: {e}")
+
+
 def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
     """Archive a file or files under a prefix (soft delete)
     
@@ -2011,18 +2259,28 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
             raise VAMSGeneralErrorResponse(f"File not found.")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
+    # Acting user for change-history provenance
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+
     # Archive file(s)
     affected_files = []
-    
+
     if is_prefix:
-        # Archive all files under prefix
+        # Archive all files under prefix (maps each archived key -> delete-marker VersionId)
         archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId)
-        
+
         # Convert full keys to relative paths
-        for key in archived_keys:
+        for key, marker_version_id in archived_keys.items():
             if key.startswith(base_key):
                 relative_path = key[len(base_key):]
                 affected_files.append(relative_path)
+                # Archive uses a delete marker (no S3 metadata) so sqsBucketSync
+                # cannot derive provenance -- write the history record directly,
+                # keyed to the new delete-marker VersionId. Skip folder markers.
+                if not key.endswith('/'):
+                    write_archive_history(
+                        databaseId, assetId, relative_path, marker_version_id, acting_user
+                    )
     else:
         # Check if this is a preview file - allow direct archive operations on preview files
         if not is_preview_file(file_path):
@@ -2040,12 +2298,20 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                     logger.info(f"Archived preview file: {rel_preview_path}")
         
         # Archive the main file
-        success = delete_s3_object(bucket, full_key)
-        
-        if not success:
+        delete_marker_version_id = archive_s3_object(bucket, full_key)
+
+        if delete_marker_version_id is None:
             raise VAMSGeneralErrorResponse(f"Failed to archive file.")
-        
+
         affected_files.append(file_path)
+
+        # Archive uses a delete marker (no S3 metadata) so sqsBucketSync cannot
+        # derive provenance -- write the history record directly. Key it to the new
+        # delete-marker VersionId so it matches the version shown in file history.
+        # Use the relative path (no leading slash) to match sqsBucketSync's filePath key form.
+        write_archive_history(
+            databaseId, assetId, file_path.lstrip('/'), delete_marker_version_id, acting_user
+        )
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -2136,7 +2402,25 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         
         if not latest_version:
             raise VAMSGeneralErrorResponse(f"Could not find a previous version for file.")
-        
+
+        # Get existing metadata from the latest version and overlay unarchive provenance
+        version_head = s3_client.head_object(
+            Bucket=bucket,
+            Key=full_key,
+            VersionId=latest_version['VersionId']
+        )
+        metadata = version_head.get('Metadata', {}).copy()
+
+        # Extract acting user for provenance tracking
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+
+        # Overlay unarchive provenance (no from-fields for unarchive)
+        provenance = build_change_metadata(
+            VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+            acting_user
+        )
+        metadata.update(provenance)
+
         # Copy the latest version to create a new current version (effectively unarchiving)
         # Use copy() which automatically handles multipart for large files
         s3_resource.Object(bucket, full_key).copy(
@@ -2146,7 +2430,8 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                 'VersionId': latest_version['VersionId']
             },
             ExtraArgs={
-                'MetadataDirective': 'COPY'
+                'Metadata': metadata,
+                'MetadataDirective': 'REPLACE'
             }
         )
         
@@ -2301,17 +2586,23 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Check if destination already exists using the helper function
     if check_destination_file_exists(dest_bucket, dest_key, dest_path):
         raise VAMSGeneralErrorResponse(f"Destination file already exists.")
-    
-    # Copy the file
+
+    # Extract acting user for provenance tracking
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+
+    # Copy the file with change provenance
     success = copy_s3_object(
-        source_bucket, 
-        source_key, 
-        dest_bucket, 
+        source_bucket,
+        source_key,
+        dest_bucket,
         dest_key,
         source_asset_id=assetId,
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
-        dest_database_id=effective_dest_db
+        dest_database_id=effective_dest_db,
+        change_source=VAMS_CHANGE_SOURCE_FILE_COPY,
+        change_user_id=acting_user,
+        source_rel_path=source_path
     )
 
     if not success:
@@ -2442,10 +2733,26 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     except Exception as e:
         logger.exception(f"Unexpected error checking destination file: {e}")
         raise VAMSGeneralErrorResponse("Error checking destination file.")
-    
-    # Move the file
-    success = move_s3_object(bucket, source_key, bucket, dest_key)
-    
+
+    # Extract acting user for provenance tracking
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+
+    # Classify the change source (move vs rename)
+    change_source = classify_move_change_source(source_path, dest_path)
+
+    # Move the file with change provenance
+    success = move_s3_object(
+        bucket,
+        source_key,
+        bucket,
+        dest_key,
+        change_source=change_source,
+        change_user_id=acting_user,
+        from_db=databaseId,
+        from_asset=assetId,
+        from_path=source_path
+    )
+
     if not success:
         raise VAMSGeneralErrorResponse("Failed to move file.")
     
@@ -2537,9 +2844,16 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Get the current version ID for reference
     current_version_id = next((v['versionId'] for v in metadata.get('versions', []) if v['isLatest']), None)
-    
+
     # Copy the specified version to create a new current version
     try:
+        # Start from the reverted-to version's metadata, then overlay fileRevert
+        # provenance so the new current version reflects the revert action.
+        source_head = s3_client.head_object(Bucket=bucket, Key=full_key, VersionId=version_id)
+        new_metadata = source_head.get('Metadata', {}).copy()
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        new_metadata.update(build_change_metadata(VAMS_CHANGE_SOURCE_FILE_REVERT, acting_user, from_version=version_id))
+
         # Use copy() which automatically handles multipart for large files
         s3_resource.Object(bucket, full_key).copy(
             CopySource={
@@ -2548,14 +2862,15 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
                 'VersionId': version_id
             },
             ExtraArgs={
-                'MetadataDirective': 'COPY'
+                'Metadata': new_metadata,
+                'MetadataDirective': 'REPLACE'
             }
         )
-        
+
         # Get the new version ID
         copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         new_version_id = copy_response.get('VersionId', 'null')
-        
+
     except Exception as e:
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
@@ -2648,6 +2963,11 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
             #logger.info(f"Enriching file versions: file_path='{file_path}', full_key='{full_key}', base_key='{base_key}', relative_path_for_lookup='{relative_path_for_lookup}'")
 
+            # Change-history records for this asset, keyed by (filePath, versionId),
+            # for in-memory per-version lookup. filePath uses a leading slash.
+            history_map = query_asset_version_history_map(databaseId, assetId)
+            history_path_key = normalize_history_file_path(relative_path_for_lookup)
+
             # Query the GSI to get all version file records for this database+asset
             all_version_file_records = []
             query_kwargs = {
@@ -2727,13 +3047,15 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
                     entries.append({'id': vid, 'label': label})
                 return entries
 
-            # Populate assetVersionIds on each version entry
+            # Populate assetVersionIds and change provenance on each version entry
             for version in metadata['versions']:
                 s3_vid = version.get('versionId')
                 if s3_vid and s3_vid in version_id_to_asset_versions:
                     version['assetVersionIds'] = build_version_entries(version_id_to_asset_versions[s3_vid])
                 else:
                     version['assetVersionIds'] = []
+                # Apply full change provenance for this (file, version) from the history map.
+                apply_change_fields_to_version(version, history_map.get((history_path_key, s3_vid)))
 
         except Exception as e:
             logger.warning(f"Failed to enrich file versions with assetVersionIds: {e}")
@@ -2848,17 +3170,17 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         # Determine the metadata value to set
         if primary_type == '':
             # Remove the metadata attribute by excluding it from the new metadata
-            new_metadata = {k: v for k, v in current_metadata.items() if k != 'vams-primarytype'}
+            new_metadata = {k: v for k, v in current_metadata.items() if k != VAMS_PRIMARY_TYPE_METADATA_KEY}
             operation_message = f"Removed primary type metadata from file: {file_path}"
             final_primary_type = None
         else:
             # Set or update the metadata attribute
             new_metadata = current_metadata.copy()
             if primary_type == 'other':
-                new_metadata['vams-primarytype'] = primary_type_other
+                new_metadata[VAMS_PRIMARY_TYPE_METADATA_KEY] = primary_type_other
                 final_primary_type = primary_type_other
             else:
-                new_metadata['vams-primarytype'] = primary_type
+                new_metadata[VAMS_PRIMARY_TYPE_METADATA_KEY] = primary_type
                 final_primary_type = primary_type
             operation_message = f"Set primary type '{final_primary_type}' for file: {file_path}"
         
@@ -3115,6 +3437,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                 'dateCreatedCurrentVersion': file_info.get('lastModified', ''),
                 'storageClass': 'STANDARD',
                 'versionId': file_info.get('versionId'),
+                'etag': (file_info.get('etag') or '').strip('"') or None,
                 'isArchived': False,
                 'primaryType': None,
                 'previewFile': "",
@@ -3175,8 +3498,10 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             # Check if this file is in the version snapshot
             if relative_key in versioned_file_lookup:
                 version_info = versioned_file_lookup[relative_key]
-                # Overlay saved versionId from the version snapshot
+                # Overlay saved versionId and ETag from the version snapshot so they
+                # reflect the requested version rather than the current S3 object.
                 s3_item['versionId'] = version_info.get('versionId')
+                s3_item['etag'] = (version_info.get('etag') or '').strip('"') or None
                 s3_item['currentAssetVersionFileVersionMismatch'] = None
                 file_items.append(AssetFileItemModel(**s3_item))
                 base_files[s3_item['key']] = len(file_items) - 1
@@ -3233,6 +3558,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                             'dateCreatedCurrentVersion': version_info.get('lastModified', ''),
                             'storageClass': 'STANDARD',
                             'versionId': version_info.get('versionId'),
+                            'etag': (version_info.get('etag') or '').strip('"') or None,
                             'isArchived': False,
                             'isPermanentlyDeleted': True,
                             'primaryType': None,
@@ -4401,31 +4727,31 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Get API path and method
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
-        
-        # Route to appropriate handler based on path pattern
-        if method == 'GET' and path.endswith('/listFiles'):
+
+        # Route to appropriate handler based on the master API route definitions
+        if method == 'GET' and API_LIST_FILES.matches(path):
             return handle_list_files(event, context)
-        elif method == 'GET' and path.endswith('/fileInfo'):
+        elif method == 'GET' and API_FILE_INFO.matches(path):
             return handle_file_info(event, context)
-        elif method == 'POST' and path.endswith('/moveFile'):
+        elif method == 'POST' and API_MOVE_FILE.matches(path):
             return handle_move_file(event, context)
-        elif method == 'POST' and path.endswith('/copyFile'):
+        elif method == 'POST' and API_COPY_FILE.matches(path):
             return handle_copy_file(event, context)
-        elif method == 'POST' and path.endswith('/unarchiveFile'):
+        elif method == 'POST' and API_UNARCHIVE_FILE.matches(path):
             return handle_unarchive_file(event, context)
-        elif method == 'POST' and path.endswith('/createFolder'):
+        elif method == 'POST' and API_CREATE_FOLDER.matches(path):
             return handle_create_folder(event, context)
-        elif method == 'DELETE' and path.endswith('/archiveFile'):
+        elif method == 'DELETE' and API_ARCHIVE_FILE.matches(path):
             return handle_archive_file(event, context)
-        elif method == 'DELETE' and path.endswith('/deleteFile'):
+        elif method == 'DELETE' and API_DELETE_FILE.matches(path):
             return handle_delete_file(event, context)
-        elif method == 'DELETE' and path.endswith('/deleteAssetPreview'):
+        elif method == 'DELETE' and API_DELETE_ASSET_PREVIEW.matches(path):
             return handle_delete_asset_preview(event, context)
-        elif method == 'DELETE' and path.endswith('/deleteAuxiliaryPreviewAssetFiles'):
+        elif method == 'DELETE' and API_DELETE_AUXILIARY_PREVIEW.matches(path):
             return handle_delete_auxiliary_preview_asset_files(event, context)
-        elif method == 'POST' and '/revertFileVersion/' in path:
+        elif method == 'POST' and API_REVERT_FILE_VERSION.matches(path):
             return handle_revert_file_version(event, context)
-        elif method == 'PUT' and path.endswith('/setPrimaryFile'):
+        elif method == 'PUT' and API_SET_PRIMARY_FILE.matches(path):
             return handle_set_primary_file(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"}, event=event)

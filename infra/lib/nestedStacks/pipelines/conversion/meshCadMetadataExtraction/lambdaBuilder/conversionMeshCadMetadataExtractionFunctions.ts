@@ -25,6 +25,7 @@ import {
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../../helper/security";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 
 export function buildVamsExecuteMeshCadMetadataExtractionPipelineFunction(
     scope: Construct,
@@ -65,5 +66,6 @@ export function buildVamsExecuteMeshCadMetadataExtractionPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

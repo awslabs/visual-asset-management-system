@@ -7,6 +7,7 @@ import json
 import datetime
 import random
 import string
+from boto3.dynamodb.conditions import Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from handlers.auth import request_to_claims
@@ -78,6 +79,40 @@ def validate_database_exists(database_id):
         db_response = db_table.get_item(Key={'databaseId': database_id})
         if 'Item' not in db_response:
             raise ValueError("Database provided does not exist")
+
+
+def find_conflicting_database(table, pipeline_id, requesting_database_id):
+    """Find an active pipeline with the same pipelineId owned by a different database.
+
+    Pipeline IDs must be unique across all databases (including GLOBAL) because
+    downstream records reference a pipeline only by its pipelineId, without the
+    owning databaseId. Soft-deleted records (databaseId ending in '#deleted') and
+    the record being created/updated (same databaseId) are not treated as conflicts.
+
+    Args:
+        table: The pipeline DynamoDB table resource.
+        pipeline_id: The pipelineId being created or updated.
+        requesting_database_id: The databaseId of the incoming request.
+
+    Returns:
+        The conflicting databaseId string, or None if the pipelineId is available.
+    """
+    scan_kwargs = {'FilterExpression': Attr('pipelineId').eq(pipeline_id)}
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get('Items', []):
+            existing_database_id = item.get('databaseId', '')
+            # Ignore soft-deleted records - their IDs are considered free
+            if '#deleted' in existing_database_id:
+                continue
+            # The record being created/updated is not a conflict with itself
+            if existing_database_id == requesting_database_id:
+                continue
+            return existing_database_id
+        if 'LastEvaluatedKey' not in response:
+            break
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    return None
 
 
 def create_lambda_pipeline(lambda_name):
@@ -206,8 +241,29 @@ def upload_pipeline(request_model, claims_and_roles, event):
     except ValueError as e:
         return validation_error(body={'message': str(e)}, event=event)
 
-    # Prevent changing pipelineExecutionType on existing pipelines
+    # Enforce cross-database uniqueness of the pipelineId
     table = dynamodb.Table(pipeline_table_name)
+    try:
+        conflicting_database_id = find_conflicting_database(
+            table, request_model.pipelineId, request_model.databaseId
+        )
+    except Exception as e:
+        logger.exception(f"Error checking pipelineId uniqueness: {e}")
+        return internal_error(event=event)
+
+    if conflicting_database_id:
+        logger.info(
+            f"pipelineId '{request_model.pipelineId}' already in use by database '{conflicting_database_id}'"
+        )
+        return validation_error(
+            body={
+                'message': "Pipeline ID is already in use by another database. Pipeline IDs must be "
+                           "unique across all databases (including GLOBAL). Choose a different ID."
+            },
+            event=event
+        )
+
+    # Prevent changing pipelineExecutionType on existing pipelines
     existing_item = table.get_item(
         Key={
             'databaseId': request_model.databaseId,

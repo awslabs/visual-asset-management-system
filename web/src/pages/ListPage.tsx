@@ -40,8 +40,8 @@ export default function ListPage(props) {
     usePageTitle(databaseId || null, pluralNameTitleCase);
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
-    const [allItems, setAllItems] = useState([]);
-    const [error, setError] = useState(null);
+    const [allItems, setAllItems] = useState<any[]>([]);
+    const [error, setError] = useState<string | null>(null);
 
     const [openNewElement, setOpenNewElement] = useState(false);
 
@@ -64,6 +64,9 @@ export default function ListPage(props) {
                         //@todo fix workflow delete return
                         items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
                     );
+                } else if (typeof items === "string" && items.trim() !== "") {
+                    // The service layer returns the API error message string on failure.
+                    setError(items);
                 } else {
                     setError("Failed to load data. Please try refreshing.");
                 }
@@ -117,8 +120,8 @@ export default function ListPage(props) {
                         </TextContent>
                     </div>
                 </Grid>
-                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
-                    {error && (
+                {error && (
+                    <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
                         <Alert
                             type="error"
                             dismissible
@@ -131,7 +134,9 @@ export default function ListPage(props) {
                         >
                             {error}
                         </Alert>
-                    )}
+                    </Grid>
+                )}
+                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
                     <TableList
                         allItems={allItems}
                         loading={loading}

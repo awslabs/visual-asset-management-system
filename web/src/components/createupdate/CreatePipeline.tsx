@@ -297,6 +297,16 @@ export default function CreatePipeline({
                                         savePipeline(buildApiBody(formState, false))
                                             .then((res) => {
                                                 console.log("Create/Update pipeline: ", res);
+                                                if (!Array.isArray(res) || res[0] === false) {
+                                                    setFormError(
+                                                        `Unable to ${createOrUpdate} pipeline. Error: ${
+                                                            Array.isArray(res)
+                                                                ? res[1]
+                                                                : "Unknown error"
+                                                        }`
+                                                    );
+                                                    return;
+                                                }
                                                 setReload(true);
                                                 setOpen(false);
                                                 setFormState(getDefaultFormState());
@@ -304,8 +314,11 @@ export default function CreatePipeline({
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
-                                                const msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
-                                                setFormError(msg);
+                                                setFormError(
+                                                    `Unable to ${createOrUpdate} pipeline. Error: ${
+                                                        err?.message || "Unknown error"
+                                                    }`
+                                                );
                                             })
                                             .finally(() => {
                                                 setInProgress(false);
@@ -700,13 +713,27 @@ export default function CreatePipeline({
                                                     "Update pipeline and associated workflows: ",
                                                     res
                                                 );
+                                                if (!Array.isArray(res) || res[0] === false) {
+                                                    setFormError(
+                                                        `Unable to update pipeline. Error: ${
+                                                            Array.isArray(res)
+                                                                ? res[1]
+                                                                : "Unknown error"
+                                                        }`
+                                                    );
+                                                    return;
+                                                }
+                                                setFormError("");
                                                 setOpenWorkflowModal(false);
                                                 setReload(true);
                                             })
                                             .catch((err) => {
                                                 console.log("update workflow error", err);
-                                                const msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
-                                                setFormError(msg);
+                                                setFormError(
+                                                    `Unable to update pipeline. Error: ${
+                                                        err?.message || "Unknown error"
+                                                    }`
+                                                );
                                             })
                                             .finally(() => {
                                                 setInProgress(false);
@@ -716,13 +743,27 @@ export default function CreatePipeline({
                                         savePipeline(buildApiBody(pipeline, false))
                                             .then((res) => {
                                                 console.log("Update pipeline: ", res);
+                                                if (!Array.isArray(res) || res[0] === false) {
+                                                    setFormError(
+                                                        `Unable to ${createOrUpdate} pipeline. Error: ${
+                                                            Array.isArray(res)
+                                                                ? res[1]
+                                                                : "Unknown error"
+                                                        }`
+                                                    );
+                                                    return;
+                                                }
+                                                setFormError("");
                                                 setReload(true);
                                                 setOpenWorkflowModal(false);
                                             })
                                             .catch((err) => {
                                                 console.log("create pipeline error", err);
-                                                const msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
-                                                setFormError(msg);
+                                                setFormError(
+                                                    `Unable to ${createOrUpdate} pipeline. Error: ${
+                                                        err?.message || "Unknown error"
+                                                    }`
+                                                );
                                             })
                                             .finally(() => {
                                                 setInProgress(false);

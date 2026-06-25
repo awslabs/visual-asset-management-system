@@ -332,6 +332,79 @@ def check_s3_key_exists(bucket_name, key):
         logger.exception(f"Error checking S3 key existence: {e}")
         raise VAMSGeneralErrorResponse("Error validating S3 location")
 
+def normalize_location_key(key):
+    """Normalize an S3 location key for comparison (strip leading slash).
+
+    Values resolved by normalize_s3_path() have their leading slash stripped, so we
+    normalize stored assetLocation.Key values the same way before comparing.
+    """
+    if not key:
+        return ''
+    return key.lstrip('/')
+
+
+def assert_existing_key_not_owned(bucket_id, resolved_s3_key):
+    """Ensure no existing asset already points at the resolved S3 key.
+
+    Because multiple databases can share one bucket and prefix root, an asset's
+    S3 location is only unambiguously owned when a single asset record maps to it.
+    We query all assets in the same bucket (via the BucketIdGSI) and reject if any
+    existing asset's assetLocation.Key equals, is a parent of, or is a child of the
+    resolved key, so a new asset cannot be bound onto a location another asset owns.
+
+    Args:
+        bucket_id: The bucketId the new asset will use
+        resolved_s3_key: The full S3 key resolved from bucketExistingKey
+
+    Raises:
+        VAMSGeneralErrorResponse: if an existing asset already occupies the key
+    """
+    target = normalize_location_key(resolved_s3_key)
+    if not target:
+        return
+
+    # Compare on prefix-folder semantics: treat the target as its containing prefix
+    target_prefix = target if target.endswith('/') else target + '/'
+
+    try:
+        query_kwargs = {
+            'IndexName': 'BucketIdGSI',
+            'KeyConditionExpression': Key('bucketId').eq(bucket_id),
+        }
+        while True:
+            response = asset_table.query(**query_kwargs)
+            for item in response.get('Items', []):
+                existing_key = normalize_location_key(
+                    item.get('assetLocation', {}).get('Key', '')
+                )
+                if not existing_key:
+                    continue
+                existing_prefix = existing_key if existing_key.endswith('/') else existing_key + '/'
+
+                # Reject exact match, or where one prefix contains the other
+                # (parent/child relationship within the shared bucket).
+                if (existing_key == target
+                        or target_prefix.startswith(existing_prefix)
+                        or existing_prefix.startswith(target_prefix)):
+                    logger.error(
+                        f"bucketExistingKey {resolved_s3_key} conflicts with existing asset "
+                        f"{item.get('databaseId')}:{item.get('assetId')} at {existing_key}"
+                    )
+                    raise VAMSGeneralErrorResponse(
+                        "The specified bucketExistingKey is already in use by another asset"
+                    )
+
+            if 'LastEvaluatedKey' in response:
+                query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            else:
+                break
+    except VAMSGeneralErrorResponse:
+        raise
+    except Exception as e:
+        logger.exception(f"Error validating bucketExistingKey ownership: {e}")
+        raise VAMSGeneralErrorResponse("Error validating S3 location")
+
+
 def create_prefix_folder(bucket, prefix):
     """Create a prefix folder in S3 bucket"""
     try:
@@ -442,8 +515,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
             raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
     
     # Verify database exists
-    db_table = dynamodb.Table(db_database)
-    db_response = db_table.get_item(
+    db_response = database_table.get_item(
         Key={
             'databaseId': databaseId
         }
@@ -471,13 +543,26 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         # Use the provided existing key (must still be at the base path for the database id -> bucket id provided)
         s3_key = normalize_s3_path(s3_bucket_prefix, request_model.bucketExistingKey)
         logger.info(f"Validating existing S3 key: {s3_key} in bucket: {s3_bucket}")
-        
+
+        # Ensure the resolved key actually falls under THIS database's base prefix.
+        # normalize_s3_path returns the file path as-is when it already starts with the
+        # base key; guard against a supplied key that resolves outside the base prefix.
+        normalized_base_prefix = normalize_location_key(s3_bucket_prefix)
+        if not normalize_location_key(s3_key).startswith(normalized_base_prefix):
+            error_msg = "The specified bucketExistingKey is not within the asset's database default S3 bucket location"
+            logger.error(f"{error_msg}: resolved {s3_key} not under base prefix {normalized_base_prefix}")
+            raise VAMSGeneralErrorResponse(error_msg)
+
         # Check if the key exists in S3 (full path: bucketPrefix/bucketExistingKey)
         if not check_s3_key_exists(s3_bucket, s3_key):
             error_msg = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"
             logger.error(error_msg)
             raise VAMSGeneralErrorResponse(error_msg)
-        
+
+        # Reject if another asset (in any database sharing this bucket) already owns
+        # this S3 location, so an asset cannot be bound onto another asset's data.
+        assert_existing_key_not_owned(s3_bucket_id, s3_key)
+
         logger.info(f"Using existing S3 key: {s3_key} in bucket: {s3_bucket}")
     else:
         # Create a new prefix folder
@@ -494,7 +579,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         create_prefix_folder(s3_bucket, s3_key)
     
     # Get username for version creation
-    username = claims_and_roles.get("tokens", ["system"])[0]
+    username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
     
     # Create initial version record in versions table
     initial_version_id = create_initial_version_record(

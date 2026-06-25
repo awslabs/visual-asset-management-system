@@ -14,13 +14,18 @@ import Textarea from "@cloudscape-design/components/textarea";
 import Toggle from "@cloudscape-design/components/toggle";
 import DatePicker from "@cloudscape-design/components/date-picker";
 import TimeInput from "@cloudscape-design/components/time-input";
-import { updateApiKey } from "../../services/APIService";
+import { updateApiKey, updateUserApiKey } from "../../services/APIService";
+import { USER_API_KEY_MAX_EXPIRATION_DAYS } from "../../common/constants/apiKeys";
 
 interface UpdateApiKeyProps {
     open: boolean;
     setOpen: (open: boolean) => void;
     setReload: (reload: boolean) => void;
     apiKey: any;
+    /** User self-service mode: expiration is required (cannot be cleared) and
+     * cannot exceed USER_API_KEY_MAX_EXPIRATION_DAYS from the key's original
+     * creation date. */
+    userMode?: boolean;
 }
 
 interface FormState {
@@ -30,7 +35,13 @@ interface FormState {
     isActive: boolean;
 }
 
-export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: UpdateApiKeyProps) {
+export default function UpdateApiKey({
+    open,
+    setOpen,
+    setReload,
+    apiKey,
+    userMode,
+}: UpdateApiKeyProps) {
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const [descriptionError, setDescriptionError] = useState("");
@@ -79,13 +90,14 @@ export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: Updat
             if (formState.expiresDate) {
                 const time = formState.expiresTime || "23:59:59";
                 body.expiresAt = `${formState.expiresDate}T${time}Z`;
-            } else {
-                // Send empty string to clear expiration
+            } else if (!userMode) {
+                // Admin mode only: send empty string to clear expiration.
+                // User keys always require an expiration date.
                 body.expiresAt = "";
             }
             body.isActive = formState.isActive ? "true" : "false";
 
-            const response = await updateApiKey(body);
+            const response = userMode ? await updateUserApiKey(body) : await updateApiKey(body);
 
             if (response && response[0] === true) {
                 setOpen(false);
@@ -125,7 +137,11 @@ export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: Updat
                         <Button
                             variant="primary"
                             onClick={handleSubmit}
-                            disabled={inProgress || formState.description.length > 256}
+                            disabled={
+                                inProgress ||
+                                formState.description.length > 256 ||
+                                (userMode === true && !formState.expiresDate)
+                            }
                             data-testid="update-api-key-button"
                         >
                             Update API Key
@@ -165,7 +181,11 @@ export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: Updat
                     </FormField>
                     <FormField
                         label="Expiration Date"
-                        constraintText="Optional. Update the expiration date for this API key. Clear to remove expiration."
+                        constraintText={
+                            userMode
+                                ? `Required. Maximum ${USER_API_KEY_MAX_EXPIRATION_DAYS} days from the key's creation date. Create a new key to extend beyond it.`
+                                : "Optional. Update the expiration date for this API key. Clear to remove expiration."
+                        }
                     >
                         <SpaceBetween direction="horizontal" size="xs">
                             <DatePicker
@@ -179,10 +199,27 @@ export default function UpdateApiKey({ open, setOpen, setReload, apiKey }: Updat
                                             : "23:59:59",
                                     });
                                 }}
+                                isDateEnabled={
+                                    userMode
+                                        ? (date) => {
+                                              const today = new Date();
+                                              today.setHours(0, 0, 0, 0);
+                                              const created = apiKey?.createdAt
+                                                  ? new Date(apiKey.createdAt)
+                                                  : new Date();
+                                              const max = new Date(created);
+                                              max.setUTCDate(
+                                                  max.getUTCDate() +
+                                                      USER_API_KEY_MAX_EXPIRATION_DAYS
+                                              );
+                                              return date > today && date <= max;
+                                          }
+                                        : undefined
+                                }
                                 placeholder="YYYY/MM/DD"
                                 data-testid="update-api-key-expiresDate"
                             />
-                            {formState.expiresDate && (
+                            {!userMode && formState.expiresDate && (
                                 <Button
                                     onClick={() =>
                                         setFormState({

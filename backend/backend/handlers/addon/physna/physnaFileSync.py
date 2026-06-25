@@ -25,6 +25,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+)
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 
 from . import physnaCommon
 from .physnaCommon import (
@@ -44,7 +49,7 @@ from .physnaCommon import (
     get_database_id_for_asset_id,
     get_file_metadata,
     get_physna_asset,
-    is_supported_file,
+    is_sync_supported_file,
     lookup_physna_asset_id,
     merge_metadata,
     physna_format_metadata,
@@ -53,17 +58,8 @@ from .physnaCommon import (
 logger = safeLogger(service_name="PhysnaFileSync")
 
 # Reuse the same skip set as Garnet
-_EXCLUDED_PREFIXES = (
-    "pipeline",
-    "pipelines",
-    "preview",
-    "previews",
-    "temp-upload",
-    "temp-uploads",
-    "workspace",
-    "workspaces",
-)
-_EXCLUDED_PATTERNS = (".previewFile.",)
+_EXCLUDED_PREFIXES = RESERVED_S3_PREFIX_FOLDERS
+_EXCLUDED_PATTERNS = EXCLUDED_FILE_PATH_PATTERNS
 
 _s3 = boto3.client("s3", config=physnaCommon._retry_config)
 
@@ -74,7 +70,7 @@ def _should_skip_s3_key(s3_key: str) -> bool:
     if any(p in s3_key for p in _EXCLUDED_PATTERNS):
         return True
     for part in s3_key.split("/"):
-        if any(part.startswith(p) for p in _EXCLUDED_PREFIXES):
+        if part in _EXCLUDED_PREFIXES:
             return True
     return False
 
@@ -207,8 +203,8 @@ def _resolve_asset_from_s3_event(bucket_name: str, s3_key: str) -> Optional[Dict
     # canonical key for all downstream calls (download, Physna path, etc.).
     s3_key = head_result["key"]
     s3_metadata = head.get("Metadata", {}) or {}
-    asset_id = s3_metadata.get("assetid")
-    database_id = s3_metadata.get("databaseid")
+    asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+    database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
     if not asset_id or not database_id:
         logger.warning(f"Missing assetid/databaseid in S3 metadata for {s3_key}")
         return None
@@ -811,11 +807,11 @@ def _handle_s3_record(record: Dict[str, Any]) -> bool:
         return True
 
     relative = resolved["relativePath"]
-    if not is_supported_file(relative):
+    if not is_sync_supported_file(relative):
         logger.info(
             f"Skipping S3 event for unsupported file type (Physna only accepts "
-            f"specific CAD/3D formats): bucket={bucket}, s3Key={s3_key}, "
-            f"relativePath={relative}, eventName={event_name}"
+            f"specific 3D/CAD, document, and image formats): bucket={bucket}, "
+            f"s3Key={s3_key}, relativePath={relative}, eventName={event_name}"
         )
         return True
 
@@ -860,11 +856,11 @@ def _handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
     database_id, asset_id, relative = parts
     if relative == "/":
         return True  # asset-level change is handled by physnaAssetSync
-    if not is_supported_file(relative):
+    if not is_sync_supported_file(relative):
         logger.info(
             f"Skipping VAMS metadata stream event for unsupported file type "
-            f"(Physna only accepts specific CAD/3D formats): "
-            f"databaseId={database_id}, assetId={asset_id}, "
+            f"(Physna only accepts specific 3D/CAD, document, and image "
+            f"formats): databaseId={database_id}, assetId={asset_id}, "
             f"relativePath={relative}, eventName={event_name}"
         )
         return True

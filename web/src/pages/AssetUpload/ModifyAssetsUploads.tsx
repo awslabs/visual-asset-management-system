@@ -21,7 +21,8 @@ import Synonyms from "../../synonyms";
 import { Link } from "@cloudscape-design/components";
 import { FileUpload } from "./components";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
-import { previewFileFormats } from "../../common/constants/fileFormats";
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
@@ -29,9 +30,6 @@ import { safeGetFile } from "../../utils/fileHandleCompat";
 import { fetchAsset, fetchDatabase } from "../../services/APIService";
 import { validateFiles, ValidationResult } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
-
-// Maximum preview file size (5MB)
-const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
 
 // Constants
 const previewFileFormatsStr = previewFileFormats.join(", ");
@@ -376,7 +374,7 @@ export default function ModifyAssetsUploadsPage() {
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
-        return fileItems.some((item) => item.name.includes(".previewFile."));
+        return fileItems.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [fileItems]);
 
     // Handle preview file selection with size validation
@@ -531,9 +529,9 @@ export default function ModifyAssetsUploadsPage() {
                                                     style={{ fontSize: "0.9em", marginTop: "8px" }}
                                                 >
                                                     <em>
-                                                        Note: Preview files (containing
-                                                        .previewFile. in the filename) are exempt
-                                                        from these restrictions.
+                                                        Note: Preview files (containing{" "}
+                                                        {PREVIEW_FILE_PATTERN} in the filename) are
+                                                        exempt from these restrictions.
                                                     </em>
                                                 </div>
                                             </SpaceBetween>
@@ -585,11 +583,12 @@ export default function ModifyAssetsUploadsPage() {
                                     <SpaceBetween direction="vertical" size="l">
                                         <Alert header="Preview File Information" type="info">
                                             <p>
-                                                Files with <strong>.previewFile.</strong> in the
-                                                filename will be ingested as preview files for their
-                                                associated files. For example,{" "}
-                                                <code>model.gltf.previewFile.png</code> will be used
-                                                as a preview for <code>model.gltf</code>.
+                                                Files with <strong>{PREVIEW_FILE_PATTERN}</strong>{" "}
+                                                in the filename will be ingested as preview files
+                                                for their associated files. For example,{" "}
+                                                <code>model.gltf{PREVIEW_FILE_PATTERN}png</code>{" "}
+                                                will be used as a preview for{" "}
+                                                <code>model.gltf</code>.
                                             </p>
                                             <p>
                                                 <strong>Important notes:</strong>

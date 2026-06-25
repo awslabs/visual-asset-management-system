@@ -268,6 +268,7 @@ const PhysnaViewerComponent: React.FC<ViewerPluginProps> = ({ assetId, databaseI
                     // ignore the attribute.
                     // @ts-expect-error — `credentialless` is valid per
                     // HTML spec but not in React 17's IframeHTMLAttributes.
+                    // eslint-disable-next-line react/no-unknown-property
                     credentialless="true"
                 />
             )}

@@ -1,7 +1,7 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
@@ -9,6 +9,12 @@ from customLogging.logger import safeLogger
 from common.validators import validate, object_name_pattern
 
 logger = safeLogger(service_name="ApiKeyModels")
+
+# Maximum lifetime of user-level (self-service) API keys, measured from key
+# creation. User-created keys must expire, and neither creation nor later
+# edits may set an expiration beyond this window; after it elapses the user
+# must rotate (create a new key).
+USER_API_KEY_MAX_EXPIRATION_DAYS = 365
 
 
 def _validate_iso8601_date(value):
@@ -25,6 +31,17 @@ def _validate_iso8601_date(value):
         except (ValueError, TypeError):
             raise ValueError(f"Invalid date format: '{value}'. Use ISO 8601 format (e.g. 2026-12-31 or 2026-12-31T23:59:59Z)")
     return value
+
+
+def parse_iso8601_datetime(value):
+    """Parse an ISO 8601 date/datetime string to a timezone-aware datetime (UTC assumed when naive)."""
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        parsed = datetime.strptime(value, '%Y-%m-%d')
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 class CreateApiKeyRequestModel(BaseModel, extra='ignore'):
@@ -84,6 +101,71 @@ class UpdateApiKeyRequestModel(BaseModel, extra='ignore'):
 
         # Validate expiresAt date format
         if values.get('expiresAt'):
+            _validate_iso8601_date(values.get('expiresAt'))
+
+        return values
+
+
+class CreateUserApiKeyRequestModel(BaseModel, extra='ignore'):
+    """Request model for creating a user-level (self-service) API key.
+
+    The key is always tied to the requesting user (no userId field), and an
+    expiration date is required. The handler enforces the maximum expiration
+    window (USER_API_KEY_MAX_EXPIRATION_DAYS from creation).
+    """
+    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
+    expiresAt: str = Field(min_length=1, max_length=30, strip_whitespace=True)
+
+    @root_validator
+    def validate_fields(cls, values):
+        logger.info("Validating user API key creation parameters")
+        (valid, message) = validate({
+            'description': {
+                'value': values.get('description'),
+                'validator': 'STRING_256'
+            },
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
+        if values.get('expiresAt'):
+            _validate_iso8601_date(values.get('expiresAt'))
+
+        return values
+
+
+class UpdateUserApiKeyRequestModel(BaseModel, extra='ignore'):
+    """Request model for updating a user-level (self-service) API key.
+
+    Unlike the admin update model, the expiration cannot be cleared -- when
+    provided it must be a non-empty valid date. The handler enforces ownership
+    and the maximum expiration window from the key's original creation.
+    """
+    description: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
+    expiresAt: Optional[str] = Field(None, min_length=1, max_length=30, strip_whitespace=True)
+    isActive: Optional[str] = Field(None, pattern=r'^(true|false)$')
+
+    @root_validator
+    def validate_fields(cls, values):
+        if values.get('description') is None and values.get('expiresAt') is None and values.get('isActive') is None:
+            raise ValueError("At least one of 'description', 'expiresAt', or 'isActive' must be provided")
+
+        if values.get('description') is not None:
+            (valid, message) = validate({
+                'description': {
+                    'value': values.get('description'),
+                    'validator': 'STRING_256',
+                    'optional': True
+                }
+            })
+            if not valid:
+                raise ValueError(message)
+
+        if values.get('expiresAt') is not None:
+            if not values.get('expiresAt'):
+                raise ValueError("User API keys require an expiration date; it cannot be cleared")
             _validate_iso8601_date(values.get('expiresAt'))
 
         return values

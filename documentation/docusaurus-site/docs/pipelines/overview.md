@@ -82,7 +82,7 @@ VAMS includes the following built-in pipelines, each controlled by a configurati
 | [3D Preview Thumbnail](3d-thumbnail.md)                | `usePreview3dThumbnail`                  | Generate animated GIF/static image previews                                                                                                                                        | PLY, STL, OBJ, GLB, GLTF, FBX, DRC, LAS, LAZ, E57, PTX, PCD, FLS, FWS, STP, STEP, USD, USDA, USDC, USDZ | AWS Batch (Fargate) | Yes          |
 | [Gaussian Splatting](gaussian-splatting.md)            | `useSplatToolbox`                        | Generate 3D Gaussian splats from images/video                                                                                                                                      | ZIP (images), MP4, MOV                                                                                  | AWS Batch (GPU)     | Yes          |
 | [GenAI Metadata Labeling](genai-labeling.md)           | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling for 3D files                                                                                                                                          | GLB, FBX, OBJ                                                                                           | AWS Batch (Fargate) | Yes          |
-| [NVIDIA Cosmos Predict](nvidia-cosmos.md)              | `useNvidiaCosmos`                        | Generate videos from text or image/video input using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes | Text2World: text only; Video2World: JPG, JPEG, PNG, GIF, MP4, MOV, AVI, MKV                             | AWS Batch (GPU)     | Yes          |
+| [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)      | `useNvidiaCosmos`                        | Generate videos from text or image/video input using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes | Text2World: text only; Video2World: JPG, JPEG, PNG, GIF, MP4, MOV, AVI, MKV                             | AWS Batch (GPU)     | Yes          |
 | [NVIDIA Cosmos Reason](nvidia-cosmos-reason.md)        | `useNvidiaCosmos.modelsReason`           | Analyze video/image content and generate text-based analysis, captions, and reasoning using Cosmos-Reason2 (2B, 8B) Vision Language Models                                         | MP4, MOV, AVI (video); JPG, JPEG, PNG (image)                                                           | AWS Batch (GPU)     | Yes          |
 | [NVIDIA Cosmos Transfer](nvidia-cosmos-transfer.md)    | `useNvidiaCosmos.modelsTransfer`         | Transform videos with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and video-to-video transformation                                                 | MP4, MOV (source video); edge, depth, seg, vis (control signals)                                        | AWS Batch (GPU)     | Yes          |
 | [NVIDIA Gr00t Fine-Tuning](nvidia-gr00t-finetune.md)   | `useNvidiaGr00t`                         | Fine-tune NVIDIA GR00T-N1.5-3B embodied AI model on custom LeRobot v2.1 robot manipulation datasets with LoRA or full fine-tuning support                                          | LeRobot v2.1 dataset (asset-level)                                                                      | AWS Batch (GPU)     | Yes          |
@@ -126,12 +126,34 @@ When `autoRegisterWithVAMS` is enabled, the CDK deployment creates a custom reso
 }
 ```
 
-### VPC Requirements
+### VPC and Network Requirements
 
-Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, VAMS automatically enables the global VPC configuration (`app.useGlobalVpc.enabled`). The VPC builder creates the necessary subnets, security groups, and VPC endpoints (Amazon ECR, AWS Batch, Amazon ECR Docker) for pipeline operation.
+Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, `app.useGlobalVpc.enabled` must be set to `true` — VAMS does not enable it automatically, and configuration validation fails with an error listing the offending features if it is left `false`. With the VPC enabled, the VPC builder provisions the subnets, security groups, and VPC interface endpoints that each enabled pipeline needs.
+
+This chart is the single source of truth for per-pipeline networking requirements. The [Network Architecture](../architecture/networking.md) page references it rather than duplicating the list, so when a pipeline is added or changed, only this table needs updating.
+
+All AWS Batch pipelines share a common set of interface endpoints: **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** (created whenever any AWS Batch pipeline is enabled). The **Additional VPC Interface Endpoints** column lists endpoints required _beyond_ that shared set.
+
+| Pipeline                                | VPC Required | Compute Target      | Additional VPC Interface Endpoints                 |
+| :-------------------------------------- | :----------- | :------------------ | :------------------------------------------------- |
+| 3D Basic Conversion                     | No           | AWS Lambda          | — (runs outside VPC)                               |
+| CAD/Mesh Metadata Extraction            | No           | AWS Lambda          | — (runs outside VPC)                               |
+| Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
+| 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
+| GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate) | Amazon Bedrock Runtime, Amazon Rekognition¹        |
+| Gaussian Splatting                      | Yes          | AWS Batch (GPU)     | Amazon ECS                                         |
+| NVIDIA Cosmos (Predict/Reason/Transfer) | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
+| NVIDIA Gr00t Fine-Tuning                | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
+| NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)     | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry |
+
+¹ Amazon Bedrock Runtime and Amazon Rekognition endpoints are created only when GenAI Metadata Labeling is enabled **and** all Lambda functions run in the VPC (`useGlobalVpc.useForAllLambdas`).
+
+:::info[Endpoint placement and ECS consolidation]
+Pipeline interface endpoints are placed in the isolated subnets, except the Amazon ECS endpoint, which is placed in private subnets for GPU/marketplace pipelines (Gaussian Splatting, NVIDIA Cosmos, NVIDIA Gr00t) and in isolated subnets for Isaac Lab Training. Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled, so VAMS consolidates ECS endpoint subnets across pipeline types — private subnets take priority over isolated subnets when both are needed. Amazon ECS Agent and Amazon ECS Telemetry are distinct services from Amazon ECS and do not conflict with that single ECS endpoint.
+:::
 
 :::warning[VPC Endpoint Costs]
-Enabling VPC-required pipelines creates several VPC Interface Endpoints, each of which incurs hourly charges. Review the [Configuration Guide](../deployment/configuration-reference.md) for details on VPC endpoint management.
+Enabling VPC-required pipelines creates several VPC interface endpoints, each of which incurs hourly charges. Review the [Configuration Guide](../deployment/configuration-reference.md) for details on VPC endpoint management.
 :::
 
 ## Pipeline S3 Output Paths

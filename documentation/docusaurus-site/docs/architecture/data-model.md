@@ -77,6 +77,21 @@ Stores metadata snapshots per asset version for point-in-time metadata recovery.
 | ------------------------ | -------------------- | -------- | ---------- |
 | `databaseIdAssetIdIndex` | `databaseId:assetId` | --       | ALL        |
 
+### Asset File Version History Storage Table
+
+Records per-version file change provenance (who created a version and how). Populated as new file versions are created; legacy versions created before this table existed have no record.
+
+| Attribute                     | Type   | Key           |
+| ----------------------------- | ------ | ------------- |
+| `databaseId:assetId:filePath` | String | Partition Key |
+| `versionId`                   | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                 | Partition Key        | Sort Key    | Projection |
+| ------------------------ | -------------------- | ----------- | ---------- |
+| `DatabaseIdAssetIdIndex` | `databaseId:assetId` | `versionId` | ALL        |
+
 ### Asset Uploads Storage Table
 
 Tracks in-progress file uploads.

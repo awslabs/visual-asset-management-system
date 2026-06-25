@@ -30,11 +30,16 @@ import {
     WXYZInput,
     Matrix4x4Input,
     LLAInput,
+    GeoPointInput,
+    GeoJSONInput,
+    MapMetadataPicker,
     JSONTextInput,
     DateInput,
     BooleanInput,
     InlineControlledListInput,
 } from "./valueTypes";
+import { appCache } from "../../services/appCache";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
 interface MetadataRowProps {
     row: MetadataRowState;
@@ -81,8 +86,22 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
     const canEditType = !isSchema; // Type can be edited for non-schema fields
 
     // Complex types that should show "Edit Value" button instead of inline controls
-    const complexTypes: MetadataValueType[] = ["xyz", "wxyz", "matrix4x4", "lla"];
+    const complexTypes: MetadataValueType[] = [
+        "xyz",
+        "wxyz",
+        "matrix4x4",
+        "lla",
+        "geopoint",
+        "geojson",
+    ];
     const isComplexType = complexTypes.includes(row.editType);
+
+    // Geo types render a side-by-side text editor + map picker inside the modal
+    const isGeoType =
+        row.editType === "lla" || row.editType === "geopoint" || row.editType === "geojson";
+    const locationServicesEnabled = !!appCache
+        .getItem("config")
+        ?.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES);
 
     // Check if required field is empty
     const isRequiredAndEmpty =
@@ -589,17 +608,64 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                                 }}
                             />
                         )}
-                        {row.editType === "lla" && (
-                            <LLAInput
-                                value={row.editValue}
-                                onChange={onValueChange}
-                                disabled={readOnly}
-                                ariaLabel={`${row.editKey} value`}
-                                onValidationChange={(isValid, errors) => {
-                                    setIsModalValueValid(isValid);
-                                    setModalValidationErrors(errors);
+                        {isGeoType && (
+                            <div
+                                style={{
+                                    display: "grid",
+                                    gridTemplateColumns: locationServicesEnabled
+                                        ? "minmax(0, 1fr) minmax(0, 1.4fr)"
+                                        : "minmax(0, 1fr)",
+                                    gap: "16px",
+                                    alignItems: "start",
                                 }}
-                            />
+                            >
+                                <div>
+                                    {row.editType === "lla" && (
+                                        <LLAInput
+                                            value={row.editValue}
+                                            onChange={onValueChange}
+                                            disabled={readOnly}
+                                            ariaLabel={`${row.editKey} value`}
+                                            onValidationChange={(isValid, errors) => {
+                                                setIsModalValueValid(isValid);
+                                                setModalValidationErrors(errors);
+                                            }}
+                                        />
+                                    )}
+                                    {row.editType === "geopoint" && (
+                                        <GeoPointInput
+                                            value={row.editValue}
+                                            onChange={onValueChange}
+                                            disabled={readOnly}
+                                            ariaLabel={`${row.editKey} value`}
+                                            onValidationChange={(isValid, errors) => {
+                                                setIsModalValueValid(isValid);
+                                                setModalValidationErrors(errors);
+                                            }}
+                                        />
+                                    )}
+                                    {row.editType === "geojson" && (
+                                        <GeoJSONInput
+                                            value={row.editValue}
+                                            onChange={onValueChange}
+                                            disabled={readOnly}
+                                            ariaLabel={`${row.editKey} value`}
+                                            onValidationChange={(isValid, errors) => {
+                                                setIsModalValueValid(isValid);
+                                                setModalValidationErrors(errors);
+                                            }}
+                                        />
+                                    )}
+                                </div>
+                                {locationServicesEnabled && (
+                                    <MapMetadataPicker
+                                        type={row.editType as "lla" | "geopoint" | "geojson"}
+                                        value={row.editValue}
+                                        onChange={onValueChange}
+                                        disabled={readOnly}
+                                    />
+                                )}
+                            </div>
                         )}
                     </Box>
                 </SpaceBetween>

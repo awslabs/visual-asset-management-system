@@ -36,6 +36,10 @@ export const VIEWER_COMPONENTS = {
         "ThreeJSViewerPlugin/ThreeJSViewerComponent",
     "./viewers/PhysnaViewerPlugin/PhysnaViewerComponent":
         "PhysnaViewerPlugin/PhysnaViewerComponent",
+    "./viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent":
+        "ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent",
+    "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent":
+        "SuperSplatViewerPlugin/SuperSplatViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here
@@ -51,6 +55,7 @@ export const DEPENDENCY_MANAGERS = {
     "./viewers/VeerumViewerPlugin/dependencies": "VeerumViewerPlugin/dependencies",
     "./viewers/NeedleUSDViewerPlugin/dependencies": "NeedleUSDViewerPlugin/dependencies",
     "./viewers/ThreeJSViewerPlugin/dependencies": "ThreeJSViewerPlugin/dependencies",
+    "./viewers/ThatOpenWebIfcViewerPlugin/dependencies": "ThatOpenWebIfcViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;

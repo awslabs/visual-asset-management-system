@@ -1,6 +1,6 @@
 # Network Architecture
 
-VAMS supports multiple network deployment configurations to accommodate commercial AWS, AWS GovCloud, . This page describes the network topology for each deployment mode, VPC configuration options, VPC endpoints, and subnet architecture.
+VAMS supports multiple network deployment configurations to accommodate commercial AWS, AWS GovCloud, and the AWS European Sovereign Cloud. This page describes the network topology for each deployment mode, VPC configuration options, VPC endpoints, and subnet architecture.
 
 ## Deployment Modes
 
@@ -76,10 +76,11 @@ In this mode:
 -   The ALB can be deployed in public or private subnets (`useAlb.usePublicSubnet`)
 -   An optional AWS WAF Web ACL (regional) protects the ALB
 -   VPC is required (`useGlobalVpc.enabled = true`)
+-   A dedicated Amazon S3 interface VPC endpoint forwards static web file requests from the ALB to the Amazon S3 web-app bucket (see [ALB Amazon S3 interface endpoint](#vpc-endpoints))
 
 ### VPC-Isolated Deployment (GovCloud)
 
-For restricted environments, GovCloud deployments can use full VPC isolation with all AWS service access routed through VPC endpoints and no internet egress.
+For restricted environments, GovCloud and AWS European Sovereign Cloud deployments can use full VPC isolation with all AWS service access routed through VPC endpoints and no internet egress. This full-isolation topology applies when `useGlobalVpc.useForAllLambdas` is `true`, which places every VAMS Lambda function inside the VPC. The GovCloud and European Sovereign Cloud templates set `useForAllLambdas` to `false` by default — only the Lambda functions that require the VPC run inside it — and you set it to `true` when stricter network isolation is needed or the Lambda functions must reach specific VPC network components.
 
 ```mermaid
 graph TD
@@ -152,16 +153,24 @@ Private and public subnets are created when any of the following are enabled:
 -   Splat Toolbox pipeline
 -   Isaac Lab Training pipeline
 -   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
+-   NVIDIA Gr00t pipeline
 
 ### Availability Zone Configuration
 
-The number of availability zones is determined by the deployment configuration:
+VAMS provisions a fixed number of Availability Zones for every subnet type it creates. The isolated subnets are always created across this AZ count, and the conditional private and public subnets (when created) use the same count. Keeping the AZ count stable across feature toggles avoids subnet add/remove churn between deployments.
 
-| Condition                                                | AZ Count |
-| -------------------------------------------------------- | -------- |
-| Amazon OpenSearch Service (Provisioned)                  | 3 AZs    |
-| ALB enabled, or all Lambdas in VPC, or RapidPipeline EKS | 2 AZs    |
-| Pipeline-only (no ALB, no all-Lambda VPC)                | 1 AZ     |
+| Condition                               | AZ Count                                    |
+| --------------------------------------- | ------------------------------------------- |
+| Amazon OpenSearch Service (Provisioned) | `availabilityZoneCount` (2 or 3, default 2) |
+| All other configurations (baseline)     | 2 AZs                                       |
+
+When Amazon OpenSearch Service (Provisioned) is enabled, the AZ count follows `openSearch.useProvisioned.availabilityZoneCount` (`2` or `3`, default `2`), with one data node per zone. At `2` the domain runs zone-aware **without** Standby (two data nodes, single index copy). At `3` the domain runs as **Multi-AZ with Standby** (three data nodes, and the asset/file indexes are created with two replicas so each has three copies, which Standby requires). Set it to `2` for Regions or partitions that expose only two Availability Zones, such as the AWS European Sovereign Cloud Region `eusc-de-east-1`; the configuration validation rejects an `availabilityZoneCount` greater than `2` for that Region.
+
+:::warning[Enabling Standby on an existing domain]
+Multi-AZ with Standby requires every index to have copies in a multiple of three. VAMS creates the indexes with the correct replica count for the chosen Availability Zone count, but a **3-AZ Standby domain must be created fresh** — switching an existing 2-AZ (single-copy) domain to `availabilityZoneCount: 3` in place is rejected by Amazon OpenSearch Service, because the domain configuration is validated against the existing indexes before their replica count can change. To move an existing domain to 3-AZ Standby, deploy with OpenSearch disabled to remove the domain, then re-enable it with `availabilityZoneCount: 3` to create a fresh domain, and run the reindex tool to repopulate it.
+:::
+
+The number of primary shards per index is set by `openSearch.useProvisioned.numberOfShards` (default `1`). As a sizing guideline, an index expected to exceed roughly 60 GB — about 3 million asset or file records for VAMS — should use more than one shard. Like the replica count, the shard count is fixed at index creation: changing it requires re-creating the index (disable and re-enable OpenSearch, then reindex); existing indexes are not re-sharded in place.
 
 ### External VPC Import
 
@@ -208,33 +217,56 @@ These interface endpoints are always created when VPC endpoints are enabled:
 
 ### Conditional Interface Endpoints
 
-These endpoints are created based on the deployment configuration:
+These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint               | Condition                                 | Purpose                  |
-| ---------------------- | ----------------------------------------- | ------------------------ |
-| AWS KMS                | `useKmsCmkEncryption.enabled`             | KMS key operations       |
-| AWS KMS (FIPS)         | `useKmsCmkEncryption.enabled` + `useFips` | FIPS-compliant KMS       |
-| AWS Batch              | Any pipeline enabled                      | Pipeline job submission  |
-| Amazon ECR API         | Any pipeline enabled                      | Container image registry |
-| Amazon ECR Docker      | Any pipeline enabled                      | Container image pulls    |
-| Amazon EFS             | NVIDIA Cosmos enabled                     | Model cache file system  |
-| Amazon ECS             | Pipeline with compute needs               | Container orchestration  |
-| Amazon ECS Agent       | Isaac Lab Training                        | ECS agent communication  |
-| Amazon ECS Telemetry   | Isaac Lab Training                        | ECS telemetry            |
-| Amazon Bedrock Runtime | GenAI Metadata + all Lambdas in VPC       | AI model invocation      |
-| Amazon Rekognition     | GenAI Metadata + all Lambdas in VPC       | Image analysis           |
+| Endpoint            | Condition                                      | Purpose                           |
+| ------------------- | ---------------------------------------------- | --------------------------------- |
+| AWS KMS             | `useKmsCmkEncryption.enabled`                  | KMS key operations                |
+| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`      | FIPS-compliant KMS                |
+| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint` | ALB-to-S3 static web file serving |
 
-### Pipeline-Required Endpoints
+:::info[ALB Amazon S3 interface endpoint]
+In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:
 
-The following endpoints are created when any of these pipelines are enabled: Point Cloud Potree Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, RapidPipeline (ECS/EKS), ModelOps, Splat Toolbox, Isaac Lab Training, or NVIDIA Cosmos (Predict, Reason, Transfer).
+-   It is gated by `useAlb.addAlbS3SpecialVpcEndpoint` (default `true`) and is created **independently of** `useGlobalVpc.addVpcEndpoints` — it exists whenever ALB mode is used, because the ALB listener/target group depends on it. Set `addAlbS3SpecialVpcEndpoint` to `false` only when the endpoint already exists in your VPC (for example, when it must be created manually outside the stack).
+-   It is created with `privateDnsEnabled: false` and placed in the ALB (web app) subnets rather than the isolated subnets.
+-   Its endpoint policy restricts access to the specific web-app Amazon S3 bucket (`s3:Get*`, `s3:List*`), and a Lambda-backed custom resource registers the endpoint's network interface IPs as ALB targets.
+    :::
 
--   AWS Batch
--   Amazon ECR API
--   Amazon ECR Docker
+### OpenSearch Serverless Interface Endpoint
 
-:::info[ECS Endpoint Consolidation]
-Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
+A **private** Amazon OpenSearch Serverless collection (`openSearch.useServerless.allowPublic = false`) is reached only through a VPC endpoint into which the OpenSearch-facing Lambda functions (search and indexers) connect. The endpoint is created by the OpenSearch Serverless construct (not the VPC builder) and is placed in the isolated subnets across two Availability Zones.
+
+The endpoint **type is determined by the collection generation**, because the two generations expose different collection endpoint hostnames:
+
+| Generation                       | Collection hostname                           | VPC endpoint                                                                                                                                    |
+| -------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Next-generation (`nextGen=true`) | `{collection-id}.aoss.{region}.on.aws`        | Standard AWS PrivateLink interface endpoint (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.{region}.aoss-data`), `privateDnsEnabled: true` |
+| Classic (`nextGen=false`)        | `{collection-id}.{region}.aoss.amazonaws.com` | Amazon OpenSearch Serverless-managed endpoint (`CfnVpcEndpoint`), which provisions its own Amazon Route 53 private hosted zone                  |
+
+VAMS creates the correct endpoint type for the configured generation. The in-VPC Lambda functions connect over private DNS on port 443 using SigV4 signing with service name `aoss`. The endpoint's id is added to the collection's network access policy (`SourceVPCEs`).
+
+The next-generation endpoint is a standard Amazon EC2 interface endpoint, so it follows the global `useGlobalVpc.addVpcEndpoints` setting like every other interface endpoint. The classic managed endpoint is an Amazon OpenSearch Serverless resource rather than an Amazon EC2 interface endpoint, so it is **not** governed by `addVpcEndpoints` and is always created for a private classic collection.
+
+| Generation | `addVpcEndpoints` | VAMS creates endpoint + network policy?          |
+| ---------- | ----------------- | ------------------------------------------------ |
+| NextGen    | `true`            | Yes                                              |
+| NextGen    | `false`           | **No** — deferred to manual creation             |
+| Classic    | `true` or `false` | Yes (managed endpoint, not governed by the flag) |
+
+:::warning[Private next-gen with `addVpcEndpoints=false`]
+When a private next-generation collection is deployed with `useGlobalVpc.addVpcEndpoints = false`, VAMS does **not** create the `aoss-data` interface endpoint or the collection's VPC network access policy — both must be created manually after deployment. The deployment still succeeds (the OpenSearch SSM parameters are written and index creation is skipped). For the step-by-step procedure to create the endpoint, tie it to the collection through a network access policy, deploy the deferred index schema, and populate the indexes, see [OpenSearch — deferred next-gen setup](../developer/opensearch.md#deferred-next-gen-setup-manual-vpc-endpoint).
 :::
+
+:::info[Dedicated security group]
+When VAMS creates the OpenSearch Serverless VPC endpoint, it uses its own security group (separate from the common VPC endpoint security group described below), allowing inbound HTTPS (port 443) from the VPC CIDR. Each OpenSearch-facing Lambda's security group is additionally granted inbound access on the endpoint.
+:::
+
+### Pipeline Interface Endpoints
+
+VPC-requiring pipelines (AWS Batch Fargate and GPU pipelines) create their own interface endpoints — a shared set of **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** whenever any AWS Batch pipeline is enabled, plus additional per-pipeline endpoints (Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry, Amazon EFS, Amazon Bedrock Runtime, Amazon Rekognition) depending on which pipelines are enabled.
+
+The authoritative per-pipeline endpoint matrix lives with the pipeline documentation. See [Pipeline System Overview — VPC and Network Requirements](../pipelines/overview.md#vpc-and-network-requirements) for the full chart of which interface endpoints each pipeline requires.
 
 ## Security Groups
 
@@ -266,7 +298,7 @@ When VAMS creates a managed VPC, VPC flow logs are automatically enabled:
 
 ## DNS Configuration
 
-All interface VPC endpoints are created with `privateDnsEnabled: true`. This allows Lambda functions and containers within the VPC to use standard AWS service hostnames (e.g., `dynamodb.us-east-1.amazonaws.com`) without custom DNS configuration. The VPC endpoint private DNS automatically resolves these hostnames to the endpoint's private IP addresses.
+Interface VPC endpoints are created with `privateDnsEnabled: true`. This allows Lambda functions and containers within the VPC to use standard AWS service hostnames (e.g., `dynamodb.us-east-1.amazonaws.com`) without custom DNS configuration. The VPC endpoint private DNS automatically resolves these hostnames to the endpoint's private IP addresses. The same applies to the standard OpenSearch Serverless next-generation endpoint, which resolves the `*.aoss.{region}.on.aws` collection hostnames through private DNS. The two exceptions are the ALB Amazon S3 interface endpoint (created with `privateDnsEnabled: false`) and the OpenSearch Serverless-managed Classic endpoint, which provisions its own Amazon Route 53 private hosted zone for the `*.aoss.amazonaws.com` collection hostnames rather than using the standard private-DNS toggle.
 
 VAMS VPCs are created with:
 

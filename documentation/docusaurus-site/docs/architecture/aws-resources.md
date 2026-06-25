@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 29 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 ### Core Data Tables
 
@@ -24,6 +24,7 @@ VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables u
 | AssetVersionsStorageTable (V2)        | `databaseId:assetId`                | `assetVersionId`            | --                                                                                                    | Asset version records                  |
 | AssetFileVersionsStorageTable (V2)    | `databaseId:assetId:assetVersionId` | `fileKey`                   | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | File version records per asset version |
 | AssetFileMetadataVersionsStorageTable | `databaseId:assetId:assetVersionId` | `type:filePath:metadataKey` | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | Metadata snapshot per asset version    |
+| AssetFileVersionHistoryStorageTable   | `databaseId:assetId:filePath`       | `versionId`                 | `DatabaseIdAssetIdIndex` (PK: databaseId:assetId, SK: versionId)                                      | Per-version file change provenance     |
 | AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt) | In-progress upload tracking            |
 
 ### Metadata and Attribute Tables
@@ -65,16 +66,26 @@ VAMS deploys 28 Amazon DynamoDB tables for persistent data storage. All tables u
 
 ## Amazon S3 Buckets
 
-| Bucket                     | Versioned | CORS | Access Logging                  | Purpose                                                                             |
-| -------------------------- | --------- | ---- | ------------------------------- | ----------------------------------------------------------------------------------- |
-| **Asset Bucket(s)**        | Yes       | Yes  | Yes (to Access Logs)            | Primary asset file storage. One auto-created bucket plus optional external buckets. |
-| **Asset Auxiliary Bucket** | Yes       | Yes  | Yes (to Access Logs)            | Auto-generated previews, visualizer files, pipeline temporary storage.              |
-| **Artefacts Bucket**       | Yes       | No   | Yes (to Access Logs)            | Template notebooks and deployment artefacts.                                        |
-| **Access Logs Bucket**     | Yes       | No   | No (self-referencing prevented) | Server access logs for all other buckets. 90-day lifecycle expiration.              |
-| **Web App Bucket**         | Yes       | No   | No                              | Built frontend static assets (CloudFront/ALB origin).                               |
+| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                             |
+| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets. |
+| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage.              |
+| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks and deployment artefacts.                                        |
+| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.              |
+| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                               |
+| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.            |
 
 :::note[Asset Bucket Configuration]
 VAMS supports multiple asset buckets. The `createNewBucket` configuration option creates a VAMS-managed bucket. The `externalAssetBuckets` configuration option registers pre-existing buckets by ARN. Each external bucket requires a `defaultSyncDatabaseId` and optional `baseAssetsPrefix`.
+:::
+
+:::note[Removal policy and redeploy collisions are separate concerns]
+Two independent properties matter when tearing down or redeploying VAMS:
+
+-   **Removal on teardown** — The asset, auxiliary, artefacts, and access logs buckets use a `RETAIN` removal policy, so they (and their contents) survive `cdk destroy` and require manual deletion. This protects against accidental data loss. The web app bucket and its access logs bucket use a `DESTROY` removal policy with automatic object deletion, so they are emptied and removed during teardown.
+-   **Custom name (redeploy collision)** — Only buckets with an explicit, fixed name can block a redeploy with a same-name conflict. The asset, auxiliary, artefacts, and access logs buckets are **auto-named** by AWS CloudFormation, so even though they are retained they do **not** need to be deleted before redeploying with the same configuration. Under ALB deployments, the web app bucket and its access logs bucket are named for the configured domain host; if a teardown fails and leaves them behind, delete them before redeploying with the same domain host.
+
+See [Uninstall the solution](../deployment/uninstall.md) for the full cleanup procedure.
 :::
 
 ## AWS Lambda Functions
@@ -114,7 +125,7 @@ VAMS deploys approximately 50 Lambda functions across 17 builder files. All func
 | ----------------------------------- | ---------------------------------------------- |
 | Amplify Config Lambda               | Serves `/api/amplify-config` (unauthenticated) |
 | VAMS Version Lambda                 | Serves `/api/version` (unauthenticated)        |
-| Schema Deploy Lambda (Node.js 20.x) | Custom resource for OpenSearch index creation  |
+| Schema Deploy Lambda (Node.js 22.x) | Custom resource for OpenSearch index creation  |
 | Populate S3 Asset Buckets Lambda    | Custom resource for bucket table population    |
 
 ## Amazon API Gateway
@@ -135,15 +146,19 @@ VAMS creates Step Functions state machines dynamically for each workflow definit
 
 ## Amazon OpenSearch Service
 
-| Configuration     | Serverless                                         | Provisioned                         |
-| ----------------- | -------------------------------------------------- | ----------------------------------- |
-| **Deployment**    | OpenSearch Serverless collection                   | OpenSearch Service domain (v2.7)    |
-| **Indexes**       | Asset index + File index (dual-index architecture) | Asset index + File index            |
-| **Access**        | IAM-based access policies                          | VPC-based access (3 AZ)             |
-| **Configuration** | `openSearch.useServerless.enabled`                 | `openSearch.useProvisioned.enabled` |
+| Configuration     | Serverless                                                                                                                             | Provisioned                         |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Deployment**    | OpenSearch Serverless collection in a collection group with configurable OCU capacity (the group generation is `CLASSIC` or `NEXTGEN`) | OpenSearch Service domain (v3.5)    |
+| **Indexes**       | Asset index + File index (dual-index architecture)                                                                                     | Asset index + File index            |
+| **Access**        | IAM-based access policies; public or VPC-endpoint-private network access (`allowPublic`)                                               | VPC-based access (2 or 3 AZ)        |
+| **Configuration** | `openSearch.useServerless.enabled`                                                                                                     | `openSearch.useProvisioned.enabled` |
 
 :::info[No OpenSearch Mode]
 Both OpenSearch modes can be disabled. When neither is enabled, the `NOOPENSEARCH` feature flag is set and search functionality is unavailable in the UI.
+:::
+
+:::warning[Provisioned is for advanced deployments only]
+OpenSearch Serverless is the recommended option for most VAMS deployments. The provisioned option requires a 3-AZ VPC, performs blue/green updates on domain configuration changes (instance type, EBS size, engine version) that can exceed the AWS CloudFormation custom-resource timeout, and may need a deploy-disabled-then-re-enabled recovery during major engine-version upgrades (for example, 2.7 to 3.5 in v2.6). Use it only when dedicated capacity, custom instance sizing, or features unsupported by Serverless are required. See the [OpenSearch configuration reference](../deployment/configuration-reference.md#amazon-opensearch-service-appopensearch) for the full caveat list.
 :::
 
 ## Amazon Cognito
@@ -181,11 +196,24 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 
 All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
 
+## Amazon EventBridge
+
+| Resource                         | Purpose                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| **Orchestration Bus**            | Top-level custom event bus for event-driven VAMS features                 |
+| **Orchestration Bus Audit Rule** | Routes all events from the deployment's sources to a CloudWatch log group |
+
+The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS encryption.
+
 ## Amazon CloudWatch
+
+VAMS creates explicitly named Amazon CloudWatch log groups under the `/aws/vendedlogs/` namespace. Each name ends with a deterministic hash suffix derived from the stack name, account ID, and a resource identifier, so the same configuration redeployed into the same account regenerates the same log group names. Because these log groups are explicitly named, an orphaned group left from a prior deployment can block a redeploy with a name conflict. See [Uninstall the solution](../deployment/uninstall.md) for cleanup steps.
 
 ### Audit Log Groups (10-Year Retention)
 
-| Log Group                       | Events Captured                      |
+Named `/aws/vendedlogs/<identifier>-<hash>`:
+
+| Log Group Identifier            | Events Captured                      |
 | ------------------------------- | ------------------------------------ |
 | `VAMSAuditAuthentication`       | Login attempts, token validation     |
 | `VAMSAuditAuthorization`        | Authorization decisions (allow/deny) |
@@ -197,16 +225,28 @@ All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
 | `VAMSAuditActions`              | General CRUD actions                 |
 | `VAMSAuditErrors`               | Application errors                   |
 
-### Infrastructure Log Groups (1-Year Retention)
+### Infrastructure and Orchestration Log Groups
 
-| Log Group               | Purpose                                   |
-| ----------------------- | ----------------------------------------- |
-| `VAMS-API-AccessLogs`   | API Gateway access logs (structured JSON) |
-| `VAMSCloudWatchVPCLogs` | VPC flow logs (when VPC enabled)          |
-| `VAMSCloudTrailLogs`    | AWS CloudTrail logs (when enabled)        |
+Named `/aws/vendedlogs/<identifier>-<hash>`:
+
+| Log Group Identifier        | Purpose                                         | Condition                |
+| --------------------------- | ----------------------------------------------- | ------------------------ |
+| `VAMS-API-AccessLogs`       | API Gateway access logs (structured JSON)       | Always                   |
+| `vamsPipelineWorkflows`     | Workflow Step Functions execution logs          | Always                   |
+| `VAMSOrchestrationBusAudit` | EventBridge orchestration bus audit rule target | Always                   |
+| `VAMSCloudWatchVPCLogs`     | VPC flow logs                                   | `useGlobalVpc`           |
+| `VAMSCloudTrailLogs`        | AWS CloudTrail logs                             | `addStackCloudTrailLogs` |
+
+### Pipeline Log Groups (per enabled pipeline)
+
+Named `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]-<hash>` for each enabled pipeline's Step Functions state machine (for example, `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`). Container-based pipelines (RapidPipeline, ModelOps) additionally create `/aws/vendedlogs/Pipelines/<containerName>` groups.
 
 :::note[Log Retention]
 A CDK aspect (`LogRetentionAspect`) forces one-year retention on all CloudWatch Log Groups in the stack. Audit log groups are explicitly set to 10-year retention.
+:::
+
+:::warning[Named log groups are retained and block redeploys]
+All VAMS log groups use the `DESTROY` removal policy and are deleted when the stack is destroyed cleanly. However, if a stack deletion fails partway, or a log group is recreated by an AWS service (such as a Lambda function writing logs) after the stack is gone, the orphaned, deterministically named group will conflict with the same-named group on a subsequent redeploy. Delete any remaining `/aws/vendedlogs/...` groups for the deployment before redeploying with the same configuration name and account. This is most common with the conditional AWS CloudTrail and VPC flow log groups.
 :::
 
 ## AWS KMS

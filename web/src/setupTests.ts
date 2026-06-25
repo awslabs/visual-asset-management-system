@@ -2,6 +2,9 @@
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+// Registers DOM matchers (toBeInTheDocument, toHaveClass, ...) on expect
+import "@testing-library/jest-dom";
+
 jest.mock("maplibre-gl/dist/maplibre-gl", () => ({
     GeolocateControl: jest.fn(),
     Map: jest.fn(() => ({

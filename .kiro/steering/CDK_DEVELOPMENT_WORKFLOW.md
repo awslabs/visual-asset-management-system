@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all CDK implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `infra/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **CDK Project Structure Standards**
@@ -36,6 +38,115 @@ infra/
 │   └── artefacts/            # Build artifacts and templates
 ├── test/                     # CDK unit and integration tests
 └── gen/                      # Generated code and endpoints
+```
+
+### **Nested Stack Dependency Chain**
+
+```
+CoreVAMSStack (root)
+  |
+  +-- VPCBuilder (conditional: useGlobalVpc.enabled)
+  +-- LambdaLayers
+  +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
+  |     |
+  |     +-- AuthBuilder (depends on Storage)
+  |     |     |
+  |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
+  |     |     |     |
+  |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
+  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types; depends on ApiBuilder)
+  |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
+  |     |     |     +-- SearchBuilder (OpenSearch)
+  |     |     |     +-- PipelineBuilder (all use-case pipelines)
+  |     |     |     +-- AddonBuilder (Garnet, Physna Sync)
+  |     |
+  +-- LocationService (conditional: useLocationService.enabled)
+  +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
+```
+
+### **Cross-Stack Shared Interfaces**
+
+**`storageResources`** (defined in `storageBuilder-nestedStack.ts`):
+
+```typescript
+interface storageResources {
+    encryption: { kmsKey?: kms.IKey };
+    s3: {
+        assetAuxiliaryBucket: s3.Bucket;
+        artefactsBucket: s3.Bucket;
+        accessLogsBucket: s3.Bucket;
+    };
+    sqs: { workflowAutoExecuteQueue: sqs.Queue };
+    sns: {
+        eventEmailSubscriptionTopic: sns.Topic;
+        fileIndexerSnsTopic: sns.Topic;
+        assetIndexerSnsTopic: sns.Topic;
+        databaseIndexerSnsTopic: sns.Topic;
+    };
+    eventBridge: {
+        orchestrationBus: events.EventBus; // Top-level VAMS orchestration event bus
+        orchestrationBusAuditLogGroup: logs.LogGroup; // Starter audit rule target
+        eventSourcePrefix: string; // Deployment-unique source prefix, e.g. "vams.prod-us-east-1"
+    };
+    cloudWatchAuditLogGroups: {
+        authentication;
+        authorization;
+        fileUpload;
+        fileDownload;
+        fileDownloadStreamed;
+        authOther;
+        authChanges;
+        actions;
+        errors: logs.LogGroup;
+    };
+    dynamo: {
+        // 20+ DynamoDB tables -- see storageBuilder-nestedStack.ts lines 72-98
+        appFeatureEnabledStorageTable;
+        assetLinksStorageTableV2;
+        assetLinksMetadataStorageTable;
+        assetStorageTable;
+        assetUploadsStorageTable;
+        assetVersionsStorageTable;
+        assetFileVersionsStorageTable;
+        assetFileVersionHistoryStorageTable;
+        assetFileMetadataVersionsStorageTable;
+        authEntitiesStorageTable;
+        commentStorageTable;
+        constraintsStorageTable;
+        databaseStorageTable;
+        metadataSchemaStorageTableV2;
+        databaseMetadataStorageTable;
+        assetFileMetadataStorageTable;
+        fileAttributeStorageTable;
+        pipelineStorageTable;
+        rolesStorageTable;
+        s3AssetBucketsStorageTable;
+        subscriptionsStorageTable;
+        tagStorageTable;
+        tagTypeStorageTable;
+        userRolesStorageTable;
+        userStorageTable;
+        workflowExecutionsStorageTable;
+        apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
+        workflowStorageTable: dynamodb.Table;
+        // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
+    };
+}
+```
+
+**`authResources`** (defined in `authBuilder-nestedStack.ts`):
+
+```typescript
+interface authResources {
+    roles: { unAuthenticatedRole: iam.Role };
+    cognito: {
+        userPool: cognito.UserPool;
+        webClientUserPool: cognito.UserPoolClient;
+        userPoolId: string;
+        identityPoolId: string;
+        webClientId: string;
+    };
+}
 ```
 
 ## 📋 **Development Workflow Checklist**
@@ -789,6 +900,20 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 3. **Encryption**: Use KMS encryption for all pipeline data
 4. **Network Security**: Use dedicated security groups for pipeline resources
 5. **Container Security**: Scan container images for vulnerabilities
+
+### **OpenSearch Serverless Connectivity**
+
+A **private** OpenSearch Serverless collection (`app.openSearch.useServerless.allowPublic = false`) is reached only through a VPC endpoint, and the endpoint **type is selected by the collection generation** because the two generations expose different endpoint hostnames:
+
+-   **NEXTGEN** (`nextGen = true`): hostname `{collection-id}.aoss.{region}.on.aws`, reached through a **standard EC2 interface endpoint** (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.{region}.aoss-data`, `privateDnsEnabled: true`), built via `new ec2.InterfaceVpcEndpointAwsService("aoss-data", "com.amazonaws", 443)`.
+-   **CLASSIC** (`nextGen = false`): hostname `{collection-id}.{region}.aoss.amazonaws.com`, reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`), which provisions its own Route 53 private hosted zone.
+
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, and the schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required for a private collection. The schema-deploy custom resource Lambda uses a long timeout (14 min) and a readiness poll because a freshly created collection/endpoint, plus a NEXTGEN scale-to-zero cold start (10–30s), can take minutes to become reachable. Backend Lambdas sign with SigV4 service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+
+**`addVpcEndpoints` gating (NEXTGEN only).** The NEXTGEN endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints` like every other interface endpoint. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
+
+-   When true, VAMS creates the endpoint, its security group, and the VPC network access policy, and runs the schema-deploy function in the VPC.
+-   When false (private NEXTGEN + `addVpcEndpoints = false`, the **deferred** case), VAMS skips the endpoint **and** the network policy. The schema-deploy function runs **outside** the VPC, writes the SSM parameters, and skips index creation (the `DeploySSMIndexSchema` custom resource passes `deferIndexCreation: "true"`). The operator creates the `aoss-data` endpoint and a matching network policy manually. To then create the index mappings, set `app.openSearch.useServerless.deployDeferredIndexSchema = true` for one deployment (also overridable via CDK context); the construct computes `deferIndexCreation = deferVpcSetup && !deployDeferredIndexSchema` and runs schema-deploy in the VPC against the operator endpoint. Then reindex. The flag is ignored when `addVpcEndpoints = true`. CLASSIC's managed endpoint is not an EC2 interface endpoint, so it is not governed by `addVpcEndpoints` and is always created for a private collection. See `documentation/docusaurus-site/docs/developer/opensearch.md`.
 
 ## 🔧 **Lambda Builder and Constructs Patterns**
 
@@ -1911,16 +2036,28 @@ When making CDK infrastructure changes, update the corresponding documentation a
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
+-   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
+-   **New or changed CloudWatch log group** → Update the Amazon CloudWatch section in `architecture/aws-resources.md` and the log group cleanup in `deployment/uninstall.md`
 -   **New nested stack** → Update `architecture/details.md`
 -   **New feature switch** → Update `overview/features.md`
+-   **New external configuration/policy file** (e.g. `config/policy/iamRoleConfig.json`) → Add it to the "Additional configuration files" table in `deployment/configuration-reference.md`, document the `config.json` flag that enables it, and explain the file structure.
+
+:::note[Document two independent properties: removal policy and custom name]
+When adding or changing a storage resource (Amazon S3 bucket, Amazon DynamoDB table) or Amazon CloudWatch log group, document **both** of these properties in `architecture/aws-resources.md`, and reflect them in `deployment/uninstall.md`:
+
+1. **Removal on teardown** — `RemovalPolicy.RETAIN` (survives `cdk destroy`, needs manual deletion) vs. `RemovalPolicy.DESTROY` (removed automatically; pair S3 buckets with `autoDeleteObjects: true`).
+2. **Custom name (redeploy-collision flag)** — Whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can cause a **name collision on redeploy** with the same configuration name and account.
+
+These axes are independent. A resource that is **retained but auto-named** (for example, the VAMS asset, auxiliary, artefacts, and access logs buckets, and all DynamoDB tables) does **not** need to be deleted before redeploying with the same config — leave it unless you intend to remove the data. A resource with a **custom/fixed name** (for example, the ALB web app bucket and its access logs bucket, named for the domain host; and all `/aws/vendedlogs/...` log groups) **must** be flagged so operators delete any orphaned copy before redeploying.
+:::
 
 #### **Cross-Steering File Updates:**
 
 When changes affect development standards, architecture patterns, or quality requirements:
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of affected workflow files (they must stay in sync)
-3. Keep WEB_DEVELOPMENT_WORKFLOW.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
+2. Update the `.kiro/steering/` version of affected workflow files
+3. Keep WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
 
 ---
 
@@ -2138,6 +2275,7 @@ dependentStack.addDependency(newFeatureStack);
 8. **Always** use service helper for cross-stack resource access
 9. **Always** write comprehensive tests
 10. **Always** update documentation
+11. **Always** match the surrounding comment density and style — describe **what** code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in code)
 
 ## 🛠️ **Development Commands**
 

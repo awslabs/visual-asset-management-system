@@ -851,6 +851,79 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
+    /auth/routes/api:
+        get:
+            summary: "List all available API routes."
+            description: "Retrieve the full list of VAMS API endpoint routes with their HTTP methods and categories from the deployment's master route definitions. Useful when authoring API authorization constraints (route__path values)."
+            responses:
+                "200":
+                    description: API routes retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/apiRoutesResponse'
+                "403":
+                    description: Not authorized to list API routes.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
+    /auth/constraints/permissionObjects:
+        get:
+            tags:
+                - auth
+            summary: "List constraint permission objects"
+            description: >-
+                Returns the master list of constraint object types (with the fields valid
+                on each), the criteria operators, the permissions (HTTP actions), and the
+                permission types. Used by the constraints editor and CLI to drive
+                objectType, field, operator, permission, and permissionType selection.
+            responses:
+                "200":
+                    description: Constraint object types, operators, permissions, and permission types
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getConstraintPermissionObjectsResponse"
+                "403":
+                    description: Forbidden
+                "500":
+                    description: Internal server error
+            security:
+                - DefaultCognitoAuthorizer: []
+    /auth/routes/api/allowed:
+        get:
+            summary: "List the API routes the current user is authorized to call."
+            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted."
+            responses:
+                "200":
+                    description: Allowed API routes retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/allowedApiRoutesResponse'
+                "403":
+                    description: Not authorized to list allowed API routes.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
     /user/cognito:
         get:
             summary: "List all Cognito users."
@@ -6535,6 +6608,222 @@ paths:
             security:
                 - DefaultCognitoAuthorizer: []
 
+    /auth/user/api-keys:
+        get:
+            summary: "List the current user's own API keys."
+            description: "Retrieve the API keys owned by the requesting user. Self-service variant of /auth/api-keys; other users' keys are never returned."
+            responses:
+                "200":
+                    description: API keys retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    Items:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/apiKeyMetadata"
+                "403":
+                    description: Not authorized to list API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create a new self-service API key for the current user."
+            description: "Create an API key tied to the requesting user. The key always acts as the authenticated caller (no userId field). An expiration date is required and may be at most 365 days from creation; after the window elapses a new key must be created (rotation). The plaintext API key is returned exactly once."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                apiKeyName:
+                                    type: string
+                                    description: "User-assigned name for the API key (immutable after creation)"
+                                description:
+                                    type: string
+                                    description: "Description of the API key"
+                                expiresAt:
+                                    type: string
+                                    format: date-time
+                                    description: "Required ISO 8601 expiration date, at most 365 days from creation"
+                            required:
+                                - apiKeyName
+                                - description
+                                - expiresAt
+            responses:
+                "200":
+                    description: API key created successfully. The apiKey field contains the plaintext key shown only once.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/apiKeyCreateResponse"
+                "400":
+                    description: Invalid parameters (including missing expiration or expiration beyond the 365-day window).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /auth/user/api-keys/{apiKeyId}:
+        get:
+            summary: "Get one of the current user's own API keys."
+            description: "Retrieve metadata for a specific API key owned by the requesting user. Keys owned by other users return not-found."
+            parameters:
+                - name: apiKeyId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                  description: "The unique identifier of the API key"
+            responses:
+                "200":
+                    description: API key metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/apiKeyMetadata"
+                "400":
+                    description: API key not found (or not owned by the requesting user).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update one of the current user's own API keys."
+            description: "Update the description, expiration date, and/or active status of an API key owned by the requesting user. The expiration cannot be cleared and cannot be set beyond 365 days from the key's original creation date; after that window a new key must be created (rotation)."
+            parameters:
+                - name: apiKeyId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                  description: "The unique identifier of the API key"
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                description:
+                                    type: string
+                                    description: "Updated description"
+                                expiresAt:
+                                    type: string
+                                    format: date-time
+                                    description: "Updated expiration date (ISO 8601, at most 365 days from key creation; cannot be cleared)"
+                                isActive:
+                                    type: string
+                                    enum: ["true", "false"]
+                                    description: "Enable or disable the API key"
+            responses:
+                "200":
+                    description: API key updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/apiKeyMetadata"
+                "400":
+                    description: Invalid parameters, expiration beyond the 365-day window, or API key not found/not owned.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete one of the current user's own API keys."
+            description: "Permanently delete an API key owned by the requesting user. Keys owned by other users return not-found. This action cannot be undone."
+            parameters:
+                - name: apiKeyId
+                  in: path
+                  required: true
+                  schema:
+                      type: string
+                  description: "The unique identifier of the API key"
+            responses:
+                "200":
+                    description: API key deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "API key deleted successfully"
+                "400":
+                    description: API key not found (or not owned by the requesting user).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete API keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+
     /addon/physna/viewer:
         get:
             summary: "Get Physna viewer metadata for a VAMS file."
@@ -6742,6 +7031,47 @@ components:
                 type: array
                 items:
                     $ref: "#/components/schemas/route"
+        apiRoute:
+            type: object
+            properties:
+                path:
+                    type: string
+                    description: "API Gateway route template (e.g. /database/{databaseId}/assets)"
+                methods:
+                    type: array
+                    items:
+                        type: string
+                        enum: [GET, POST, PUT, DELETE, HEAD]
+                    description: "HTTP methods available on this route"
+                category:
+                    type: string
+                    description: "Logical route category (e.g. assets, databases, workflows)"
+                unauthenticated:
+                    type: boolean
+                    description: "True for routes served without the custom Lambda authorizer"
+        apiRoutesResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        routes:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/apiRoute"
+        allowedApiRoutesResponse:
+            type: object
+            properties:
+                message:
+                    type: object
+                    properties:
+                        routes:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/apiRoute"
+                        userId:
+                            type: string
+                            description: "The user the allowed routes were evaluated for"
         checkSubscription:
             type: object
             properties:
@@ -8245,6 +8575,10 @@ components:
                 versionId:
                     type: string
                     description: "S3 version ID"
+                etag:
+                    type: string
+                    description: "S3 ETag of the file's current version. Present for non-folder objects in both basic and full mode; null for folders."
+                    nullable: true
                 isArchived:
                     type: boolean
                     description: "Whether the file is archived (soft deleted)"
@@ -8258,12 +8592,18 @@ components:
                 previewFile:
                     type: string
                     description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                changeSource:
+                    type: string
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
+                changeUserId:
+                    type: string
+                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
             required:
                 - fileName
                 - key
                 - relativePath
                 - isFolder
-        
+
         listAssetFilesRequest:
             type: object
             properties:
@@ -8353,6 +8693,12 @@ components:
                 previewFile:
                     type: string
                     description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                changeSource:
+                    type: string
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
+                changeUserId:
+                    type: string
+                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
                 versions:
                     type: array
                     items:
@@ -8389,12 +8735,36 @@ components:
                                     type: string
                                 description: "List of asset version IDs that contain this specific file version"
                                 nullable: true
+                            changeSource:
+                                type: string
+                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for legacy versions."
+                            changeUserId:
+                                type: string
+                                description: "User (or SYSTEM) that created this version. Blank or absent for legacy versions."
+                            changeWorkflowId:
+                                type: string
+                                description: "Workflow ID that created this version, when changeSource is workflowExecution."
+                            changeWorkflowExecutionId:
+                                type: string
+                                description: "Workflow execution ID that created this version, when changeSource is workflowExecution."
+                            changeAssetIdFrom:
+                                type: string
+                                description: "Source asset ID this version was copied or moved from, when applicable."
+                            changeDatabaseIdFrom:
+                                type: string
+                                description: "Source database ID this version was copied or moved from, when applicable."
+                            changeAssetFilePathFrom:
+                                type: string
+                                description: "Source file path this version was copied, moved, or renamed from, when applicable."
+                            changeAssetFileVersionFrom:
+                                type: string
+                                description: "Source S3 version ID this version was copied, moved, renamed, or reverted from, when applicable."
             required:
                 - fileName
                 - key
                 - relativePath
                 - isFolder
-        
+
         moveFileRequest:
             type: object
             properties:
@@ -9914,6 +10284,8 @@ components:
                     type: boolean
                     default: false
                     description: "Include archived items"
+                geoSearch:
+                    $ref: "#/components/schemas/geoSearch"
                 from:
                     type: integer
                     minimum: 0
@@ -9992,6 +10364,8 @@ components:
                     type: boolean
                     default: true
                     description: "Enhanced highlighting"
+                geoSearch:
+                    $ref: "#/components/schemas/geoSearch"
                 from:
                     type: integer
                     minimum: 0
@@ -10005,7 +10379,59 @@ components:
                     default: 100
                     description: "Number of results to return"
             required: []
-        
+
+        geoSearch:
+            type: object
+            description: |
+                Geospatial filter applied to the geo_MD_location field on indexed asset and file
+                documents. The indexer derives geo_MD_location from a metadata 'location' key
+                (GeoJSON or {latitude, longitude, altitude}) or from individual latitude /
+                longitude / altitude metadata fields. Provide exactly one of point, bbox, or
+                geoJson.
+            properties:
+                relation:
+                    type: string
+                    enum: [intersects, within, contains, disjoint]
+                    default: intersects
+                    description: "Spatial relation between input shape and indexed shapes"
+                point:
+                    type: object
+                    description: "Single point with optional radius (meters) for proximity filtering"
+                    properties:
+                        lat:
+                            type: number
+                            minimum: -90
+                            maximum: 90
+                        lon:
+                            type: number
+                            minimum: -180
+                            maximum: 180
+                        radiusMeters:
+                            type: number
+                            exclusiveMinimum: 0
+                            description: "Optional radius in meters; treated as a circle around (lat, lon)"
+                    required: [lat, lon]
+                bbox:
+                    type: object
+                    description: "Axis-aligned geographic bounding box"
+                    properties:
+                        topLeft:
+                            type: object
+                            properties:
+                                lat: { type: number, minimum: -90, maximum: 90 }
+                                lon: { type: number, minimum: -180, maximum: 180 }
+                            required: [lat, lon]
+                        bottomRight:
+                            type: object
+                            properties:
+                                lat: { type: number, minimum: -90, maximum: 90 }
+                                lon: { type: number, minimum: -180, maximum: 180 }
+                            required: [lat, lon]
+                    required: [topLeft, bottomRight]
+                geoJson:
+                    type: object
+                    description: "GeoJSON Geometry, Feature, or FeatureCollection"
+
         searchToken:
             type: object
             properties:
@@ -10466,6 +10892,64 @@ components:
                 userId: "user@example.com"
                 operation: "create"
                 timestamp: "2024-01-15T10:30:00.000Z"
+        constraintObjectTypeField:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintObjectType:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+                fields:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintObjectTypeField"
+        constraintOperator:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintPermission:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintPermissionType:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        getConstraintPermissionObjectsResponse:
+            type: object
+            properties:
+                objectTypes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintObjectType"
+                operators:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintOperator"
+                permissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintPermission"
+                permissionTypes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintPermissionType"
     parameters:
       maxItemsParam:
         name: maxItems

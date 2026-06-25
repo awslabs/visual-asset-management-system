@@ -57,9 +57,10 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             ALLOWED_CONSTRAINT_PERMISSIONS,
             ALLOWED_CONSTRAINT_PERMISSION_TYPES,
             ALLOWED_CONSTRAINT_OBJECT_TYPES,
-            ALLOWED_CONSTRAINT_OPERATORS
+            ALLOWED_CONSTRAINT_OPERATORS,
+            get_constraint_fields_for_object_type
         )
-        
+
         # Validate identifier
         (valid, message) = validate({
             'identifier': {
@@ -99,7 +100,16 @@ class CreateConstraintRequestModel(BaseModel, extra='ignore'):
             message = f"Invalid objectType. Allowed values: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
             logger.error(message)
             raise ValueError(message)
-        
+
+        # Validate each criterion's field is valid for the chosen objectType
+        valid_fields = get_constraint_fields_for_object_type(object_type)
+        for criteria in (values.get('criteriaAnd') or []) + (values.get('criteriaOr') or []):
+            if criteria.field not in valid_fields:
+                message = (f"Invalid field '{criteria.field}' for objectType '{object_type}'. "
+                           f"Allowed fields: {', '.join(valid_fields)}")
+                logger.error(message)
+                raise ValueError(message)
+
         # Validate that at least one criteria exists
         criteria_and = values.get('criteriaAnd', [])
         criteria_or = values.get('criteriaOr', [])
@@ -227,6 +237,45 @@ class ConstraintOperationResponseModel(BaseModel, extra='ignore'):
     timestamp: str
 
 
+class ConstraintFieldModel(BaseModel, extra='ignore'):
+    """A constraint field option (display label + stored value)"""
+    label: str
+    value: str
+
+
+class ConstraintObjectTypeModel(BaseModel, extra='ignore'):
+    """A constraint object type with its valid fields"""
+    label: str
+    value: str
+    fields: List[ConstraintFieldModel]
+
+
+class ConstraintOperatorModel(BaseModel, extra='ignore'):
+    """A constraint criteria operator option"""
+    label: str
+    value: str
+
+
+class ConstraintPermissionModel(BaseModel, extra='ignore'):
+    """A constraint permission (HTTP action) option"""
+    label: str
+    value: str
+
+
+class ConstraintPermissionTypeModel(BaseModel, extra='ignore'):
+    """A constraint permission type (allow/deny) option"""
+    label: str
+    value: str
+
+
+class GetConstraintPermissionObjectsResponseModel(BaseModel, extra='ignore'):
+    """Response model for GET /auth/constraints/permissionObjects"""
+    objectTypes: List[ConstraintObjectTypeModel]
+    operators: List[ConstraintOperatorModel]
+    permissions: List[ConstraintPermissionModel]
+    permissionTypes: List[ConstraintPermissionTypeModel]
+
+
 ######################## Constraint Template Import Models ##########################
 
 class TemplateVariableDefinition(BaseModel, extra='ignore'):
@@ -274,7 +323,8 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
             ALLOWED_CONSTRAINT_PERMISSIONS,
             ALLOWED_CONSTRAINT_PERMISSION_TYPES,
             ALLOWED_CONSTRAINT_OBJECT_TYPES,
-            ALLOWED_CONSTRAINT_OPERATORS
+            ALLOWED_CONSTRAINT_OPERATORS,
+            get_constraint_fields_for_object_type
         )
 
         variable_values = values.get('variableValues', {})
@@ -316,6 +366,15 @@ class ImportConstraintsTemplateRequestModel(BaseModel, extra='ignore'):
                     f"Invalid objectType '{constraint.objectType}'. "
                     f"Allowed: {', '.join(ALLOWED_CONSTRAINT_OBJECT_TYPES)}"
                 )
+
+            # Validate each criterion's field is valid for the constraint's objectType
+            valid_fields = get_constraint_fields_for_object_type(constraint.objectType)
+            for criteria in (constraint.criteriaAnd or []) + (constraint.criteriaOr or []):
+                if criteria.field not in valid_fields:
+                    raise ValueError(
+                        f"Invalid field '{criteria.field}' for objectType "
+                        f"'{constraint.objectType}'. Allowed: {', '.join(valid_fields)}"
+                    )
 
             # Validate criteria exist
             if not constraint.criteriaAnd and not constraint.criteriaOr:

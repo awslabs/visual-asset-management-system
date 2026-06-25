@@ -47,10 +47,18 @@ web/src/
 
   pages/                  # Thin page wrappers (lazy-loaded)
   components/             # Domain/feature components
-  visualizerPlugin/       # 3D/media viewer plugin system (17 viewers)
+  visualizerPlugin/       # 3D/media viewer plugin system (viewers)
   layout/Navigation.tsx   # Left sidebar navigation
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities
+
+  common/constants/       # Shared constants
+    fileFormats.ts        # Preview file formats and .previewFile. pattern
+    featuresEnabled.ts    # Feature flag name constants
+    actions.ts            # Action name constants
+    permissionConstraintTypes.ts  # Permission constraint type constants
+  constants/
+    uploadLimits.ts       # Upload limits (part sizes, file counts, preview size)
 ```
 
 ## Critical Rules
@@ -446,6 +454,38 @@ description={`Please provide a reason for archiving this ${Synonyms.asset}.`}
 const body = { entityName: "Asset" }; // Keep hardcoded for API
 ```
 
+## Shared Constants
+
+Shared literal values (file format lists, file-name patterns, upload limits) are defined once in dedicated constants files. Always import these constants instead of redefining the literal values in components or pages, so all usages can be found and changed in one place.
+
+| File                                  | Defines                                                                      |
+| ------------------------------------- | ---------------------------------------------------------------------------- |
+| `common/constants/fileFormats.ts`     | `previewFileFormats` (allowed preview extensions), `PREVIEW_FILE_PATTERN`    |
+| `constants/uploadLimits.ts`           | Upload part sizes, file counts, retry attempts, `MAX_PREVIEW_FILE_SIZE`      |
+| `common/constants/featuresEnabled.ts` | Feature flag name constants                                                  |
+| `common/constants/authRoutes.ts`      | Allowed-API-routes cache key/TTL, `isApiRouteAllowed()` helper               |
+| `common/constants/apiKeys.ts`         | `USER_API_KEY_MAX_EXPIRATION_DAYS` (mirrors the backend `models/apiKeys.py`) |
+
+### Preview File Constants
+
+`common/constants/fileFormats.ts` is the single source of truth for the file-level preview file pattern and the allowed preview image extensions:
+
+```typescript
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+
+// Check whether a file is a preview file ({baseFile}.previewFile.{ext})
+const isPreview = fileName.includes(PREVIEW_FILE_PATTERN);
+
+// Validate a preview file extension
+const isAllowed = previewFileFormats.includes(fileExt);
+```
+
+`constants/uploadLimits.ts` re-exports `previewFileFormats` as `ALLOWED_PREVIEW_EXTENSIONS` alongside the upload limit values, so upload code can import everything from one place.
+
+:::note[Backend Mirror]
+The preview file pattern and allowed preview extensions are mirrored in the backend at `backend/backend/common/s3PathPatterns.py` (`PREVIEW_FILE_PATTERN`, `ALLOWED_PREVIEW_FILE_EXTENSIONS`). Keep the two in sync when changing them.
+:::
+
 ## Adding New Pages and Components
 
 ### Adding a New Page
@@ -524,7 +564,7 @@ export default MyComponent;
 
 ## Content Security Policy and Inline Scripts
 
-The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'none'`, HTTPS upgrades, etc.).
+The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
 
 ### `script-src` uses `'unsafe-inline'`
 

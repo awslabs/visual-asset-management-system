@@ -95,6 +95,8 @@ vamscli file list -d my-db -a my-asset --asset-version-id ver-123 --basic
 Use `--basic` mode for large directories (1000+ files). It skips version checks, preview file processing, and metadata lookups, running approximately 100x faster.
 :::
 
+Each file entry shows its relative path, size, primary type, and change source on the main line, with the current-version creation date, version ID, S3 ETag, storage class, and preview file listed as indented detail sub-lines. Version-mismatch and permanently-deleted files are flagged. Fields skipped in `--basic` mode (such as version ID and preview file) are omitted from the output.
+
 ---
 
 ## file info

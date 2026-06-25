@@ -10,6 +10,11 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import (
+    VAMS_STATUS_METADATA_KEY,
+    VAMS_STATUS_ARCHIVED,
+    VAMS_STATUS_DELETED,
+)
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -35,9 +40,6 @@ s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 dynamodb = boto3.resource('dynamodb')
 logger = safeLogger(service_name="DownloadAsset")
-
-# Constants
-PREVIEW_PREFIX = 'previews/'
 
 # Load environment variables
 try:
@@ -117,13 +119,13 @@ def is_file_archived(metadata):
     Returns:
         True if file is archived, False otherwise
     """
-    vams_status = metadata.get('Metadata', {}).get('vams-status', '')
+    vams_status = metadata.get('Metadata', {}).get(VAMS_STATUS_METADATA_KEY, '')
     storage_class = metadata.get('StorageClass', 'STANDARD')
-    
+
     # File is archived if:
     # 1. Has vams-status=archived or deleted metadata, OR
     # 2. Storage class is GLACIER/DEEP_ARCHIVE
-    return (vams_status in ['archived', 'deleted'] or 
+    return (vams_status in [VAMS_STATUS_ARCHIVED, VAMS_STATUS_DELETED] or
             storage_class in ['GLACIER', 'DEEP_ARCHIVE'])
 
 def is_delete_marker(bucket, key, version_id=None):

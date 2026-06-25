@@ -31,7 +31,7 @@ Associated data such as textures, materials, bills of materials, quality analysi
 As an **open-source project** (Apache 2.0), VAMS is designed for extensibility. Organizations can integrate new viewer plugins, upstream data sources, downstream consumers, and custom workflow pipelines — adapting the platform to their specific requirements without vendor lock-in. Several ISVs have built commercial products on top of VAMS, and enterprise customers across defense, energy, manufacturing, and construction have adopted and contributed to the solution.
 
 :::info[Current Version]
-VAMS supports Python 3.12 Lambda runtime, Node.js 20.x, React 17 with Vite build tooling, and AWS CDK v2 infrastructure. See `infra/config/config.ts` for the current version.
+VAMS supports Python 3.12 Lambda runtime, Node.js 22.x, React 17 with Vite build tooling, and AWS CDK v2 infrastructure. See `infra/config/config.ts` for the current version.
 :::
 
 ---

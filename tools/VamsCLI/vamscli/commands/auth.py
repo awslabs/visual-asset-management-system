@@ -4,10 +4,10 @@ import click
 import datetime
 
 from ..auth.cognito import CognitoAuthenticator
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_api_access, requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
-from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError
+from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError, AuthRoutesError
 
 
 def get_authenticator(config: dict) -> CognitoAuthenticator:
@@ -782,3 +782,101 @@ def clear_override(ctx: click.Context, json_output: bool):
         success_message="✓ Override token cleared successfully!",
         cli_formatter=format_clear_override_result
     )
+
+
+@auth.group()
+def routes():
+    """API route listing commands."""
+    pass
+
+
+@routes.command(name='list')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def list_routes(ctx: click.Context, json_output: bool):
+    """
+    List all available VAMS API routes.
+
+    Returns the full list of API endpoint routes with their HTTP methods and
+    categories from the deployment's master route definitions. Useful when
+    authoring API authorization constraints (route__path values).
+
+    Examples:
+        vamscli auth routes list
+        vamscli auth routes list --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    output_status("Retrieving API routes...", json_output)
+
+    try:
+        result = api_client.list_api_routes()
+        route_list = result.get('routes', [])
+        output_result(
+            result,
+            json_output,
+            success_message=f"Found {len(route_list)} API route(s)",
+            cli_formatter=format_api_routes_output
+        )
+    except AuthRoutesError as e:
+        output_error(e, json_output, error_type="Auth Routes Error")
+        raise click.ClickException(str(e))
+
+
+@routes.command(name='allowed')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def allowed_routes(ctx: click.Context, json_output: bool):
+    """
+    List the VAMS API routes the current user is authorized to call.
+
+    Returns the API routes (and the HTTP methods on each) permitted by the
+    current user's authorization constraints.
+
+    Examples:
+        vamscli auth routes allowed
+        vamscli auth routes allowed --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    output_status("Retrieving allowed API routes...", json_output)
+
+    try:
+        result = api_client.list_allowed_api_routes()
+        route_list = result.get('routes', [])
+        output_result(
+            result,
+            json_output,
+            success_message=f"Found {len(route_list)} allowed API route(s)",
+            cli_formatter=format_api_routes_output
+        )
+    except AuthRoutesError as e:
+        output_error(e, json_output, error_type="Auth Routes Error")
+        raise click.ClickException(str(e))
+
+
+def format_api_routes_output(result):
+    """Format API routes list for CLI output, grouped by category."""
+    route_list = result.get('routes', [])
+    if not route_list:
+        return "No API routes found."
+
+    by_category = {}
+    for route in route_list:
+        by_category.setdefault(route.get('category', 'other'), []).append(route)
+
+    lines = []
+    for category in sorted(by_category):
+        lines.append(f"  {category}:")
+        for route in sorted(by_category[category], key=lambda r: r.get('path', '')):
+            methods = ','.join(route.get('methods', []))
+            lines.append(f"    {methods:25s} {route.get('path', '')}")
+    return '\n'.join(lines)

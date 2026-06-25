@@ -288,18 +288,150 @@ If Lambda functions behind a VPC were broken in v2.2, this version restores VPC 
 The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteItem` on V2 destination tables, and `dynamodb:UpdateItem` on the metadata versions table. See the [v2.4 to v2.5 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.4_to_v2.5/upgrade/v2.4_to_v2.5_migration_README.md) for the full IAM policy.
 :::
 
+### v2.5 to v2.6
+
+**Breaking changes:**
+
+-   New OpenSearch index names: `vams-assets-v3` and `vams-files-v3`. The new mapping adds a `geo_MD_location` field of type `geo_shape` that powers the new geospatial search filter and map view. The previous v2 indexes are abandoned and remain in OpenSearch until you delete them manually.
+-   Provisioned OpenSearch domains are upgraded from engine version 2.7 to 3.5. Serverless collections are reworked separately (see below).
+-   OpenSearch Serverless collections are reshaped onto a next-generation collection group with new `app.openSearch.useServerless` settings (`nextGen`, `allowPublic`, `enableStandbyReplicas`, and configurable OCU capacity). The collection cannot be updated in place — it must be removed and re-created, then reindexed. See [OpenSearch Serverless next-gen upgrade](#opensearch-serverless-next-gen-upgrade).
+-   The VPC is no longer enabled automatically. If a feature that requires a VPC (ALB, OpenSearch Provisioned, or any container-based pipeline) is enabled while `app.useGlobalVpc.enabled` is `false`, the deployment now fails configuration validation with an error that lists the offending features, rather than silently turning the VPC on. See [VPC is now required for certain features](#vpc-is-now-required-for-certain-features).
+-   Provisioned OpenSearch `availabilityZoneCount` now defaults to `2`, and the VPC is built with exactly that many Availability Zones. Earlier releases always built the VPC across 3 Availability Zones for provisioned OpenSearch even though the domain only used 2, so on upgrade the previously-unused third AZ subnet is removed (a VPC downgrade). See [OpenSearch Provisioned Availability Zone count downgrade](#opensearch-provisioned-availability-zone-count-downgrade).
+
+**Required migration steps:**
+
+1.  Deploy the v2.6 CDK stack. The schema-deploy custom resource creates the empty v3 indexes; the v2 indexes are left in place but unreferenced.
+
+2.  Navigate to the migration scripts directory:
+
+    ```bash
+    cd infra/deploymentDataMigration/v2.5_to_v2.6/upgrade
+    ```
+
+3.  Copy and configure the migration configuration file:
+
+    ```bash
+    cp v2.5_to_v2.6_migration_config.json my_migration_config.json
+    ```
+
+4.  Set `reindexer_function_name` in the config to the value of the CloudFormation output `ReindexerFunctionNameOutput` from your stack:
+
+    ```bash
+    aws cloudformation describe-stacks --stack-name your-vams-stack \
+      --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \
+      --output text
+    ```
+
+5.  Run the migration:
+
+    === "Linux / macOS"
+
+        ```bash
+        chmod +x run_migration.sh
+        ./run_migration.sh my_migration_config.json
+        ```
+
+    === "Windows"
+
+        ```powershell
+        .\run_migration.ps1 -ConfigFile my_migration_config.json
+        ```
+
+6.  The migration invokes the deployed reindexer Lambda, which:
+    -   Re-publishes every asset record from the asset storage DynamoDB table so the asset indexer writes the asset document (including the new `geo_MD_location` field) into `vams-assets-v3`.
+    -   Lists every asset bucket and re-publishes file events so the file indexer writes file documents into `vams-files-v3`.
+    -   Returns aggregate success/failure counts.
+
+:::note[`--clear-indexes` defaults to false]
+The v3 indexes are empty after the v2.6 CDK deploy, so the first migration run never needs to clear them. Pass `--clear-indexes` only if a previous run partially populated v3 and you want to start clean.
+:::
+
+:::warning[Provisioned OpenSearch 3.5 upgrade]
+The v2.6 CDK switches `OPENSEARCH_VERSION` to `OPENSEARCH_3_5`. This applies only to provisioned deployments (`app.openSearch.useProvisioned.enabled = true`); serverless collections are unaffected. Amazon OpenSearch Service supports in-place version upgrades, but a major-version jump on a long-running domain can occasionally fail or exceed the CloudFormation custom-resource timeout.
+
+If `cdk deploy` fails on the OpenSearch domain version upgrade, recover by deploying first with OpenSearch disabled and then re-enabling it:
+
+1. Set `app.openSearch.useProvisioned.enabled = false` (and `useServerless.enabled = false`) in `infra/config/config.json`.
+2. Run `cdk deploy --all --require-approval never` to delete the existing 2.7 domain.
+3. Restore the original `useProvisioned` configuration in `config.json`.
+4. Run `cdk deploy --all --require-approval never` to create a fresh 3.5 domain with the empty v3 indexes.
+5. Run this migration to repopulate the v3 indexes from source data.
+
+This recovery path discards only the OpenSearch indexes; all source data lives in DynamoDB and S3, and the reindex restores the full search corpus. For details and other troubleshooting steps, see the [v2.5 to v2.6 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
+:::
+
+#### OpenSearch Serverless next-gen upgrade
+
+v2.6 reworks the OpenSearch Serverless collection and adds new `app.openSearch.useServerless` settings:
+
+| Setting                                                               | Default                                        | Behavior                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nextGen`                                                             | `true` (commercial), `false` (GovCloud and EU) | Sets the collection group generation to `NEXTGEN` (`true`) or `CLASSIC` (`false`). The collection is placed in a collection group either way; `NEXTGEN` adds scale-to-zero support.                                                                                                                   |
+| `allowPublic`                                                         | `true`                                         | When `false`, the collection is reachable only through a VPC endpoint and requires `app.useGlobalVpc.enabled` to be `true` (built across 2 Availability Zones). Only the OpenSearch-facing Lambda functions are placed in the VPC, so `app.useGlobalVpc.useForAllLambdas` does not need to be `true`. |
+| `enableStandbyReplicas`                                               | tracks `nextGen`                               | Enables Serverless standby replicas. Required for `NEXTGEN` (must be `true` when `nextGen` is `true`); optional for `CLASSIC`. Defaults to the value of `nextGen`.                                                                                                                                    |
+| `minIndexingOcu` / `maxIndexingOcu` / `minSearchOcu` / `maxSearchOcu` | `2` / `16` / `2` / `16`                        | OpenSearch Compute Unit (OCU) capacity bounds. Each must be one of `0`, `2`, `4`, `8`, `16`, or any multiple of `16`. A minimum of `0` (scale-to-zero) requires `nextGen = true`.                                                                                                                     |
+
+:::warning[Serverless collections cannot be updated in place]
+Previously, a Serverless collection was updated by the CDK changeset like any other resource. In v2.6 the collection is placed in a collection group, the `allowPublic` network-policy change is applied, and the group generation is set, all of which reshape the collection, so an existing Serverless deployment **cannot** be updated in place. Remove the collection and re-create it, then reindex:
+
+1. Set `app.openSearch.useServerless.enabled = false` in `infra/config/config.json` and deploy. This removes the existing collection.
+
+    ```bash
+    npx cdk deploy --all --require-approval never
+    ```
+
+2. Set `app.openSearch.useServerless.enabled = true` again with the desired settings (`nextGen`, `allowPublic`, and OCU values) and deploy. This creates the new collection group and collection.
+
+    ```bash
+    npx cdk deploy --all --require-approval never
+    ```
+
+3. Reindex to repopulate the new collection — run the reindex utility (`infra/deploymentDataMigration/v2.5_to_v2.6/upgrade` or `tools/reindex_utility.py`), or set `app.openSearch.reindexOnCdkDeploy = true` for one deployment and then set it back to `false`.
+
+Tearing down the collection deletes the indexes, but all source data lives in Amazon DynamoDB and Amazon S3, so the reindex restores the full search corpus. **GovCloud and EU Sovereign Cloud deployments must keep `nextGen = false`.**
+:::
+
+:::note[Reindexing a private collection]
+A private collection (`allowPublic = false`) is reachable only from inside the VPC and not from a local machine, so the reindex utility's `direct` mode cannot reach it. For a private collection, reindex through the deployed Lambda (`lambda` mode) or set `app.openSearch.reindexOnCdkDeploy = true`.
+:::
+
+#### VPC is now required for certain features
+
+In earlier releases, enabling a feature that needs a VPC while `app.useGlobalVpc.enabled` was `false` silently turned the VPC on. In v2.6 this is a configuration error instead: the deployment fails and lists the features that require a VPC. The VPC-requiring features are ALB (`useAlb`), OpenSearch Provisioned (`openSearch.useProvisioned`), and the container-based pipelines (Potree viewer, 3D preview thumbnail, GenAI labeling, Gaussian splatting, RapidPipeline ECS/EKS, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Gr00t).
+
+If your existing `config.json` relied on the old implicit behavior, update it before deploying v2.6: set `app.useGlobalVpc.enabled` to `true` (the value the deployment was effectively using all along), or disable the listed features. No infrastructure changes result from setting the flag to the value that was already in effect — this is a configuration-file correction only.
+
+#### OpenSearch Provisioned Availability Zone count downgrade
+
+In v2.6, provisioned OpenSearch adds `app.openSearch.useProvisioned.availabilityZoneCount` (default `2`), and the VPC is built with exactly that many Availability Zones. Earlier releases always built the VPC across **3** Availability Zones for provisioned OpenSearch, even though the OpenSearch domain itself only ever used **2** of them — the third AZ's subnet was created but unused. v2.6 now provisions 2 Availability Zones by default (or 3 only when you set `availabilityZoneCount` to `3`) and uses them consistently.
+
+On upgrade, this is a **VPC downgrade**: the previously-unused third Availability Zone's subnet is removed. Removing a subnet can fail in AWS CloudFormation when the subnet still holds elastic network interfaces — in this case the shared interface VPC endpoints placed across the isolated subnets, and the VPC-attached Lambda (Hyperplane) ENIs created when `app.useGlobalVpc.useForAllLambdas` is `true`. The OpenSearch domain itself does not change AZ count (it was already on 2), so the failure is specifically about deleting the orphaned third-AZ subnet.
+
+You have two options:
+
+-   **Keep the existing 3-AZ VPC layout (no change):** set `app.openSearch.useProvisioned.availabilityZoneCount` to `3` in `config.json` before deploying v2.6. The VPC is unchanged and the upgrade proceeds normally.
+-   **Move to the 2-AZ layout (default):** because the third AZ's subnet must be deleted, follow the staged drain-and-redeploy procedure so the elastic network interfaces release first. Turn off the VPC and all VPC-associated components, deploy to release the ENIs, manually clear any orphaned ENIs / subnets / VPC resources that still fail to delete, then redeploy with the 2-AZ settings and reindex. The full step-by-step is documented in [Subnet or VPC Resource Deletion Failures](../troubleshooting/common-issues.md) — set `availabilityZoneCount` to `2` when you re-enable OpenSearch in that procedure. No asset data is lost: search data is rebuilt from the authoritative DynamoDB tables and S3 buckets by the reindex.
+
+:::warning[Plan the Availability Zone choice before first v2.6 deploy]
+Decide on `availabilityZoneCount` (`2` or `3`) before upgrading. Setting it to `3` preserves the existing VPC with no teardown. Accepting the default of `2` removes a subnet and may require the manual VPC teardown above if elastic network interfaces have not finished detaching.
+:::
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
 
-| Change type                       | Versions affected          | Action required                                                                     |
-| --------------------------------- | -------------------------- | ----------------------------------------------------------------------------------- |
-| DynamoDB table schema change      | v2.3 to v2.4, v2.4 to v2.5 | Run version-specific migration scripts.                                             |
-| Amazon OpenSearch Service reindex | v2.2 to v2.3, v2.3 to v2.4 | Run reindex script or set `reindexOnCdkDeploy: true`.                               |
-| Permission constraint migration   | v2.3 to v2.4, v2.4 to v2.5 | Run constraint migration script if custom constraints exist.                        |
-| API Gateway authorizer change     | v2.2 to v2.3               | Reset authorizer cache after deployment.                                            |
-| Pipeline CDK construct rename     | v2.2 to v2.3               | Deploy without pipelines, then redeploy with pipelines enabled.                     |
-| Website framework change          | v2.4 to v2.5               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`. |
+| Change type                            | Versions affected                          | Action required                                                                                                      |
+| -------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| DynamoDB table schema change           | v2.3 to v2.4, v2.4 to v2.5                 | Run version-specific migration scripts.                                                                              |
+| Amazon OpenSearch Service reindex      | v2.2 to v2.3, v2.3 to v2.4, v2.5 to v2.6   | Run reindex script or set `reindexOnCdkDeploy: true`.                                                                |
+| OpenSearch engine version upgrade      | v2.5 to v2.6 (provisioned only, 2.7 → 3.5) | Redeploy with OpenSearch disabled then re-enabled if the in-place upgrade fails.                                     |
+| OpenSearch Serverless next-gen reshape | v2.5 to v2.6 (serverless only)             | Disable Serverless, deploy, re-enable with new settings, deploy, then reindex. Keep `nextGen: false` on GovCloud/EU. |
+| VPC no longer auto-enabled             | v2.5 to v2.6                               | Set `app.useGlobalVpc.enabled: true` (or disable VPC-requiring features) if validation fails.                        |
+| OpenSearch AZ count VPC downgrade      | v2.5 to v2.6 (provisioned only)            | Set `availabilityZoneCount: 3` to keep the existing VPC, or follow the drain-and-redeploy teardown to move to 2 AZs. |
+| Permission constraint migration        | v2.3 to v2.4, v2.4 to v2.5                 | Run constraint migration script if custom constraints exist.                                                         |
+| API Gateway authorizer change          | v2.2 to v2.3                               | Reset authorizer cache after deployment.                                                                             |
+| Pipeline CDK construct rename          | v2.2 to v2.3                               | Deploy without pipelines, then redeploy with pipelines enabled.                                                      |
+| Website framework change               | v2.4 to v2.5                               | Clear `node_modules` and reinstall: `cd web && rm -rf node_modules && npm install`.                                  |
 
 ## Rollback guidance
 

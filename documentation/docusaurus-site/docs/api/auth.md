@@ -94,8 +94,8 @@ POST /auth/constraints/{constraintId}
 | `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                                       |
 | `description`      | string | No       | Description of the constraint's purpose                                                                                                                                      |
 | `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `apiKey`) |
-| `criteriaAnd`      | array  | No       | AND criteria for matching resources                                                                                                                                          |
-| `criteriaOr`       | array  | No       | OR criteria for matching resources                                                                                                                                           |
+| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                                         |
+| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                                 |
 | `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                          |
 | `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                                        |
 
@@ -114,6 +114,10 @@ Each entry in `criteriaAnd` or `criteriaOr`:
 | `field`    | string | Yes      | Field to match (e.g., `databaseId`, `assetType`) |
 | `value`    | string | Yes      | Value to match against (supports `*` wildcard)   |
 | `operator` | string | Yes      | Comparison operator (`equals`, `contains`, etc.) |
+
+:::note[Combining AND and OR criteria]
+A constraint may define both `criteriaAnd` and `criteriaOr`. When both are present, access is granted only if **all** `criteriaAnd` entries match **and at least one** `criteriaOr` entry matches.
+:::
 
 #### Request body example
 
@@ -214,6 +218,123 @@ The request body should contain the full constraint template JSON. See the permi
     "message": "Template imported successfully"
 }
 ```
+
+---
+
+### List constraint permission objects
+
+Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
+
+```
+GET /auth/constraints/permissionObjects
+```
+
+#### Response
+
+```json
+{
+    "message": {
+        "objectTypes": [
+            {
+                "label": "Asset",
+                "value": "asset",
+                "fields": [
+                    { "label": "Database ID", "value": "databaseId" },
+                    { "label": "Asset Name", "value": "assetName" },
+                    { "label": "Asset Type", "value": "assetType" },
+                    { "label": "Tags", "value": "tags" }
+                ]
+            }
+        ],
+        "operators": [{ "label": "Equals", "value": "equals" }],
+        "permissions": [{ "label": "View/GET", "value": "GET" }],
+        "permissionTypes": [{ "label": "Allow", "value": "allow" }]
+    }
+}
+```
+
+:::note[Authoritative field matrix]
+A constraint criterion whose `field` is not valid for its `objectType` is rejected at create/update and template import, and out-of-matrix or deprecated fields are ignored during authorization evaluation.
+:::
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
+---
+
+## API route listing
+
+These endpoints expose the deployment's API route surface from the master route definitions. They are useful when authoring API authorization constraints (`route__path` values) and for discovering which endpoints a user can call.
+
+### List all API routes
+
+Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories.
+
+```
+GET /auth/routes/api
+```
+
+#### Response
+
+```json
+{
+    "message": {
+        "routes": [
+            {
+                "path": "/database/{databaseId}/assets",
+                "methods": ["GET"],
+                "category": "assets",
+                "unauthenticated": false
+            }
+        ]
+    }
+}
+```
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
+
+---
+
+### List allowed API routes
+
+Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted.
+
+```
+GET /auth/routes/api/allowed
+```
+
+#### Response
+
+```json
+{
+    "message": {
+        "routes": [
+            {
+                "path": "/database/{databaseId}/assets",
+                "methods": ["GET"],
+                "category": "assets"
+            }
+        ],
+        "userId": "user@example.com"
+    }
+}
+```
+
+#### Error responses
+
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `500`  | Internal server error |
 
 ---
 
@@ -684,6 +805,95 @@ DELETE /auth/api-keys/{apiKeyId}
     "message": "API key deleted successfully"
 }
 ```
+
+---
+
+## User (self-service) API keys
+
+The `/auth/user/api-keys` routes are the self-service variant of the API key endpoints. They allow users to manage their own keys without administrative access:
+
+-   All operations are scoped to keys owned by the requesting user. Other users' keys are never listed, and direct access to them returns not-found.
+-   Created keys are always tied to the authenticated caller -- there is no `userId` field.
+-   An **expiration date is required** on creation and may be at most **365 days** from creation.
+-   Updates cannot clear the expiration and cannot set it beyond 365 days from the key's **original creation date**. After the window elapses, the user must create a new key (rotation).
+
+The admin routes (`/auth/api-keys`) are unchanged: administrators can manage keys across all users without expiration requirements.
+
+### List your API keys
+
+```
+GET /auth/user/api-keys
+```
+
+Returns the same response shape as the admin list, filtered to the requesting user's keys.
+
+---
+
+### Get one of your API keys
+
+```
+GET /auth/user/api-keys/{apiKeyId}
+```
+
+#### Path parameters
+
+| Parameter  | Type   | Required | Description        |
+| ---------- | ------ | -------- | ------------------ |
+| `apiKeyId` | string | Yes      | API key identifier |
+
+---
+
+### Create a self-service API key
+
+```
+POST /auth/user/api-keys
+```
+
+#### Request body
+
+| Field         | Type   | Required | Description                                                |
+| ------------- | ------ | -------- | ---------------------------------------------------------- |
+| `apiKeyName`  | string | Yes      | Display name for the API key (immutable after creation)    |
+| `description` | string | Yes      | Description of the API key                                 |
+| `expiresAt`   | string | Yes      | Expiration date (ISO 8601), at most 365 days from creation |
+
+#### Request body example
+
+```json
+{
+    "apiKeyName": "My Automation Key",
+    "description": "Personal automation scripts",
+    "expiresAt": "2027-03-15T10:30:00Z"
+}
+```
+
+The response matches the admin create response; the plaintext key is returned exactly once.
+
+---
+
+### Update one of your API keys
+
+```
+PUT /auth/user/api-keys/{apiKeyId}
+```
+
+#### Request body
+
+| Field         | Type   | Required | Description                                                             |
+| ------------- | ------ | -------- | ----------------------------------------------------------------------- |
+| `description` | string | No       | Updated description                                                     |
+| `expiresAt`   | string | No       | Updated expiration (within 365 days of key creation; cannot be cleared) |
+| `isActive`    | string | No       | `true` or `false` to enable/disable the key                             |
+
+---
+
+### Delete one of your API keys
+
+```
+DELETE /auth/user/api-keys/{apiKeyId}
+```
+
+Deletes the key when it is owned by the requesting user; other users' keys return not-found.
 
 ---
 

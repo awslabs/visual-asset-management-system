@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import Alert from "@cloudscape-design/components/alert";
 import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
+import Button from "@cloudscape-design/components/button";
 import Grid from "@cloudscape-design/components/grid";
 import Input from "@cloudscape-design/components/input";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -26,9 +28,11 @@ export default function ViewPipeline() {
     const [pipelineType, setPipelineType] = useState("standardFile");
     const [pipelineExecutionType, setPipelineExecutionType] = useState("Lambda");
     const [resourceDisplay, setResourceDisplay] = useState(null);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const getData = async () => {
+            setError(null);
             const items = await fetchAllPipelines();
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
@@ -50,6 +54,14 @@ export default function ViewPipeline() {
                         setResourceDisplay(null);
                     }
                 }
+            } else {
+                setReload(false);
+                // The service layer returns the API error message string on failure.
+                setError(
+                    typeof items === "string" && items.trim() !== ""
+                        ? items
+                        : "Failed to load pipeline. Please try refreshing."
+                );
             }
         };
         if (reload) {
@@ -71,6 +83,16 @@ export default function ViewPipeline() {
                         ariaLabel="Breadcrumbs"
                     />
                     <h1>{pipelineName}</h1>
+                    {error && (
+                        <Alert
+                            type="error"
+                            dismissible
+                            onDismiss={() => setError(null)}
+                            action={<Button onClick={() => setReload(true)}>Retry</Button>}
+                        >
+                            {error}
+                        </Alert>
+                    )}
                     <Grid gridDefinition={[{ colspan: 4 }, { colspan: 8 }]}>
                         <TextContent>Pipeline Name</TextContent>
                         <Input

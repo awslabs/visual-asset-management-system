@@ -30,6 +30,7 @@ import { useMultiSequenceUpload } from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
 import { formatRetryMessage } from "./uploadRetry";
+import { PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
 
 interface UploadManagerProps {
@@ -367,7 +368,7 @@ export default function UploadManager({
                         size: item.size,
                         relativePath: item.relativePath,
                         handle: item.handle,
-                        isPreviewFile: item.relativePath.includes(".previewFile."),
+                        isPreviewFile: item.relativePath.includes(PREVIEW_FILE_PATTERN),
                         isAssetPreview: item.index === 99999, // Mark asset preview files
                     }));
 
@@ -960,7 +961,7 @@ export default function UploadManager({
                 size: item.size,
                 relativePath: item.relativePath,
                 handle: item.handle,
-                isPreviewFile: item.relativePath.includes(".previewFile."),
+                isPreviewFile: item.relativePath.includes(PREVIEW_FILE_PATTERN),
                 isAssetPreview: item.index === 99999,
             }));
 

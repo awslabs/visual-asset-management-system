@@ -10,11 +10,39 @@ Tests cover:
 - ASL generation
 """
 
+import os
+import sys
+import types
 import pytest
 import json
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 from botocore.exceptions import ClientError
+
+# createWorkflow loads these environment variables at import time. Set them
+# before importing the handler so module initialization succeeds under test.
+os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
+os.environ.setdefault("VAMS_STACK_NAME", "test-stack")
+os.environ.setdefault("PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME", "test-process-output")
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("LAMBDA_ROLE_ARN", "arn:aws:iam::123456789012:role/test-role")
+os.environ.setdefault("LOG_GROUP_ARN", "arn:aws:logs:us-east-1:123456789012:log-group:test")
+
+# The workflows handler package imports get_task_builder from
+# common.stepfunctions_builder at import time. The shared test mock package does
+# not provide this submodule, so register a lightweight stub before importing the
+# handler. The uniqueness tests below do not exercise ASL generation.
+if "common.stepfunctions_builder" not in sys.modules:
+    _sf_builder_stub = types.ModuleType("common.stepfunctions_builder")
+    for _name in (
+        "create_lambda_task_state", "create_fail_state", "create_retry_config",
+        "create_catch_config", "create_workflow_definition", "create_state_machine",
+        "update_state_machine", "get_task_builder",
+    ):
+        setattr(_sf_builder_stub, _name, MagicMock())
+    sys.modules["common.stepfunctions_builder"] = _sf_builder_stub
+
+from backend.backend.handlers.workflows.createWorkflow import find_conflicting_database
 
 
 @pytest.fixture
@@ -597,6 +625,80 @@ class TestErrorHandling:
             assert "message" in body
             # Should NOT expose internal AWS error details
             assert "InvalidDefinition" not in body["message"]
+
+
+class TestFindConflictingDatabase:
+    """Tests for the cross-database workflowId uniqueness helper."""
+
+    def test_no_conflict_when_id_unused(self):
+        """Returns None when no other database owns the workflowId."""
+
+        with patch("backend.backend.handlers.workflows.createWorkflow.dynamodb") as mock_dynamodb:
+            table = MagicMock()
+            table.scan.return_value = {"Items": []}
+            mock_dynamodb.Table.return_value = table
+
+            result = find_conflicting_database("test-database-id", "test-workflow-id")
+
+            assert result is None
+
+    def test_no_conflict_when_same_database(self):
+        """The record being updated (same databaseId) is not a conflict with itself."""
+
+        with patch("backend.backend.handlers.workflows.createWorkflow.dynamodb") as mock_dynamodb:
+            table = MagicMock()
+            table.scan.return_value = {
+                "Items": [{"databaseId": "test-database-id", "workflowId": "test-workflow-id"}]
+            }
+            mock_dynamodb.Table.return_value = table
+
+            result = find_conflicting_database("test-database-id", "test-workflow-id")
+
+            assert result is None
+
+    def test_conflict_when_different_database(self):
+        """Returns the conflicting databaseId when another database owns the workflowId."""
+
+        with patch("backend.backend.handlers.workflows.createWorkflow.dynamodb") as mock_dynamodb:
+            table = MagicMock()
+            table.scan.return_value = {
+                "Items": [{"databaseId": "other-db", "workflowId": "test-workflow-id"}]
+            }
+            mock_dynamodb.Table.return_value = table
+
+            result = find_conflicting_database("test-database-id", "test-workflow-id")
+
+            assert result == "other-db"
+
+    def test_deleted_record_not_a_conflict(self):
+        """A workflowId held only by a soft-deleted partition is reusable."""
+
+        with patch("backend.backend.handlers.workflows.createWorkflow.dynamodb") as mock_dynamodb:
+            table = MagicMock()
+            table.scan.return_value = {
+                "Items": [{"databaseId": "other-db#deleted", "workflowId": "test-workflow-id"}]
+            }
+            mock_dynamodb.Table.return_value = table
+
+            result = find_conflicting_database("test-database-id", "test-workflow-id")
+
+            assert result is None
+
+    def test_conflict_paginates_scan(self):
+        """The scan follows LastEvaluatedKey pagination before concluding."""
+
+        with patch("backend.backend.handlers.workflows.createWorkflow.dynamodb") as mock_dynamodb:
+            table = MagicMock()
+            table.scan.side_effect = [
+                {"Items": [], "LastEvaluatedKey": {"databaseId": "x", "workflowId": "y"}},
+                {"Items": [{"databaseId": "other-db", "workflowId": "test-workflow-id"}]},
+            ]
+            mock_dynamodb.Table.return_value = table
+
+            result = find_conflicting_database("test-database-id", "test-workflow-id")
+
+            assert result == "other-db"
+            assert table.scan.call_count == 2
 
 
 if __name__ == "__main__":

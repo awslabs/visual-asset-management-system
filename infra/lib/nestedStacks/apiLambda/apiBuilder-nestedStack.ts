@@ -58,7 +58,6 @@ import { NestedStack } from "aws-cdk-lib";
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
 import { buildMetadataService } from "../../lambdaBuilder/metadataFunctions";
 import { buildAuthFunctions } from "../../lambdaBuilder/authFunctions";
-import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
     buildSubscriptionService,
     buildCheckSubscriptionFunction,
@@ -69,10 +68,6 @@ import {
     buildCreateAssetLinkFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
 import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
-import {
-    buildTagTypeService,
-    buildCreateTagTypeFunction,
-} from "../../lambdaBuilder/tagTypeFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
@@ -316,84 +311,6 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, userRolesService, {
             routePath: "/user-roles",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-
-        //Tags Resources
-        const tagService = buildTagService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, tagService, {
-            routePath: "/tags",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, tagService, {
-            routePath: "/tags/{tagId}",
-            method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-
-        const createTagFunction = buildCreateTagFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createTagFunction, {
-            routePath: "/tags",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
-        attachFunctionToApi(this, createTagFunction, {
-            routePath: "/tags",
-            method: apigateway.HttpMethod.PUT,
-            api: api,
-        });
-
-        //Tag Types Resources
-        const tagTypeService = buildTagTypeService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, tagTypeService, {
-            routePath: "/tag-types",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        attachFunctionToApi(this, tagTypeService, {
-            routePath: "/tag-types/{tagTypeId}",
-            method: apigateway.HttpMethod.DELETE,
-            api: api,
-        });
-
-        const createTagTypeFunction = buildCreateTagTypeFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createTagTypeFunction, {
-            routePath: "/tag-types",
-            method: apigateway.HttpMethod.POST,
-            api: api,
-        });
-        attachFunctionToApi(this, createTagTypeFunction, {
-            routePath: "/tag-types",
-            method: apigateway.HttpMethod.PUT,
             api: api,
         });
 
@@ -1190,28 +1107,25 @@ export class ApiBuilderNestedStack extends NestedStack {
             subnets
         );
 
-        attachFunctionToApi(this, authFunctions.authConstraintsService, {
-            routePath: "/auth/constraints",
-            method: apigateway.HttpMethod.GET,
-            api: api,
-        });
-        for (let i = 0; i < methods.length; i++) {
-            attachFunctionToApi(this, authFunctions.authConstraintsService, {
-                routePath: "/auth/constraints/{constraintId}",
-                method: methods[i],
-                api: api,
-            });
-        }
+        // NOTE: the auth constraints service and its routes (/auth/constraints,
+        // /auth/constraints/{constraintId}, /auth/constraints/permissionObjects, and
+        // /auth/constraintsTemplateImport) are wired in apiBuilder2-nestedStack.ts.
 
-        attachFunctionToApi(this, authFunctions.authConstraintsTemplateService, {
-            routePath: "/auth/constraintsTemplateImport",
+        attachFunctionToApi(this, authFunctions.routes, {
+            routePath: "/auth/routes",
             method: apigateway.HttpMethod.POST,
             api: api,
         });
 
         attachFunctionToApi(this, authFunctions.routes, {
-            routePath: "/auth/routes",
-            method: apigateway.HttpMethod.POST,
+            routePath: "/auth/routes/api",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.routes, {
+            routePath: "/auth/routes/api/allowed",
+            method: apigateway.HttpMethod.GET,
             api: api,
         });
 
@@ -1285,6 +1199,38 @@ export class ApiBuilderNestedStack extends NestedStack {
 
         attachFunctionToApi(this, authFunctions.apiKeyService, {
             routePath: "/auth/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.DELETE,
+            api: api,
+        });
+
+        // User-level (self-service) API key routes — scoped to the requesting
+        // user's own keys with mandatory expiration (enforced by the handler).
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys",
+            method: apigateway.HttpMethod.POST,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.GET,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys/{apiKeyId}",
+            method: apigateway.HttpMethod.PUT,
+            api: api,
+        });
+
+        attachFunctionToApi(this, authFunctions.apiKeyService, {
+            routePath: "/auth/user/api-keys/{apiKeyId}",
             method: apigateway.HttpMethod.DELETE,
             api: api,
         });

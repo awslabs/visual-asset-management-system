@@ -17,10 +17,17 @@ export interface RoleGroupPermission {
     permissionType: string;
 }
 
+export interface PermissionOption {
+    label: string;
+    value: string;
+}
+
 export interface RoleGroupPermissionsTableProps {
     permissions: RoleGroupPermission[];
     setPermissions: (permissions: RoleGroupPermission[]) => void;
     fetchGroups?: () => Promise<string[]>;
+    permissionOptions?: PermissionOption[];
+    permissionTypeOptions?: PermissionOption[];
 }
 
 export interface RoleGroup {
@@ -32,20 +39,14 @@ export default function RoleGroupPermissionsTable({
     permissions,
     setPermissions,
     fetchGroups,
+    permissionOptions = [],
+    permissionTypeOptions = [],
 }: RoleGroupPermissionsTableProps) {
     const [selected, setSelected] = useState<RoleGroupPermission[]>([]);
     const [allRoleGroups, setAllRoleGroups] = useState<RoleGroup[]>([]);
 
-    const allPermissions = [
-        { label: "View/GET", value: "GET" },
-        { label: "Add/PUT", value: "PUT" },
-        { label: "Update/POST", value: "POST" },
-        { label: "DELETE", value: "DELETE" },
-    ];
-    const permissionTypes = [
-        { label: "Allow", value: "allow" },
-        { label: "Deny", value: "deny" },
-    ];
+    const allPermissions = permissionOptions;
+    const permissionTypes = permissionTypeOptions;
 
     const addPermissions = () => {
         const permission = {
@@ -132,6 +133,7 @@ export default function RoleGroupPermissionsTable({
                                 <Select
                                     autoFocus={true}
                                     expandToViewport={true}
+                                    filteringType="auto"
                                     selectedOption={
                                         allRoleGroups.find((option) => option.value === value) ??
                                         null

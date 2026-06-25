@@ -23,6 +23,7 @@ import {
     globalLambdaEnvironmentsAndPermissions,
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
@@ -101,6 +102,7 @@ export function buildVamsExecuteRapidPipelineEKSFunction(
     // CDK Nag Suppressions
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -186,6 +188,7 @@ export function buildOpenPipelineEKSFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -323,5 +326,6 @@ export function buildConsolidatedHandlerFunction(
     // CDK Nag Suppressions
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

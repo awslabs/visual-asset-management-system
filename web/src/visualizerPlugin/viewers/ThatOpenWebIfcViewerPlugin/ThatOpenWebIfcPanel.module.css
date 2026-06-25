@@ -1,0 +1,292 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * Shared styling for the IFC BIM Viewer control panel (Model Tree / Properties /
+ * Tools tabs). Scoped via CSS Modules so it cannot leak into the host app or
+ * other viewer plugins. The look intentionally matches the dark, semi-transparent
+ * canvas-overlay HUD used by the Three.js viewer, but with hover/active polish.
+ */
+
+/* ---- Section grouping ---- */
+.section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+
+.sectionHeader {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.55);
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ---- Generic buttons ---- */
+.button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8em;
+    line-height: 1.2;
+    transition: background 0.12s ease, border-color 0.12s ease, transform 0.06s ease;
+}
+
+.button:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.32);
+}
+
+.button:active {
+    transform: translateY(1px);
+}
+
+.button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Primary call-to-action (e.g. Fit to View). */
+.buttonPrimary {
+    composes: button;
+    background: linear-gradient(180deg, #2a8af0 0%, #1f6fd0 100%);
+    border-color: rgba(255, 255, 255, 0.18);
+    font-weight: 600;
+}
+
+.buttonPrimary:hover {
+    background: linear-gradient(180deg, #3a9af8 0%, #2a7fdc 100%);
+}
+
+/* Active/toggled-on state for tool buttons. */
+.buttonActive {
+    composes: button;
+    background: linear-gradient(180deg, #2a8af0 0%, #1f6fd0 100%);
+    border-color: #4aa6ff;
+    font-weight: 700;
+    box-shadow: 0 0 0 1px rgba(74, 166, 255, 0.4) inset;
+}
+
+.buttonActive:hover {
+    background: linear-gradient(180deg, #3a9af8 0%, #2a7fdc 100%);
+}
+
+/* Warning-tone button (e.g. Reset / Clear). */
+.buttonWarn {
+    composes: button;
+    background: rgba(255, 152, 0, 0.18);
+    border-color: rgba(255, 152, 0, 0.4);
+}
+
+.buttonWarn:hover {
+    background: rgba(255, 152, 0, 0.3);
+}
+
+/* ---- Button grids ---- */
+.grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.grid3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+}
+
+/* Compact button used inside grids/toolbars. */
+.smallButton {
+    composes: button;
+    padding: 7px 6px;
+    font-size: 0.76em;
+}
+
+/* ---- Hint / helper text ---- */
+.hint {
+    font-size: 0.72em;
+    color: rgba(255, 255, 255, 0.5);
+    line-height: 1.4;
+}
+
+.emptyHint {
+    padding: 20px 16px;
+    text-align: center;
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+/* ---- Model tree ---- */
+.treeWrap {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.treeToolbar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.treeBody {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 4px 0;
+}
+
+.treeRow {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 5px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    transition: background 0.1s ease;
+}
+
+.treeRow:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.treeCaret {
+    cursor: pointer;
+    width: 16px;
+    display: inline-block;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    user-select: none;
+}
+
+.treeCaretSpacer {
+    width: 16px;
+    display: inline-block;
+}
+
+.treeLabel {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82em;
+}
+
+.treeCount {
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.7);
+    border-radius: 9px;
+    padding: 1px 7px;
+    font-size: 0.85em;
+    flex-shrink: 0;
+}
+
+.iconButton {
+    background: none;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.95em;
+    padding: 2px 4px;
+    border-radius: 4px;
+    opacity: 0.75;
+    transition: opacity 0.1s ease, background 0.1s ease;
+}
+
+.iconButton:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.iconButton:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* ---- Properties tab ---- */
+.propHeader {
+    font-weight: 700;
+    font-size: 0.95em;
+    margin-bottom: 2px;
+    word-break: break-word;
+}
+
+.propSubHeader {
+    font-size: 0.78em;
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 14px;
+}
+
+.psetCard {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+}
+
+.psetTitle {
+    font-weight: 700;
+    font-size: 0.78em;
+    color: #4aa6ff;
+    margin-bottom: 6px;
+}
+
+.propRow {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 2px 0;
+    font-size: 0.78em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.propKey {
+    color: rgba(255, 255, 255, 0.6);
+    flex-shrink: 0;
+}
+
+.propVal {
+    text-align: right;
+    word-break: break-word;
+}
+
+/* Range slider rows in Tools. */
+.sliderRow {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sliderLabel {
+    font-size: 0.76em;
+    color: rgba(255, 255, 255, 0.7);
+    display: flex;
+    justify-content: space-between;
+}
+
+.range {
+    width: 100%;
+    accent-color: #2a8af0;
+}

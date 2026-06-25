@@ -66,6 +66,14 @@ Constraints are the rules within a role that define what a user can or cannot do
 | **Criteria (AND)**    | Conditions that must ALL be true for the constraint to match.                                                                                                     |
 | **Criteria (OR)**     | Conditions where ANY one must be true for the constraint to match.                                                                                                |
 
+:::note[Combining AND and OR criteria]
+When a constraint includes both AND and OR criteria, they combine within the same rule: the constraint matches only when **all** AND conditions are true **and at least one** OR condition is true.
+:::
+
+:::tip[API route values]
+When creating a constraint with the `api` object type, the **Criteria Values** field for `Route Path` offers an autosuggest of the deployment's available API routes (with their HTTP methods), so you can pick valid `route__path` values instead of typing them by hand. You can still enter free text for prefix or regex patterns.
+:::
+
 ### The GLOBAL keyword
 
 Use `GLOBAL` as a criteria value for `databaseId` to match resources that are not scoped to any specific database. For example, GLOBAL pipelines and GLOBAL workflows use `databaseId equals GLOBAL`.
@@ -96,6 +104,10 @@ The authorization engine evaluates all constraints for a user. If any constraint
 ![Access control constraints page showing constraint definitions](/img/access_constraints_page_20260323_v2.5.png)
 
 ![Constraint editor showing object type, criteria, and group permissions](/img/access_constraints_20260323_v2.5.png)
+
+:::warning[Limit who can manage constraints]
+The ability to create and edit constraints lets a role define the authorization policy itself, so it can grant access to any resource. Only assign constraint management (the Constraints page and its `api` route `/auth/constraints`) to fully trusted administrators. By default, only the **Admin** role can manage constraints. Avoid adding this access to roles meant for general users. See [Permissions Model](../concepts/permissions-model.md#constraints) for details.
+:::
 
 ## Assigning roles to users
 

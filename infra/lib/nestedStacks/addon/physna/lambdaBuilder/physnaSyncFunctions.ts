@@ -16,6 +16,7 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../helper/security";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../config/config";
 import * as Config from "../../../../../config/config";
@@ -100,6 +101,7 @@ function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -203,5 +205,6 @@ export function buildPhysnaViewerFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

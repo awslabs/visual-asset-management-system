@@ -142,7 +142,7 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   17 viewer plugins covering 3D, video, audio, image, document, and data formats
+-   18+ viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)

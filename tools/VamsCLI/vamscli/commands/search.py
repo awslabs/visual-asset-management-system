@@ -57,6 +57,71 @@ def _parse_entity_types(entity_types_str: str) -> List[str]:
     return types
 
 
+def _parse_geo_options(
+    geo_point: Optional[str],
+    geo_bbox: Optional[str],
+    geo_geojson: Optional[str],
+    geo_relation: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """
+    Build the geoSearch request payload from CLI options.
+
+    Exactly one of --geo-point, --geo-bbox, or --geo-geojson may be supplied.
+    Formats:
+      --geo-point   "lat,lon" or "lat,lon,radiusMeters"
+      --geo-bbox    "topLeftLat,topLeftLon,bottomRightLat,bottomRightLon"
+      --geo-geojson Path to a file containing a GeoJSON Geometry / Feature / FeatureCollection
+    """
+    provided = [opt for opt in (geo_point, geo_bbox, geo_geojson) if opt]
+    if not provided:
+        return None
+    if len(provided) > 1:
+        raise InvalidSearchParametersError(
+            "Only one of --geo-point, --geo-bbox, or --geo-geojson may be specified."
+        )
+
+    geo_search: Dict[str, Any] = {}
+    if geo_relation:
+        geo_search["relation"] = geo_relation
+
+    if geo_point:
+        parts = [p.strip() for p in geo_point.split(",") if p.strip()]
+        if len(parts) not in (2, 3):
+            raise InvalidSearchParametersError(
+                "--geo-point must be 'lat,lon' or 'lat,lon,radiusMeters'."
+            )
+        try:
+            point = {"lat": float(parts[0]), "lon": float(parts[1])}
+            if len(parts) == 3:
+                point["radiusMeters"] = float(parts[2])
+        except ValueError:
+            raise InvalidSearchParametersError("--geo-point values must be numeric.")
+        geo_search["point"] = point
+    elif geo_bbox:
+        parts = [p.strip() for p in geo_bbox.split(",") if p.strip()]
+        if len(parts) != 4:
+            raise InvalidSearchParametersError(
+                "--geo-bbox must be 'topLeftLat,topLeftLon,bottomRightLat,bottomRightLon'."
+            )
+        try:
+            geo_search["bbox"] = {
+                "topLeft": {"lat": float(parts[0]), "lon": float(parts[1])},
+                "bottomRight": {"lat": float(parts[2]), "lon": float(parts[3])},
+            }
+        except ValueError:
+            raise InvalidSearchParametersError("--geo-bbox values must be numeric.")
+    elif geo_geojson:
+        try:
+            with open(geo_geojson, 'r') as f:
+                geo_search["geoJson"] = json.load(f)
+        except FileNotFoundError:
+            raise InvalidSearchParametersError(f"GeoJSON file not found: {geo_geojson}")
+        except json.JSONDecodeError as e:
+            raise InvalidSearchParametersError(f"Invalid GeoJSON: {e}")
+
+    return geo_search
+
+
 def _parse_filters(filters_str: Optional[str]) -> List[Dict[str, Any]]:
     """
     Parse filters from string input.
@@ -371,6 +436,11 @@ def search():
 @click.option('--size', type=int, default=100, help='Number of results per page (default: 100, max: 2000)')
 @click.option('--filters', help='Advanced filters in JSON array or query string format (see examples)')
 @click.option('--include-archived', is_flag=True, help='Include archived assets')
+@click.option('--geo-point', help="Geo point filter: 'lat,lon' or 'lat,lon,radiusMeters'")
+@click.option('--geo-bbox', help="Geo bounding box filter: 'topLeftLat,topLeftLon,bottomRightLat,bottomRightLon'")
+@click.option('--geo-geojson', help='Path to a GeoJSON file (Geometry, Feature, or FeatureCollection) for the geo filter')
+@click.option('--geo-relation', type=click.Choice(['intersects', 'within', 'contains', 'disjoint']),
+              default='intersects', help='Spatial relation for the geo filter (default: intersects)')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -380,6 +450,8 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
            metadata_mode: str, include_metadata: bool, explain_results: bool,
            sort_field: Optional[str], sort_desc: bool, from_offset: int, size: int,
            filters: Optional[str], include_archived: bool,
+           geo_point: Optional[str], geo_bbox: Optional[str], geo_geojson: Optional[str],
+           geo_relation: str,
            output_format: str, json_output: bool):
     """
     Search assets using OpenSearch with advanced filter support.
@@ -411,6 +483,11 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
         vamscli search assets -q "model" --output-format csv > results.csv
         vamscli search assets -q "model" --explain-results --json-output
+
+    Geospatial Examples:
+        vamscli search assets --geo-point "47.6062,-122.3321,5000"
+        vamscli search assets --geo-bbox "47.7,-122.5,47.5,-122.2" --geo-relation within
+        vamscli search assets --geo-geojson ./aoi.geojson --geo-relation intersects
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -451,18 +528,23 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         if filters:
             parsed_filters = _parse_filters(filters)
             search_request["filters"] = parsed_filters
-        
+
+        # Parse and add geospatial filter
+        geo_search = _parse_geo_options(geo_point, geo_bbox, geo_geojson, geo_relation)
+        if geo_search:
+            search_request["geoSearch"] = geo_search
+
         output_status("Executing search...", json_output)
-        
+
         # Execute search
         result = api_client.search_query(search_request)
-        
+
         # Handle output format
         if json_output:
             output_result(result, json_output)
         elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            
+
             def format_assets_table(data):
                 """Format assets search results for CLI display."""
                 lines = [f"\nFound {total} assets\n"]
@@ -522,6 +604,11 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
 @click.option('--size', type=int, default=100, help='Number of results per page (default: 100, max: 2000)')
 @click.option('--filters', help='Advanced filters in JSON array or query string format (see examples)')
 @click.option('--include-archived', is_flag=True, help='Include archived files')
+@click.option('--geo-point', help="Geo point filter: 'lat,lon' or 'lat,lon,radiusMeters'")
+@click.option('--geo-bbox', help="Geo bounding box filter: 'topLeftLat,topLeftLon,bottomRightLat,bottomRightLon'")
+@click.option('--geo-geojson', help='Path to a GeoJSON file (Geometry, Feature, or FeatureCollection) for the geo filter')
+@click.option('--geo-relation', type=click.Choice(['intersects', 'within', 'contains', 'disjoint']),
+              default='intersects', help='Spatial relation for the geo filter (default: intersects)')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -531,6 +618,8 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
           metadata_mode: str, include_metadata: bool, explain_results: bool,
           sort_field: Optional[str], sort_desc: bool, from_offset: int, size: int,
           filters: Optional[str], include_archived: bool,
+          geo_point: Optional[str], geo_bbox: Optional[str], geo_geojson: Optional[str],
+          geo_relation: str,
           output_format: str, json_output: bool):
     """
     Search files using OpenSearch with advanced filter support.
@@ -555,6 +644,11 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search files -q "texture" --output-format csv > files.csv
         vamscli search files -q "texture" --json-output
+
+    Geospatial Examples:
+        vamscli search files --geo-point "47.6062,-122.3321,5000"
+        vamscli search files --geo-bbox "47.7,-122.5,47.5,-122.2" --geo-relation within
+        vamscli search files --geo-geojson ./aoi.geojson --geo-relation intersects
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -595,18 +689,23 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         if filters:
             parsed_filters = _parse_filters(filters)
             search_request["filters"] = parsed_filters
-        
+
+        # Parse and add geospatial filter
+        geo_search = _parse_geo_options(geo_point, geo_bbox, geo_geojson, geo_relation)
+        if geo_search:
+            search_request["geoSearch"] = geo_search
+
         output_status("Executing search...", json_output)
-        
+
         # Execute search
         result = api_client.search_query(search_request)
-        
+
         # Handle output format
         if json_output:
             output_result(result, json_output)
         elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            
+
             def format_files_table(data):
                 """Format files search results for CLI display."""
                 lines = [f"\nFound {total} files\n"]
@@ -665,6 +764,11 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
 @click.option('--metadata-value', help='Search metadata field values')
 @click.option('--entity-types', help='Filter by entity type: asset, file, or both (comma-separated)')
 @click.option('--include-archived', is_flag=True, help='Include archived items')
+@click.option('--geo-point', help="Geo point filter: 'lat,lon' or 'lat,lon,radiusMeters'")
+@click.option('--geo-bbox', help="Geo bounding box filter: 'topLeftLat,topLeftLon,bottomRightLat,bottomRightLon'")
+@click.option('--geo-geojson', help='Path to a GeoJSON file (Geometry, Feature, or FeatureCollection) for the geo filter')
+@click.option('--geo-relation', type=click.Choice(['intersects', 'within', 'contains', 'disjoint']),
+              default='intersects', help='Spatial relation for the geo filter (default: intersects)')
 @click.option('--from', 'from_offset', type=int, default=0, help='Pagination offset (default: 0)')
 @click.option('--size', type=int, default=100, help='Results per page (default: 100, max: 1000)')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
@@ -676,6 +780,8 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
            asset_type: Optional[str], file_key: Optional[str], file_ext: Optional[str],
            database: Optional[str], tags: Optional[str], metadata_key: Optional[str],
            metadata_value: Optional[str], entity_types: Optional[str], include_archived: bool,
+           geo_point: Optional[str], geo_bbox: Optional[str], geo_geojson: Optional[str],
+           geo_relation: str,
            from_offset: int, size: int, output_format: str, json_output: bool):
     """
     Simple search with user-friendly parameters.
@@ -691,6 +797,11 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         vamscli search simple -d my-database --tags "simulation,training"
         vamscli search simple -q "model" --output-format csv > results.csv
         vamscli search simple -q "model" --json-output
+
+    Geospatial Examples:
+        vamscli search simple --geo-point "47.6062,-122.3321,5000"
+        vamscli search simple --geo-bbox "47.7,-122.5,47.5,-122.2" --geo-relation within
+        vamscli search simple --geo-geojson ./aoi.geojson
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -737,9 +848,14 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
             search_request["metadataValue"] = metadata_value
         if entity_types:
             search_request["entityTypes"] = _parse_entity_types(entity_types)
-        
+
+        # Parse and add geospatial filter
+        geo_search = _parse_geo_options(geo_point, geo_bbox, geo_geojson, geo_relation)
+        if geo_search:
+            search_request["geoSearch"] = geo_search
+
         output_status("Executing search...", json_output)
-        
+
         # Execute simple search
         result = api_client.search_simple(search_request)
         

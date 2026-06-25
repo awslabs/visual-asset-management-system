@@ -225,6 +225,16 @@ The following fields can be used in ABAC policy rules:
 
 Roles can require MFA verification. When a role has `mfaRequired=True`, it is only active when the user's authentication claims include `mfaEnabled=True`. This provides an additional security layer for privileged operations.
 
+The MFA check requires Lambda functions to call Amazon Cognito to verify a user's MFA status. Amazon Cognito does not currently offer a VPC interface endpoint, so a Lambda function running in a VPC isolated subnet cannot reach Amazon Cognito to perform this check. To avoid authorization failures in these topologies, VAMS disables the Cognito MFA check (sets the `COGNITO_AUTH_ENABLED` Lambda environment variable to `FALSE`) whenever Amazon Cognito is enabled **and** any of the following place VAMS Lambda functions in the VPC:
+
+-   `app.useGlobalVpc.enabled` and `app.useGlobalVpc.useForAllLambdas` are both `true` (all Lambda functions run in the VPC), or
+-   `app.openSearch.useProvisioned.enabled` is `true` (a provisioned domain places the OpenSearch-facing Lambda functions in the VPC), or
+-   `app.openSearch.useServerless.enabled` is `true` and `app.openSearch.useServerless.allowPublic` is `false` (a private Serverless collection places the OpenSearch-facing Lambda functions in the VPC).
+
+:::warning[MFA-aware roles are not enforced in VPC-isolated deployments]
+In any of the scenarios above, the Cognito MFA check is disabled and `mfaRequired` on a role has no effect — you cannot restrict roles behind MFA. Roles continue to apply based on their other constraints, but the `mfaEnabled` claim is not evaluated. This limitation exists because Amazon Cognito has no VPC interface endpoint for in-VPC Lambda functions to call. If MFA-gated roles are required, use a deployment topology that keeps the authorization Lambda functions out of the VPC (for example, a public Serverless collection, or no provisioned domain, with `useForAllLambdas` disabled).
+:::
+
 ### Policy Caching
 
 The Casbin enforcer caches user policies with a 60-second TTL per user. This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute.
@@ -262,9 +272,14 @@ The VAMS KMS key policy grants cryptographic operations to the following service
 -   AWS Lambda
 -   AWS STS
 -   AWS CloudFormation
+-   Amazon EventBridge
 -   Account root principal (for custom resource Lambda roles)
 -   Amazon CloudFront (conditional)
 -   Amazon OpenSearch Service / Amazon OpenSearch Serverless (conditional)
+
+### Imported KMS Keys
+
+VAMS applies this key policy to keys it creates. When an external key is supplied with `useKmsCmkEncryption.optionalExternalCmkArn`, VAMS references the key by ARN for encryption and leaves the key's policy unchanged. An imported key carries its own policy, which grants the same cryptographic operations to the service principals listed above so the encrypted VAMS resources — including the Amazon EventBridge orchestration bus and the Amazon CloudWatch log groups — can use the key.
 
 ### Encryption in Transit
 
@@ -300,16 +315,21 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | ----------------- | --------------------------------------------------------------- |
 | `base-uri`        | `'none'`                                                        |
 | `default-src`     | `'none'`                                                        |
-| `script-src`      | `'self'`, `'unsafe-hashes'`, SHA-256 hashes for inline scripts  |
+| `script-src`      | `'self'`, `'unsafe-hashes'`, `'unsafe-inline'`                  |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                     |
 | `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                      |
 | `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
 | `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                  |
 | `object-src`      | `'none'`                                                        |
-| `frame-ancestors` | `'none'`                                                        |
+| `frame-src`       | `'self'`, `blob:`                                               |
+| `frame-ancestors` | `'self'`                                                        |
 | `font-src`        | `'self'`                                                        |
 | `manifest-src`    | `'self'`                                                        |
+
+:::note[Framing directives]
+`frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes used by add-on viewers (such as the Physna Viewer). `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
+:::
 
 ### Conditional CSP Sources
 
@@ -320,10 +340,11 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | External OAuth IDP               | IDP auth provider URL in `connect-src`                                   |
 | `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins) |
 | Amazon Location Service enabled  | Maps endpoint in `connect-src`                                           |
+| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`                    |
 
 ### Extensible CSP
 
-Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, and `styleSrc` arrays.
+Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, `styleSrc`, and `frameSrc` arrays.
 
 ## IP Range Restrictions
 
@@ -365,7 +386,7 @@ Every CDK Nag suppression must include a detailed justification explaining why t
 | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `AwsSolutions-IAM5` | Amazon S3 `grantReadWrite` generates wildcard actions; scoped to VAMS buckets                       |
 | `AwsSolutions-IAM4` | Managed policies (`AWSLambdaBasicExecutionRole`, `AWSLambdaVPCAccessExecutionRole`) used for Lambda |
-| `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 20.x)                                  |
+| `AwsSolutions-L1`   | Lambda runtimes are explicitly managed (Python 3.12, Node.js 22.x)                                  |
 | `AwsSolutions-COG3` | Amazon Cognito AdvancedSecurityMode not available in AWS GovCloud                                   |
 | `AwsSolutions-S1`   | Access logs bucket cannot log to itself                                                             |
 | `AwsSolutions-SQS3` | Dead-letter queues not used for bucket sync queues (files easily re-driven)                         |
@@ -476,6 +497,7 @@ The following recommendations should be reviewed with your organization's securi
 7. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.
 8. **Review Content Security Policy** — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization's standards.
 9. **Enable audit logging review** — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.
+10. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/\{constraintId\}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.
 
 :::warning[Shared Responsibility]
 VAMS is provided under the AWS shared responsibility model. Any customization for customer use must go through a security review to confirm that modifications do not introduce new vulnerabilities. Any team implementing VAMS takes on the responsibility of ensuring their implementation has gone through a proper security review.

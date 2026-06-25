@@ -61,6 +61,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     const fileSpecificColumns = [
         "str_key",
         "str_assetname",
+        "str_assetid",
         "str_bucketid",
         "str_bucketname",
         "str_bucketprefix",

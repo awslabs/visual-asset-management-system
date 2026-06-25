@@ -10,7 +10,7 @@ The following software must be installed on the machine used to build and deploy
 | -------------------------- | --------------------- | ---------------------------------------------------- |
 | Python                     | 3.12                  | AWS Lambda runtime, backend dependencies             |
 | Docker                     | Latest stable         | Container builds for AWS Lambda layers and pipelines |
-| Node.js                    | 20.18.1               | Frontend build tooling, AWS CDK CLI                  |
+| Node.js                    | 22.22.3               | Frontend build tooling, AWS CDK CLI                  |
 | npm                        | Included with Node.js | Package management for frontend and infrastructure   |
 | Node Version Manager (nvm) | Latest stable         | Ensures the correct Node.js version is active        |
 | AWS CLI                    | v2 (latest)           | AWS account authentication and resource management   |
@@ -22,7 +22,7 @@ Run the following commands to confirm your tools are at the required versions:
 ```bash
 python --version   # 3.12+
 docker --version
-node --version     # v20.18.1+
+node --version     # v22.22.3+
 npm --version
 nvm --version
 aws --version      # aws-cli/2.x

@@ -9,6 +9,25 @@
     ],
     "constraints": [
         {
+            "name": "{{ROLE_NAME}}-user-api-keys",
+            "description": "Allow self-service API key management (own keys only, expiration required)",
+            "objectType": "api",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/user/api-keys"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
             "name": "{{ROLE_NAME}}-web-routes",
             "description": "Allow navigation to standard viewing pages",
             "objectType": "web",
@@ -18,7 +37,8 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/databases" },
                 { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
-                { "field": "route__path", "operator": "starts_with", "value": "/workflows" }
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },

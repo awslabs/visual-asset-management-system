@@ -20,6 +20,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
 } from "../../../../../helper/security";
+import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 import {
@@ -70,6 +71,7 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -130,6 +132,7 @@ export function buildOpenPipelineFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -176,6 +179,7 @@ export function buildConstructPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -290,6 +294,7 @@ export function buildMetadataGenerationPipelineFunction(
     });
     fun.addToRolePolicy(rekognitionPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -349,5 +354,6 @@ export function buildPipelineEndFunction(
     });
     fun.addToRolePolicy(stateTaskPolicy);
 
+    suppressCdkNagLambda(fun);
     return fun;
 }

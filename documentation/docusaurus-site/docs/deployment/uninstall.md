@@ -154,19 +154,24 @@ for BUCKET in $BUCKETS; do
 done
 ```
 
-VAMS creates the following S3 buckets that may require manual deletion:
+VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, and access logs buckets use a `RETAIN` removal policy and require manual deletion. The web app bucket and its access logs bucket are emptied and deleted automatically during stack teardown, so they normally require manual deletion only if the stack deletion fails partway.
 
-| Bucket             | Description                                                                             |
-| ------------------ | --------------------------------------------------------------------------------------- |
-| Asset bucket(s)    | Stores uploaded asset files. One bucket per configuration (new bucket and/or external). |
-| Auxiliary bucket   | Stores auto-generated previews, pipeline working files, and viewer data.                |
-| Artefacts bucket   | Stores CDK deployment artefacts.                                                        |
-| Access logs bucket | Stores S3 server access logs.                                                           |
-| Web app bucket     | Stores the built frontend static files (for both CloudFront and ALB deployments).       |
+| Bucket                     | Removal on teardown     | Blocks redeploy if left behind?     | Description                                                                             |
+| -------------------------- | ----------------------- | ----------------------------------- | --------------------------------------------------------------------------------------- |
+| Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external). |
+| Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data.                |
+| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                        |
+| Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                           |
+| Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).       |
+| Web app access logs bucket | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores access logs for the web app bucket and ALB.                                      |
+
+:::note[Retained does not mean it blocks a redeploy]
+The retained asset, auxiliary, artefacts, and access logs buckets are **auto-named** by AWS CloudFormation, so they can be left in place when redeploying with the same configuration name — they will not cause a name collision. Delete them only when you intend to permanently remove the stored data. By contrast, under ALB deployments the web app bucket and its access logs bucket carry fixed names derived from the configured domain host; if a teardown fails and leaves either behind, delete it before redeploying with the same domain host to avoid a bucket-name collision.
+:::
 
 ## Step 3: Delete DynamoDB tables
 
-If any DynamoDB tables were retained after stack deletion, delete them manually.
+VAMS DynamoDB tables use a `DESTROY` removal policy and are auto-named by AWS CloudFormation, so they are normally removed during teardown and do not block a redeploy with the same configuration. If any tables were retained after a failed stack deletion, delete them manually.
 
 ```bash
 # List remaining VAMS tables
@@ -185,7 +190,7 @@ done
 
 ## Step 4: Delete Amazon CloudWatch log groups
 
-VAMS creates Lambda function log groups and audit log groups that persist after stack deletion.
+VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
 
 ```bash
 # List VAMS-related log groups
@@ -193,8 +198,14 @@ aws logs describe-log-groups \
     --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
     --query 'logGroups[].logGroupName' --output text
 
+# List all VAMS named log groups (audit, API access, workflow, orchestration,
+# VPC, CloudTrail, and per-pipeline state machine groups)
 aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/VAMSAudit" \
+    --log-group-name-prefix "/aws/vendedlogs/VAMS" \
+    --query 'logGroups[].logGroupName' --output text
+
+aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/vendedlogs/vamsPipelineWorkflows" \
     --query 'logGroups[].logGroupName' --output text
 
 # Delete Lambda log groups
@@ -205,9 +216,27 @@ for LG in $(aws logs describe-log-groups \
     aws logs delete-log-group --log-group-name "${LG}"
 done
 
-# Delete audit log groups
+# Delete all VAMS named vendedlogs groups (audit, API access, orchestration bus,
+# VPC flow logs, per-pipeline state machine logs). Includes the conditional
+# CloudTrail (VAMSCloudTrailLogs) and VPC (VAMSCloudWatchVPCLogs) groups.
 for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/VAMSAudit" \
+    --log-group-name-prefix "/aws/vendedlogs/VAMS" \
+    --query 'logGroups[].logGroupName' --output text); do
+    echo "Deleting log group ${LG}..."
+    aws logs delete-log-group --log-group-name "${LG}"
+done
+
+# Delete the workflow execution log group
+for LG in $(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/vendedlogs/vamsPipelineWorkflows" \
+    --query 'logGroups[].logGroupName' --output text); do
+    echo "Deleting log group ${LG}..."
+    aws logs delete-log-group --log-group-name "${LG}"
+done
+
+# Delete container pipeline log groups (RapidPipeline, ModelOps), if present
+for LG in $(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/vendedlogs/Pipelines/" \
     --query 'logGroups[].logGroupName' --output text); do
     echo "Deleting log group ${LG}..."
     aws logs delete-log-group --log-group-name "${LG}"
@@ -221,6 +250,10 @@ for LG in $(aws logs describe-log-groups \
     aws logs delete-log-group --log-group-name "${LG}"
 done
 ```
+
+:::warning[Redeploying with the same configuration]
+VAMS log group names are deterministic (a hash of the stack name plus account ID). If you intend to redeploy VAMS with the same configuration name into the same account, you **must** delete any orphaned `/aws/vendedlogs/...` groups first. A pre-existing log group with the same name causes the deployment's log group creation to fail. This most commonly affects the conditional `VAMSCloudTrailLogs` (when `addStackCloudTrailLogs` is enabled) and `VAMSCloudWatchVPCLogs` (when `useGlobalVpc` is enabled) groups.
+:::
 
 ## Step 5: Schedule AWS KMS key deletion
 
@@ -279,6 +312,13 @@ aws opensearchserverless list-collections \
 aws opensearchserverless delete-collection \
     --id <COLLECTION_ID>
 
+# Delete the collection group (created with a "cg" name prefix for both CLASSIC and NEXTGEN generations)
+aws opensearchserverless list-collection-groups \
+    --query "collectionGroupSummaries[?contains(name, 'cg')]"
+
+aws opensearchserverless delete-collection-group \
+    --name <COLLECTION_GROUP_NAME>
+
 # Delete associated security policies and access policies
 aws opensearchserverless list-security-policies --type encryption \
     --query "securityPolicySummaries[?contains(name, '<STACK_NAME>')]"
@@ -289,6 +329,10 @@ aws opensearchserverless delete-security-policy \
 aws opensearchserverless delete-security-policy \
     --name <POLICY_NAME> --type network
 ```
+
+:::note
+A collection group is created for every Serverless deployment (its generation is `CLASSIC` or `NEXTGEN`, set by `openSearch.useServerless.nextGen`). Delete the collection before the collection group. All of these resources use a `DESTROY` removal policy, so AWS CloudFormation deletes them automatically on stack teardown; the commands above are a fallback for resources orphaned by a failed delete.
+:::
 
 ### OpenSearch Provisioned
 

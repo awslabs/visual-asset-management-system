@@ -1,0 +1,292 @@
+{
+    "name": "vams",
+    "env": {
+        "account": null,
+        "region": "eusc-de-east-1",
+        "loadContextIgnoreVPCStacks": false
+    },
+    "app": {
+        "baseStackName": "prod",
+        "assetBuckets": {
+            "createNewBucket": true,
+            "defaultNewBucketSyncDatabaseId": "default",
+            "externalAssetBuckets": null
+        },
+        "adminUserId": "administrator",
+        "adminEmailAddress": "adminEmail@example.com",
+        "iamRoleConfig": {
+            "useCustomBootstrapRoles": false,
+            "useCustomVamsStackRoles": false
+        },
+        "useFips": false,
+        "useWaf": true,
+        "addStackCloudTrailLogs": true,
+        "useKmsCmkEncryption": {
+            "enabled": true,
+            "optionalExternalCmkArn": null
+        },
+        "govCloud": {
+            "enabled": true,
+            "il6Compliant": false
+        },
+        "useGlobalVpc": {
+            "enabled": true,
+            "useForAllLambdas": false,
+            "addVpcEndpoints": true,
+            "optionalExternalVpcId": null,
+            "optionalExternalIsolatedSubnetIds": null,
+            "optionalExternalPrivateSubnetIds": null,
+            "optionalExternalPublicSubnetIds": null,
+            "vpcCidrRange": "10.1.0.0/16"
+        },
+        "openSearch": {
+            "useServerless": {
+                "enabled": false,
+                "nextGen": false,
+                "allowPublic": false,
+                "enableStandbyReplicas": false,
+                "minIndexingOcu": 2,
+                "maxIndexingOcu": 16,
+                "minSearchOcu": 2,
+                "maxSearchOcu": 16,
+                "deployDeferredIndexSchema": false
+            },
+            "useProvisioned": {
+                "enabled": true,
+                "availabilityZoneCount": 2,
+                "numberOfShards": 1,
+                "dataNodeInstanceType": "r6g.large.search",
+                "masterNodeInstanceType": "r6g.large.search",
+                "ebsInstanceNodeSizeGb": 120
+            },
+            "reindexOnCdkDeploy": false
+        },
+        "useLocationService": {
+            "enabled": false
+        },
+        "useAlb": {
+            "enabled": true,
+            "usePublicSubnet": false,
+            "addAlbS3SpecialVpcEndpoint": true,
+            "domainHost": "vams1.example.com",
+            "certificateArn": "arn:aws-eusc:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
+            "optionalHostedZoneId": null
+        },
+        "useCloudFront": {
+            "enabled": false,
+            "customDomain": {
+                "enabled": false,
+                "domainHost": "",
+                "certificateArn": "",
+                "optionalHostedZoneId": ""
+            }
+        },
+        "pipelines": {
+            "useConversion3dBasic": {
+                "enabled": true,
+                "autoRegisterWithVAMS": true
+            },
+            "usePreview3dThumbnail": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useConversionCadMeshMetadataExtraction": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useConversionCoordinateTransform": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
+            },
+            "usePreviewPcPotreeViewer": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "sqsAutoRunOnAssetModified": false
+            },
+            "useGenAiMetadata3dLabeling": {
+                "enabled": false,
+                "bedrockModelId": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useSplatToolbox": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true
+            },
+            "useRapidPipeline": {
+                "useEcs": {
+                    "enabled": false,
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "autoRegisterWithVAMS": true
+                },
+                "useEks": {
+                    "enabled": false,
+                    "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                    "autoRegisterWithVAMS": true,
+                    "eksClusterVersion": "1.31",
+                    "nodeInstanceType": "m5.2xlarge",
+                    "minNodes": 1,
+                    "maxNodes": 10,
+                    "desiredNodes": 2,
+                    "jobTimeout": 7200,
+                    "jobMemory": "16Gi",
+                    "jobCpu": "2000m",
+                    "jobBackoffLimit": 2,
+                    "jobTTLSecondsAfterFinished": 600,
+                    "observability": {
+                        "enableControlPlaneLogs": false,
+                        "enableContainerInsights": false
+                    }
+                }
+            },
+            "useModelOps": {
+                "enabled": false,
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.eu/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
+                "autoRegisterWithVAMS": true
+            },
+            "useIsaacLabTraining": {
+                "enabled": false,
+                "acceptNvidiaEula": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "keepWarmInstance": false
+            },
+            "useNvidiaCosmos": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsPredict": {
+                    "text2world2B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "video2world2B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g5.12xlarge", "g5.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "text2world14B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g6e.48xlarge", "p5.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "video2world14B_v2": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.48xlarge", "p5.48xlarge"],
+                        "maxVCpus": 192
+                    }
+                },
+                "modelsTransfer": {
+                    "transfer2B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.48xlarge", "p5.48xlarge"],
+                        "maxVCpus": 192
+                    }
+                },
+                "modelsReason": {
+                    "reason2B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g5.12xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "reason8B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g6e.24xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
+            },
+            "useNvidiaGr00t": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsFinetune": {
+                    "gr00tN1_5_3B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
+            }
+        },
+        "addons": {
+            "useGarnetFramework": {
+                "enabled": false,
+                "garnetApiEndpoint": "",
+                "garnetApiToken": "",
+                "garnetIngestionQueueSqsUrl": ""
+            },
+            "usePhysnaSync": {
+                "enabled": false,
+                "tenantId": "",
+                "apiBaseEndpoint": "https://app-api.physna.com/v3/",
+                "authTokenEndpoint": "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
+                "authType": "cognito",
+                "clientId": "",
+                "clientSecret": ""
+            }
+        },
+        "authProvider": {
+            "presignedUrlTimeoutSeconds": 86400,
+            "authorizerOptions": {
+                "allowedIpRanges": []
+            },
+            "useCognito": {
+                "enabled": true,
+                "useSaml": false,
+                "useUserPasswordAuthFlow": false,
+                "credTokenTimeoutSeconds": 3600
+            },
+            "useExternalOAuthIdp": {
+                "enabled": false,
+                "idpAuthProviderUrl": null,
+                "idpAuthClientId": null,
+                "idpAuthProviderScope": null,
+                "idpAuthProviderScopeMfa": null,
+                "idpAuthPrincipalDomain": null,
+                "idpAuthProviderTokenEndpoint": null,
+                "idpAuthProviderAuthorizationEndpoint": null,
+                "idpAuthProviderDiscoveryEndpoint": null,
+                "lambdaAuthorizorJWTIssuerUrl": null,
+                "lambdaAuthorizorJWTAudience": null
+            }
+        },
+        "webUi": {
+            "optionalBannerHtmlMessage": "",
+            "allowUnsafeEvalFeatures": false
+        },
+        "api": {
+            "globalRateLimit": 50,
+            "globalBurstLimit": 100
+        },
+        "metadataSchema": {
+            "autoLoadDefaultAssetLinksSchema": true,
+            "autoLoadDefaultDatabaseSchema": true,
+            "autoLoadDefaultAssetSchema": true,
+            "autoLoadDefaultAssetFileSchema": true
+        }
+    }
+}

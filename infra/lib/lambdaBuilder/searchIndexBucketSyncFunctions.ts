@@ -25,6 +25,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
@@ -46,12 +47,16 @@ export function buildSearchFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
-                : undefined, //Use VPC when provisioned OS or flag to use for all lambdas
+                : undefined, //Use VPC for provisioned OS, a private (non-public) serverless collection, or the use-for-all-lambdas flag
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -86,6 +91,7 @@ export function buildSearchFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -108,12 +114,16 @@ export function buildFileIndexingFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -154,6 +164,7 @@ export function buildFileIndexingFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;
@@ -177,12 +188,16 @@ export function buildAssetIndexingFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -229,6 +244,7 @@ export function buildAssetIndexingFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;
@@ -270,6 +286,8 @@ export function buildSqsBucketSyncFunction(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+            ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
             FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
                 storageResources.dynamo.fileAttributeStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
@@ -287,6 +305,7 @@ export function buildSqsBucketSyncFunction(
     });
 
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
@@ -311,6 +330,7 @@ export function buildSqsBucketSyncFunction(
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
@@ -334,12 +354,16 @@ export function buildReindexerFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? vpc
                 : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            (config.app.openSearch.useServerless.enabled &&
+                !config.app.openSearch.useServerless.allowPublic)
                 ? { subnets: subnets }
                 : undefined,
 
@@ -377,6 +401,7 @@ export function buildReindexerFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -422,6 +447,7 @@ export function buildFileIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
@@ -468,6 +494,7 @@ export function buildAssetIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
@@ -512,6 +539,7 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;

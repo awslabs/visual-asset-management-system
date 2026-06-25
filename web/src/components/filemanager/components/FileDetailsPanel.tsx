@@ -21,6 +21,7 @@ import {
     hasFolderContent,
     downloadFile,
 } from "../utils/FileManagerUtils";
+import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
 import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
@@ -158,6 +159,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     isArchived: fileInfo.isArchived,
                                     primaryType: fileInfo.primaryType,
                                     previewFile: fileInfo.previewFile,
+                                    changeSource: fileInfo.changeSource,
+                                    changeUserId: fileInfo.changeUserId,
                                 },
                             ],
                             loadingPhase: state.loadingPhase,
@@ -1357,6 +1360,25 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 <div className="file-info-label">Primary Type:</div>
                                 <div className="file-info-value">
                                     {selectedItem.primaryType || "None"}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Show Change Source (with modifying user in parentheses) for files only */}
+                        {!isFolder && selectedItem.level > 0 && (
+                            <div className="file-info-item">
+                                <div className="file-info-label">Change Source:</div>
+                                <div className="file-info-value">
+                                    {(() => {
+                                        const source = getChangeSourceLabel(
+                                            selectedItem.changeSource
+                                        );
+                                        const user = selectedItem.changeUserId;
+                                        if (source && user) return `${source} (${user})`;
+                                        if (source) return source;
+                                        if (user) return `(${user})`;
+                                        return "—";
+                                    })()}
                                 </div>
                             </div>
                         )}

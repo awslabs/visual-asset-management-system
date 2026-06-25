@@ -34,6 +34,9 @@ export interface OpensearchProvisionedConstructProps {
     ebsVolumeSize?: number;
     ebsVolumeType?: cdk.aws_ec2.EbsDeviceVolumeType;
     zoneAwareness?: cdk.aws_opensearchservice.ZoneAwarenessConfig;
+    availabilityZoneCount?: number;
+    multiAzWithStandbyEnabled?: boolean;
+    numberOfShards?: number;
 }
 
 const defaultProps: Partial<OpensearchProvisionedConstructProps> = {
@@ -47,10 +50,12 @@ const defaultProps: Partial<OpensearchProvisionedConstructProps> = {
     // dataNodeInstanceType: 'i3.2xlarge.search',
     dataNodeInstanceType: "r6gd.large.search",
     masterNodesCount: 3, //Minimum of 3
-    dataNodesCount: 2, //Minimum of 2, must be even number.
+    //dataNodesCount intentionally not defaulted here: it is derived from availabilityZoneCount in
+    //the constructor so it stays valid for the zone-awareness mode (multiple of 3 for Multi-AZ with
+    //Standby at 3 AZs, an even count for 2 AZs).
     ebsVolumeSize: 120,
     ebsVolumeType: cdk.aws_ec2.EbsDeviceVolumeType.GENERAL_PURPOSE_SSD_GP3,
-    zoneAwareness: { enabled: true },
+    availabilityZoneCount: 2,
 };
 
 const iam = new IAMClient({});
@@ -71,6 +76,23 @@ export class OpensearchProvisionedConstruct extends Construct {
         this.aosName = name;
 
         this.config = props.config;
+
+        // The domain runs zone-aware across availabilityZoneCount zones. A 3-AZ domain runs as Multi-AZ
+        // with Standby (production posture); a 2-AZ domain runs without Standby. Multi-AZ with Standby
+        // requires every index to have copies in a multiple of 3, so it is only enabled at 3 AZs (where
+        // 3 data nodes + 2 replicas = 3 copies satisfy that requirement). The default availabilityZoneCount
+        // of 2 keeps Standby off, so existing 2-AZ deployments are unchanged.
+        const availabilityZoneCount = props.availabilityZoneCount!;
+        const multiAzWithStandbyEnabled =
+            props.multiAzWithStandbyEnabled ?? availabilityZoneCount === 3;
+        // One data node per AZ (2 for a 2-AZ domain, 3 for a 3-AZ domain — a multiple of 3 for Standby).
+        const dataNodesCount = props.dataNodesCount ?? availabilityZoneCount;
+        // Index copies (primary + replicas) must be a multiple of 3 for Multi-AZ with Standby, so use
+        // 2 replicas (3 copies) when Standby is on; otherwise keep 0 replicas. Threaded to the schema-deploy custom resource.
+        const numberOfReplicas = multiAzWithStandbyEnabled ? 2 : 0;
+        // Primary shard count per index. Defaults to 1. Larger indexes
+        // (roughly >60 GB / ~3M records) should increase this; changing it requires re-creating the index.
+        const numberOfShards = props.numberOfShards ?? 1;
 
         //https://github.com/aws-samples/opensearch-vpc-cdk/blob/main/lib/opensearch-vpc-cdk-stack.ts
 
@@ -116,15 +138,16 @@ export class OpensearchProvisionedConstruct extends Construct {
             }
         })();
 
-        //Loop through all  subnets and store subnets in an array up to the total number of data nodes specified
-        //Note: Make sure each subnet chosen is in a different availability zone. OS Domains are very sensitive about choosing the right subnets, thus this additional filter.
+        //Select exactly one subnet per AZ, up to the configured Availability Zone count.
+        //Note: OpenSearch domains require the number of subnets to match the zone-aware AZ count,
+        //so we bound the selection by availabilityZoneCount (not dataNodesCount) and pick one subnet per AZ.
         const subnets: ec2.ISubnet[] = [];
         const azUsed: string[] = [];
 
         props.subnets.forEach((element) => {
             if (
                 azUsed.indexOf(element.availabilityZone) == -1 &&
-                subnets.length < props.dataNodesCount!
+                subnets.length < availabilityZoneCount
             ) {
                 azUsed.push(element.availabilityZone);
                 subnets.push(element);
@@ -150,12 +173,18 @@ export class OpensearchProvisionedConstruct extends Construct {
             vpcSubnets: [{ subnets: subnets, onePerAz: true }],
             capacity: {
                 dataNodeInstanceType: props.dataNodeInstanceType,
-                dataNodes: props.dataNodesCount,
+                dataNodes: dataNodesCount,
                 masterNodeInstanceType: props.masterNodeInstanceType,
                 masterNodes: props.masterNodesCount,
+                //Multi-AZ with Standby is enabled only for a 3-AZ domain (it requires 3 AZs and data
+                //nodes in multiples of 3); a 2-AZ domain runs zone-aware without standby.
+                multiAzWithStandbyEnabled: multiAzWithStandbyEnabled,
             },
             enforceHttps: true,
-            zoneAwareness: props.zoneAwareness,
+            zoneAwareness: {
+                enabled: true,
+                availabilityZoneCount: availabilityZoneCount,
+            },
             //Disabled fine grained access control to allow the VPC and domain access policy to restrict to IAM roles
             //fineGrainedAccessControl: {
             //    masterUserArn: props.cognitoAuthenticatedRole,
@@ -193,7 +222,9 @@ export class OpensearchProvisionedConstruct extends Construct {
                     externalModules: ["aws-sdk"],
                 },
                 runtime: LAMBDA_NODE_RUNTIME,
-                timeout: cdk.Duration.seconds(30),
+                //A freshly created domain can take several minutes to become reachable. The handler polls with
+                //backoff, so allow ample time rather than failing on the first index call.
+                timeout: cdk.Duration.minutes(14),
                 vpc: props.vpc,
                 vpcSubnets: { subnets: props.subnets },
                 //Note: This schema deploy resource must run in the VPC in order to communicate with the AOS provisioned running in the VPC.
@@ -242,7 +273,14 @@ export class OpensearchProvisionedConstruct extends Construct {
                 domainEndpoint: "https://" + osDomain.domainEndpoint,
                 assetIndexName: props.config.openSearchAssetIndexName,
                 fileIndexName: props.config.openSearchFileIndexName,
-                version: "2",
+                //Index copies must be a multiple of 3 for a Multi-AZ-with-Standby (3-AZ) domain.
+                numberOfReplicas: numberOfReplicas,
+                //Primary shard count per index. Default 1; increase for large indexes.
+                numberOfShards: numberOfShards,
+                //A provisioned domain is always created in the VPC and reachable by the schema-deploy
+                //function, so index creation is never deferred (only private next-gen Serverless can defer).
+                deferIndexCreation: "false",
+                version: "3",
                 Timestamp: Date.now().toString(), //Used to check index deployment every CDK deployment
             },
         });

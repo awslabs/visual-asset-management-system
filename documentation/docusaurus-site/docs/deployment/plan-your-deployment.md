@@ -58,6 +58,10 @@ Amazon OpenSearch Service provides full-text search, filtering, and map-view fun
 You cannot enable both OpenSearch Serverless and OpenSearch Provisioned at the same time.
 :::
 
+:::warning[Provisioned is for advanced deployments only]
+Amazon OpenSearch Serverless is the recommended option for most deployments. Provisioned is intended for advanced use cases that require dedicated capacity, custom instance sizing, or features unsupported by Serverless. It can complicate stack deployments — domain configuration changes trigger blue/green updates that may exceed the AWS CloudFormation custom-resource timeout, and major-version engine upgrades can fail in place and require redeploying with OpenSearch disabled before re-enabling. See the [OpenSearch configuration reference](configuration-reference.md#amazon-opensearch-service-appopensearch) for the full caveat list.
+:::
+
 ### VPC configuration
 
 | Option                  | Configuration                                             | Notes                                                                                                                                                                                                      |
@@ -66,8 +70,8 @@ You cannot enable both OpenSearch Serverless and OpenSearch Provisioned at the s
 | **VAMS-managed VPC**    | `useGlobalVpc.enabled: true` with `vpcCidrRange`          | VAMS creates a new VPC with isolated, private, and public subnets. Specify a CIDR range (for example, `10.1.0.0/16`).                                                                                      |
 | **Import existing VPC** | `useGlobalVpc.enabled: true` with `optionalExternalVpcId` | Import an existing VPC by ID. Requires providing isolated subnet IDs and optionally private and public subnet IDs. See [Deploy the solution](deploy-the-solution.md) for the two-phase deployment process. |
 
-:::tip[Automatic VPC enablement]
-The VPC is automatically enabled when any of the following features are turned on: ALB deployment, OpenSearch Provisioned, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail).
+:::warning[VPC is required for some features]
+Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail, NVIDIA Cosmos, NVIDIA Gr00t).
 :::
 
 **Subnet sizing guidance:**

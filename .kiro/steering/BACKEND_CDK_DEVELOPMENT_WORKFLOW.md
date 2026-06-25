@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending VAMS backend APIs and CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all backend and infrastructure implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `backend/CLAUDE.md` and `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **File Structure Standards**
@@ -45,6 +47,31 @@ infra/
 │   └── helper/                # CDK helper utilities
 └── config/                   # Configuration files
 ```
+
+### **Handler Domains (`backend/backend/handlers/`)**
+
+One folder per domain. The current domains:
+
+-   `assets/` — Asset handlers (`assetService.py` is the GOLD STANDARD; `assetVersions.py` covers version CRUD + archive/unarchive + update)
+-   `auth/` — Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
+-   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
+-   `assetLinks/` — Asset relationship management
+-   `comments/` — Comment CRUD
+-   `config/` — System configuration
+-   `databases/` — Database CRUD
+-   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
+-   `metadata/` — Metadata CRUD
+-   `metadataschema/` — Metadata schema management
+-   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge execution types)
+-   `roles/` — Role CRUD
+-   `search/` — OpenSearch search handlers
+-   `sendEmail/` — Email notification Lambda
+-   `subscription/` — Asset subscription management
+-   `tags/` — Tag CRUD
+-   `tagTypes/` — Tag type management
+-   `userRoles/` — User-role assignment
+-   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
+-   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer)
 
 ## 📋 **Development Workflow Checklist**
 
@@ -129,7 +156,7 @@ infra/
 
 #### **Step 8: Documentation Updates**
 
--   [ ] **Update VAMS_API.yaml**: Add new endpoints, schemas, and responses
+-   [ ] **Update API docs in BOTH places**: API documentation lives in two independent sources that must be kept in sync — (1) the OpenAPI spec `documentation/VAMS_API.yaml` (paths + component schemas), and (2) the Docusaurus reference page `documentation/docusaurus-site/docs/api/{domain}.md` (e.g. `api/auth.md` for `/auth/*`). Add/rename/change the endpoint in **both**; updating only one leaves the docs inconsistent.
 -   [ ] **Update Docusaurus developer docs (`documentation/docusaurus-site/docs/developer/`)**: Add architecture and usage information
 -   [ ] **Update Docusaurus permissions docs (`documentation/docusaurus-site/docs/concepts/permissions-model.md`)**: Add authorization mappings for new endpoints
 -   [ ] **Update README**: Update overview if major features added
@@ -733,6 +760,13 @@ When making API changes, update the appropriate documentation files:
 -   **Architecture changes** → Update Docusaurus developer docs with component information
 -   **Major features** → Update main `README.md`
 
+#### **Comment & Documentation Style (Match Surrounding Code):**
+
+Comments and documentation must be commensurate with the surrounding material — match the level of detail, density, and tone of the file you are editing.
+
+-   **Code comments**: Match the comment density and style already present in the file (the CDK stacks use brief single-line `//` notes and short `/** ... */` section headers). Describe **what** a piece of code is, not the history of why it was added.
+-   **No changelog/process narration in code**: Never write comments that reference "upgrades", "new in vX", "added for", migrations, or the change request that prompted the edit. Changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in source comments.
+
 #### **VAMS_API.yaml Update Pattern:**
 
 ```yaml
@@ -829,7 +863,7 @@ components:
 
 When making backend or CDK changes, update the corresponding Docusaurus documentation pages at `documentation/docusaurus-site/docs/`:
 
--   **New API endpoint** → Update `api/` relevant page, `VAMS_API.yaml`, CLI command reference if applicable
+-   **New or changed API endpoint (incl. path renames)** → Update **both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md`) — two separate sources of truth that must stay in sync — plus the CLI command reference if applicable
 -   **New config option** → Update `deployment/configuration-reference.md`
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, update `overview/features.md`, update `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
@@ -840,9 +874,9 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 When making changes that affect development standards, architecture patterns, or quality requirements:
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of this file (they must stay in sync)
-3. If the change affects frontend patterns, also update WEB_DEVELOPMENT_WORKFLOW.md in both locations
-4. If the change affects documentation standards, also update DOCUMENTATION_WORKFLOW.md in both locations
+2. Update the `.kiro/steering/` version of this file
+3. If the change affects frontend patterns, also update `WEB_DEVELOPMENT_WORKFLOW.md` and `WEB_FRONTEND.md`
+4. If the change affects documentation standards, also update `DOCUMENTATION_WORKFLOW.md`
 
 ### **Rule 10: Tests MUST Follow Comprehensive Patterns**
 
@@ -1062,7 +1096,7 @@ def create_[domain]([domain]_data, claims_and_roles):
 
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("username", "system")
+        username = claims_and_roles.get("username", "SYSTEM")
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
 

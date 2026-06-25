@@ -39,6 +39,15 @@ backend/
 │   │   ├── dynamodb.py                  # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
 │   │   ├── validators.py                # Input validation regex patterns and validate() dispatcher
 │   │   ├── s3.py                        # S3 file validation (extension + MIME type checks)
+│   │   ├── s3MetadataKeys.py            # Canonical S3 object user-metadata keys (assetid, vams-*)
+│   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
+│   │   │                                #   allowed preview extensions (mirrored in
+│   │   │                                #   web/src/common/constants/fileFormats.ts)
+│   │   ├── dynamoDbMetadataKeys.py      # Special DynamoDB metadata keys (REINDEX_METADATA_RECORD)
+│   │   │                                #   and internal field prefixes (VAMS_, _)
+│   │   ├── apiRoutes.py                 # MASTER list of all API endpoint routes (ApiRoute constants,
+│   │   │                                #   category group arrays, ALL_API_ROUTES). Handlers dispatch
+│   │   │                                #   via ApiRoute.matches(); feeds GET /auth/routes/api
 │   │   └── stepfunctions_builder.py     # ASL builder for workflows (builder pattern:
 │   │                                    #   TaskStateBuilder, LambdaTaskBuilder,
 │   │                                    #   SqsTaskBuilder, EventBridgeTaskBuilder)
@@ -78,7 +87,8 @@ backend/
 │       ├── assetsV3.py                  # GOLD STANDARD model file -- follow this pattern
 │       │                                #   Includes UpdateAssetVersionRequestModel (versionAlias, comment)
 │       │                                #   AssetVersionListItemModel/CurrentVersionModel have versionAlias, isArchived
-│       ├── apiKeys.py                   # API key request/response models
+│       ├── apiKeys.py                   # API key request/response models (admin + user self-service;
+│       │                                #   USER_API_KEY_MAX_EXPIRATION_DAYS = 365)
 │       ├── pipelines.py                 # Pipeline models (PipelineExecutionType enum, SQS/EventBridge fields)
 │       ├── workflows.py                 # Workflow models (Step Functions ASL generation)
 │       ├── common.py                    # Response helpers, error functions, APIGatewayProxyResponseV2
@@ -134,6 +144,50 @@ backend/
 
 10. **NEVER use `os.environ["KEY"]` outside of the module-level try/except block.**
     All environment variable loading happens once at cold start.
+
+11. **NEVER echo request input into error messages returned to the client.** Keep
+    error response messages generic and free of user-supplied values (IDs, names,
+    paths, etc.) and of internal details (other databases' IDs, ARNs, stack traces).
+    Log the specifics with `logger` for debugging, but return a generic message.
+
+    ```python
+    # WRONG -- leaks the input id and an internal database id back to the caller
+    return validation_error(
+        body={'message': f"Pipeline ID '{pipeline_id}' already exists in '{other_db}'."},
+        event=event
+    )
+
+    # CORRECT -- generic client message; details only in the log
+    logger.info(f"pipelineId {pipeline_id} conflicts with database {other_db}")
+    return validation_error(
+        body={'message': "Pipeline ID is already in use by another database. "
+                         "Choose a different ID."},
+        event=event
+    )
+    ```
+
+12. **ALWAYS dispatch API requests via the master route constants.** Handlers that route
+    on `event['requestContext']['http']['path']` must match against the `ApiRoute`
+    constants from `common/apiRoutes.py` (e.g. `API_LIST_FILES.matches(path)`), never
+    against hard-coded path fragments (`path.endswith('/listFiles')`). When adding a new
+    API path or changing an existing one, define the `ApiRoute` constant in
+    `common/apiRoutes.py` AND add it to the appropriate category group array (e.g.
+    `ASSET_FILE_ROUTES`, `AUTH_ROUTES`) so it is included in `ALL_API_ROUTES` and served
+    by the `GET /auth/routes/api` listing. Keep the route templates in sync with the
+    routes attached in the CDK api builder stacks.
+
+13. **ALWAYS use a leading `/` for normalized asset-relative file paths.** When storing
+    or working with a normalized file path (e.g. DynamoDB composite keys like
+    `databaseId:assetId:filePath`, the `filePath` attribute, and file-path provenance
+    values), the path is asset-relative and begins with a single `/` (e.g.
+    `/folder/file.txt`). Normalize inputs that may or may not carry the slash before
+    storing or comparing.
+
+    ```python
+    # CORRECT -- guarantee exactly one leading slash before storing/comparing
+    file_path = "/" + raw_path.lstrip("/")
+    composite_key = f"{database_id}:{asset_id}:{file_path}"
+    ```
 
 ---
 
@@ -1057,6 +1111,17 @@ return {'statusCode': 400, 'body': 'bad request'}
 
 # CORRECT
 return validation_error(body={'message': 'Specific error description'}, event=event)
+```
+
+### 11. Echoing request input or internal details in client error messages
+
+```python
+# WRONG -- reflects user input and internal data back to the caller
+return validation_error(body={'message': f"Workflow '{workflow_id}' conflicts with '{other_db}'"}, event=event)
+
+# CORRECT -- generic client message; specifics go to the log only
+logger.info(f"workflowId {workflow_id} conflicts with database {other_db}")
+return validation_error(body={'message': "Workflow ID is already in use by another database."}, event=event)
 ```
 
 ---

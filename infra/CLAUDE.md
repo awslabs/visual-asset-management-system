@@ -9,7 +9,7 @@ This is the Claude Code steering document for the `infra/` directory. It is auto
 -   **Name**: VAMS (Visual Asset Management System) -- CDK Infrastructure
 -   **Version**: (tracked in `config/config.ts` as `VAMS_VERSION`)
 -   **Runtime**: AWS CDK v2 (TypeScript), targeting `aws-cdk-lib`
--   **Node**: NODEJS_20_X for Lambda and CDK
+-   **Node**: NODEJS_22_X for Lambda and CDK
 -   **Python**: PYTHON_3_12 for all Lambda functions
 -   **Lambda Memory**: 5308 MB (all functions)
 -   **Lambda Timeout**: 15 minutes (all functions)
@@ -35,7 +35,7 @@ infra/
     saml-config.ts              # SAML provider settings
     csp/                        # CSP additional config (cspAdditionalConfig.json)
     docker/                     # Docker build configurations
-    policy/                     # S3 additional bucket policy JSON
+    policy/                     # S3 additional bucket policy JSON; IAM role mappings (iamRoleConfig.json)
   gen/
     genEndpoints.ts             # Endpoint generation utility
   lib/
@@ -48,6 +48,7 @@ infra/
       wafv2-basic-construct.ts  # WAFv2 web ACL construct
     helper/
       const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso)
+      iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring (app.iamRoleConfig)
       lambda.ts                 # Layer bundling commands (poetry-based)
       s3AssetBuckets.ts         # Global asset bucket registry (shared across stacks)
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
@@ -85,7 +86,8 @@ infra/
           dynamodb-authdefaults-ro-construct.ts
       apiLambda/
         apigatewayv2-amplify-nestedStack.ts  # API Gateway V2 HttpApi + Lambda authorizer
-        apiBuilder-nestedStack.ts            # ~1375 lines: all API routes + Lambda wiring
+        apiBuilder-nestedStack.ts            # Primary API routes + Lambda wiring (asset, database, metadata, auth, pipeline, workflow, etc.)
+        apiBuilder2-nestedStack.ts           # Secondary API stack: self-contained domains moved to free ApiBuilder headroom (currently Tags, Tag Types, Auth Constraints)
         lambdaLayersBuilder-nestedStack.ts   # Lambda layer construction
         constructs/
           apigatewayv2-lambda-construct.ts       # Route attachment helper
@@ -161,7 +163,8 @@ CoreVAMSStack (root)
   |     |     |
   |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
   |     |     |     |
-  |     |     |     +-- ApiBuilder (all API route Lambda wiring)
+  |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
+  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints; depends on ApiBuilder)
   |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
   |     |     |     +-- SearchBuilder (OpenSearch)
   |     |     |     +-- PipelineBuilder (all use-case pipelines)
@@ -190,6 +193,11 @@ interface storageResources {
         assetIndexerSnsTopic: sns.Topic;
         databaseIndexerSnsTopic: sns.Topic;
     };
+    eventBridge: {
+        orchestrationBus: events.EventBus; // Top-level VAMS orchestration event bus
+        orchestrationBusAuditLogGroup: logs.LogGroup; // Starter audit rule target
+        eventSourcePrefix: string; // Deployment-unique source prefix, e.g. "vams.prod-us-east-1"
+    };
     cloudWatchAuditLogGroups: {
         authentication;
         authorization;
@@ -210,6 +218,7 @@ interface storageResources {
         assetUploadsStorageTable;
         assetVersionsStorageTable;
         assetFileVersionsStorageTable;
+        assetFileVersionHistoryStorageTable;
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
         commentStorageTable;
@@ -271,7 +280,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 | --------------------------------- | ----------------------------------------- |
 | `VAMS_VERSION`                    | `"2.X.0"`                                 |
 | `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_20_X`                     |
+| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                     |
 | `LAMBDA_MEMORY_SIZE`              | `5308`                                    |
 | `OPENSEARCH_VERSION`              | `OPENSEARCH_2_7`                          |
 | `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]` |
@@ -283,7 +292,7 @@ The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all depl
 -   `env`: account, region, partition, coreStackName
 -   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets
 -   `app.useGlobalVpc`: enabled, useForAllLambdas, addVpcEndpoints, optionalExternalVpcId, vpcCidrRange
--   `app.openSearch`: useServerless, useProvisioned, reindexOnCdkDeploy
+-   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
 -   `app.pipelines`: useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
@@ -291,11 +300,12 @@ The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all depl
 -   `app.authProvider`: useCognito (enabled, useSaml, useUserPasswordAuthFlow), useExternalOAuthIdp, authorizerOptions.allowedIpRanges
 -   `app.api`: globalRateLimit (default 50), globalBurstLimit (default 100)
 -   `app.govCloud`: enabled, il6Compliant
+-   `app.iamRoleConfig`: useCustomBootstrapRoles, useCustomVamsStackRoles (advanced; mappings live in `config/policy/iamRoleConfig.json`)
 -   `app.webUi`: optionalBannerHtmlMessage, allowUnsafeEvalFeatures
 
 ### Config extends ConfigPublic (Internal)
 
-Adds: `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, SSM parameter paths.
+Adds: `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `iamRoleCustomizationJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, SSM parameter paths.
 
 ### Feature Flags (common/vamsAppFeatures.ts)
 
@@ -359,9 +369,9 @@ const fun = new lambda.Function(scope, name, {
 });
 ```
 
-### 4 Required Security Calls (Every Lambda Builder)
+### Required Security Calls (Every Lambda Builder)
 
-Every lambda builder function MUST include these four calls after creating the function:
+Every lambda builder function MUST include these calls after creating the function:
 
 ```typescript
 // 1. KMS permissions (if encryption enabled)
@@ -373,16 +383,26 @@ setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 // 3. Global environment variables (Cognito auth flag)
 globalLambdaEnvironmentsAndPermissions(fun, config);
 
-// 4. CDK Nag suppression for S3 grant patterns
+// 4. Per-Lambda CDK Nag suppressions (IAM4 execution roles + wildcard KMS actions)
+suppressCdkNagLambda(fun);
+
+// 5. CDK Nag suppression for S3 grant patterns (only if the function uses grantRead/grantReadWrite)
 suppressCdkNagErrorsByGrantReadWrite(scope);
 ```
+
+`suppressCdkNagLambda(fun)` is REQUIRED on every authored Lambda function (including those built inside
+constructs and custom resources). It replaces the old stack-wide suppression that `CoreVAMSStack` previously
+applied with `applyToChildren=true` — that approach stamped the suppression metadata onto every resource in
+every nested stack and bloated the synthesized CloudFormation templates. Scope the suppression to the function.
 
 ### What the Security Helpers Do
 
 -   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
 -   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Adds env vars for AUTH_TABLE_NAME, CONSTRAINTS_TABLE_NAME, USER_ROLES_TABLE_NAME, ROLES_TABLE_NAME + 9 audit log group env vars. Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all audit log groups.
 -   **`globalLambdaEnvironmentsAndPermissions`**: Sets COGNITO_AUTH_ENABLED based on Cognito + VPC configuration
+-   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
 
 ---
 
@@ -545,6 +565,22 @@ When `config.app.govCloud.il6Compliant = true`:
 
 ---
 
+## OpenSearch Serverless Connectivity
+
+A **private** OpenSearch Serverless collection (`app.openSearch.useServerless.allowPublic = false`) is reached only through a VPC endpoint, and the endpoint **type is selected by the collection generation** because the two generations expose different endpoint hostnames:
+
+-   **NEXTGEN** (`nextGen = true`) — endpoint hostname is `\{collection-id\}.aoss.\{region\}.on.aws`. Reached through a **standard EC2 interface endpoint** (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.\{region\}.aoss-data`, `privateDnsEnabled: true`). Built partition-aware via `new ec2.InterfaceVpcEndpointAwsService("aoss-data", "com.amazonaws", 443)`.
+-   **CLASSIC** (`nextGen = false`) — endpoint hostname is `\{collection-id\}.\{region\}.aoss.amazonaws.com`. Reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`), which provisions its own Route 53 private hosted zone.
+
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, and the schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required for a private collection. The schema-deploy custom resource Lambda uses a long timeout (14 min) and a readiness poll because a freshly created collection/endpoint, plus a NEXTGEN scale-to-zero cold start (10–30s), can take minutes to become reachable. Backend Lambdas sign with SigV4 service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+
+**`addVpcEndpoints` gating (NEXTGEN only).** The NEXTGEN endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints` like every other interface endpoint. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
+
+-   When `createEndpointResources` is true, VAMS creates the endpoint, its security group, and the VPC network access policy, and runs the schema-deploy function in the VPC.
+-   When it is false (private NEXTGEN + `addVpcEndpoints = false`, the **deferred** case), VAMS skips the endpoint **and** the network policy. The schema-deploy custom resource runs **outside** the VPC, writes the SSM parameters, and skips index creation (the `DeploySSMIndexSchema` custom resource passes `deferIndexCreation: "true"`, which the handler honors by returning success without creating indexes). The operator creates the `aoss-data` endpoint and a matching network policy manually. To then create the index mappings, set `app.openSearch.useServerless.deployDeferredIndexSchema = true` for one deployment (also overridable via CDK context) — the construct computes `deferIndexCreation = deferVpcSetup && !deployDeferredIndexSchema` and `schemaDeployInVpc = createEndpointResources || (deferVpcSetup && !deferIndexCreation)`, so the schema-deploy function runs in the VPC against the operator endpoint and creates the (idempotent) indexes. Then reindex. The flag is ignored when `addVpcEndpoints = true` (nothing is deferred). CLASSIC's managed endpoint is not an EC2 interface endpoint, so it is not governed by `addVpcEndpoints` and is always created for a private collection. See `documentation/docusaurus-site/docs/developer/opensearch.md`.
+
+---
+
 ## Development Rules
 
 ### 1. Configuration Changes
@@ -566,12 +602,13 @@ When `config.app.govCloud.il6Compliant = true`:
     - `memorySize: Config.LAMBDA_MEMORY_SIZE`
     - VPC conditional on `config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas`
 3. Grant DynamoDB table permissions (grantReadData or grantReadWriteData)
-4. Apply ALL 4 security calls:
+4. Apply the security calls:
     - `kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey)`
     - `setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources)`
     - `globalLambdaEnvironmentsAndPermissions(fun, config)`
-    - `suppressCdkNagErrorsByGrantReadWrite(scope)`
-5. Wire the function to API Gateway in `apiBuilder-nestedStack.ts` using `attachFunctionToApi()`
+    - `suppressCdkNagLambda(fun)` — required on every Lambda
+    - `suppressCdkNagErrorsByGrantReadWrite(scope)` — only if the function uses grantRead/grantReadWrite
+5. Wire the function to API Gateway using `attachFunctionToApi()`. Prefer `apiBuilder2-nestedStack.ts` for new endpoints (the primary `apiBuilder-nestedStack.ts` is near the CFN per-stack resource limit). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
 
 ### 3. Adding a New Nested Stack
 
@@ -588,6 +625,16 @@ When `config.app.govCloud.il6Compliant = true`:
 3. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`
 4. Add `RemovalPolicy.DESTROY` (current pattern -- all tables use DESTROY)
 5. Update lambda builders to reference the new table name env var and grant permissions
+6. Update the documentation (see Rule below): add the table to `architecture/aws-resources.md` and `architecture/data-model.md`
+
+### Documentation Rule: Storage Resources and Log Groups
+
+Whenever you **add or change** an Amazon S3 bucket, an Amazon DynamoDB table, or an Amazon CloudWatch log group, update `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` (and the matching Kiro steering — see Rule 11 and the bidirectional-sync rule in the root `CLAUDE.md`). Document **two independent properties** for each such resource:
+
+1. **Removal on teardown** -- `RemovalPolicy.RETAIN` (survives `cdk destroy`; needs manual deletion) vs. `RemovalPolicy.DESTROY` (removed automatically; pair S3 buckets with `autoDeleteObjects: true`).
+2. **Custom name (redeploy-collision flag)** -- whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can collide by name on a redeploy into the same account with the same configuration name.
+
+These axes are independent. **Retained + auto-named** resources (the asset, auxiliary, artefacts, and access logs buckets; all DynamoDB tables) survive teardown but do **not** block a redeploy, so they do not need to be deleted unless you intend to remove the data. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
 
 ### 5. Service Helper Usage
 
@@ -673,10 +720,11 @@ export function buildMyNewFunction(
     // Grant DynamoDB permissions
     storageResources.dynamo.myTable.grantReadWriteData(fun);
 
-    // Required security calls (all 4)
+    // Required security calls
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

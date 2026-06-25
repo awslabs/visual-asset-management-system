@@ -71,6 +71,58 @@ class TestFileUpload:
 
 
 @pytest.mark.unit
+class TestShouldSkipS3Key:
+    """Exclusion of reserved folders must match whole path segments, not
+    filename prefixes. A base file named e.g. `preview.jpg` shares a prefix
+    with the reserved `preview` folder but must NOT be excluded.
+    """
+
+    def test_reserved_folder_segment_is_skipped(self):
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        assert physnaFileSync._should_skip_s3_key("asset-1/preview/thumb.png") is True
+        assert physnaFileSync._should_skip_s3_key("asset-1/pipelines/foo/out.step") is True
+        assert physnaFileSync._should_skip_s3_key("asset-1/temp-upload/part.step") is True
+
+    def test_filename_sharing_reserved_prefix_is_not_skipped(self):
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        # Regression: "preview.jpg"/"preview.png" begin with "preview" but are
+        # base filenames, not the reserved "preview/" folder, so must be kept.
+        assert physnaFileSync._should_skip_s3_key("asset-1/preview.jpg") is False
+        assert physnaFileSync._should_skip_s3_key("asset-1/preview.png") is False
+        assert physnaFileSync._should_skip_s3_key("asset-1/pipelines.step") is False
+        assert physnaFileSync._should_skip_s3_key("asset-1/workspaceModel.glb") is False
+
+    def test_previewfile_pattern_is_still_skipped(self):
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        # The ".previewFile." pattern is a wildcard (*.previewFile.*): any key
+        # CONTAINING the literal substring ".previewFile." is excluded, regardless
+        # of base filename or extension.
+        assert physnaFileSync._should_skip_s3_key("asset-1/part.step.previewFile.png") is True
+        assert physnaFileSync._should_skip_s3_key("asset-1/photo.e57.previewFile.gif") is True
+        assert physnaFileSync._should_skip_s3_key("asset-1/sub/dir/model.obj.previewFile.jpg") is True
+        # Pattern can appear anywhere in the key, not only at the end.
+        assert physnaFileSync._should_skip_s3_key("asset-1/x.previewFile.png.bak") is True
+
+    def test_previewfile_pattern_is_substring_not_literal_star(self):
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        # The "*" in "*.previewFile.*" denotes a wildcard, NOT a literal asterisk.
+        # A file that merely resembles the word but lacks the exact ".previewFile."
+        # substring must NOT be excluded, and a literal "*" is not required.
+        assert physnaFileSync._should_skip_s3_key("asset-1/part.previewFilexpng") is False
+        assert physnaFileSync._should_skip_s3_key("asset-1/previewFile.png") is False  # no leading dot
+        assert physnaFileSync._should_skip_s3_key("asset-1/my.preview.png") is False
+
+    def test_folder_marker_is_skipped(self):
+        from backend.backend.handlers.addon.physna import physnaFileSync
+
+        assert physnaFileSync._should_skip_s3_key("asset-1/preview/") is True
+
+
+@pytest.mark.unit
 class TestSkipLogging:
     """Every skip path that drops a record must emit an INFO log line so the
     skip is visible in CloudWatch (no silent drops). Tests patch the module
@@ -80,23 +132,24 @@ class TestSkipLogging:
     def test_unsupported_extension_in_s3_record_is_logged(self):
         from backend.backend.handlers.addon.physna import physnaFileSync
 
-        s3_record = _s3_put_record("bucket-1", "prefix/db-1/asset-1/notes.txt")
+        # `.ifc` is a format Physna rejects — neither synced nor viewable.
+        s3_record = _s3_put_record("bucket-1", "prefix/db-1/asset-1/model.ifc")
 
         with patch.object(physnaFileSync, "_resolve_asset_from_s3_event") as resolve, \
              patch.object(physnaFileSync.logger, "info") as log_info:
             resolve.return_value = {
                 "databaseId": "db-1",
                 "assetId": "asset-1",
-                "relativePath": "/notes.txt",
+                "relativePath": "/model.ifc",
                 "bucketName": "bucket-1",
-                "s3Key": "prefix/db-1/asset-1/notes.txt",
+                "s3Key": "prefix/db-1/asset-1/model.ifc",
             }
             ok = physnaFileSync._handle_s3_record(s3_record)
 
         assert ok is True
         log_messages = " ".join(str(c.args[0]) for c in log_info.call_args_list)
         assert "unsupported file type" in log_messages.lower()
-        assert "/notes.txt" in log_messages
+        assert "/model.ifc" in log_messages
 
     def test_excluded_prefix_in_s3_record_is_logged(self):
         from backend.backend.handlers.addon.physna import physnaFileSync
@@ -116,6 +169,7 @@ class TestSkipLogging:
     def test_unsupported_extension_in_metadata_stream_is_logged(self):
         from backend.backend.handlers.addon.physna import physnaFileSync
 
+        # `.ifc` is a format Physna rejects — neither synced nor viewable.
         stream_record = {
             "eventSource": "aws:dynamodb",
             "eventName": "MODIFY",
@@ -123,12 +177,12 @@ class TestSkipLogging:
                 "Keys": {
                     "metadataKey": {"S": "foo"},
                     "databaseId:assetId:filePath": {
-                        "S": "db-1:asset-1:/notes.txt"
+                        "S": "db-1:asset-1:/model.ifc"
                     },
                 },
                 "NewImage": {
                     "databaseId:assetId:filePath": {
-                        "S": "db-1:asset-1:/notes.txt"
+                        "S": "db-1:asset-1:/model.ifc"
                     },
                 },
             },
@@ -140,7 +194,7 @@ class TestSkipLogging:
         assert ok is True
         log_messages = " ".join(str(c.args[0]) for c in log_info.call_args_list)
         assert "unsupported file type" in log_messages.lower()
-        assert "/notes.txt" in log_messages
+        assert "/model.ifc" in log_messages
 
 
 @pytest.mark.unit
@@ -444,7 +498,7 @@ class TestFileVersionTracking:
             lambda bid: {"bucketName": "bucket-1", "baseAssetsPrefix": "prefix/"},
         )
         monkeypatch.setattr(
-            physnaFileSync, "is_supported_file", lambda rel: True
+            physnaFileSync, "is_sync_supported_file", lambda rel: True
         )
 
         stream_record = {

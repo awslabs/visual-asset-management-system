@@ -9,29 +9,117 @@ import pytest
 from backend.backend.handlers.addon.physna import physnaCommon as _pc  # noqa: F401
 
 
+_VIEWER_3D_EXTENSIONS = (
+    "step",
+    "stp",
+    "igs",
+    "iges",
+    "stl",
+    "obj",
+    "3ds",
+    "asm",
+    "catpart",
+    "catproduct",
+    "glb",
+    "iam",
+    "ipt",
+    "jt",
+    "par",
+    "prt",
+    "sldasm",
+    "sldprt",
+    "x_b",
+    "x_t",
+)
+
+_DOCUMENT_IMAGE_EXTENSIONS = ("txt", "pdf", "gif", "jpeg", "jpg", "png")
+
+# Extensions Physna does not accept at all — neither sync nor viewer.
+_PHYSNA_REJECTED_EXTENSIONS = (
+    "ifc",
+    "ply",
+    "sat",
+    "3mf",
+    "fbx",
+    "dae",
+    "dwg",
+    "dxf",
+    "gltf",
+)
+
+
 @pytest.mark.unit
-class TestSupportedExtension:
-    def test_step_file_is_supported(self):
-        from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file
+class TestSyncSupportedExtension:
+    """The sync gate covers everything Physna accepts: 3D/CAD + docs + images."""
 
-        assert is_supported_file("/path/to/part.step") is True
-        assert is_supported_file("/path/to/part.STEP") is True
+    def test_3d_cad_formats_are_sync_supported(self):
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_sync_supported_file,
+        )
 
-    def test_stp_igs_iges_stl_obj_supported(self):
-        from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file
+        assert is_sync_supported_file("/path/to/part.step") is True
+        assert is_sync_supported_file("/path/to/part.STEP") is True
+        for ext in _VIEWER_3D_EXTENSIONS:
+            assert is_sync_supported_file(f"/file.{ext}") is True
 
-        for ext in ("stp", "igs", "iges", "stl", "obj", "3ds", "ply"):
-            assert is_supported_file(f"/file.{ext}") is True
+    def test_documents_and_images_are_sync_supported(self):
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_sync_supported_file,
+        )
 
-    def test_text_file_not_supported(self):
-        from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file
+        for ext in _DOCUMENT_IMAGE_EXTENSIONS:
+            assert is_sync_supported_file(f"/file.{ext}") is True
+            assert is_sync_supported_file(f"/file.{ext.upper()}") is True
 
-        assert is_supported_file("/notes.txt") is False
+    def test_formats_physna_rejects_are_not_sync_supported(self):
+        # Regression: these extensions must never be pushed to Physna. Physna's
+        # upload endpoint rejects them server-side with HTTP 400 "Invalid path
+        # extension". .ifc in particular triggered the original bug. Note .glb
+        # IS supported but .gltf is NOT.
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_sync_supported_file,
+        )
 
-    def test_file_with_no_extension_not_supported(self):
-        from backend.backend.handlers.addon.physna.physnaCommon import is_supported_file
+        for ext in _PHYSNA_REJECTED_EXTENSIONS:
+            assert is_sync_supported_file(f"/file.{ext}") is False
 
-        assert is_supported_file("/README") is False
+    def test_file_with_no_extension_not_sync_supported(self):
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_sync_supported_file,
+        )
+
+        assert is_sync_supported_file("/README") is False
+
+
+@pytest.mark.unit
+class TestViewerSupportedExtension:
+    """The viewer gate is 3D/CAD only — docs and images are synced but not
+    rendered by the embedded Physna Viewer."""
+
+    def test_3d_cad_formats_are_viewer_supported(self):
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_viewer_supported_file,
+        )
+
+        assert is_viewer_supported_file("/path/to/part.STEP") is True
+        for ext in _VIEWER_3D_EXTENSIONS:
+            assert is_viewer_supported_file(f"/file.{ext}") is True
+
+    def test_documents_and_images_are_not_viewer_supported(self):
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_viewer_supported_file,
+        )
+
+        for ext in _DOCUMENT_IMAGE_EXTENSIONS:
+            assert is_viewer_supported_file(f"/file.{ext}") is False
+
+    def test_rejected_formats_are_not_viewer_supported(self):
+        from backend.backend.handlers.addon.physna.physnaCommon import (
+            is_viewer_supported_file,
+        )
+
+        for ext in _PHYSNA_REJECTED_EXTENSIONS:
+            assert is_viewer_supported_file(f"/file.{ext}") is False
 
 
 @pytest.mark.unit

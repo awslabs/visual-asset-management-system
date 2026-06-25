@@ -200,6 +200,10 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 -   VAMS 1.X -> 2.0 - `MigrationSchema_v1.X_to_v2.0.template.json`
 -   VAMS 2.0 -> 2.0 - `MigrationSchema_v2.1_to_v2.1.template.json`
 -   VAMS 2.1 -> 2.2 - See the [v2.1 to v2.2 Migration README](./v2.1_to_v2.2/upgrade/v2.1_to_v2.2_migration_README.md)
+-   VAMS 2.2 -> 2.3 - See the [v2.2 to v2.3 Migration README](./v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration_README.md)
+-   VAMS 2.3 -> 2.4 - See the [v2.3 to v2.4 Migration README](./v2.3_to_v2.4/upgrade/v2.3_to_v2.4_migration_README.md)
+-   VAMS 2.4 -> 2.5 - See the [v2.4 to v2.5 Migration README](./v2.4_to_v2.5/upgrade/v2.4_to_v2.5_migration_README.md)
+-   VAMS 2.5 -> 2.6 - See the [v2.5 to v2.6 Migration README](./v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
 
 ### Script Notes
 

@@ -18,6 +18,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     kmsKeyPolicyStatementGenerator,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
@@ -25,8 +26,6 @@ import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
 interface AuthFunctions {
-    authConstraintsService: lambda.Function;
-    authConstraintsTemplateService: lambda.Function;
     authLoginProfile: lambda.Function;
     routes: lambda.Function;
     cognitoUserService: lambda.Function;
@@ -43,24 +42,6 @@ export function buildAuthFunctions(
     subnets: ec2.ISubnet[]
 ): AuthFunctions {
     return {
-        authConstraintsService: buildAuthConstraintsFunction(
-            scope,
-            lambdaCommonBaseLayer,
-            storageResources,
-            authResources,
-            config,
-            vpc,
-            subnets
-        ),
-        authConstraintsTemplateService: buildAuthConstraintsTemplateFunction(
-            scope,
-            lambdaCommonBaseLayer,
-            storageResources,
-            authResources,
-            config,
-            vpc,
-            subnets
-        ),
         authLoginProfile: buildAuthLoginProfile(
             scope,
             lambdaCommonBaseLayer,
@@ -101,7 +82,6 @@ export function buildAuthConstraintsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -129,6 +109,7 @@ export function buildAuthConstraintsFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -136,7 +117,6 @@ export function buildAuthConstraintsTemplateFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -164,6 +144,7 @@ export function buildAuthConstraintsTemplateFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -206,6 +187,7 @@ export function buildAuthLoginProfile(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -243,6 +225,7 @@ export function buildRoutesService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -308,6 +291,7 @@ export function buildCognitoUserService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -346,6 +330,7 @@ export function buildApiKeyServiceFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -425,6 +410,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
 
     // Add global permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;
@@ -493,6 +479,7 @@ export function buildApiGatewayAuthorizerWebsocketFunction(
 
     // Add global permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
     return fun;

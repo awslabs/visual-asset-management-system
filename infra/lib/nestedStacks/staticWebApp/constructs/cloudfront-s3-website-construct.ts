@@ -99,8 +99,13 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         protection: true,
                         modeBlock: true,
                     },
+                    // SAMEORIGIN (not DENY) so VAMS can frame its own same-origin
+                    // pages, which iframe-embedded viewers require (e.g. the SuperSplat
+                    // editor served under /viewers/supersplat/). External sites still
+                    // cannot frame VAMS. Keep in sync with the CSP "frame-ancestors 'self'"
+                    // directive generated in security.ts.
                     frameOptions: {
-                        frameOption: cloudfront.HeadersFrameOption.DENY,
+                        frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN,
                         override: true,
                     },
                     contentTypeOptions: {

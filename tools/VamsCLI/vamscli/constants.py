@@ -83,10 +83,19 @@ API_ROLE_BY_ID = "/roles/{roleId}"
 API_CONSTRAINTS = "/auth/constraints"
 API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
 API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
+API_AUTH_CONSTRAINT_PERMISSION_OBJECTS = "/auth/constraints/permissionObjects"
+
+# Auth Routes API Endpoints
+API_AUTH_ROUTES_API = "/auth/routes/api"
+API_AUTH_ROUTES_API_ALLOWED = "/auth/routes/api/allowed"
 
 # API Key Management API Endpoints
 API_AUTH_API_KEYS = "/auth/api-keys"
 API_AUTH_API_KEY = "/auth/api-keys/{apiKeyId}"
+# User-level (self-service) API key endpoints: scoped to the requesting
+# user's own keys; expiration required
+API_AUTH_USER_API_KEYS = "/auth/user/api-keys"
+API_AUTH_USER_API_KEY = "/auth/user/api-keys/{apiKeyId}"
 
 # User Role Management API Endpoints
 API_USER_ROLES = "/user-roles"

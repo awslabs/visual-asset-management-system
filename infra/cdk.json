@@ -9,6 +9,7 @@
         "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
         "@aws-cdk/aws-iam:minimizePolicies": true,
         "@aws-cdk/core:suppressTemplateIndentation": true,
+        "@aws-cdk/core:defaultCrossStackReferences": "strong",
         "environments": {
             "common": {
                 "SolutionName": "AWSVisualAssetManagementSystem",

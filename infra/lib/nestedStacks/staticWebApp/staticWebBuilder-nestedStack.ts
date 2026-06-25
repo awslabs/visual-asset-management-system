@@ -96,6 +96,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                     noncurrentVersionExpiration: cdk.Duration.days(30),
                 },
             ],
+            autoDeleteObjects: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(webAppAccessLogsBucket, props.config);
 
