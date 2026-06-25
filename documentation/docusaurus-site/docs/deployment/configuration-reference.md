@@ -46,14 +46,17 @@ Controls how Amazon S3 asset storage buckets are provisioned.
 
 Each element in `externalAssetBuckets` has the following fields:
 
-| Field                   | Type   | Description                                                                                                           |
-| ----------------------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
-| `bucketArn`             | string | Amazon Resource Name (ARN) of the existing Amazon S3 bucket.                                                          |
-| `baseAssetsPrefix`      | string | Base prefix to use for cataloging and syncing assets. Use `/` for the bucket root. Must end with `/`.                 |
-| `defaultSyncDatabaseId` | string | Database ID to associate with asset changes synced from this bucket. If the database does not exist, VAMS creates it. |
+| Field                   | Type   | Description                                                                                                                                                                                 |
+| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucketArn`             | string | Amazon Resource Name (ARN) of the existing Amazon S3 bucket. Must use the same partition as the deployment. May be repeated to register the bucket under multiple non-overlapping prefixes. |
+| `baseAssetsPrefix`      | string | Base prefix to use for cataloging and syncing assets. Use `/` for the bucket root. Must end with `/`.                                                                                       |
+| `defaultSyncDatabaseId` | string | Database ID to associate with asset changes synced from this bucket. If the database does not exist, VAMS creates it.                                                                       |
+| `bucketAccountId`       | string | Optional. The 12-digit AWS account ID that owns the bucket. Set for cross-account buckets so VAMS imports them as cross-account and scopes notification source policies.                    |
+| `bucketRegion`          | string | Optional. The AWS Region of the bucket. Defaults to the deployment Region when omitted.                                                                                                     |
+| `bucketKmsKeyArn`       | string | Optional. ARN of the AWS KMS key the bucket is encrypted with. When set, VAMS grants this key to its Lambda and pipeline roles. Required if the bucket uses SSE-KMS.                        |
 
 :::tip[Adding external buckets]
-External buckets can be added incrementally across deployments. Each bucket requires additional IAM bucket policies. See the [Developer Guide](../developer/setup.md) for external bucket IAM policy requirements.
+External buckets can be added incrementally across deployments. Each bucket requires additional IAM bucket policies. A bucket ARN may be registered more than once to map multiple databases to non-overlapping prefixes within it. See [External Amazon S3 bucket setup](external-s3-setup.md) for the full bucket policy, KMS, and cross-account requirements.
 :::
 
 ## Security and compliance

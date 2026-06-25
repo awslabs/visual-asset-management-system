@@ -211,6 +211,9 @@ export function storageResourcesBuilder(
 ): storageResources {
     //Import or generate new encryption keys
     let kmsEncryptionKey: kms.IKey | undefined = undefined;
+    // Tracks whether VAMS created the key (resource policy is mutable) versus
+    // imported it by ARN (resource policy changes are a no-op).
+    let vamsGeneratedKmsKey = false;
     if (config.app.useKmsCmkEncryption.enabled) {
         if (
             config.app.useKmsCmkEncryption.optionalExternalCmkArn &&
@@ -223,6 +226,7 @@ export function storageResourcesBuilder(
                 config.app.useKmsCmkEncryption.optionalExternalCmkArn
             );
         } else {
+            vamsGeneratedKmsKey = true;
             kmsEncryptionKey = new kms.Key(scope, "VAMSEncryptionKMSKey", {
                 description: "VAMS Generated KMS Encryption key",
                 enableKeyRotation: true,
@@ -342,6 +346,14 @@ export function storageResourcesBuilder(
         config.app.assetBuckets.externalAssetBuckets &&
         config.app.assetBuckets.externalAssetBuckets.length > 0
     ) {
+        // A single bucket ARN may be registered under multiple (non-overlapping)
+        // prefixes. Each unique ARN must be imported exactly once: a single IBucket
+        // instance accumulates all of its addEventNotification calls into one S3
+        // notification configuration with multiple prefix-filtered topic entries.
+        // Importing the same ARN twice would create duplicate construct IDs and
+        // racing notification custom resources that overwrite each other.
+        const importedBucketsByArn = new Map<string, s3.IBucket>();
+
         // Look up each bucket and add to global array
         for (const bucketConfig of config.app.assetBuckets.externalAssetBuckets) {
             if (
@@ -366,18 +378,91 @@ export function storageResourcesBuilder(
                 );
             }
 
-            const bucket = s3.Bucket.fromBucketArn(
-                scope,
-                `ImportedAssetBucket-${bucketConfig.bucketArn}`,
-                bucketConfig.bucketArn
-            );
+            // Normalize optional cross-account / encryption fields
+            const bucketAccountId =
+                bucketConfig.bucketAccountId &&
+                bucketConfig.bucketAccountId != "" &&
+                bucketConfig.bucketAccountId != "UNDEFINED"
+                    ? bucketConfig.bucketAccountId
+                    : undefined;
+            const bucketRegion =
+                bucketConfig.bucketRegion &&
+                bucketConfig.bucketRegion != "" &&
+                bucketConfig.bucketRegion != "UNDEFINED"
+                    ? bucketConfig.bucketRegion
+                    : undefined;
+            const bucketKmsKeyArn =
+                bucketConfig.bucketKmsKeyArn &&
+                bucketConfig.bucketKmsKeyArn != "" &&
+                bucketConfig.bucketKmsKeyArn != "UNDEFINED"
+                    ? bucketConfig.bucketKmsKeyArn
+                    : undefined;
 
-            requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
+            // Import each unique bucket ARN only once and reuse the instance for
+            // every prefix registered against it.
+            let bucket = importedBucketsByArn.get(bucketConfig.bucketArn);
+            if (!bucket) {
+                // Import the bucket account-aware so CDK treats it as cross-account when
+                // an owning account is provided (drives correct event-notification source
+                // handling and region resolution). Falls back to same-account behavior
+                // when no account is given.
+                bucket = s3.Bucket.fromBucketAttributes(
+                    scope,
+                    `ImportedAssetBucket-${bucketConfig.bucketArn}`,
+                    {
+                        bucketArn: bucketConfig.bucketArn,
+                        account: bucketAccountId,
+                        region: bucketRegion,
+                    }
+                );
+
+                // VAMS only applies bucket-level resource policies to buckets it owns.
+                // For imported (potentially cross-account) buckets this is a no-op; the
+                // bucket owner applies TLS/additional policies (see external-s3 docs).
+                // Apply once per unique bucket.
+                requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
+
+                importedBucketsByArn.set(bucketConfig.bucketArn, bucket);
+            }
 
             s3AssetBuckets.addS3AssetBucket(
                 bucket,
                 bucketConfig.baseAssetsPrefix,
-                bucketConfig.defaultSyncDatabaseId
+                bucketConfig.defaultSyncDatabaseId,
+                bucketAccountId,
+                bucketKmsKeyArn
+            );
+        }
+    }
+
+    // When VAMS generated its own CMK and there are cross-account external buckets,
+    // the S3 service in the bucket's account must be able to generate data keys with
+    // the VAMS key to encrypt notifications published to the VAMS-owned SNS topics.
+    // Add an additive statement scoped to those external accounts. (No-op when the
+    // key was imported by ARN or when there are no cross-account buckets, so existing
+    // deployments without externals see no key-policy change.)
+    if (vamsGeneratedKmsKey && kmsEncryptionKey) {
+        const externalBucketAccountIds = Array.from(
+            new Set(
+                s3AssetBuckets
+                    .getS3AssetBucketRecords()
+                    .map((record) => record.accountId)
+                    .filter((accountId): accountId is string => !!accountId)
+            )
+        );
+
+        if (externalBucketAccountIds.length > 0) {
+            kmsEncryptionKey.addToResourcePolicy(
+                new iam.PolicyStatement({
+                    sid: "AllowExternalBucketS3Notifications",
+                    effect: iam.Effect.ALLOW,
+                    principals: [Service("S3").Principal],
+                    actions: ["kms:GenerateDataKey*", "kms:Decrypt"],
+                    resources: ["*"],
+                    conditions: {
+                        StringEquals: { "aws:SourceAccount": externalBucketAccountIds },
+                    },
+                })
             );
         }
     }
@@ -453,6 +538,28 @@ export function storageResourcesBuilder(
                 new s3not.SnsDestination(removedTopic),
                 { prefix: prefix }
             );
+        }
+
+        // For cross-account buckets, explicitly allow the S3 service to publish to
+        // the topics on behalf of the external bucket. CDK derives the SourceAccount
+        // from the importing stack account, which is the VAMS account and would not
+        // match an external bucket's account, so the auto-added condition can drop
+        // notifications silently. Scope the grant to the external bucket ARN/account.
+        if (record.accountId) {
+            for (const topic of [createdTopic, removedTopic]) {
+                topic.addToResourcePolicy(
+                    new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        principals: [Service("S3").Principal],
+                        actions: ["SNS:Publish"],
+                        resources: [topic.topicArn],
+                        conditions: {
+                            ArnLike: { "aws:SourceArn": record.bucket.bucketArn },
+                            StringEquals: { "aws:SourceAccount": record.accountId },
+                        },
+                    })
+                );
+            }
         }
 
         console.log(
@@ -1821,17 +1928,32 @@ export function storageResourcesBuilder(
     // Loop through each asset bucket and setup S3 event notifications sync
     let bucketSyncIndex = 0;
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+    // A bucket instance can appear in multiple records (same bucket, different
+    // prefixes). The sync-queue construct IDs are derived from the bucket instance,
+    // so they would collide across those records. Keep the original construct ID for
+    // the first registration of each bucket (preserves existing logical IDs / no diff
+    // for single-registration deployments) and add a per-occurrence suffix for any
+    // additional prefix registrations of the same bucket.
+    const bucketSyncOccurrence = new Map<s3.IBucket, number>();
     for (const record of bucketRecords) {
+        const bucketOccurrence = bucketSyncOccurrence.get(record.bucket) ?? 0;
+        bucketSyncOccurrence.set(record.bucket, bucketOccurrence + 1);
+        const bucketSyncIdSuffix = bucketOccurrence === 0 ? "" : `-${bucketOccurrence}`;
+
         // Create SQS queue for S3 object created events
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated--" + record.bucket, {
-            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`,
-            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
-            encryption: kmsEncryptionKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: kmsEncryptionKey,
-            enforceSSL: true,
-        });
+        const onS3ObjectCreatedQueue = new sqs.Queue(
+            scope,
+            "bucketSyncCreated--" + record.bucket + bucketSyncIdSuffix,
+            {
+                queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`,
+                visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
         onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (created events)
@@ -1889,15 +2011,19 @@ export function storageResourcesBuilder(
         bucketSyncIndex = bucketSyncIndex + 1;
 
         // Create SQS queue for S3 object deleted events
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted--" + record.bucket, {
-            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted--${bucketSyncIndex}`,
-            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
-            encryption: kmsEncryptionKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: kmsEncryptionKey,
-            enforceSSL: true,
-        });
+        const onS3ObjectDeletedQueue = new sqs.Queue(
+            scope,
+            "bucketSyncDeleted--" + record.bucket + bucketSyncIdSuffix,
+            {
+                queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted--${bucketSyncIndex}`,
+                visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
         onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (deleted events)

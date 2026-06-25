@@ -290,7 +290,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all deployment parameters. Key sections:
 
 -   `env`: account, region, partition, coreStackName
--   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets
+-   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets (each entry: bucketArn, baseAssetsPrefix, defaultSyncDatabaseId, and optional bucketAccountId / bucketRegion / bucketKmsKeyArn for cross-account + SSE-KMS buckets). A bucketArn may be registered multiple times under non-overlapping prefixes (validated by `validateExternalAssetBuckets()` in `getConfig()`, which rejects overlapping prefixes and inconsistent per-bucket attributes); `storageBuilder` imports each unique ARN once so the per-prefix event notifications merge into a single S3 notification configuration.
 -   `app.useGlobalVpc`: enabled, useForAllLambdas, addVpcEndpoints, optionalExternalVpcId, vpcCidrRange
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn

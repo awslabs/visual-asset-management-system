@@ -659,6 +659,36 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
 }
 
 /**
+ * Grants a principal access to the customer managed KMS keys of any external asset
+ * buckets that declare one. The bucket grant covers S3 object actions, but a bucket
+ * encrypted with a key the VAMS account does not own additionally requires explicit
+ * KMS permissions on that external key (the VAMS-owned key grant does not cover it).
+ * No-op for buckets without an external key, so same-account/SSE-managed setups are
+ * unaffected.
+ * @param grantable The IAM grantable (lambda function or role) to grant permissions to
+ */
+export function grantExternalAssetBucketKmsKeys(grantable: iam.IGrantable): void {
+    const externalKeyArns = Array.from(
+        new Set(
+            s3AssetBuckets
+                .getS3AssetBucketRecords()
+                .map((record) => record.kmsKeyArn)
+                .filter((keyArn): keyArn is string => !!keyArn)
+        )
+    );
+
+    if (externalKeyArns.length > 0) {
+        grantable.grantPrincipal.addToPrincipalPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["kms:Decrypt", "kms:GenerateDataKey*", "kms:DescribeKey"],
+                resources: externalKeyArns,
+            })
+        );
+    }
+}
+
+/**
  * Grants read permissions to a lambda function for all asset buckets defined in s3AssetBuckets
  * @param lambdaFunction The lambda function to grant permissions to
  */
@@ -668,6 +698,9 @@ export function grantReadPermissionsToAllAssetBuckets(lambdaFunction: lambda.Fun
     for (const record of bucketRecords) {
         record.bucket.grantRead(lambdaFunction);
     }
+
+    // Grant external bucket KMS keys (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(lambdaFunction);
 
     // // Add CDK Nag suppressions
     // const reason = "Lambda needs read access to all asset buckets to perform its operations";
@@ -701,6 +734,9 @@ export function grantReadWritePermissionsToAllAssetBuckets(lambdaFunction: lambd
     for (const record of bucketRecords) {
         record.bucket.grantReadWrite(lambdaFunction);
     }
+
+    // Grant external bucket KMS keys (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(lambdaFunction);
 
     // Add CDK Nag suppressions
     //suppressCdkNagErrorsByGrantReadWrite(lambdaFunction);

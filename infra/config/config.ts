@@ -784,6 +784,18 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //Validate external asset bucket entries
+    if (
+        config.app.assetBuckets.externalAssetBuckets &&
+        config.app.assetBuckets.externalAssetBuckets.length > 0
+    ) {
+        validateExternalAssetBuckets(
+            config.app.assetBuckets.externalAssetBuckets,
+            config.env.partition,
+            config.env.account
+        );
+    }
+
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -869,14 +881,14 @@ export function getConfig(app: cdk.App): Config {
         }
     }
     //Cloudfront + ALB check (not more than 1)
-    if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
+    if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
         console.warn(
             "Configuration Warning: YOU HAVE DISABLED DEPLOYING ANY VAMS FRONT-END WITH CLOUDFRONT OR ALB. THIS WILL BE A API-DRIVEN SOLUTION-ONLY DEPLOYMENT."
         );
     }
 
     //Cloudfront + ALB neither warning check
-    if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
+    if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
         throw new Error(
             "Configuration Error: Must choose either only Cloufront or ALB for static website deployment use (or neither), cannot have both enabled."
         );
@@ -1398,10 +1410,141 @@ export function getConfig(app: cdk.App): Config {
     return config;
 }
 
+/**
+ * Validates the externalAssetBuckets configuration. A single bucket ARN may be
+ * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
+ * only one notification configuration per bucket and cannot route an object to an
+ * ambiguous prefix), and the per-bucket attributes (account, region, KMS key) must
+ * be consistent across every entry for that ARN. Throws a Configuration Error on any
+ * violation. Exported for unit testing.
+ */
+export function validateExternalAssetBuckets(
+    externalAssetBuckets: ConfigPublicAssetS3Buckets[],
+    deploymentPartition: string,
+    deploymentAccount?: string
+): void {
+    // Normalizes a baseAssetsPrefix to a comparable form. "", "/", and undefined all
+    // represent the bucket root (matches everything); any other value is returned
+    // with a guaranteed single trailing slash.
+    const normalizePrefix = (prefix: string | undefined): string => {
+        if (!prefix || prefix == "" || prefix == "/") {
+            return "/";
+        }
+        return prefix.endsWith("/") ? prefix : prefix + "/";
+    };
+
+    // Two prefixes "overlap" when one is a path-prefix of the other (so S3 cannot
+    // unambiguously route an object to a single prefix-filtered notification). The
+    // root "/" overlaps every prefix.
+    const prefixesOverlap = (a: string, b: string): boolean => {
+        if (a == "/" || b == "/") {
+            return true;
+        }
+        return a == b || a.startsWith(b) || b.startsWith(a);
+    };
+
+    // Per-ARN accumulator: tracks the prefixes already registered and the
+    // account/region/KMS attributes, which must be consistent across all entries for
+    // the same bucket (they describe one physical bucket).
+    interface SeenBucket {
+        prefixes: string[];
+        accountId?: string;
+        region?: string;
+        kmsKeyArn?: string;
+    }
+    const seenBuckets = new Map<string, SeenBucket>();
+
+    const normalizeOptional = (value: string | undefined): string | undefined =>
+        value && value != "" && value != "UNDEFINED" ? value : undefined;
+
+    for (const bucketConfig of externalAssetBuckets) {
+        // The external bucket ARN must use the same partition as the deployment.
+        const arnPartition = bucketConfig.bucketArn.split(":")[1];
+        if (arnPartition && arnPartition != deploymentPartition) {
+            throw new Error(
+                `Configuration Error: external bucket ARN ${bucketConfig.bucketArn} uses partition '${arnPartition}' which does not match the deployment partition '${deploymentPartition}'.`
+            );
+        }
+
+        const accountId = normalizeOptional(bucketConfig.bucketAccountId);
+        const region = normalizeOptional(bucketConfig.bucketRegion);
+        const kmsKeyArn = normalizeOptional(bucketConfig.bucketKmsKeyArn);
+
+        // bucketAccountId, when provided, must be a 12-digit AWS account ID.
+        if (accountId) {
+            if (!/^\d{12}$/.test(accountId)) {
+                throw new Error(
+                    `Configuration Error: external bucket ${bucketConfig.bucketArn} bucketAccountId must be a 12-digit AWS account ID.`
+                );
+            }
+            if (deploymentAccount && accountId == deploymentAccount) {
+                console.warn(
+                    `Configuration Warning: external bucket ${bucketConfig.bucketArn} bucketAccountId matches the deployment account; the bucket is not actually cross-account.`
+                );
+            }
+        }
+
+        const prefix = normalizePrefix(bucketConfig.baseAssetsPrefix);
+        const existing = seenBuckets.get(bucketConfig.bucketArn);
+
+        if (!existing) {
+            // First registration for this bucket ARN.
+            seenBuckets.set(bucketConfig.bucketArn, {
+                prefixes: [prefix],
+                accountId,
+                region,
+                kmsKeyArn,
+            });
+            continue;
+        }
+
+        // The same bucket may be registered under multiple prefixes, but each physical
+        // bucket has one set of attributes — they must match across every entry for
+        // that ARN.
+        if (existing.accountId != accountId) {
+            throw new Error(
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} is registered with inconsistent bucketAccountId values across entries.`
+            );
+        }
+        if (existing.region != region) {
+            throw new Error(
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} is registered with inconsistent bucketRegion values across entries.`
+            );
+        }
+        if (existing.kmsKeyArn != kmsKeyArn) {
+            throw new Error(
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} is registered with inconsistent bucketKmsKeyArn values across entries.`
+            );
+        }
+
+        // Prefixes registered for the same bucket must not overlap, otherwise S3
+        // cannot route an object-created event to a single prefix-filtered topic.
+        for (const otherPrefix of existing.prefixes) {
+            if (prefixesOverlap(prefix, otherPrefix)) {
+                const display = (value: string) => (value == "/" ? "/ (bucket root)" : value);
+                throw new Error(
+                    `Configuration Error: external bucket ${
+                        bucketConfig.bucketArn
+                    } has overlapping baseAssetsPrefix values '${display(prefix)}' and '${display(
+                        otherPrefix
+                    )}'. Prefixes registered for the same bucket must not overlap.`
+                );
+            }
+        }
+        existing.prefixes.push(prefix);
+    }
+}
+
 export interface ConfigPublicAssetS3Buckets {
     bucketArn: string;
     baseAssetsPrefix: string;
     defaultSyncDatabaseId: string;
+    // Optional cross-account / encryption fields. Required for buckets that live
+    // in a different account (bucketAccountId) or use a customer managed KMS key
+    // (bucketKmsKeyArn). bucketRegion defaults to the deployment region.
+    bucketAccountId?: string;
+    bucketRegion?: string;
+    bucketKmsKeyArn?: string;
 }
 
 //Public config values that should go into a configuration file

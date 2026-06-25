@@ -34,6 +34,7 @@ import * as Config from "../../../../../../../config/config";
 import {
     generateUniqueNameHash,
     kmsKeyPolicyStatementGenerator,
+    grantExternalAssetBucketKmsKeys,
 } from "../../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
@@ -133,7 +134,11 @@ export class CosmosReasonConstruct extends Construct {
             statements: [
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
                         actions: [
@@ -145,7 +150,7 @@ export class CosmosReasonConstruct extends Construct {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -228,6 +233,11 @@ export class CosmosReasonConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         /**
          * Batch Compute Environment

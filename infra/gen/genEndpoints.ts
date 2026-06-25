@@ -25,6 +25,12 @@
  *   - Some partitions only publish a dnsSuffix and not a usable per-service endpoint; in those
  *     cases the generated hostname/fipsHostname may need to be blanked manually for a given
  *     service. The merge never overwrites an existing entry, so manual corrections are retained.
+ *   - Service principals are NOT the same as endpoint hostnames. A service principal (the value
+ *     in `"Principal": { "Service": ... }`) uses the global `service.amazonaws.com` form in some
+ *     partitions whose *endpoints* live under a different DNS suffix. EU Sovereign Cloud is the
+ *     key case: endpoints are `service.{region}.amazonaws.eu` but principals are
+ *     `service.amazonaws.com`. Deriving the principal from the endpoint dnsSuffix yields invalid
+ *     values like `s3.amazonaws.eu` that KMS/SQS/SNS reject. See PRINCIPAL_DNS_SUFFIX_OVERRIDE.
  */
 
 const https = require("https");
@@ -49,6 +55,18 @@ type ServiceLookup = { [serviceKey: string]: PartitionMap };
 // Services botocore omits from its services map but VAMS still needs in every partition.
 const INJECTED_SERVICES = ["sagemaker", "execute-api", "ecs-tasks", "ecr-dkr"];
 
+// Partitions whose endpoint dnsSuffix is NOT usable as the service-principal suffix. The
+// endpoint suffix (used for hostname/fipsHostname) and the service-principal suffix (used for
+// the IAM `Principal.Service` value) diverge in these partitions, so the principal must use the
+// override below instead of the partition's botocore dnsSuffix.
+//
+// EU Sovereign Cloud (aws-eusc): endpoints are `service.{region}.amazonaws.eu`, but service
+// principals are the global `service.amazonaws.com` form. Without this override the generator
+// emits `s3.amazonaws.eu`, which KMS/SQS/SNS resource policies reject as an invalid principal.
+const PRINCIPAL_DNS_SUFFIX_OVERRIDE: { [partition: string]: string } = {
+    "aws-eusc": "amazonaws.com",
+};
+
 /**
  * Build a fresh SERVICE_LOOKUP straight from the botocore master file. This is the "ideal"
  * generated table that the existing const.ts is merged on top of.
@@ -68,6 +86,10 @@ function buildMasterLookup(json: any): ServiceLookup {
 
         if (!perPartition[partitionName]) perPartition[partitionName] = {};
 
+        // The principal suffix may differ from the endpoint dnsSuffix (e.g. aws-eusc endpoints
+        // use amazonaws.eu but principals use the global amazonaws.com form).
+        const principalSuffix = PRINCIPAL_DNS_SUFFIX_OVERRIDE[partitionName] || dnsSuffix;
+
         for (const serviceKey in v["services"]) {
             allServices.add(serviceKey);
 
@@ -78,7 +100,7 @@ function buildMasterLookup(json: any): ServiceLookup {
 
             perPartition[partitionName][serviceKey] = {
                 arn: `arn:${partitionName}:${serviceKey}:{region}:{account-id}:{resource-id}`,
-                principal: `${principalPrefix}.${dnsSuffix}`,
+                principal: `${principalPrefix}.${principalSuffix}`,
                 hostname: `${principalPrefix}.{region}.${dnsSuffix}`,
                 fipsHostname: `${principalPrefix}-fips.{region}.${dnsSuffix}`,
             };
@@ -132,6 +154,7 @@ interface MergeReport {
     gapFills: { [partition: string]: string[] };
     newServices: string[];
     staleServices: string[];
+    principalCorrections: { partition: string; service: string; from: string; to: string }[];
 }
 
 /**
@@ -148,6 +171,7 @@ function mergeLookups(
         gapFills: {},
         newServices: [],
         staleServices: [],
+        principalCorrections: [],
     };
 
     const existingKeys = Object.keys(existing);
@@ -185,6 +209,30 @@ function mergeLookups(
         if (!existing[serviceKey]) {
             merged[serviceKey] = { ...master[serviceKey] };
             report.newServices.push(serviceKey);
+        }
+    }
+
+    // Reconcile service principals for override partitions. Principals are fully deterministic
+    // (`prefix.suffix`), so unlike endpoints/ARNs they are safe to authoritatively correct even
+    // on existing entries. This repairs entries previously generated with the wrong suffix (e.g.
+    // aws-eusc principals emitted as `s3.amazonaws.eu` instead of `s3.amazonaws.com`) without
+    // disturbing their hand-tuned hostname / fipsHostname / arn values.
+    for (const partitionName of Object.keys(PRINCIPAL_DNS_SUFFIX_OVERRIDE)) {
+        const suffix = PRINCIPAL_DNS_SUFFIX_OVERRIDE[partitionName];
+        for (const serviceKey of Object.keys(merged)) {
+            const entry = merged[serviceKey][partitionName];
+            if (!entry) continue;
+            const prefix = serviceKey === "es" ? "opensearchservice" : serviceKey;
+            const expected = `${prefix}.${suffix}`;
+            if (entry.principal !== expected) {
+                report.principalCorrections.push({
+                    partition: partitionName,
+                    service: serviceKey,
+                    from: entry.principal,
+                    to: expected,
+                });
+                entry.principal = expected;
+            }
         }
     }
 
@@ -262,6 +310,9 @@ function writeReport(report: MergeReport, master: ServiceLookup, existing: Servi
     lines.push(
         `- Stale services (in const.ts, no longer in botocore master): **${report.staleServices.length}**`
     );
+    lines.push(
+        `- Service-principal corrections (override-partition suffix fixes): **${report.principalCorrections.length}**`
+    );
     lines.push("");
 
     lines.push("## 1. New aws-eusc (EU Sovereign Cloud) additions");
@@ -336,6 +387,32 @@ function writeReport(report: MergeReport, master: ServiceLookup, existing: Servi
         lines.push("_None._");
     }
     lines.push("");
+
+    lines.push("## 5. Service-principal corrections");
+    lines.push("");
+    lines.push(
+        "Partitions whose endpoint dnsSuffix is not usable as the service-principal suffix " +
+            "(see `PRINCIPAL_DNS_SUFFIX_OVERRIDE`). The `principal` field of these entries was set " +
+            "to the override suffix; `hostname`/`fipsHostname`/`arn` were left untouched. EU " +
+            "Sovereign Cloud endpoints use `amazonaws.eu` but service principals use `amazonaws.com`."
+    );
+    lines.push("");
+    if (report.principalCorrections.length) {
+        const byPartition: { [p: string]: typeof report.principalCorrections } = {};
+        for (const c of report.principalCorrections) {
+            (byPartition[c.partition] = byPartition[c.partition] || []).push(c);
+        }
+        for (const p of Object.keys(byPartition).sort()) {
+            const corr = byPartition[p].sort((x, y) => x.service.localeCompare(y.service));
+            lines.push(`### ${p} (${corr.length})`);
+            lines.push("");
+            for (const c of corr) lines.push(`- \`${c.service}\`: \`${c.from}\` → \`${c.to}\``);
+            lines.push("");
+        }
+    } else {
+        lines.push("_None._");
+        lines.push("");
+    }
 
     fs.writeFileSync(REPORT_PATH, lines.join("\n"));
     console.log(`Wrote change report to ${REPORT_PATH}`);
