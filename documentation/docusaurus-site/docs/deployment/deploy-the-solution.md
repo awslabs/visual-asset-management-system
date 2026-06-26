@@ -74,6 +74,16 @@ You must set the `AWS_REGION` environment variable when bootstrapping AWS GovClo
 
 Replace `ACCOUNT_ID` with your 12-digit AWS account ID and `REGION` with your target deployment Region.
 
+:::warning[Importing an external VPC]
+If you are importing an existing VPC by setting `app.useGlobalVpc.optionalExternalVpcId` in `config.json`, bootstrap also synthesizes the app and will fail with VPC or subnet lookup errors unless the `loadContextIgnoreVPCStacks` flag is set. Set it either as a context flag on the bootstrap command or as `env.loadContextIgnoreVPCStacks: true` in `config.json`:
+
+```bash
+cdk bootstrap aws://ACCOUNT_ID/REGION --context loadContextIgnoreVPCStacks=true
+```
+
+See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deployment that follows.
+:::
+
 ## Step 5: Configure the deployment
 
 Edit the configuration file at `infra/config/config.json` to set your deployment parameters. Template files are provided as starting points:

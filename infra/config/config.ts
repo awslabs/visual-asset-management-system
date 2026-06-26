@@ -373,10 +373,29 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    if (config.app.addons.useGarnetFramework == undefined) {
+        config.app.addons.useGarnetFramework = {
+            enabled: false,
+            garnetApiEndpoint: "",
+            garnetApiToken: "",
+            garnetIngestionQueueSqsUrl: "",
+        };
+    }
     if (config.app.addons.useGarnetFramework.enabled == undefined) {
         config.app.addons.useGarnetFramework.enabled = false;
     }
 
+    if (config.app.addons.usePhysnaSync == undefined) {
+        config.app.addons.usePhysnaSync = {
+            enabled: false,
+            tenantId: "",
+            apiBaseEndpoint: "https://app-api.physna.com/v3/",
+            authTokenEndpoint: "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
+            authType: "cognito",
+            clientId: "",
+            clientSecret: "",
+        };
+    }
     if (config.app.addons.usePhysnaSync.enabled == undefined) {
         config.app.addons.usePhysnaSync.enabled = false;
     }

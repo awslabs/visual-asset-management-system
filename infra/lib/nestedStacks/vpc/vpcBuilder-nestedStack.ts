@@ -63,13 +63,16 @@ export class VPCBuilderNestedStack extends NestedStack {
                 vpcId: props.config.app.useGlobalVpc.optionalExternalVpcId.trim(),
             });
 
-            //Get subnet IDs provided
-            const subnetPrivateIds =
-                props.config.app.useGlobalVpc.optionalExternalPrivateSubnetIds.split(",");
-            const subnetIsolatedIds =
-                props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds.split(",");
-            const subnetPublicIds =
-                props.config.app.useGlobalVpc.optionalExternalPublicSubnetIds.split(",");
+            //Get subnet IDs provided (treat null/undefined as an empty string so split() never throws)
+            const subnetPrivateIds = (
+                props.config.app.useGlobalVpc.optionalExternalPrivateSubnetIds || ""
+            ).split(",");
+            const subnetIsolatedIds = (
+                props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds || ""
+            ).split(",");
+            const subnetPublicIds = (
+                props.config.app.useGlobalVpc.optionalExternalPublicSubnetIds || ""
+            ).split(",");
 
             //(Should run after CDK context is loaded) Resolve Subnets, Check if exists , and check for errors
             if (!props.config.env.loadContextIgnoreVPCStacks) {

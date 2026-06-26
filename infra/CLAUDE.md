@@ -276,14 +276,15 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 
 ### Key Constants (config/config.ts)
 
-| Constant                          | Value                                     |
-| --------------------------------- | ----------------------------------------- |
-| `VAMS_VERSION`                    | `"2.X.0"`                                 |
-| `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                     |
-| `LAMBDA_MEMORY_SIZE`              | `5308`                                    |
-| `OPENSEARCH_VERSION`              | `OPENSEARCH_2_7`                          |
-| `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]` |
+| Constant                          | Value                                                                                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `VAMS_VERSION`                    | `"2.X.0"`                                                                                                                                                                      |
+| `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                                                                                                                                                          |
+| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                                                                                                                                                          |
+| `LAMBDA_MEMORY_SIZE`              | `5308`                                                                                                                                                                         |
+| `OPENSEARCH_VERSION`              | `OPENSEARCH_3_5` (standard partitions)                                                                                                                                         |
+| `OPENSEARCH_VERSION_EUSOVEREIGN`  | `OPENSEARCH_2_19` (AWS European Sovereign Cloud `aws-eusc`; OpenSearch 3.x not yet supported there). The provisioned construct selects this when `Partition() === "aws-eusc"`. |
+| `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]`                                                                                                                                      |
 
 ### ConfigPublic Interface
 
