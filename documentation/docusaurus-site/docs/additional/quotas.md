@@ -71,15 +71,15 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 
 ### Amazon OpenSearch
 
-| Parameter                 | Serverless         | Provisioned                                |
-| ------------------------- | ------------------ | ------------------------------------------ |
-| Index OCUs (default)      | 2 index + 2 search | N/A                                        |
-| Data node instance type   | N/A                | Configurable (default: `r6g.large.search`) |
-| Master node instance type | N/A                | Configurable (default: `r6g.large.search`) |
-| EBS volume size           | N/A                | Configurable (default: 240 GB per node)    |
-| Data nodes                | N/A                | 3 (requires 3-AZ VPC)                      |
-| Master nodes              | N/A                | 3                                          |
-| Engine version            | OpenSearch 2.7     | OpenSearch 2.7                             |
+| Parameter                 | Serverless         | Provisioned                                                                                         |
+| ------------------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
+| Index OCUs (default)      | 2 index + 2 search | N/A                                                                                                 |
+| Data node instance type   | N/A                | Configurable (default: `r7g.large.search`)                                                          |
+| Master node instance type | N/A                | Configurable (default: `r7g.large.search`)                                                          |
+| EBS volume size           | N/A                | Configurable (default: 120 GB per node)                                                             |
+| Data nodes                | N/A                | One per Availability Zone (2 or 3)                                                                  |
+| Master nodes              | N/A                | 3                                                                                                   |
+| Engine version            | Managed by AWS     | OpenSearch 3.x (OpenSearch 2.x in the AWS European Sovereign Cloud, which does not yet support 3.x) |
 
 ---
 

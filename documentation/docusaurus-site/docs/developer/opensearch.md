@@ -175,7 +175,9 @@ A provisioned Amazon OpenSearch Service domain offers dedicated capacity and cus
 
 ### Setup and availability zones
 
-The domain runs the engine version pinned in `config.ts` (`OPENSEARCH_VERSION`). The Availability Zone count is set by `app.openSearch.useProvisioned.availabilityZoneCount` (`2` or `3`, default `2`), with one data node per zone:
+The domain runs the engine version pinned in `config.ts`. The version is selected by partition: most partitions (commercial AWS, AWS GovCloud) use `OPENSEARCH_VERSION` (OpenSearch 3.x), while the **AWS European Sovereign Cloud** (partition `aws-eusc`, Region `eusc-de-east-1`) uses `OPENSEARCH_VERSION_EUSOVEREIGN` (OpenSearch 2.x) because OpenSearch 3.x is not yet supported there. The selection is automatic and requires no configuration.
+
+The Availability Zone count is set by `app.openSearch.useProvisioned.availabilityZoneCount` (`2` or `3`, default `2`), with one data node per zone:
 
 -   At **2 AZs**, the domain runs zone-aware **without** Standby (two data nodes, a single copy of each index).
 -   At **3 AZs**, the domain runs as **Multi-AZ with Standby** (three data nodes, and the indexes are created with two replicas so each has three copies, which Standby requires).
@@ -195,7 +197,7 @@ The shard count and the replica count are **fixed at index creation**. Changing 
 -   **VPC required:** a provisioned domain runs in the VPC; `app.useGlobalVpc.enabled` must be `true`.
 -   **3-AZ Standby must be created fresh:** switching an existing 2-AZ domain to `availabilityZoneCount: 3` in place is rejected by the service. To move to 3-AZ Standby, deploy with OpenSearch disabled to remove the domain, then re-enable with `availabilityZoneCount: 3`, then reindex.
 -   **Fragile in-place updates:** domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the CloudFormation custom-resource timeout. A major engine-version upgrade may require deploying with OpenSearch disabled, then re-enabling.
--   **Service-linked role propagation:** first-time deploys may fail with a service-linked-role error; wait a few minutes and redeploy.
+-   **Service-linked role:** a provisioned domain in a VPC requires the `AWSServiceRoleForAmazonOpenSearchService` service-linked role. VAMS creates it idempotently during deployment (created if missing, left unchanged if present), so the _"you must enable a service-linked role"_ error should no longer require a manual retry. The role is account-wide and is not removed on stack teardown.
 
 ## Disabling OpenSearch
 

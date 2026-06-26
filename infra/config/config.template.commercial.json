@@ -55,8 +55,8 @@
                 "enabled": false,
                 "availabilityZoneCount": 2,
                 "numberOfShards": 1,
-                "dataNodeInstanceType": "r6g.large.search",
-                "masterNodeInstanceType": "r6g.large.search",
+                "dataNodeInstanceType": "r7g.large.search",
+                "masterNodeInstanceType": "r7g.large.search",
                 "ebsInstanceNodeSizeGb": 120
             },
             "reindexOnCdkDeploy": false

@@ -22,6 +22,8 @@ export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
 export const LAMBDA_MEMORY_SIZE = 5308;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_3_5;
+export const OPENSEARCH_VERSION_EUSOVEREIGN =
+    cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_19;
 export const CODEBUILD_BUILD_IMAGE = codebuild.LinuxBuildImage.STANDARD_7_0;
 
 export const STACK_WAF_DESCRIPTION =
