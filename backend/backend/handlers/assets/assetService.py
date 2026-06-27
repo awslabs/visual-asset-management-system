@@ -23,6 +23,7 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from common.s3 import is_object_version_archived, list_all_object_versions
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
@@ -204,47 +205,12 @@ def enhance_asset_with_version_info(asset):
 #######################
 
 def is_file_archived(bucket, key, version_id=None):
-    """Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    try:
-        if version_id:
-            # For specific version, try head_object with version_id
-            # If it's a delete marker, head_object will return 405 Method Not Allowed
-            try:
-                s3.head_object(Bucket=bucket, Key=key, VersionId=version_id)
-                return False  # Version exists and is not a delete marker
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'MethodNotAllowed':
-                    # This version is a delete marker
-                    return True
-                elif e.response['Error']['Code'] == 'NoSuchKey':
-                    # Version doesn't exist
-                    return False
-                else:
-                    raise
-        else:
-            # Check if current version is a delete marker
-            try:
-                response = s3.head_object(Bucket=bucket, Key=key)
-                # If head_object succeeds, check if it's a delete marker
-                return response.get('DeleteMarker', False)
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist at all (no versions)
-                    return False
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def mark_file_as_archived(key, bucket):
     """Mark an S3 object as archived by creating a delete marker
@@ -463,11 +429,16 @@ def unarchive_file_preview(location, bucket):
     logger.info(f"Unarchiving item: {bucket}:{key}")
 
     try:
-        # List versions to find the delete marker
-        response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
-        
+        # Page through all versions/markers for this prefix and remove the delete
+        # marker that is the current (IsLatest) version of exactly this key. The
+        # prior MaxKeys=1 lookup could miss the marker: list_object_versions caps
+        # total returned entries across Versions+DeleteMarkers, and the prefix can
+        # match sibling keys, so a single entry is not guaranteed to be this key's
+        # delete marker.
+        versions_response = list_all_object_versions(bucket, key, client=s3)
+
         # Remove delete marker if it exists
-        for delete_marker in response.get('DeleteMarkers', []):
+        for delete_marker in versions_response.get('DeleteMarkers', []):
             if delete_marker.get('IsLatest') and delete_marker['Key'] == key:
                 logger.info(f"Removing delete marker for {key}")
                 s3.delete_object(
@@ -477,7 +448,7 @@ def unarchive_file_preview(location, bucket):
                 )
     except Exception as e:
         logger.exception(f"Error unarchiving file {key}: {e}")
-    
+
     return
 
 def delete_s3_objects(prefix, bucket):
@@ -802,8 +773,12 @@ def get_assets(databaseId, query_params, showArchived=False):
     # Return the combined results
     result = {"Items": all_items}
     if next_token:
+        # More assets remain; expose a truncation indicator so callers that do
+        # not follow NextToken can detect the result is incomplete.
         result["NextToken"] = next_token
-        
+        result["truncated"] = True
+        logger.warning("Asset listing truncated; more results available via NextToken")
+
     return result
 
 def get_all_assets(query_params, showArchived=False):
@@ -874,12 +849,16 @@ def get_all_assets(query_params, showArchived=False):
         
         # Build response with nextToken
         result = {'Items': items}
-        
+
         # Return LastEvaluatedKey as nextToken if present (base64 encoded)
         if 'LastEvaluatedKey' in response:
+            # More assets remain; expose a truncation indicator so callers that do
+            # not follow NextToken can detect the result is incomplete.
             json_str = json.dumps(response['LastEvaluatedKey'])
             result['NextToken'] = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-            
+            result['truncated'] = True
+            logger.warning("Asset listing truncated; more results available via NextToken")
+
         return result
         
     except Exception as e:

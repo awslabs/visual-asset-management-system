@@ -14,7 +14,7 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
-from common.s3 import validateS3AssetExtensionsAndContentType
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -45,6 +45,11 @@ logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+# Sample size for asset-type detection. This is a best-effort visibility
+# classification (empty vs. single-file vs. folder), not a correctness-critical
+# read, so it is intentionally capped rather than scanning the entire asset —
+# paging every object of a very large asset would add latency to the upload path.
+ASSET_TYPE_DETECTION_SAMPLE_SIZE = 1000
 allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
@@ -413,15 +418,12 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         import os
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
-        
-        # List all objects with the specified prefix
-        response = s3.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-        )
-        
-        # Get the contents and filter out folder markers (objects ending with '/')
-        contents = response.get('Contents', [])
+
+        # Sample objects under the prefix to classify the asset (empty / single
+        # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
+        # best-effort visibility classification, so a sample is sufficient and
+        # avoids adding upload latency by scanning a very large asset in full.
+        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
         
         # Filter out archived files and count non-archived files
         non_archived_files = []
@@ -481,51 +483,12 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         return None
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    Determine if file is archived based on S3 delete markers.
-    Simplified version from uploadFile.py for async processing.
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
-    """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def send_subscription_email(database_id: str, asset_id: str):
     """

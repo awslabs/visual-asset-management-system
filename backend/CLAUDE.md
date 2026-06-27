@@ -107,40 +107,40 @@ backend/
 
 ## Critical Rules
 
-1. **ALWAYS use Pydantic v1 syntax.** This project uses `pydantic==1.10.7`. Never use
-   Pydantic v2 APIs (`model_validate`, `model_dump`, `ConfigDict`). Use `@root_validator`,
-   `@validator`, `Field(...)`, `extra='ignore'`.
+1.  **ALWAYS use Pydantic v1 syntax.** This project uses `pydantic==1.10.7`. Never use
+    Pydantic v2 APIs (`model_validate`, `model_dump`, `ConfigDict`). Use `@root_validator`,
+    `@validator`, `Field(...)`, `extra='ignore'`.
 
-2. **ALWAYS import BaseModel from aws_lambda_powertools**, not from pydantic directly.
+2.  **ALWAYS import BaseModel from aws_lambda_powertools**, not from pydantic directly.
 
     ```python
     from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
     ```
 
-3. **ALWAYS use the validate() dispatcher** from `common.validators` for complex validation
-   in `@root_validator` methods. Never write raw regex validation inline.
+3.  **ALWAYS use the validate() dispatcher** from `common.validators` for complex validation
+    in `@root_validator` methods. Never write raw regex validation inline.
 
-4. **ALWAYS enforce two-level authorization**: `enforceAPI()` for route access, then
-   `enforce()` for object-level access inside method handlers.
+4.  **ALWAYS enforce two-level authorization**: `enforceAPI()` for route access, then
+    `enforce()` for object-level access inside method handlers.
 
-5. **ALWAYS use safeLogger** from `customLogging.logger`. Never use `print()` or raw
-   `logging.getLogger()`.
+5.  **ALWAYS use safeLogger** from `customLogging.logger`. Never use `print()` or raw
+    `logging.getLogger()`.
 
-6. **ALWAYS wrap AWS clients with retry config** at module level:
+6.  **ALWAYS wrap AWS clients with retry config** at module level:
 
     ```python
     retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
     ```
 
-7. **ALWAYS raise VAMSGeneralErrorResponse** for business logic errors. Never return
-   raw dicts with status codes.
+7.  **ALWAYS raise VAMSGeneralErrorResponse** for business logic errors. Never return
+    raw dicts with status codes.
 
-8. **ALWAYS use `extra='ignore'`** on all Pydantic model classes to silently drop
-   unexpected fields.
+8.  **ALWAYS use `extra='ignore'`** on all Pydantic model classes to silently drop
+    unexpected fields.
 
-9. **NEVER log sensitive data.** The safeLogger auto-redacts `authorization`,
-   `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
-   Do not circumvent this.
+9.  **NEVER log sensitive data.** The safeLogger auto-redacts `authorization`,
+    `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+    Do not circumvent this.
 
 10. **NEVER use `os.environ["KEY"]` outside of the module-level try/except block.**
     All environment variable loading happens once at cold start.
@@ -188,6 +188,37 @@ backend/
     file_path = "/" + raw_path.lstrip("/")
     composite_key = f"{database_id}:{asset_id}:{file_path}"
     ```
+
+14. **NEVER read only the first page of an S3 or DynamoDB listing when the full
+    set is needed.** S3 `list_object_versions` / `list_objects_v2` and DynamoDB
+    queries cap a single call (`MaxKeys`, `Limit`, one page). When the result must
+    be complete, page to exhaustion. For S3 versions/objects use the shared helpers
+    `common.s3.list_all_object_versions()` / `list_all_objects()` (page-size
+    constants `S3_VERSIONS_PAGE_SIZE` / `S3_OBJECTS_PAGE_SIZE`; both accept an
+    optional cap — `max_keys` / `max_objects` — for best-effort sampling). A bare
+    `list_object_versions(..., MaxKeys=N)` silently drops versions beyond `N`
+    (wrong archive status, truncated history). Existence-only checks
+    (`MaxKeys=1`) are the allowed exception.
+
+        **To check whether a single key (or a specific `versionId`) is archived, do NOT
+        list versions** — use `common.s3.is_object_version_archived(bucket, key,
+
+    version_id, client=...)`. It issues one `HeadObject`(a delete-marker version
+returns 405 MethodNotAllowed; a live version returns 200; a missing version
+returns 404), which is O(1) regardless of how many versions the key has. All
+handler-local`is_file_archived` helpers must delegate to it rather than
+    re-implementing a version scan.
+
+15. **Paginate large GET responses; never return an unbounded in-memory set.**
+    A response that can exceed the AWS Lambda synchronous response limit (6 MB)
+    must page externally: accept `maxItems`/`pageSize`/`startingToken` and return
+    `NextToken`, defaulting the sizes to named constants (mirror the asset-listing
+    and metadata-listing handlers). Do not use DynamoDB `paginator.build_full_result()`
+    to accumulate every record for a user-facing GET. When response ordering or
+    enrichment requires the full set first (e.g. metadata schema injection/ordering),
+    enrich the full set, then offset-slice to the page. Limits that exist to bound
+    response size or protect Lambda runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`,
+    worker-pool caps) stay as named constants with a rationale comment — keep them.
 
 ---
 

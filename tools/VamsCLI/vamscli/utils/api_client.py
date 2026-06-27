@@ -11,7 +11,7 @@ from ..constants import (
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
     API_DELETE_AUXILIARY_PREVIEW, API_DELETE_FILE, API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE,
-    API_ARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
+    API_ARCHIVE_ASSET, API_UNARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
     API_TAGS, API_TAG_DELETE, API_TAG_TYPES, API_TAG_TYPE_DELETE,
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_VERSION_BY_ID, API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
@@ -29,7 +29,7 @@ from .exceptions import (
     APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError, InvalidAssetDataError, FileUploadError,
-    AssetAlreadyArchivedError, AssetDeletionError, TagNotFoundError, TagAlreadyExistsError,
+    AssetAlreadyArchivedError, AssetNotArchivedError, AssetDeletionError, TagNotFoundError, TagAlreadyExistsError,
     TagTypeNotFoundError, TagTypeAlreadyExistsError, TagTypeInUseError, 
     InvalidTagDataError, InvalidTagTypeDataError, AssetVersionError, AssetVersionNotFoundError,
     AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError, AssetVersionArchiveError,
@@ -1213,11 +1213,13 @@ class APIClient:
         """
         try:
             endpoint = API_ARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
-            data = {}
+            # Always send a body — the archive endpoint requires a non-empty request
+            # body. confirmArchive signals intent; reason is optional.
+            data = {'confirmArchive': True}
             if reason:
                 data['reason'] = reason
-                
-            response = self.delete(endpoint, include_auth=True, json=data if data else None)
+
+            response = self.delete(endpoint, include_auth=True, json=data)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1246,6 +1248,63 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to archive asset: {e}")
+
+    def unarchive_asset(self, database_id: str, asset_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Unarchive an asset (restore from soft delete) using the
+        /database/{databaseId}/assets/{assetId}/unarchiveAsset PUT endpoint.
+
+        Restores the asset's files and its preview by removing their S3 delete markers.
+
+        Args:
+            database_id: Database ID (with or without the #deleted suffix)
+            asset_id: Asset ID
+            reason: Optional reason for unarchiving the asset
+
+        Returns:
+            API response data with operation result
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            AssetNotArchivedError: When the asset is not archived
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_UNARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            data = {'confirmUnarchive': True}
+            if reason:
+                data['reason'] = reason
+
+            response = self.put(endpoint, data=data)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'not archived' in error_message.lower() or 'not in a valid archived state' in error_message.lower():
+                    raise AssetNotArchivedError(f"Asset is not archived: {error_message}")
+                else:
+                    raise InvalidAssetDataError(f"Invalid unarchive operation: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Asset unarchive failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to unarchive asset: {e}")
 
     def delete_asset_permanent(self, database_id: str, asset_id: str, reason: Optional[str] = None, confirm: bool = False) -> Dict[str, Any]:
         """

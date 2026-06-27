@@ -118,6 +118,11 @@ class AssetAlreadyArchivedError(AssetError):
     pass
 
 
+class AssetNotArchivedError(AssetError):
+    """Raised when trying to unarchive an asset that is not archived"""
+    pass
+
+
 class AssetDeletionError(AssetError):
     """Raised when asset deletion operations fail"""
     pass

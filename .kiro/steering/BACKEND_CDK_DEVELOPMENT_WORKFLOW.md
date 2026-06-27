@@ -175,6 +175,37 @@ One folder per domain. The current domains:
 
 ### **Rule 1: Follow Gold Standard Implementation (assetService.py)**
 
+### **Rule 2: Page S3 and DynamoDB listings to exhaustion when the full set is needed**
+
+S3 `list_object_versions` / `list_objects_v2` and DynamoDB queries cap a single
+call (`MaxKeys`, `Limit`, one page). When the result must be complete, page to
+exhaustion — a bare `list_object_versions(..., MaxKeys=N)` silently drops versions
+beyond `N`, producing wrong archive status and truncated history. For S3
+versions/objects use the shared helpers `common.s3.list_all_object_versions()` /
+`list_all_objects()` (page-size constants `S3_VERSIONS_PAGE_SIZE` /
+`S3_OBJECTS_PAGE_SIZE`; both accept an optional `max_keys` / `max_objects` cap for
+best-effort sampling). Existence-only checks (`MaxKeys=1`) are the allowed
+exception.
+
+To check whether a single key or a specific `versionId` is archived, do **not**
+list versions — use `common.s3.is_object_version_archived()`, which issues one
+`HeadObject` (405 MethodNotAllowed = delete marker, 200 = live, 404 = missing) and
+is O(1) regardless of version count. Handler-local `is_file_archived` helpers must
+delegate to it.
+
+### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
+
+A response that can exceed the AWS Lambda synchronous response limit (6 MB) must
+page externally: accept `maxItems`/`pageSize`/`startingToken` and return
+`NextToken`, defaulting the sizes to named constants (mirror the asset-listing and
+metadata-listing handlers). Do not use DynamoDB `paginator.build_full_result()` to
+accumulate every record for a user-facing GET. When ordering or enrichment requires
+the full set first (e.g. metadata schema injection/ordering), enrich the full set,
+then offset-slice to the page. Limits that bound response size or protect Lambda
+runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
+constants with a rationale comment — keep them. CLI and web clients that consume a
+paginated GET must follow `NextToken` to retrieve the complete set.
+
 ## 🔐 **Security Guidelines for Exception Handling**
 
 ### **Critical Security Rule: Secure Exception Handling**

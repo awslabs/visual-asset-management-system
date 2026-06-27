@@ -18,7 +18,7 @@ from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ..utils.exceptions import (
     AssetNotFoundError, AssetAlreadyExistsError, DatabaseNotFoundError,
-    InvalidAssetDataError, AssetAlreadyArchivedError, AssetDeletionError, 
+    InvalidAssetDataError, AssetAlreadyArchivedError, AssetNotArchivedError, AssetDeletionError,
     FileDownloadError, DownloadError, AssetDownloadError, PreviewNotFoundError,
     AssetNotDistributableError, DownloadTreeError, APIError
 )
@@ -401,6 +401,97 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
             json_output,
             error_type="Asset Already Archived",
             helpful_message=f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to view the archived asset."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+
+
+@assets.command()
+@click.argument('asset_id')
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('--reason', help='Reason for unarchiving the asset')
+@click.option('--json-input', type=click.File('r'), help='JSON file with parameters')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def unarchive(ctx: click.Context, asset_id: str, database: str, reason: Optional[str], json_input: Optional[click.File], json_output: bool):
+    """
+    Unarchive an asset (restore from soft delete).
+
+    This command restores a previously archived asset to active state, including
+    removing the S3 delete markers on its files and its preview so it appears in
+    normal listings again.
+
+    Examples:
+        vamscli assets unarchive my-asset -d my-database
+        vamscli assets unarchive my-asset -d my-database --reason "Restoring for review"
+        vamscli assets unarchive my-asset -d my-database --json-input unarchive-params.json
+        vamscli assets unarchive my-asset -d my-database --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Handle JSON input
+        if json_input:
+            try:
+                json_data = json.load(json_input)
+                # Override command line parameters with JSON data
+                database = json_data.get('databaseId', database)
+                asset_id = json_data.get('assetId', asset_id)
+                reason = json_data.get('reason', reason)
+            except json.JSONDecodeError as e:
+                raise click.BadParameter(f"Invalid JSON in input file: {e}")
+
+        output_status(f"Unarchiving asset '{asset_id}' in database '{database}'...", json_output)
+
+        # Unarchive the asset
+        result = api_client.unarchive_asset(database, asset_id, reason)
+
+        def format_unarchive_result(data):
+            """Format unarchive result for CLI display."""
+            lines = []
+            lines.append(f"  Asset ID: {asset_id}")
+            lines.append(f"  Database: {database}")
+            lines.append(f"  Operation: {data.get('operation', 'unarchive')}")
+            lines.append(f"  Timestamp: {data.get('timestamp', 'N/A')}")
+            lines.append(f"  Message: {data.get('message', 'Asset unarchived')}")
+            lines.append("")
+            lines.append("The asset has been restored to active state and will appear in normal listings.")
+            return '\n'.join(lines)
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Asset unarchived successfully!",
+            cli_formatter=format_unarchive_result
+        )
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset_id} --show-archived' to check if the archived asset exists."
+        )
+        raise click.ClickException(str(e))
+    except AssetNotArchivedError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Archived",
+            helpful_message=f"Only archived assets can be unarchived. Use 'vamscli assets get -d {database} {asset_id}' to check the asset's state."
         )
         raise click.ClickException(str(e))
     except DatabaseNotFoundError as e:

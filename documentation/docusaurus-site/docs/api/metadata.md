@@ -46,7 +46,7 @@ Asset-level metadata is attached to an asset within a database.
 
 `GET /database/{databaseId}/assets/{assetId}/metadata`
 
-Retrieves all metadata items for the specified asset.
+Retrieves metadata items for the specified asset, one page at a time. When more records exist than `pageSize`, the response includes a `NextToken`; pass it as `startingToken` to retrieve the next page. Records are ordered consistently across pages.
 
 **Request Parameters:**
 

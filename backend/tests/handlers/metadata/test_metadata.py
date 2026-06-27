@@ -10,11 +10,16 @@ target the current handler: Tier-1 API authorization, route dispatch, and
 route-not-found behavior.
 """
 
+import base64
 import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.backend.handlers.metadata.metadataService import lambda_handler
+from backend.backend.handlers.metadata.metadataService import (
+    lambda_handler,
+    paginate_metadata_records,
+    DEFAULT_METADATA_PAGE_SIZE,
+)
 
 
 def _event(method, path, body=None, path_params=None):
@@ -126,3 +131,52 @@ def test_database_metadata_get_routes_to_handler(mock_enforcer, mock_claims, moc
 
     assert response["statusCode"] == 200
     mock_handle_get.assert_called_once_with(event)
+
+
+class TestPaginateMetadataRecords:
+    """Offset-pagination of the enriched, ordered metadata list (A7)."""
+
+    def test_single_page_when_under_page_size(self):
+        records = list(range(5))
+        page, next_token = paginate_metadata_records(records, {"pageSize": 10})
+        assert page == records
+        assert next_token is None
+
+    def test_first_page_emits_next_token(self):
+        records = list(range(25))
+        page, next_token = paginate_metadata_records(records, {"pageSize": 10})
+        assert page == list(range(10))
+        assert next_token is not None
+        # Token decodes to the next offset
+        assert int(base64.b64decode(next_token).decode("utf-8")) == 10
+
+    def test_following_token_returns_next_page(self):
+        records = list(range(25))
+        _, token1 = paginate_metadata_records(records, {"pageSize": 10})
+        page2, token2 = paginate_metadata_records(records, {"pageSize": 10, "startingToken": token1})
+        assert page2 == list(range(10, 20))
+        assert int(base64.b64decode(token2).decode("utf-8")) == 20
+
+    def test_last_page_has_no_next_token(self):
+        records = list(range(25))
+        page, token = paginate_metadata_records(records, {"pageSize": 10, "startingToken": base64.b64encode(b"20").decode("utf-8")})
+        assert page == list(range(20, 25))
+        assert token is None
+
+    def test_invalid_token_serves_first_page(self):
+        records = list(range(5))
+        page, token = paginate_metadata_records(records, {"pageSize": 10, "startingToken": "not-base64!!"})
+        assert page == records
+        assert token is None
+
+    def test_defaults_when_no_params(self):
+        records = list(range(3))
+        page, token = paginate_metadata_records(records, {})
+        assert page == records
+        assert token is None
+
+    def test_maxitems_used_when_no_pagesize(self):
+        records = list(range(25))
+        page, token = paginate_metadata_records(records, {"maxItems": 5})
+        assert page == list(range(5))
+        assert int(base64.b64decode(token).decode("utf-8")) == 5

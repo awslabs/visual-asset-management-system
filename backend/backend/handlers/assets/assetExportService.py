@@ -89,6 +89,8 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # Constants
 COMPRESSION_THRESHOLD = 102400  # 100KB
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
+# Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
+MAX_PARALLEL_EXPORT_WORKERS = 10
 
 #######################
 # Utility Functions
@@ -909,7 +911,7 @@ def process_asset_batch(
             return None
 
     if authorized_assets:
-        max_workers = min(10, len(authorized_assets))
+        max_workers = min(MAX_PARALLEL_EXPORT_WORKERS, len(authorized_assets))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(_process_single_asset, asset_tuple): asset_tuple

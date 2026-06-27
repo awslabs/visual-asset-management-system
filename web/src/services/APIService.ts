@@ -1632,6 +1632,61 @@ export const updateDatabase = async ({
 };
 
 /**
+ * Fetches every page of a paged metadata GET and aggregates the records.
+ *
+ * The metadata GET APIs return one page of records plus an optional NextToken.
+ * This helper follows NextToken to completion so callers receive the full
+ * metadata set, then normalizes the various response shapes the metadata
+ * endpoints can return into a single `{ metadata: [...] }` object.
+ *
+ * @param {string} endpoint - API path (relative to the apiClient base).
+ * @param {Object} baseQuery - Query string parameters to send on every request.
+ * @returns {Promise<{ metadata: any[], message?: string }>}
+ */
+const fetchAllMetadataPages = async (endpoint: string, baseQuery: Record<string, any> = {}) => {
+    let allMetadata: any[] = [];
+    let nextToken: string | null = null;
+    let lastMessage: any;
+
+    do {
+        const queryStringParameters: Record<string, any> = {
+            ...baseQuery,
+            ...(nextToken ? { startingToken: nextToken } : {}),
+        };
+        const response = await apiClient.get(endpoint, { queryStringParameters });
+
+        // Normalize the response into a payload object that holds `metadata`.
+        let payload: any = null;
+        if (response && typeof response === "object") {
+            if (Array.isArray(response.metadata)) {
+                payload = response;
+            } else if (
+                response.message &&
+                typeof response.message === "object" &&
+                Array.isArray(response.message.metadata)
+            ) {
+                payload = response.message;
+            } else if (response.message && typeof response.message === "string") {
+                return { metadata: [], message: response.message };
+            }
+        } else if (typeof response === "string") {
+            return { metadata: [], message: response };
+        }
+
+        if (!payload) {
+            return { metadata: [], message: "Unknown response format" };
+        }
+
+        allMetadata = allMetadata.concat(payload.metadata || []);
+        // Preserve any non-metadata fields (e.g. restrictMetadataOutsideSchemas) from the last page.
+        lastMessage = payload;
+        nextToken = payload.NextToken || null;
+    } while (nextToken);
+
+    return { ...lastMessage, metadata: allMetadata, NextToken: undefined };
+};
+
+/**
  * Fetches metadata for an asset link
  * @param {Object} params - Parameters object
  * @param {string} params.assetLinkId - Asset link ID
@@ -1643,38 +1698,8 @@ export const fetchAssetLinkMetadata = async ({ assetLinkId }) => {
             return false;
         }
 
-        const response = await apiClient.get(`asset-links/${assetLinkId}/metadata`, {});
-        console.log("fetchAssetLinkMetadata raw response:", response);
-
-        // Handle different response formats
-        if (response && typeof response === "object") {
-            // If response has metadata array directly
-            if (Array.isArray(response.metadata)) {
-                return response;
-            }
-            // If response.message contains the data
-            else if (
-                response.message &&
-                typeof response.message === "object" &&
-                Array.isArray(response.message.metadata)
-            ) {
-                return response.message;
-            }
-            // If response.message is just a string (like "Success"), return empty metadata structure
-            else if (response.message && typeof response.message === "string") {
-                return { metadata: [], message: response.message };
-            }
-            // Return response as-is for other object formats
-            else {
-                return response;
-            }
-        }
-        // If response is a string (like "Success"), return empty metadata structure
-        else if (typeof response === "string") {
-            return { metadata: [], message: response };
-        }
-
-        return response;
+        // Follow NextToken to aggregate all pages of metadata.
+        return await fetchAllMetadataPages(`asset-links/${assetLinkId}/metadata`);
     } catch (error) {
         console.log("Error fetching asset link metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
@@ -2185,30 +2210,8 @@ export const fetchAssetMetadata = async ({ databaseId, assetId }) => {
             return { metadata: [], message: "Missing required parameters" };
         }
 
-        const response = await apiClient.get(
-            `database/${databaseId}/assets/${assetId}/metadata`,
-            {}
-        );
-        console.log("fetchAssetMetadata raw response:", response);
-
-        // Handle different response formats
-        if (response && typeof response === "object") {
-            if (Array.isArray(response.metadata)) {
-                return response;
-            } else if (
-                response.message &&
-                typeof response.message === "object" &&
-                Array.isArray(response.message.metadata)
-            ) {
-                return response.message;
-            } else if (response.message && typeof response.message === "string") {
-                return { metadata: [], message: response.message };
-            }
-        } else if (typeof response === "string") {
-            return { metadata: [], message: response };
-        }
-
-        return { metadata: [], message: "Unknown response format" };
+        // Follow NextToken to aggregate all pages of metadata.
+        return await fetchAllMetadataPages(`database/${databaseId}/assets/${assetId}/metadata`);
     } catch (error) {
         console.log("Error fetching asset metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
@@ -2314,33 +2317,11 @@ export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type })
             return { metadata: [], message: "Missing required parameters" };
         }
 
-        const response = await apiClient.get(
+        // Follow NextToken to aggregate all pages of metadata.
+        return await fetchAllMetadataPages(
             `database/${databaseId}/assets/${assetId}/metadata/file`,
-            {
-                queryStringParameters: { filePath, type },
-            }
+            { filePath, type }
         );
-
-        console.log("fetchFileMetadata raw response:", response);
-
-        // Handle different response formats
-        if (response && typeof response === "object") {
-            if (Array.isArray(response.metadata)) {
-                return response;
-            } else if (
-                response.message &&
-                typeof response.message === "object" &&
-                Array.isArray(response.message.metadata)
-            ) {
-                return response.message;
-            } else if (response.message && typeof response.message === "string") {
-                return { metadata: [], message: response.message };
-            }
-        } else if (typeof response === "string") {
-            return { metadata: [], message: response };
-        }
-
-        return { metadata: [], message: "Unknown response format" };
     } catch (error) {
         console.log("Error fetching file metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
@@ -2460,27 +2441,8 @@ export const fetchDatabaseMetadata = async ({ databaseId }) => {
             return { metadata: [], message: "Missing required parameters" };
         }
 
-        const response = await apiClient.get(`database/${databaseId}/metadata`, {});
-        console.log("fetchDatabaseMetadata raw response:", response);
-
-        // Handle different response formats
-        if (response && typeof response === "object") {
-            if (Array.isArray(response.metadata)) {
-                return response;
-            } else if (
-                response.message &&
-                typeof response.message === "object" &&
-                Array.isArray(response.message.metadata)
-            ) {
-                return response.message;
-            } else if (response.message && typeof response.message === "string") {
-                return { metadata: [], message: response.message };
-            }
-        } else if (typeof response === "string") {
-            return { metadata: [], message: response };
-        }
-
-        return { metadata: [], message: "Unknown response format" };
+        // Follow NextToken to aggregate all pages of metadata.
+        return await fetchAllMetadataPages(`database/${databaseId}/metadata`);
     } catch (error) {
         console.log("Error fetching database metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
