@@ -34,6 +34,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
+from common.s3 import is_object_version_archived
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
@@ -200,50 +201,12 @@ def is_versioning_enabled(bucket_id: str) -> bool:
         return False
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
-    """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3_client.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3_client.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3_client.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3_client)
 
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""

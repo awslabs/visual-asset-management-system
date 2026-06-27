@@ -118,6 +118,33 @@ vamscli assets archive <ASSET_ID> [OPTIONS]
 
 ---
 
+## assets unarchive
+
+Unarchive an asset (restore from soft delete). Restores the asset's files and its preview so the asset appears in normal listings again.
+
+```bash
+vamscli assets unarchive <ASSET_ID> [OPTIONS]
+```
+
+| Option             | Type | Required | Description                         |
+| ------------------ | ---- | -------- | ----------------------------------- |
+| `ASSET_ID`         | TEXT | Yes      | Asset ID to unarchive (positional)  |
+| `-d`, `--database` | TEXT | Yes      | Database ID containing the asset    |
+| `--reason`         | TEXT | No       | Reason for unarchiving              |
+| `--json-input`     | TEXT | No       | JSON input file path or JSON string |
+| `--json-output`    | Flag | No       | Output raw JSON response            |
+
+```bash
+vamscli assets unarchive my-asset -d my-database
+vamscli assets unarchive my-asset -d my-database --reason "Restoring for review"
+```
+
+:::note
+Only archived assets can be unarchived. Use `vamscli assets get <ASSET_ID> -d <DB> --show-archived` to confirm an asset's archived state.
+:::
+
+---
+
 ## assets delete
 
 Permanently delete an asset and all associated data.

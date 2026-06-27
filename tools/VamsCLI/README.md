@@ -45,6 +45,12 @@ vamscli assets download /local/path -d my-database -a my-asset
 # Download an entire asset recursively
 vamscli assets download /local/path -d my-database -a my-asset --recursive
 
+# Archive an asset (soft delete)
+vamscli assets archive my-asset -d my-database --reason "No longer needed"
+
+# Unarchive an asset (restore from soft delete)
+vamscli assets unarchive my-asset -d my-database
+
 # Create a version
 vamscli asset-version create -d my-database -a my-asset --comment "Release v1"
 
@@ -69,7 +75,7 @@ vamscli assets --help
 | `setup`            | Configure CLI with VAMS URL                  |
 | `auth`             | Authentication and session management        |
 | `database`         | Database CRUD operations                     |
-| `assets`           | Asset management and export                  |
+| `assets`           | Asset management, archive/unarchive, export  |
 | `asset-version`    | Version management (create, archive, revert) |
 | `asset-links`      | Asset relationship management                |
 | `file`             | File upload, download, copy, move, delete    |

@@ -76,7 +76,61 @@ class TestAssetMetadataListCommand:
             
             # Verify API call
             mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 3000, None, None)
-    
+
+    def test_list_auto_paginates_all_pages(self, cli_runner, metadata_command_mocks):
+        """Without a starting token, the list command follows NextToken to aggregate all pages."""
+        with metadata_command_mocks as mocks:
+            mocks['api_client'].get_asset_metadata_v2.side_effect = [
+                {
+                    'metadata': [{
+                        'databaseId': 'test-db', 'assetId': 'test-asset',
+                        'metadataKey': 'k1', 'metadataValue': 'v1', 'metadataValueType': 'string'
+                    }],
+                    'NextToken': 'token-page-2'
+                },
+                {
+                    'metadata': [{
+                        'databaseId': 'test-db', 'assetId': 'test-asset',
+                        'metadataKey': 'k2', 'metadataValue': 'v2', 'metadataValueType': 'string'
+                    }]
+                }
+            ]
+
+            result = cli_runner.invoke(cli, ['metadata', 'asset', 'list', '-d', 'test-db', '-a', 'test-asset', '--json-output'])
+
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            # Both pages aggregated, NextToken stripped from the final result
+            assert len(data['metadata']) == 2
+            assert {m['metadataKey'] for m in data['metadata']} == {'k1', 'k2'}
+            assert 'NextToken' not in data
+            assert mocks['api_client'].get_asset_metadata_v2.call_count == 2
+            # Second call follows the NextToken from page 1
+            second_call = mocks['api_client'].get_asset_metadata_v2.call_args_list[1]
+            assert second_call.args[3] == 'token-page-2'
+
+    def test_list_with_starting_token_single_page(self, cli_runner, metadata_command_mocks):
+        """With an explicit starting token, only that single page is fetched (manual pagination)."""
+        with metadata_command_mocks as mocks:
+            mocks['api_client'].get_asset_metadata_v2.return_value = {
+                'metadata': [{
+                    'databaseId': 'test-db', 'assetId': 'test-asset',
+                    'metadataKey': 'k2', 'metadataValue': 'v2', 'metadataValueType': 'string'
+                }],
+                'NextToken': 'token-page-3'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'metadata', 'asset', 'list', '-d', 'test-db', '-a', 'test-asset',
+                '--starting-token', 'token-page-2', '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            # Single call, NextToken preserved for the caller to continue manually
+            mocks['api_client'].get_asset_metadata_v2.assert_called_once_with('test-db', 'test-asset', 3000, 'token-page-2', None)
+            data = json.loads(result.output)
+            assert data.get('NextToken') == 'token-page-3'
+
     def test_list_json_output(self, cli_runner, metadata_command_mocks):
         """Test asset metadata listing with JSON output."""
         with metadata_command_mocks as mocks:

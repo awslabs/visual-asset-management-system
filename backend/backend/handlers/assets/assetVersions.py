@@ -6,6 +6,7 @@ import boto3
 import json
 import uuid
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from boto3.dynamodb.conditions import Key
@@ -26,6 +27,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from common.dynamodb import to_update_expr
+from common.s3 import is_object_version_archived, list_all_object_versions
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
     GetAssetVersionRequestModel, GetAssetVersionsRequestModel, AssetVersionFileModel,
@@ -33,11 +35,19 @@ from models.assetsV3 import (
     AssetVersionListItemModel, AssetVersionMetadataItemModel, UpdateAssetVersionRequestModel
 )
 
+# Concurrency for parallel per-file S3 work (e.g. version revert copies). Bounds
+# Lambda thread/memory use; the client connection pool below is sized to match so
+# threads don't block waiting for a connection.
+MAX_PARALLEL_S3_WORKERS = 16
+
 retry_config = Config(
     retries={
         'max_attempts': 5,
         'mode': 'adaptive'
-    }
+    },
+    # Match the pool to the worker count so parallel S3 calls don't queue on a
+    # too-small connection pool (botocore default is 10).
+    max_pool_connections=MAX_PARALLEL_S3_WORKERS
 )
 
 # Configure AWS clients
@@ -228,47 +238,12 @@ def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     return bucket, key
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
-    """Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    try:
-        if version_id:
-            # For specific version, try head_object with version_id
-            # If it's a delete marker, head_object will return 405 Method Not Allowed
-            try:
-                s3_client.head_object(Bucket=bucket, Key=key, VersionId=version_id)
-                return False  # Version exists and is not a delete marker
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'MethodNotAllowed':
-                    # This version is a delete marker
-                    return True
-                elif e.response['Error']['Code'] == 'NoSuchKey':
-                    # Version doesn't exist
-                    return False
-                else:
-                    raise
-        else:
-            # Check if current version is a delete marker
-            try:
-                response = s3_client.head_object(Bucket=bucket, Key=key)
-                # If head_object succeeds, check if it's a delete marker
-                return response.get('DeleteMarker', False)
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist at all (no versions)
-                    return False
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3_client)
 
 def does_file_version_exist(bucket: str, key: str, version_id: str) -> bool:
     """Check if a specific file version still exists (wasn't permanently deleted)
@@ -335,70 +310,102 @@ def delete_assetAuxiliary_files(prefix):
 
 def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool = False) -> List[Dict]:
     """List all files in an S3 bucket prefix with their version information
-    
+
+    Uses a single paginated list_object_versions walk (no per-file head_object
+    calls). Live current files are always returned with isArchived=False. When
+    include_archived is True, archived keys (whose latest entry is a delete
+    marker) are additionally returned with isArchived=True and the versionId of
+    their most recent content version — this does extra in-memory grouping and
+    therefore has a longer runtime than the live-only path.
+
     Args:
         bucket: The S3 bucket name
         prefix: The S3 key prefix
-        include_archived: Whether to include archived files
-        
+        include_archived: Whether to also include archived (soft-deleted) files
+
     Returns:
         List of file dictionaries with version information
     """
     result = []
-    
+
     try:
         # Ensure prefix ends with a slash if it doesn't already
         if not prefix.endswith('/'):
             prefix = prefix + '/'
-            
-        # List all objects with the prefix
-        paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get('Contents', []):
+
+        # Use a single paginated list_object_versions walk rather than a
+        # head_object per file. list_object_versions returns VersionId + IsLatest
+        # inline, so each key's current state is derived without any per-file
+        # calls — turning ~2 calls per file into ~one paginated listing.
+        versions_data = list_all_object_versions(bucket, prefix, client=s3_client)
+        all_versions = versions_data.get('Versions', [])
+        delete_markers = versions_data.get('DeleteMarkers', [])
+
+        # The current state of a key is its IsLatest entry. A live current version
+        # appears in Versions; an archived (soft-deleted) key has an IsLatest
+        # delete marker.
+        for version in all_versions:
+            if not version.get('IsLatest'):
+                continue
+
+            key = version['Key']
+            # Skip folder markers (keys ending with '/')
+            if key.endswith('/'):
+                continue
+
+            relative_key = key[len(prefix):]
+            result.append({
+                'relativeKey': relative_key,
+                'key': key,
+                'versionId': version.get('VersionId', 'null'),
+                'size': version.get('Size', 0),
+                'lastModified': version['LastModified'].isoformat(),
+                'etag': version.get('ETag', '').strip('"'),
+                'isArchived': False
+            })
+
+        # When requested, also include archived (soft-deleted) keys — those whose
+        # IsLatest entry is a delete marker. This branch does extra in-memory work
+        # (and so a longer runtime) to resolve each archived key's most recent
+        # content version from the same listing — still no per-file S3 calls.
+        if include_archived:
+            # Group all non-current content versions by key so the newest one
+            # behind each delete marker can be surfaced.
+            content_versions_by_key = {}
+            for version in all_versions:
+                if version.get('IsLatest') or version['Key'].endswith('/'):
+                    continue
+                content_versions_by_key.setdefault(version['Key'], []).append(version)
+
+            for marker in delete_markers:
+                if not marker.get('IsLatest'):
+                    continue
+
+                key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if obj['Key'].endswith('/'):
+                if key.endswith('/'):
                     continue
-                
-                # Get relative key by removing prefix
-                relative_key = obj['Key'][len(prefix):]
-                
-                # Get object metadata and version information
-                try:
-                    head_response = s3_client.head_object(
-                        Bucket=bucket,
-                        Key=obj['Key']
-                    )
-                    
-                    # Check if file is archived
-                    is_archived = is_file_archived(bucket, obj['Key'])
-                    
-                    # Skip archived files if not including them
-                    if is_archived and not include_archived:
-                        continue
-                    
-                    # Get version ID
-                    version_id = head_response.get('VersionId', 'null')
-                    
-                    # Add file to result
-                    result.append({
-                        'relativeKey': relative_key,
-                        'key': obj['Key'],
-                        'versionId': version_id,
-                        'size': obj['Size'],
-                        'lastModified': obj['LastModified'].isoformat(),
-                        'etag': obj.get('ETag', '').strip('"'),
-                        'isArchived': is_archived
-                    })
-                    
-                except Exception as e:
-                    logger.warning(f"Error getting metadata for {obj['Key']}: {e}")
-                    # Skip files with errors
-                    continue
-                    
+
+                relative_key = key[len(prefix):]
+                # Most recent content version behind the delete marker (if any).
+                candidates = content_versions_by_key.get(key, [])
+                latest_content = max(candidates, key=lambda v: v['LastModified'], default=None)
+
+                result.append({
+                    'relativeKey': relative_key,
+                    'key': key,
+                    'versionId': latest_content.get('VersionId', 'null') if latest_content else 'null',
+                    'size': latest_content.get('Size', 0) if latest_content else 0,
+                    'lastModified': (latest_content['LastModified'] if latest_content
+                                     else marker['LastModified']).isoformat(),
+                    'etag': latest_content.get('ETag', '').strip('"') if latest_content else '',
+                    'isArchived': True
+                })
+
     except Exception as e:
         logger.exception(f"Error listing S3 files: {e}")
         raise VAMSGeneralErrorResponse(f"Error listing files.")
-    
+
     return result
 
 def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersionItemModel]) -> List[str]:
@@ -1530,42 +1537,58 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     new_version = current_version + 1
     new_assetVersionId = f"{new_version}"
     
-    # Process files
+    # Process files. Each file's revert (existence check + version copy + aux
+    # cleanup) is an independent, order-independent set of S3 calls, so run them
+    # in parallel to keep large reverts within the Lambda runtime. Per-file
+    # failures are isolated and reported via skipped_files.
     files_to_version = []
     skipped_files = []
-    
-    for file in target_version.get('files', []):
+
+    def _revert_one_file(file):
+        """Revert a single file's version. Returns (entry, None) on success or
+        (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
         full_key = prefix + relative_key.lstrip('/')
-        
-        # Check if the file version still exists (wasn't permanently deleted)
-        if not does_file_version_exist(bucket, full_key, source_version_id):
-            skipped_files.append(relative_key)
-            continue
-        
-        # Copy the file version to make it current
-        new_version_id = copy_s3_object_version(
-            bucket, full_key, source_version_id,
-            bucket, full_key
-        )
-        
-        if new_version_id:
-            #Delete the aux files since they are most likely wrong with the version revert
+
+        try:
+            # Check if the file version still exists (wasn't permanently deleted)
+            if not does_file_version_exist(bucket, full_key, source_version_id):
+                return None, relative_key
+
+            # Copy the file version to make it current
+            new_version_id = copy_s3_object_version(
+                bucket, full_key, source_version_id,
+                bucket, full_key
+            )
+
+            if not new_version_id:
+                return None, relative_key
+
+            # Delete the aux files since they are most likely wrong with the version revert
             delete_assetAuxiliary_files(full_key)
 
-            # Add to files to version
-            files_to_version.append({
+            return {
                 'relativeKey': relative_key,
                 'versionId': new_version_id,
                 'size': file.get('size'),
                 'lastModified': datetime.utcnow().isoformat(),
                 'etag': file.get('etag')
-            })
-        else:
-            # Skip files that couldn't be copied
-            skipped_files.append(relative_key)
-    
+            }, None
+        except Exception as e:
+            logger.warning(f"Error reverting file {relative_key}: {e}")
+            return None, relative_key
+
+    target_files = target_version.get('files', [])
+    if target_files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(target_files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for entry, skipped_key in executor.map(_revert_one_file, target_files):
+                if entry is not None:
+                    files_to_version.append(entry)
+                elif skipped_key is not None:
+                    skipped_files.append(skipped_key)
+
     # Don't error if no files could be reverted - empty file list is valid
     
     # Save file versions to DynamoDB

@@ -14,6 +14,24 @@ from aws_lambda_powertools.utilities.parser.models import (
 
 logger = safeLogger(service_name="AssetModelsV3")
 
+# Default pagination sizes for the asset listing API. maxItems is the per-response
+# ceiling; callers retrieve additional assets by following the response NextToken.
+# pageSize is the per-DynamoDB-query batch size.
+DEFAULT_ASSET_LIST_MAX_ITEMS = 30000
+DEFAULT_ASSET_LIST_PAGE_SIZE = 3000
+
+# Upload request limits. S3 caps a multipart upload at 10,000 parts per object.
+MAX_PARTS_PER_FILE = 10000
+# Maximum number of files accepted in a single upload-initialize request.
+MAX_FILES_PER_UPLOAD_REQUEST = 1000
+# Maximum total parts across all files in a single upload-initialize request.
+# This bounds the init Lambda's time/memory AND keeps the presigned-URL response
+# payload under the AWS Lambda synchronous response limit (6 MB) and the API
+# Gateway payload limit: each part contributes one presigned URL to the response,
+# so this cap directly bounds the response size. Do not raise it without
+# re-checking the worst-case response-size math (parts x URL length).
+MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 5000
+
 ########################Common Asset Models##########################
 
 class AssetLocationModel(BaseModel, extra='ignore'):
@@ -102,7 +120,7 @@ class UploadFileModel(BaseModel, extra='ignore'):
     """Model for file to be uploaded"""
     relativeKey: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
     file_size: Optional[int] = Field(None, ge=0)  # Allow zero-byte files, use int instead of PositiveInt
-    num_parts: Optional[int] = Field(None, ge=0, le=10000)  # Allow 0 parts for zero-byte files, max 10,000
+    num_parts: Optional[int] = Field(None, ge=0, le=MAX_PARTS_PER_FILE)  # Allow 0 parts for zero-byte files; S3 max parts per object
     
     @root_validator
     def validate_size_or_parts(cls, values):
@@ -141,7 +159,7 @@ class InitializeUploadRequestModel(BaseModel, extra='ignore'):
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     uploadType: Literal["assetFile", "assetPreview"]
-    files: List[UploadFileModel] = Field(..., max_items=1000)  # Max 1000 files per request
+    files: List[UploadFileModel] = Field(..., max_items=MAX_FILES_PER_UPLOAD_REQUEST)  # Max files per request
 
     @root_validator
     def validate_fields(cls, values):
@@ -171,7 +189,9 @@ class InitializeUploadRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
         
-        # Validate total parts across all files (5000 limit)
+        # Validate total parts across all files. This cap also bounds the
+        # presigned-URL response payload (one URL per part) under the Lambda /
+        # API Gateway response-size limits — see MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST.
         total_parts = 0
         for file in values.get('files', []):
             if file.num_parts:
@@ -180,9 +200,9 @@ class InitializeUploadRequestModel(BaseModel, extra='ignore'):
                 # Calculate using 150MB chunks (same logic as uploadFile.py)
                 calculated_parts = -(-file.file_size // (150 * 1024 * 1024))  # Ceiling division
                 total_parts += calculated_parts
-        
-        if total_parts > 5000:
-            message = f"Total parts across all files exceeds maximum allowed (5000)"
+
+        if total_parts > MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST:
+            message = f"Total parts across all files exceeds maximum allowed ({MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST})"
             logger.error(message)
             raise ValueError(message)
             
@@ -685,8 +705,8 @@ class GetAssetRequestModel(BaseModel, extra='ignore'):
 
 class GetAssetsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing assets"""
-    maxItems: Optional[int] = Field(default=30000, ge=1)
-    pageSize: Optional[int] = Field(default=3000, ge=1) 
+    maxItems: Optional[int] = Field(default=DEFAULT_ASSET_LIST_MAX_ITEMS, ge=1)
+    pageSize: Optional[int] = Field(default=DEFAULT_ASSET_LIST_PAGE_SIZE, ge=1)
     startingToken: Optional[str] = None
     showArchived: Optional[bool] = False
 

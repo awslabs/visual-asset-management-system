@@ -36,6 +36,10 @@ List all metadata for an asset.
 vamscli metadata asset list -d <DB> -a <ASSET> [--asset-version-id <VER>] [--json-output]
 ```
 
+:::note[Automatic pagination]
+The metadata `list` commands (`asset`, `file`, `asset-link`, `database`) return the complete metadata set. The API responds one page at a time; the CLI follows the response `NextToken` and aggregates all pages automatically. Supplying `--starting-token` fetches only that single page (manual pagination).
+:::
+
 ---
 
 ## metadata asset update

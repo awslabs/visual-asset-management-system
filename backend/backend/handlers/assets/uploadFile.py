@@ -7,6 +7,7 @@ import json
 import uuid
 import time
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from datetime import datetime, timedelta
 from botocore.config import Config
@@ -39,7 +40,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -55,14 +56,23 @@ os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
 # Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
 
+# Concurrency for parallel per-file S3 work (e.g. moving completed uploads from
+# the temporary to the final location). Bounds Lambda thread/memory use; the
+# client connection pool below is sized to match so threads don't block waiting
+# for a connection.
+MAX_PARALLEL_S3_WORKERS = 16
+
 # Standardized retry configuration merged with existing S3 config
 s3_config = Config(
-    signature_version='s3v4', 
+    signature_version='s3v4',
     s3={'addressing_style': 'path'},
     retries={
         'max_attempts': 5,
         'mode': 'adaptive'
-    }
+    },
+    # Match the pool to the worker count so parallel S3 calls don't queue on a
+    # too-small connection pool (botocore default is 10).
+    max_pool_connections=MAX_PARALLEL_S3_WORKERS
 )
 
 s3 = boto3.client('s3', region_name=region, config=s3_config)
@@ -79,6 +89,12 @@ MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
 LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
+MAX_PARTS_PER_FILE = 10000  # S3 hard limit on parts per multipart upload object
+# Sample size for asset-type detection. This is a best-effort visibility
+# classification (empty vs. single-file vs. folder), not a correctness-critical
+# read, so it is intentionally capped rather than scanning the entire asset —
+# paging every object of a very large asset would add latency to the upload path.
+ASSET_TYPE_DETECTION_SAMPLE_SIZE = 1000
 allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
@@ -107,7 +123,7 @@ def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_S
     """Calculate the number of parts needed for a multipart upload"""
     if num_parts is not None:
         # User specified parts directly - validate against S3 limits but allow large part sizes
-        if num_parts > 10000:
+        if num_parts > MAX_PARTS_PER_FILE:
             raise ValueError("Number of parts cannot exceed 10,000 (S3 limit)")
         return num_parts
     elif file_size is not None:
@@ -337,64 +353,24 @@ def delete_upload_details(uploadId, assetId):
         # Don't raise here, just log the error
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
-    """Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
     try:
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
-        
-        # List all objects with the specified prefix
-        response = s3.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-        )
-        
-        # Get the contents and filter out folder markers (objects ending with '/')
-        contents = response.get('Contents', [])
+
+        # Sample objects under the prefix to classify the asset (empty / single
+        # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
+        # best-effort visibility classification, so a sample is sufficient and
+        # avoids adding upload latency by scanning a very large asset in full.
+        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
         
         # Filter out archived files
         non_archived_files = []
@@ -1515,43 +1491,58 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         largeFileAsynchronousHandling=has_async_files
                     )
     
-            # Copy successful files from temporary to final location
-    for file_detail in successful_files:
-        
-        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-        
-        # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
-        if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
-            # Get the base file path
-            base_file_path = get_base_file_path(file_detail['relativeKey'])
-            base_file_key = normalize_s3_path(asset_base_key, base_file_path)
-            
-            # Delete existing preview files
-            deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
-            if deleted_files:
-                logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
+            # Copy successful files from temporary to final location.
+    # Each file's move (optional preview cleanup + copy + temp delete) is an
+    # independent, order-independent set of S3 calls, so run them in parallel to
+    # keep multi-file completions within the Lambda runtime. The pure S3 work is
+    # threaded; result-list mutation is applied single-threaded afterward.
+    def _move_one_file(file_detail):
+        """Move a completed upload from temp to final. Returns (relativeKey, success)."""
+        try:
+            logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
 
-        copy_success = copy_s3_object(
-            bucket_name,
-            file_detail['temp_s3_key'],
-            bucket_name,
-            file_detail['final_s3_key'],
-            databaseId,
-            assetId,
-            extra_metadata=change_metadata
-        )
-        
-        if not copy_success:
-            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-            # Update the file result to indicate copy failure
+            # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
+            if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
+                base_file_path = get_base_file_path(file_detail['relativeKey'])
+                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
+                if deleted_files:
+                    logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
+
+            copy_success = copy_s3_object(
+                bucket_name,
+                file_detail['temp_s3_key'],
+                bucket_name,
+                file_detail['final_s3_key'],
+                databaseId,
+                assetId,
+                extra_metadata=change_metadata
+            )
+
+            if not copy_success:
+                logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+                return file_detail['relativeKey'], False
+
+            # Delete temporary file after successful copy
+            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
+            return file_detail['relativeKey'], True
+        except Exception as e:
+            logger.exception(f"Error moving file {file_detail['relativeKey']} to final location: {e}")
+            return file_detail['relativeKey'], False
+
+    if successful_files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(successful_files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            move_results = list(executor.map(_move_one_file, successful_files))
+
+        # Apply copy failures to the result list single-threaded (no shared-state races).
+        failed_keys = {rel_key for rel_key, ok in move_results if not ok}
+        if failed_keys:
             for result in file_results:
-                if result.relativeKey == file_detail['relativeKey'] and result.success:
+                if result.relativeKey in failed_keys and result.success:
                     result.success = False
                     result.error = "Failed to copy file to final location"
                     has_failures = True
-        else:
-            # Delete temporary file after successful copy
-            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
     
     # Update asset record based on upload type
     if uploadType == "assetFile" and any(f.success for f in file_results):
@@ -2226,40 +2217,54 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         largeFileAsynchronousHandling=has_async_files
                     )
     
-    # Copy successful files from temporary to final location
-    for file_detail in successful_files:
+    # Copy successful files from temporary to final location.
+    # Each file's move is independent and order-independent, so run them in
+    # parallel to keep multi-file completions within the Lambda runtime. The
+    # pure S3 work is threaded; result-list mutation is applied afterward.
+    change_metadata = build_upload_change_metadata(user_id)
 
-        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+    def _move_one_file(file_detail):
+        """Move a completed upload from temp to final. Returns (relativeKey, success)."""
+        try:
+            logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+            copy_success = copy_s3_object(
+                bucket_name,
+                file_detail['temp_s3_key'],
+                bucket_name,
+                file_detail['final_s3_key'],
+                databaseId,
+                assetId,
+                extra_metadata=change_metadata
+            )
+            if not copy_success:
+                logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+                return file_detail['relativeKey'], False
+            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
+            return file_detail['relativeKey'], True
+        except Exception as e:
+            logger.exception(f"Error moving file {file_detail['relativeKey']} to final location: {e}")
+            return file_detail['relativeKey'], False
 
-        copy_success = copy_s3_object(
-            bucket_name,
-            file_detail['temp_s3_key'],
-            bucket_name,
-            file_detail['final_s3_key'],
-            databaseId,
-            assetId,
-            extra_metadata=build_upload_change_metadata(user_id)
-        )
-        
-        if not copy_success:
-            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
-            # Update the file result to indicate copy failure
+    if successful_files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(successful_files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            move_results = list(executor.map(_move_one_file, successful_files))
+
+        failed_keys = {rel_key for rel_key, ok in move_results if not ok}
+        if failed_keys:
             for result in file_results:
-                if result.relativeKey == file_detail['relativeKey'] and result.success:
+                if result.relativeKey in failed_keys and result.success:
                     result.success = False
                     result.error = "Failed to copy file to final location"
                     has_failures = True
-        else:
-            # Delete temporary file after successful copy
-            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
-    
+
     # Update asset record based on upload type
     if uploadType == "assetFile" and any(f.success for f in file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
-        
-        
+
+
         # Update asset type - ensure we're not overriding with None
         if assetType:
             asset['assetType'] = assetType

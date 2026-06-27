@@ -10,6 +10,7 @@ from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, AssetAlreadyExistsError, DatabaseNotFoundError,
     InvalidAssetDataError, AuthenticationError, APIError, AssetAlreadyArchivedError,
+    AssetNotArchivedError,
     AssetDeletionError, PreviewNotFoundError, AssetNotDistributableError,
     FileDownloadError, DownloadError, AssetDownloadError, DownloadTreeError
 )
@@ -796,6 +797,160 @@ class TestAssetArchiveCommand:
             assert result.exit_code == 1
             assert '✗ Asset Already Archived' in result.output
             assert '--show-archived' in result.output
+
+
+class TestAssetUnarchiveCommand:
+    """Test asset unarchive command."""
+
+    def test_unarchive_help(self, cli_runner):
+        """Test unarchive command help."""
+        result = cli_runner.invoke(cli, ['assets', 'unarchive', '--help'])
+        assert result.exit_code == 0
+        assert 'Unarchive an asset (restore from soft delete)' in result.output
+        assert '--database' in result.output
+        assert '--reason' in result.output
+        assert '--json-input' in result.output
+        assert '--json-output' in result.output
+
+    def test_unarchive_success(self, cli_runner, assets_command_mocks):
+        """Test successful asset unarchiving."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.return_value = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'test-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-15T10:30:00Z'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database',
+                '--reason', 'Restoring for review'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset unarchived successfully!' in result.output
+            assert 'test-asset' in result.output
+
+            # Verify API call
+            mocks['api_client'].unarchive_asset.assert_called_once_with(
+                'test-database', 'test-asset', 'Restoring for review'
+            )
+
+    def test_unarchive_without_reason(self, cli_runner, assets_command_mocks):
+        """Test asset unarchiving without reason."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.return_value = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'test-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset unarchived successfully!' in result.output
+            assert 'test-asset' in result.output
+            assert 'test-database' in result.output
+            assert 'active state' in result.output
+
+            # Verify API call without reason
+            mocks['api_client'].unarchive_asset.assert_called_once_with('test-database', 'test-asset', None)
+
+    def test_unarchive_json_input_file(self, cli_runner, assets_command_mocks):
+        """Test asset unarchive with JSON input from file."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.return_value = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'json-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+
+            json_data = {
+                'databaseId': 'json-database',
+                'assetId': 'json-asset',
+                'reason': 'JSON reason'
+            }
+
+            with patch('builtins.open', mock_open(read_data=json.dumps(json_data))):
+                result = cli_runner.invoke(cli, [
+                    'assets', 'unarchive', 'test-asset',
+                    '-d', 'test-database',
+                    '--json-input', 'test.json'
+                ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset unarchived successfully!' in result.output
+
+            # Verify API call uses JSON data
+            mocks['api_client'].unarchive_asset.assert_called_once_with('json-database', 'json-asset', 'JSON reason')
+
+    def test_unarchive_json_output(self, cli_runner, assets_command_mocks):
+        """Test asset unarchive with JSON output emits valid JSON."""
+        with assets_command_mocks as mocks:
+            api_response = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'test-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+            mocks['api_client'].unarchive_asset.return_value = api_response
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            # Output must be valid JSON with the expected fields
+            output_json = json.loads(result.output)
+            assert output_json['assetId'] == 'test-asset'
+            assert output_json['operation'] == 'unarchive'
+
+    def test_unarchive_asset_not_found(self, cli_runner, assets_command_mocks):
+        """Test unarchive command with asset not found."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.side_effect = AssetNotFoundError("Asset not found")
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'nonexistent-asset',
+                '-d', 'test-database'
+            ])
+
+            assert result.exit_code == 1
+            assert '✗ Asset Not Found' in result.output
+            assert 'vamscli assets get' in result.output
+
+    def test_unarchive_not_archived(self, cli_runner, assets_command_mocks):
+        """Test unarchive command with an asset that is not archived."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.side_effect = AssetNotArchivedError("Asset is not archived")
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database'
+            ])
+
+            assert result.exit_code == 1
+            assert '✗ Asset Not Archived' in result.output
+
+    def test_unarchive_no_setup(self, cli_runner, no_setup_command_mocks):
+        """Test unarchive without setup returns an error."""
+        with no_setup_command_mocks('assets') as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset', '-d', 'test-database'
+            ])
+            assert result.exit_code != 0
 
 
 class TestAssetDeleteCommand:
