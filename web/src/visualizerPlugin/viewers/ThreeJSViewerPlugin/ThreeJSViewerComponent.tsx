@@ -20,6 +20,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     multiFileKeys,
+    multiFiles,
     versionId,
     assetVersionId,
 }) => {
@@ -263,6 +264,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     const fileName = fileKey.split("/").pop() || `model_${i}`;
                     const fileExtension = fileName.split(".").pop()?.toLowerCase() || "";
 
+                    // Per-file asset context (Decision #3): when a multi-file selection spans
+                    // assets, each file streams from its OWN assetId/databaseId. Falls back to
+                    // the shared top-level pair for single-asset / legacy callers.
+                    const fileAssetId = multiFiles?.[i]?.assetId || assetId;
+                    const fileDatabaseId = multiFiles?.[i]?.databaseId || databaseId;
+
                     console.log(
                         `\n=== Loading file ${i + 1}/${filesToLoad.length}: ${fileKey} ===`
                     );
@@ -282,7 +289,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             encodeURIComponent(segment)
                         );
                         const encodedFileKey = encodedSegments.join("/");
-                        let assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/download/stream/${encodedFileKey}`;
+                        let assetUrl = `${config.api}database/${fileDatabaseId}/assets/${fileAssetId}/download/stream/${encodedFileKey}`;
 
                         // assetVersionId takes precedence (used for all files including deps)
                         // versionId is S3 file version, only for the primary file (isMainFile)
@@ -310,8 +317,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             const depResult = await preloadGLTFDependencies(
                                 arrayBuffer,
                                 {
-                                    assetId,
-                                    databaseId,
+                                    assetId: fileAssetId,
+                                    databaseId: fileDatabaseId,
                                     baseFileKey: fileKey,
                                     apiEndpoint: config.api,
                                     assetVersionId: assetVersionId,
@@ -419,6 +426,13 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                 }
 
+                // Multi-file viewing loads every model at its OWN native coordinates — we do
+                // NOT scale, recenter, or offset any geometry. Model coordinates are meaningful
+                // (scene construction now; diff mode later), so the viewer must preserve them
+                // exactly as authored. Files that share a coordinate space will overlap/align as
+                // intended; the camera is framed to the combined bounds below, and the object-tree
+                // panel lets the user isolate individual files. (An earlier build normalized and
+                // spread models into a row for visibility — removed because it mutated geometry.)
                 setLoadedFileGroups(loadedGroups);
                 setLoadingMessage("Positioning camera...");
 

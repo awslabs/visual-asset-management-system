@@ -45,6 +45,22 @@ import { searchRowToFileInfo, isViewableExtension } from "./utils/searchRowToFil
 
 let tagTypes: any;
 
+// Real "eye" preview glyph. Cloudscape has no built-in eye icon (its closest, "view-full",
+// renders as a fullscreen-brackets box), so we supply an SVG via the Button iconSvg slot.
+// stroke/fill use currentColor so it inherits the Cloudscape icon-button color and theming.
+const EYE_ICON_SVG = (
+    <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+        <path
+            d="M8 3C4.5 3 1.7 5.1 1 8c.7 2.9 3.5 5 7 5s6.3-2.1 7-5c-.7-2.9-3.5-5-7-5z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+        />
+        <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+);
+
 // Helper component to render explanation popover
 const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ explanation }) => (
     <Popover
@@ -367,7 +383,14 @@ const TruncatedCell: React.FC<{
     return <span title={isTruncated ? text : undefined}>{displayText}</span>;
 };
 
-function columnRender(e: any, name: string, value: any, navigate?: any, isFileMode?: boolean) {
+function columnRender(
+    e: any,
+    name: string,
+    value: any,
+    navigate?: any,
+    isFileMode?: boolean,
+    onViewFile?: (item: any) => void
+) {
     // Check if item is archived
     const isArchived = e.bool_archived === true || e.status === "archived";
 
@@ -418,6 +441,21 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             lineHeight: "1.4",
             fontSize: "13px",
         };
+        // Per-row eye icon: opens the popup viewer for this single file directly
+        // from the search table (no need to navigate into the asset). Only shown in
+        // file mode when a viewer plugin can render the file's extension.
+        const viewButton =
+            isFileMode && onViewFile && isViewableExtension(e.str_fileext) ? (
+                <Button
+                    variant="icon"
+                    iconSvg={EYE_ICON_SVG}
+                    ariaLabel={`Preview ${value || e.str_fileext || "file"}`}
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onViewFile(e);
+                    }}
+                />
+            ) : null;
         if (isFileMode && navigate && !isArchived) {
             // Encode the file path in BOTH the href (`?filePath=`) and the
             // router state. The href is what right-click → "Open in new
@@ -429,6 +467,7 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
+                        {viewButton}
                         <span style={pathStyle}>
                             <Link
                                 href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}${filePathQuery}`}
@@ -453,6 +492,7 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
+                        {viewButton}
                         <span style={pathStyle}>{value}</span>
                         {e.explanation && isFileMode && (
                             <ExplanationPopover explanation={e.explanation} />
@@ -663,7 +703,10 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                 return {
                     id: name,
                     header: "File Path",
-                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    cell: (e: any) =>
+                        columnRender(e, name, e[name], navigate, isFileMode, (item: any) =>
+                            openViewer([searchRowToFileInfo(item)])
+                        ),
                     sortingField: name,
                     isRowHeader: false,
                     width: 350,
@@ -793,36 +836,21 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                     id: "preview",
                     header: "Preview",
                     cell: (item: any) => (
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <FilePreviewThumbnailCell
-                                assetId={item.str_assetid}
-                                databaseId={item.str_databaseid}
-                                fileKey={item.str_key}
-                                fileName={item.str_key?.split("/").pop() || item.str_key || ""}
-                                fileSize={item.num_filesize || item.num_size}
-                                onOpenFullPreview={(url, fileName, previewKey, downloadType) =>
-                                    handleOpenPreview(url, fileName, previewKey, downloadType, item)
-                                }
-                                previewFileKey={
-                                    item.str_previewfilekey !== undefined
-                                        ? item.str_previewfilekey
-                                        : undefined
-                                }
-                            />
-                            {isViewableExtension(item.str_fileext) && (
-                                <Button
-                                    variant="icon"
-                                    iconName="view-full"
-                                    ariaLabel={`Preview ${
-                                        item.str_key || item.str_fileext || "file"
-                                    }`}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        openViewer([searchRowToFileInfo(item)]);
-                                    }}
-                                />
-                            )}
-                        </SpaceBetween>
+                        <FilePreviewThumbnailCell
+                            assetId={item.str_assetid}
+                            databaseId={item.str_databaseid}
+                            fileKey={item.str_key}
+                            fileName={item.str_key?.split("/").pop() || item.str_key || ""}
+                            fileSize={item.num_filesize || item.num_size}
+                            onOpenFullPreview={(url, fileName, previewKey, downloadType) =>
+                                handleOpenPreview(url, fileName, previewKey, downloadType, item)
+                            }
+                            previewFileKey={
+                                item.str_previewfilekey !== undefined
+                                    ? item.str_previewfilekey
+                                    : undefined
+                            }
+                        />
                     ),
                     sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
@@ -993,12 +1021,16 @@ function SearchPageListView({ state, dispatch, onShowToast }: SearchPageViewProp
                                 type: "set-selected-items",
                                 selectedItems: detail.selectedItems,
                             });
-                            // Viewer-selection is an ACCUMULATE-ONLY running set that persists across searches/pagination (Decision #4). Unchecking a row here does NOT remove it; users remove via Clear selection / Exit. Dedup-by-key is handled in the reducer.
+                            // Viewer-selection mirrors exactly the currently checked viewable
+                            // rows (check = in, uncheck = out), so the "View Selected (N)" count
+                            // always matches the checkboxes. Cloudscape's selectedItems carries
+                            // the full current selection on every change, so we replace (not
+                            // accumulate) the running set.
                             if (isFileMode && state?.viewerSelectMode) {
-                                const additions = detail.selectedItems
+                                const selection = detail.selectedItems
                                     .filter((r: any) => isViewableExtension(r.str_fileext))
                                     .map((r: any) => searchRowToFileInfo(r));
-                                state.addToViewerSelection(additions);
+                                state.setViewerSelection(selection);
                             }
                         }
                     }}

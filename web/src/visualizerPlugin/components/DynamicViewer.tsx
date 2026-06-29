@@ -404,6 +404,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         ? files.map((f) => f.key)
                                                         : undefined
                                                 }
+                                                multiFiles={
+                                                    files.length > 1 ? files : undefined
+                                                }
                                                 versionId={
                                                     files.length === 1
                                                         ? files[0].versionId

@@ -31,6 +31,10 @@ export function searchRowToFileInfo(row: Record<string, any>): FileInfo {
 /** True if ANY enabled plugin can render this extension. Source of truth: PluginRegistry. */
 export function isViewableExtension(ext?: string): boolean {
     if (!ext) return false;
+    // Search rows carry the extension without a leading dot (e.g. "ply"), but the
+    // registry's supportedExtensions are stored with one (e.g. ".ply"). Normalize so
+    // canHandle's includes() check matches.
+    const normalized = ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
     const registry = PluginRegistry.getInstance();
-    return registry.getCompatibleViewers([ext.toLowerCase()], false, false).length > 0;
+    return registry.getCompatibleViewers([normalized], false, false).length > 0;
 }

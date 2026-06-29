@@ -103,6 +103,86 @@ const auditFix = async () => {
     }
 };
 
+// Web-ifc self-hosting: the o3dv build loads web-ifc from this exact CDN URL. We copy the
+// library + wasm into a local libs/ dir and rewrite the URL so IFC parsing works offline /
+// in GovCloud where external CDNs are blocked by CSP.
+const WEBIFC_CDN_URL = "https://cdn.jsdelivr.net/npm/web-ifc@0.0.68/web-ifc-api-iife.js";
+const WEBIFC_LOCAL_DIR = "libs"; // under public/viewers/online3dviewer/
+const WEBIFC_LOCAL_URL = "/viewers/online3dviewer/libs/web-ifc-api-iife.js";
+const WEBIFC_WASM_BASE = "/viewers/online3dviewer/libs/"; // SetWasmPath base (absolute)
+
+// Copy web-ifc locally and patch o3dv.min.js to use the local copy + correct wasm path.
+const selfHostWebIfc = async (o3dvLibPath) => {
+    const webIfcSrcDir = path.join(npmRepoSourceDestDir, "web-ifc");
+    const libsDest = path.join(publicDestinationDir, WEBIFC_LOCAL_DIR);
+
+    // Copy the IIFE bundle plus BOTH wasm variants and the worker. web-ifc picks the
+    // multithreaded build (web-ifc-mt.wasm + web-ifc-mt.worker.js) when the page is
+    // cross-origin isolated (COOP/COEP set, as the dev server does for SharedArrayBuffer),
+    // and the single-thread build (web-ifc.wasm) otherwise. Shipping all of them means IFC
+    // works in every deployment regardless of whether COOP/COEP headers are present.
+    const iifeSrc = path.join(webIfcSrcDir, "web-ifc-api-iife.js");
+    const requiredFiles = ["web-ifc-api-iife.js", "web-ifc.wasm"];
+    const optionalFiles = ["web-ifc-mt.wasm", "web-ifc-mt.worker.js"];
+    const missingRequired = [];
+    for (const f of requiredFiles) {
+        if (!(await fs.pathExists(path.join(webIfcSrcDir, f)))) missingRequired.push(f);
+    }
+    if (missingRequired.length > 0) {
+        console.warn(
+            "Online3DViewer: web-ifc files not found (" +
+                missingRequired.join(", ") +
+                ") - .ifc viewing will be unavailable. Expected under " +
+                webIfcSrcDir
+        );
+        return;
+    }
+    await fs.mkdir(libsDest, { recursive: true });
+    for (const f of [...requiredFiles, ...optionalFiles]) {
+        const src = path.join(webIfcSrcDir, f);
+        if (await fs.pathExists(src)) {
+            await fs.copy(src, path.join(libsDest, f));
+        }
+    }
+    void iifeSrc; // retained for clarity; required-file check above covers it
+    console.log("Online3DViewer: web-ifc library + wasm variants copied to " + libsDest);
+
+    // Rewrite the hardcoded CDN URL in o3dv.min.js to the local copy.
+    let o3dvSource = await fs.readFile(o3dvLibPath, "utf8");
+    if (!o3dvSource.includes(WEBIFC_CDN_URL)) {
+        console.warn(
+            "Online3DViewer: expected web-ifc CDN URL not found in o3dv.min.js " +
+                "(library version may have changed). Skipping URL rewrite - .ifc may not work offline."
+        );
+        return;
+    }
+    o3dvSource = o3dvSource.split(WEBIFC_CDN_URL).join(WEBIFC_LOCAL_URL);
+
+    // Inject SetWasmPath so the IFC parser finds web-ifc.wasm at the local libs/ path, and
+    // force single-thread Init. The multithreaded build (web-ifc-mt) spins up a worker that
+    // builds blob URLs and requires SharedArrayBuffer + COOP/COEP; that path is fragile and
+    // not guaranteed across deployments (e.g. GovCloud ALB). Forcing single-thread via
+    // Init(undefined, true) uses web-ifc.wasm reliably everywhere.
+    // o3dv constructs the API as `new WebIFC.IfcAPI` then calls `.Init()`.
+    const INIT_NEEDLE = "this.ifc=new WebIFC.IfcAPI,this.ifc.Init()";
+    const INIT_PATCHED =
+        'this.ifc=new WebIFC.IfcAPI,this.ifc.SetWasmPath("' +
+        WEBIFC_WASM_BASE +
+        '",true),this.ifc.Init(void 0,true)';
+    if (o3dvSource.includes(INIT_NEEDLE)) {
+        o3dvSource = o3dvSource.split(INIT_NEEDLE).join(INIT_PATCHED);
+        console.log("Online3DViewer: injected SetWasmPath for local web-ifc wasm");
+    } else {
+        console.warn(
+            "Online3DViewer: IfcAPI init pattern not found - could not inject SetWasmPath. " +
+                ".ifc wasm may fail to load."
+        );
+    }
+
+    await fs.writeFile(o3dvLibPath, o3dvSource, "utf8");
+    console.log("Online3DViewer: o3dv.min.js patched to use self-hosted web-ifc");
+};
+
 // Function to copy files to public directory for dynamic loading
 const copyFiles = async () => {
     try {
@@ -124,6 +204,13 @@ const copyFiles = async () => {
         } else {
             throw new Error("Library file not found: " + libSource);
         }
+
+        // Self-host the web-ifc library + WASM so .ifc files can be viewed WITHOUT reaching
+        // out to a public CDN. The stock o3dv build hardcodes a jsdelivr URL for web-ifc, which
+        // breaks under GovCloud / air-gapped CSP. We copy web-ifc locally, rewrite the CDN URL
+        // in o3dv.min.js to the local copy, and inject a SetWasmPath() call so the IFC parser
+        // finds its .wasm next to the JS (o3dv otherwise calls IfcAPI.Init() with no wasm path).
+        await selfHostWebIfc(libDest);
 
         // Copy website assets (environment maps)
         const assetsSource = path.join(npmRepoSourceDestDir, "online-3d-viewer/website/assets");

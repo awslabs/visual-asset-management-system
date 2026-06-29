@@ -47,6 +47,7 @@ type SearchAction =
     | { type: "ENTER_VIEWER_SELECT_MODE" }
     | { type: "EXIT_VIEWER_SELECT_MODE" }
     | { type: "ADD_TO_VIEWER_SELECTION"; payload: FileInfo[] }
+    | { type: "SET_VIEWER_SELECTION"; payload: FileInfo[] }
     | { type: "REMOVE_FROM_VIEWER_SELECTION"; payload: string }
     | { type: "CLEAR_VIEWER_SELECTION" };
 
@@ -191,6 +192,18 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
             return { ...state, viewerSelection: [...state.viewerSelection, ...additions] };
         }
 
+        // Replace the running selection so it mirrors exactly the currently checked rows
+        // (check = in, uncheck = out). Dedup by key in case the same file appears twice.
+        case "SET_VIEWER_SELECTION": {
+            const seen = new Set<string>();
+            const deduped = action.payload.filter((f) => {
+                if (seen.has(f.key)) return false;
+                seen.add(f.key);
+                return true;
+            });
+            return { ...state, viewerSelection: deduped };
+        }
+
         case "REMOVE_FROM_VIEWER_SELECTION":
             return {
                 ...state,
@@ -323,6 +336,10 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         dispatch({ type: "ADD_TO_VIEWER_SELECTION", payload: files });
     }, []);
 
+    const setViewerSelection = useCallback((files: FileInfo[]) => {
+        dispatch({ type: "SET_VIEWER_SELECTION", payload: files });
+    }, []);
+
     const removeFromViewerSelection = useCallback((key: string) => {
         dispatch({ type: "REMOVE_FROM_VIEWER_SELECTION", payload: key });
     }, []);
@@ -381,6 +398,7 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         enterViewerSelectMode,
         exitViewerSelectMode,
         addToViewerSelection,
+        setViewerSelection,
         removeFromViewerSelection,
         clearViewerSelection,
 

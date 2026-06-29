@@ -21,6 +21,7 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
     databaseId,
     assetKey,
     multiFileKeys,
+    multiFiles,
     versionId,
     assetVersionId,
 }) => {
@@ -54,11 +55,17 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                     // Load multiple files
                     console.log("Loading multiple assets:", multiFileKeys);
 
-                    for (const key of multiFileKeys) {
+                    for (let i = 0; i < multiFileKeys.length; i++) {
+                        const key = multiFileKeys[i];
+                        // Per-file asset context (Decision #3): when a multi-file selection
+                        // spans assets, each file downloads from its OWN assetId/databaseId.
+                        // Falls back to the shared top-level pair for single-asset callers.
+                        const fileAssetId = multiFiles?.[i]?.assetId || assetId;
+                        const fileDatabaseId = multiFiles?.[i]?.databaseId || databaseId;
                         try {
                             const response = await downloadAsset({
-                                assetId: assetId,
-                                databaseId: databaseId,
+                                assetId: fileAssetId,
+                                databaseId: fileDatabaseId,
                                 key: key,
                                 versionId: versionId,
                                 assetVersionId: assetVersionId as any,
@@ -124,7 +131,16 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
         };
 
         loadAssets();
-    }, [assetId, assetKey, databaseId, versionId, assetVersionId, multiFileKeys, updateState]);
+    }, [
+        assetId,
+        assetKey,
+        databaseId,
+        versionId,
+        assetVersionId,
+        multiFileKeys,
+        multiFiles,
+        updateState,
+    ]);
 
     // Load model URLs into viewer when both viewer and URLs are ready
     useEffect(() => {
