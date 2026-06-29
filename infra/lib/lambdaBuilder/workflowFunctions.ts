@@ -187,6 +187,7 @@ export function buildCreateWorkflowFunction(
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
             LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
+            AWS_PARTITION: config.env.partition,
         },
     });
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);

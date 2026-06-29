@@ -148,6 +148,23 @@ const sidebars: SidebarsConfig = {
                             ],
                         },
                         "cli/automation",
+                        "cli/development",
+                        {
+                            type: "category",
+                            label: "Troubleshooting",
+                            collapsed: true,
+                            items: [
+                                "cli/troubleshooting/setup-auth",
+                                "cli/troubleshooting/assets-files",
+                                "cli/troubleshooting/database-tags",
+                                "cli/troubleshooting/search",
+                                "cli/troubleshooting/permissions",
+                                "cli/troubleshooting/users",
+                                "cli/troubleshooting/industry",
+                                "cli/troubleshooting/network-config",
+                                "cli/troubleshooting/general",
+                            ],
+                        },
                     ],
                 },
                 {

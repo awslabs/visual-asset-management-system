@@ -406,6 +406,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         tags?: string;
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -452,6 +453,17 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         tagTypes = [];
 
         fetchtagTypes().then((res) => {
+            // The service returns an array on success, or an error message string / false
+            // on failure. Surface failures instead of silently leaving the form blank.
+            if (!Array.isArray(res)) {
+                tagTypes = [];
+                setLoadError(
+                    typeof res === "string" && res.trim() !== ""
+                        ? res
+                        : "Failed to load tag types. Please try refreshing the page."
+                );
+                return;
+            }
             tagTypes = res;
 
             if (tagTypes.length) {
@@ -478,6 +490,16 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     return (
         <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
             <SpaceBetween direction="vertical" size="l">
+                {loadError && (
+                    <Alert
+                        type="error"
+                        dismissible
+                        onDismiss={() => setLoadError(null)}
+                        header="Error loading form data"
+                    >
+                        {loadError}
+                    </Alert>
+                )}
                 <FormField
                     label={`${Synonyms.Asset} Name`}
                     errorText={showErrors && validationText.assetId}
@@ -1365,12 +1387,21 @@ const UploadForm = () => {
     const [isCancelVisible, setCancelVisible] = useState(false);
     const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
     const [validSteps, setValidSteps] = useState([false, false, false]);
+    const [tagsLoadError, setTagsLoadError] = useState<string | null>(null);
 
     useEffect(() => {
         tags = [];
 
         fetchTags().then((res) => {
             tags.length = 0; // Clear existing array without losing reference
+            if (!Array.isArray(res)) {
+                // Surface load failures (e.g. a 403) instead of leaving the tag list blank.
+                setTagsLoadError(
+                    typeof res === "string" && res.trim() !== ""
+                        ? res
+                        : "Failed to load tags. Please try refreshing the page."
+                );
+            }
             if (res && Array.isArray(res)) {
                 // Group tags by tag type, sorted alphabetically
                 const grouped: Record<
@@ -1494,6 +1525,16 @@ const UploadForm = () => {
 
     return (
         <Box padding={{ left: "l", right: "l" }}>
+            {tagsLoadError && (
+                <Alert
+                    type="error"
+                    dismissible
+                    onDismiss={() => setTagsLoadError(null)}
+                    header="Error loading form data"
+                >
+                    {tagsLoadError}
+                </Alert>
+            )}
             {isCancelVisible && (
                 <CancelButtonModal onDismiss={setCancelVisible} visible={isCancelVisible} />
             )}

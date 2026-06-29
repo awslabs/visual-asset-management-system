@@ -200,13 +200,14 @@ backend/
     (wrong archive status, truncated history). Existence-only checks
     (`MaxKeys=1`) are the allowed exception.
 
-        **To check whether a single key (or a specific `versionId`) is archived, do NOT
-        list versions** — use `common.s3.is_object_version_archived(bucket, key,
+            **To check whether a single key (or a specific `versionId`) is archived, do NOT
+            list versions** — use `common.s3.is_object_version_archived(bucket, key,
 
-    version_id, client=...)`. It issues one `HeadObject`(a delete-marker version
-returns 405 MethodNotAllowed; a live version returns 200; a missing version
-returns 404), which is O(1) regardless of how many versions the key has. All
-handler-local`is_file_archived` helpers must delegate to it rather than
+        version_id, client=...)`. It issues one `HeadObject`(a delete-marker version
+
+    returns 405 MethodNotAllowed; a live version returns 200; a missing version
+    returns 404), which is O(1) regardless of how many versions the key has. All
+    handler-local`is_file_archived` helpers must delegate to it rather than
     re-implementing a version scan.
 
 15. **Paginate large GET responses; never return an unbounded in-memory set.**

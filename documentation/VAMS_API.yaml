@@ -765,9 +765,20 @@ paths:
     /auth/loginProfile/{userId}/:
         get:
             summary: "Get loginProfile for the specified user"
+            description: "Returns the requesting user's stored login profile. A user who has authenticated but has no stored profile yet (for example, not assigned any roles) receives an identity-only profile so login can still proceed."
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/loginProfileResponse'
+                "400":
+                    description: Invalid request parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Unauthorized user.
                     content:
@@ -796,11 +807,8 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/constraint'
+                            $ref: '#/components/schemas/loginProfileUpdateRequest'
             parameters:
-            - $ref: '#/components/parameters/maxItemsParam'
-            - $ref: '#/components/parameters/pageSizeParam'
-            - $ref: '#/components/parameters/startingTokenParam'            
             - name: "userId"
               in: "path"
               description: "Unique identifier for user."
@@ -810,6 +818,16 @@ paths:
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/loginProfileResponse'
+                "400":
+                    description: Invalid request parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Unauthorized user.
                     content:
@@ -8171,6 +8189,22 @@ components:
         userid_regex:
             type: string
             pattern: ^[\w\-\.\+\@]{3,256}$
+        loginProfileResponse:
+            type: object
+            description: "User login profile. May include organization-specific fields beyond those listed."
+            properties:
+                userId:
+                    type: string
+                email:
+                    type: string
+            required:
+                - userId
+        loginProfileUpdateRequest:
+            type: object
+            description: "Optional body for updating a login profile. May be overridden by organization-specific profile logic."
+            properties:
+                email:
+                    type: string
         userRole:
             type: object
             properties: 

@@ -411,7 +411,9 @@ export class ModelOpsConstruct extends NestedStack {
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
+                    props.importGlobalPipelineWorkflowFunctionName
+                }`
             );
 
             const importProvider = new cr.Provider(this, "ImportProvider", {

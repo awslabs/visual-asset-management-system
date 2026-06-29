@@ -40,6 +40,8 @@ The following options appear on nearly every command and are not repeated in ind
 ```bash
 vamscli setup https://your-vams-url.example.com
 vamscli auth login -u admin@example.com
+vamscli auth change-password -u admin@example.com
+vamscli auth forgot-password -u admin@example.com
 vamscli auth status
 vamscli profile list
 ```
