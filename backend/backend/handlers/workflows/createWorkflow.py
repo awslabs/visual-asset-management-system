@@ -70,6 +70,10 @@ try:
     region = os.environ['AWS_REGION']
     role = os.environ['LAMBDA_ROLE_ARN']
     logGroupArn = os.environ['LOG_GROUP_ARN']
+    # Deployment AWS partition for the Step Functions service-integration ARNs embedded in the
+    # generated ASL (arn:{partition}:states:::...). Defaults to "aws" (commercial); GovCloud/
+    # China/ISO inject the matching partition so the ASL is valid there.
+    aws_partition = os.environ.get('AWS_PARTITION', 'aws') or 'aws'
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -250,8 +254,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         }
 
-        # Get the appropriate builder
-        builder = get_task_builder(exec_type)
+        # Get the appropriate builder (partition-aware service-integration ARNs)
+        builder = get_task_builder(exec_type, partition=aws_partition)
 
         # Build payload using the builder (shared payload construction)
         payload = builder.build_payload(pipeline, path_context)
@@ -322,7 +326,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         payload=process_output_payload,
         result_path=f"$.{process_output_state_id}.output",
         retry_config=po_retry_config,
-        catch_config=po_catch_config
+        catch_config=po_catch_config,
+        partition=aws_partition
     )
 
     # Add the single process_output state to the states list

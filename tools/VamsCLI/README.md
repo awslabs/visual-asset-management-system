@@ -2,6 +2,10 @@
 
 VamsCLI is a command-line interface for the Visual Asset Management System (VAMS), providing programmatic access to your VAMS deployment running on AWS. It supports authentication, multi-profile configuration, and comprehensive asset/file operations through an intuitive CLI.
 
+**[📖 Read the full CLI documentation](https://awslabs.github.io/visual-asset-management-system/cli/getting-started)**
+
+This README covers basic installation and a quick start. The complete CLI reference — every command and option, authentication and profile flows, automation and CI/CD patterns, and troubleshooting — lives in the official documentation site (see [Documentation](#documentation) below).
+
 ## Installation
 
 ```bash
@@ -102,17 +106,26 @@ vamscli assets --help
 
 ## Documentation
 
-For comprehensive CLI documentation including detailed command reference, automation patterns, and CI/CD integration:
+The official VAMS documentation site is the single source of truth for the CLI. It contains the full command reference, authentication and profile flows, automation and CI/CD patterns, and troubleshooting.
 
-**[VAMS CLI Reference Documentation](../../documentation/docusaurus-site/docs/cli/getting-started.md)**
+| Section                                                                                                    | Description                                          |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| [Getting Started](https://awslabs.github.io/visual-asset-management-system/cli/getting-started)            | Installation, first-time setup, and authentication   |
+| [Installation and Profiles](https://awslabs.github.io/visual-asset-management-system/cli/installation)     | Install methods, profiles, and configuration storage |
+| [Command Reference](https://awslabs.github.io/visual-asset-management-system/cli/command-reference)        | Index of all command groups with per-command pages   |
+| [Automation and Scripting](https://awslabs.github.io/visual-asset-management-system/cli/automation)        | JSON output, pagination, scripting, and CI/CD        |
+| [Development](https://awslabs.github.io/visual-asset-management-system/cli/development)                    | Contributing, code quality, testing, and releasing   |
+| [Troubleshooting](https://awslabs.github.io/visual-asset-management-system/cli/troubleshooting/setup-auth) | Problem-solving by domain                            |
 
-To view the full documentation site locally:
+To view the documentation site locally:
 
 ```bash
 cd documentation/docusaurus-site
 npm install
 npm run start
 ```
+
+Then open `http://localhost:3000/visual-asset-management-system/cli/getting-started` in your browser. The Markdown sources live under [`documentation/docusaurus-site/docs/cli/`](../../documentation/docusaurus-site/docs/cli/).
 
 ## License
 

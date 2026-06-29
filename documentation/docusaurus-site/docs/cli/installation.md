@@ -36,15 +36,25 @@ Ensure your system meets the following requirements:
     ```
 
 :::tip[Virtual Environment]
-It is recommended to install VamsCLI inside a Python virtual environment to avoid dependency conflicts:
+It is recommended to install VamsCLI inside a Python virtual environment to avoid dependency conflicts. Either `venv` or `conda` works:
 
 ```bash
+# venv
 python -m venv venv
 source venv/bin/activate    # Linux/macOS
 venv\Scripts\activate       # Windows
 pip install -e .
+
+# conda
+conda create -n vamscli python=3.13
+conda activate vamscli
+pip install -e .
 ```
 
+:::
+
+:::note[Installing without a virtual environment]
+If you install outside a virtual environment and lack permission to write to the system site-packages, install into your user site with `pip install --user .`. If the `vamscli` command is not found afterward, ensure Python's script directory is on your `PATH`, or invoke the CLI with `python -m vamscli`.
 :::
 
 ### Install from Pre-built Wheel
@@ -69,7 +79,9 @@ pip install build
 python -m build
 ```
 
-This creates files in the `dist/` directory: `vamscli-X.X.X-py3-none-any.whl` (wheel) and `vamscli-X.X.X.tar.gz` (source distribution).
+This creates files in the `dist/` directory: `vamscli-X.X.X-py3-none-any.whl` (wheel) and `vamscli-X.X.X.tar.gz` (source distribution). To rebuild from scratch, remove the previous artifacts first with `rm -rf build/ dist/ *.egg-info/`.
+
+For detailed contributor guidance — code quality tooling, testing, command architecture, and the release process — see [VamsCLI Development](development.md).
 
 ### Uninstalling VamsCLI
 
@@ -89,6 +101,12 @@ pip install -e .
 ```
 
 The `pip install -e .` command links to the source directory, so in most cases pulling new code automatically updates the CLI. Re-running the install command ensures any new dependencies are resolved.
+
+If you installed from a wheel rather than from source, upgrade by installing the new wheel with `--upgrade`:
+
+```bash
+pip install --upgrade path/to/vamscli-X.X.X-py3-none-any.whl
+```
 
 ## Profile Management
 

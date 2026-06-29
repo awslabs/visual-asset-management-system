@@ -411,48 +411,46 @@ class APIClient:
             # Save new authentication profile
             self.profile_manager.save_auth_profile(auth_result)
             
-            # Try to call login profile API to validate and refresh user profile
+            # Try to call login profile API to validate and refresh user profile.
+            # A failure here is non-blocking: we still have valid tokens and must
+            # continue on to fetch feature switches below.
+            login_profile_error = None
             try:
                 login_profile_result = self.call_login_profile(saved_credentials['username'])
-                
-                # Try to fetch feature switches after successful re-authentication
-                try:
-                    secure_config_result = self.get_secure_config()
-                    self.profile_manager.save_feature_switches(secure_config_result)
-                    
-                    log_auth_diagnostic(
-                        auth_type="reauth_saved_creds",
-                        status="success",
-                        details={
-                            'user_id': saved_credentials['username'],
-                            'profile_name': self.profile_manager.profile_name,
-                            'secure_config': secure_config_result
-                        }
-                    )
-                except Exception as sc_error:
-                    # Feature switches fetch failure is non-blocking
-                    log_auth_diagnostic(
-                        auth_type="reauth_saved_creds",
-                        status="success_partial",
-                        details={
-                            'user_id': saved_credentials['username'],
-                            'profile_name': self.profile_manager.profile_name,
-                            'secure_config_error': str(sc_error)
-                        }
-                    )
-                    
             except Exception as lp_error:
-                # If login profile API fails, we still have valid tokens
+                login_profile_error = lp_error
+
+            # Try to fetch feature switches independently of the login-profile result
+            secure_config_error = None
+            try:
+                secure_config_result = self.get_secure_config()
+                self.profile_manager.save_feature_switches(secure_config_result)
+            except Exception as sc_error:
+                # Feature switches fetch failure is non-blocking
+                secure_config_error = sc_error
+
+            if login_profile_error is None and secure_config_error is None:
+                log_auth_diagnostic(
+                    auth_type="reauth_saved_creds",
+                    status="success",
+                    details={
+                        'user_id': saved_credentials['username'],
+                        'profile_name': self.profile_manager.profile_name,
+                        'secure_config': secure_config_result
+                    }
+                )
+            else:
                 log_auth_diagnostic(
                     auth_type="reauth_saved_creds",
                     status="success_partial",
                     details={
                         'user_id': saved_credentials['username'],
                         'profile_name': self.profile_manager.profile_name,
-                        'login_profile_error': str(lp_error)
+                        'login_profile_error': str(login_profile_error) if login_profile_error else None,
+                        'secure_config_error': str(secure_config_error) if secure_config_error else None
                     }
                 )
-            
+
             return True
             
         except Exception as e:

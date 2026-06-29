@@ -363,11 +363,19 @@ export const fetchAllDatabases = async () => {
             return items;
         }
 
-        // If no items found, return empty array instead of false
+        // No recognizable Items payload — surface the API message so the page can
+        // show it, otherwise fall back to an empty list (genuinely zero databases).
+        if (response && typeof response.message === "string" && response.message.trim() !== "") {
+            console.log(response.message);
+            return response.message;
+        }
         return [];
     } catch (error) {
         console.log("Error fetching databases:", error);
-        return [];
+        // Return the error message string so list/selector consumers can surface it
+        // (ListPage renders a non-empty string via setError); an array would be
+        // mistaken for data and the failure would be silent.
+        return error?.message || "Failed to load databases.";
     }
 };
 

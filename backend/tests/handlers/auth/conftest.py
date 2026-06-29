@@ -32,6 +32,12 @@ def _install_real_constants():
 
 _install_real_constants()
 
+# Several auth handlers load required environment variables at module import time
+# (gold-standard pattern: raise on missing). Handler modules are imported during
+# collection, before any fixture runs, so these must be set at conftest load time.
+os.environ.setdefault("USER_STORAGE_TABLE_NAME", "test-user-table")
+os.environ.setdefault("COGNITO_AUTH_ENABLED", "true")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_environment():

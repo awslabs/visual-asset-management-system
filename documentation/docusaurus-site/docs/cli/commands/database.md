@@ -7,6 +7,10 @@ title: Database Commands
 
 Manage VAMS databases and Amazon S3 bucket configurations. Databases are logical containers for organizing assets.
 
+:::note[Pagination]
+List commands (`database list`, `database list-buckets`) share a common pagination model. `--page-size` is passed to the API to control items per request. `--auto-paginate` fetches all pages up to `--max-items` (default: 10000); `--max-items` is a CLI-side limit and is ignored (with a warning) unless `--auto-paginate` is set. For manual paging, use the `NextToken` from a response as the next `--starting-token`. `--auto-paginate` and `--starting-token` cannot be combined.
+:::
+
 ---
 
 ## database list
@@ -31,6 +35,7 @@ vamscli database list
 vamscli database list --show-deleted
 vamscli database list --auto-paginate
 vamscli database list --auto-paginate --max-items 5000
+vamscli database list --page-size 200 --starting-token "token123"
 vamscli database list --json-output
 ```
 
@@ -38,7 +43,7 @@ vamscli database list --json-output
 
 ## database get
 
-Get details for a specific database.
+Get details for a specific database, including metadata, bucket information, and asset count.
 
 ```bash
 vamscli database get [OPTIONS]
@@ -50,12 +55,17 @@ vamscli database get [OPTIONS]
 | `--show-deleted`      | Flag | No       | Include deleted databases in search |
 | `--json-output`       | Flag | No       | Output raw JSON response            |
 
-Output includes database ID, description, creation date, asset count, default bucket information, metadata restriction status, and file upload extension restrictions.
+Output includes database ID, description, creation date, asset count, default bucket ID, bucket name and base assets prefix, metadata restriction status, and file upload extension restrictions.
 
 ```bash
 vamscli database get -d my-database
+vamscli database get -d my-database --show-deleted
 vamscli database get -d my-database --json-output
 ```
+
+:::tip[Database not found]
+If a database is not found, try `--show-deleted` to include deleted databases in the search.
+:::
 
 ---
 
@@ -71,11 +81,20 @@ vamscli database create [OPTIONS]
 | --------------------------------------- | ---- | ----------- | ------------------------------------------------------------------------- |
 | `-d`, `--database-id`                   | TEXT | Yes         | Database ID to create                                                     |
 | `--description`                         | TEXT | Conditional | Database description (required unless using `--json-input`)               |
-| `--default-bucket-id`                   | TEXT | No          | Default bucket ID (prompts if not provided)                               |
-| `--restrict-metadata-outside-schemas`   | Flag | No          | Restrict metadata to defined schemas only                                 |
+| `--default-bucket-id`                   | TEXT | Conditional | Default bucket ID (prompts interactively if omitted)                      |
+| `--restrict-metadata-outside-schemas`   | Flag | No          | Restrict metadata to fields defined in the database schema                |
 | `--restrict-file-uploads-to-extensions` | TEXT | No          | Comma-separated list of allowed file extensions (e.g., `.pdf,.docx,.jpg`) |
-| `--json-input`                          | TEXT | No          | JSON input file path or JSON string                                       |
+| `--json-input`                          | TEXT | No          | JSON input file path or JSON string with all database data                |
 | `--json-output`                         | Flag | No          | Output raw JSON response                                                  |
+
+:::note
+When `--default-bucket-id` is omitted, the CLI lists available buckets and prompts for a selection. In `--json-output` mode this prompt is unavailable, so `--default-bucket-id` is required. Use `vamscli database list-buckets` to find a bucket ID.
+:::
+
+### Configuration fields
+
+-   **Metadata restriction** — when `--restrict-metadata-outside-schemas` is set, only metadata fields defined in the database schema can be added to assets.
+-   **File extension restriction** — `--restrict-file-uploads-to-extensions` accepts a comma-separated list of extensions with leading dots (e.g., `.pdf,.docx,.jpg`). The special value `.all` bypasses the restriction; an empty or omitted value applies no restriction.
 
 ### JSON input format
 
@@ -89,6 +108,8 @@ vamscli database create [OPTIONS]
 }
 ```
 
+`--json-input` accepts either a JSON string or a path to a JSON file. The `-d`/`--database-id` option always overrides the `databaseId` in the JSON payload.
+
 ### Examples
 
 ```bash
@@ -96,7 +117,7 @@ vamscli database create -d my-database --description "My Database"
 vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid"
 vamscli database create -d my-database --description "My Database" --restrict-metadata-outside-schemas
 vamscli database create -d my-database --description "My Database" --restrict-file-uploads-to-extensions ".pdf,.docx,.jpg"
-vamscli database create -d my-database --json-input @database-config.json --json-output
+vamscli database create -d my-database --json-input database-config.json --default-bucket-id "bucket-uuid" --json-output
 ```
 
 ---
@@ -122,15 +143,17 @@ vamscli database update [OPTIONS]
 | `--json-output`                          | Flag | No       | Output raw JSON response            |
 
 :::note
-At least one field must be provided for update. The flags `--restrict-metadata-outside-schemas` and `--no-restrict-metadata-outside-schemas` are mutually exclusive, as are `--restrict-file-uploads-to-extensions` and `--clear-file-extensions`.
+At least one updatable field must be provided (otherwise the command errors). The flags `--restrict-metadata-outside-schemas` and `--no-restrict-metadata-outside-schemas` are mutually exclusive, as are `--restrict-file-uploads-to-extensions` and `--clear-file-extensions`. The `-d`/`--database-id` option overrides any `databaseId` in a `--json-input` payload.
 :::
 
 ```bash
 vamscli database update -d my-database --description "Updated description"
+vamscli database update -d my-database --default-bucket-id "new-bucket-uuid"
 vamscli database update -d my-database --restrict-metadata-outside-schemas
 vamscli database update -d my-database --no-restrict-metadata-outside-schemas
 vamscli database update -d my-database --restrict-file-uploads-to-extensions ".pdf,.png"
 vamscli database update -d my-database --clear-file-extensions
+vamscli database update -d my-database --json-input '{"description":"Updated","restrictMetadataOutsideSchemas":true}'
 ```
 
 ---
@@ -149,12 +172,13 @@ vamscli database delete [OPTIONS]
 | `--confirm`           | Flag | Yes      | Confirm database deletion |
 | `--json-output`       | Flag | No       | Output raw JSON response  |
 
-:::warning[Deletion Prerequisites]
-The database must not contain any active assets, workflows, or pipelines. Requires explicit `--confirm` flag and an interactive confirmation prompt.
+:::warning[Deletion prerequisites]
+The database must not contain any active assets, workflows, or pipelines before it can be deleted. The `--confirm` flag is required; in CLI mode an additional interactive confirmation prompt must be answered. In `--json-output` mode the prompt is skipped and `--confirm` alone proceeds.
 :::
 
 ```bash
 vamscli database delete -d my-database --confirm
+vamscli database delete -d my-database --confirm --json-output
 ```
 
 ---
@@ -167,19 +191,20 @@ List available Amazon S3 bucket configurations for use with databases.
 vamscli database list-buckets [OPTIONS]
 ```
 
-| Option             | Type    | Required | Description                                                |
-| ------------------ | ------- | -------- | ---------------------------------------------------------- |
-| `--page-size`      | INTEGER | No       | Number of items per page                                   |
-| `--max-items`      | INTEGER | No       | Maximum total items to fetch (only with `--auto-paginate`) |
-| `--starting-token` | TEXT    | No       | Token for manual pagination                                |
-| `--auto-paginate`  | Flag    | No       | Automatically fetch all items                              |
-| `--json-output`    | Flag    | No       | Output raw JSON response                                   |
+| Option             | Type    | Required | Description                                                                |
+| ------------------ | ------- | -------- | -------------------------------------------------------------------------- |
+| `--page-size`      | INTEGER | No       | Number of items per page                                                   |
+| `--max-items`      | INTEGER | No       | Maximum total items to fetch (only with `--auto-paginate`, default: 10000) |
+| `--starting-token` | TEXT    | No       | Token for manual pagination                                                |
+| `--auto-paginate`  | Flag    | No       | Automatically fetch all items                                              |
+| `--json-output`    | Flag    | No       | Output raw JSON response                                                   |
 
-Output includes bucket ID, bucket name, and base assets prefix.
+Output includes bucket ID, bucket name, and base assets prefix. Use a returned bucket ID with `database create --default-bucket-id` or `database update --default-bucket-id`.
 
 ```bash
 vamscli database list-buckets
 vamscli database list-buckets --auto-paginate
+vamscli database list-buckets --page-size 200 --starting-token "token123"
 vamscli database list-buckets --json-output
 ```
 
@@ -187,27 +212,36 @@ vamscli database list-buckets --json-output
 
 ## Workflow Examples
 
-### Database with restrictions
+### Databases with restrictions
 
 ```bash
-# Create a database with strict metadata schema enforcement
+# Enforce metadata schemas (for compliance and data governance)
 vamscli database create -d schema-enforced-db \
   --description "Schema-Enforced Database" \
   --default-bucket-id "bucket-uuid" \
   --restrict-metadata-outside-schemas
 
-# Create a database that only accepts specific file types
-vamscli database create -d documents-db \
-  --description "Documents Database" \
+# Accept only specific file types (e.g., CAD models)
+vamscli database create -d cad-models \
+  --description "CAD Models Database" \
   --default-bucket-id "bucket-uuid" \
-  --restrict-file-uploads-to-extensions ".pdf,.docx,.xlsx"
+  --restrict-file-uploads-to-extensions ".step,.stp,.iges,.igs"
+
+# Combine both controls, then remove them later
+vamscli database update -d existing-db --restrict-metadata-outside-schemas
+vamscli database update -d existing-db --no-restrict-metadata-outside-schemas --clear-file-extensions
 ```
 
 ### Automation with JSON
 
 ```bash
-vamscli database create -d automated-db --json-input @database-config.json --json-output
+# Capture current state for migration or backup
 vamscli database list --json-output > current-databases.json
+vamscli database get -d my-database --json-output > my-database-config.json
+vamscli database list-buckets --json-output > bucket-configs.json
+
+# Create from a saved JSON config (bucket ID required in JSON output mode)
+vamscli database create -d automated-db --json-input database-config.json --default-bucket-id "bucket-uuid" --json-output
 ```
 
 ## Related Pages
@@ -215,3 +249,4 @@ vamscli database list --json-output > current-databases.json
 -   [Asset Commands](assets.md)
 -   [File Commands](files.md)
 -   [Metadata Commands](metadata.md)
+-   [Search Commands](search.md)

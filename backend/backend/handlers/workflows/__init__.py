@@ -17,6 +17,11 @@ logger = safeLogger(service="WorkflowCommon")
 dynamodb = boto3.resource('dynamodb')
 sf_client = boto3.client('stepfunctions')
 
+# Deployment AWS partition for Step Functions service-integration ARNs in any ASL state this
+# module rebuilds (arn:{partition}:states:::...). Defaults to "aws"; GovCloud/China/ISO inject
+# the matching partition.
+aws_partition = os.environ.get('AWS_PARTITION', 'aws') or 'aws'
+
 
 def _scan_all_workflows(workflow_table):
     """Scan all workflows from the table, handling DynamoDB pagination."""
@@ -126,7 +131,7 @@ def update_pipeline_workflows(self, pipelineData, event):
             for step_name in original_workflow["States"]:
                 if updated_pipeline_id in step_name:
                     try:
-                        builder = get_task_builder(exec_type)
+                        builder = get_task_builder(exec_type, partition=aws_partition)
 
                         # Preserve transition fields from existing state
                         existing_state = original_workflow["States"][step_name]

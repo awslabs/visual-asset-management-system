@@ -75,6 +75,7 @@ export function buildCreatePipelineFunction(
                 ? newPipelineLambdaSecurityGroup.securityGroupId
                 : "", //used if subnet IDs are passed in,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            AWS_PARTITION: config.env.partition,
         },
     });
     enablePipelineFunction.grantInvoke(fun);

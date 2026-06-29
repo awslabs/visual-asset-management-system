@@ -7,6 +7,10 @@ title: Setup and Authentication Commands
 
 This page documents VamsCLI commands for initial setup, authentication, profile management, and feature switch inspection.
 
+:::note[JSON output and profile selection]
+Every command on this page accepts `--json-output` to emit a machine-readable JSON response instead of formatted text. The global `--profile <name>` option selects which profile a command runs against (default: `default`). These are omitted from individual Options tables unless they affect a command's behavior.
+:::
+
 ## setup
 
 Configure VamsCLI to connect to a VAMS deployment. The command fetches the Amplify configuration from the provided URL and extracts the Amazon API Gateway endpoint, AWS Region, and Amazon Cognito settings.
@@ -22,6 +26,7 @@ vamscli setup <BASE_URL> [OPTIONS]
 | `BASE_URL`             | TEXT | Yes      | VAMS deployment URL (Amazon CloudFront, ALB, Amazon API Gateway, or custom domain) |
 | `--force`, `-f`        | Flag | No       | Overwrite existing configuration                                                   |
 | `--skip-version-check` | Flag | No       | Skip CLI/API version mismatch confirmation prompts                                 |
+| `--json-output`        | Flag | No       | Output raw JSON response                                                           |
 
 ### What setup does
 
@@ -64,7 +69,7 @@ Configuration is saved to `~/.config/vamscli/profiles/\{profile_name\}/`. Each p
 
 ## auth login
 
-Authenticate with VAMS using Amazon Cognito or token override.
+Authenticate with VAMS using Amazon Cognito or a token override. Token override supplies a pre-generated token directly instead of having the CLI sign you in. It is used mostly for external identity provider authentication, but any valid pre-generated token works (including an Amazon Cognito token obtained outside VAMS).
 
 ```bash
 vamscli auth login [OPTIONS]
@@ -72,15 +77,17 @@ vamscli auth login [OPTIONS]
 
 ### Options
 
-| Option                 | Type | Required    | Description                                                       |
-| ---------------------- | ---- | ----------- | ----------------------------------------------------------------- |
-| `-u`, `--username`     | TEXT | Conditional | Username for Amazon Cognito authentication                        |
-| `-p`, `--password`     | TEXT | No          | Password (prompts securely if not provided)                       |
-| `--save-credentials`   | Flag | No          | Save credentials for automatic re-authentication                  |
-| `--user-id`            | TEXT | Conditional | User ID for token override authentication                         |
-| `--token-override`     | TEXT | Conditional | Override token for external authentication (requires `--user-id`) |
-| `--expires-at`         | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)   |
-| `--skip-version-check` | Flag | No          | Skip version mismatch confirmation prompts                        |
+| Option                 | Type | Required    | Description                                                                              |
+| ---------------------- | ---- | ----------- | ---------------------------------------------------------------------------------------- |
+| `-u`, `--username`     | TEXT | Conditional | Username for Amazon Cognito authentication                                               |
+| `-p`, `--password`     | TEXT | No          | Password (prompts securely if not provided)                                              |
+| `--new-password`       | TEXT | No          | New password to set when Amazon Cognito requires a password change                       |
+| `--save-credentials`   | Flag | No          | Save credentials for automatic re-authentication                                         |
+| `--user-id`            | TEXT | Conditional | User ID for token override authentication                                                |
+| `--token-override`     | TEXT | Conditional | Pre-generated token to use directly, mostly for external IDP auth (requires `--user-id`) |
+| `--expires-at`         | TEXT | No          | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`)                          |
+| `--skip-version-check` | Flag | No          | Skip version mismatch confirmation prompts                                               |
+| `--json-output`        | Flag | No          | Output raw JSON response                                                                 |
 
 ### Amazon Cognito examples
 
@@ -88,7 +95,14 @@ vamscli auth login [OPTIONS]
 vamscli auth login -u john.doe@example.com
 vamscli auth login -u john.doe@example.com -p mypassword
 vamscli auth login -u john.doe@example.com --save-credentials
+
+# First login when Amazon Cognito forces a password change
+vamscli auth login -u john.doe@example.com -p temporary-password --new-password new-password
 ```
+
+:::note[Forced Password Change on Login]
+Amazon Cognito can require a password change before the first successful sign-in (for example, for a newly created account). In interactive mode, VamsCLI prompts for the new password when one is required. With `--json-output`, supply the new password using `--new-password`; if a change is required and `--new-password` is not provided, the command returns an error rather than prompting.
+:::
 
 ### Token override examples
 
@@ -115,6 +129,90 @@ If your VAMS deployment uses external authentication (no Amazon Cognito), you mu
 vamscli auth login --user-id user@example.com --token-override "your-external-token"
 ```
 
+:::
+
+---
+
+## auth change-password
+
+Change an Amazon Cognito user's password **when you know your current password**. The command signs in with the current password and sets a new one. It also satisfies a forced password change when Amazon Cognito requires one (for example, on a new account's first sign-in).
+
+:::tip[change-password vs. forgot-password]
+Use `auth change-password` when you **know** your current password and want to set a new one. If you have **forgotten** your password, use [`auth forgot-password`](#auth-forgot-password) instead, which resets it with a verification code emailed by Amazon Cognito.
+:::
+
+```bash
+vamscli auth change-password [OPTIONS]
+```
+
+### Options
+
+| Option             | Type | Required    | Description                                   |
+| ------------------ | ---- | ----------- | --------------------------------------------- |
+| `-u`, `--username` | TEXT | Yes         | Username for Amazon Cognito authentication    |
+| `--old-password`   | TEXT | Conditional | Current password (prompts if not provided)    |
+| `--new-password`   | TEXT | Conditional | New password to set (prompts if not provided) |
+| `--json-output`    | Flag | No          | Output raw JSON response                      |
+
+### Examples
+
+```bash
+vamscli auth change-password -u john.doe@example.com
+vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
+vamscli auth change-password -u john.doe@example.com --old-password old --new-password new --json-output
+```
+
+:::note[Amazon Cognito Only]
+This command is available only for deployments that use Amazon Cognito authentication. In interactive mode, VamsCLI prompts for any password not provided on the command line (the new password is confirmed). With `--json-output`, both `--old-password` and `--new-password` are required.
+:::
+
+---
+
+## auth forgot-password
+
+Reset a forgotten Amazon Cognito password **when you do not know your current password**, using an emailed verification code. This is a self-service flow that does not require knowing the current password. It is available only for deployments that use Amazon Cognito authentication.
+
+:::tip[forgot-password vs. change-password]
+Use `auth forgot-password` when you have **forgotten** your password and need to reset it. If you **know** your current password and simply want to change it, use [`auth change-password`](#auth-change-password) instead.
+:::
+
+```bash
+vamscli auth forgot-password [OPTIONS]
+```
+
+### Options
+
+| Option             | Type | Required    | Description                                                |
+| ------------------ | ---- | ----------- | ---------------------------------------------------------- |
+| `-u`, `--username` | TEXT | Yes         | Username for Amazon Cognito authentication                 |
+| `--code`           | TEXT | Conditional | Verification code emailed by Amazon Cognito (confirm step) |
+| `--new-password`   | TEXT | Conditional | New password to set (confirm step)                         |
+| `--json-output`    | Flag | No          | Output raw JSON response                                   |
+
+### How it works
+
+The reset is a two-step flow handled by a single command:
+
+1. **Request a code** — run with `--username` only. Amazon Cognito emails a verification code to the user's verified email or phone.
+2. **Confirm the reset** — run again with `--code` and `--new-password` to set the new password.
+
+In interactive mode, after the code is requested VamsCLI prompts for the verification code and new password, completing both steps in one invocation. With `--json-output`, prompts are not possible: provide `--code` and `--new-password` together to confirm, or neither to only request a code.
+
+### Examples
+
+```bash
+# Step 1: request a verification code
+vamscli auth forgot-password -u john.doe@example.com
+
+# Step 2: confirm with the emailed code and a new password
+vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
+
+# JSON output (request a code only)
+vamscli auth forgot-password -u john.doe@example.com --json-output
+```
+
+:::note[After a Reset]
+A successful reset does not sign you in. Authenticate afterward with `vamscli auth login` using the new password.
 :::
 
 ---
@@ -159,11 +257,12 @@ Set an override token for external authentication systems.
 vamscli auth set-override [OPTIONS]
 ```
 
-| Option            | Type | Required | Description                                |
-| ----------------- | ---- | -------- | ------------------------------------------ |
-| `-u`, `--user-id` | TEXT | Yes      | User ID associated with the override token |
-| `--token`         | TEXT | Yes      | Override token to use for authentication   |
-| `--expires-at`    | TEXT | No       | Token expiration time                      |
+| Option            | Type | Required | Description                                                     |
+| ----------------- | ---- | -------- | --------------------------------------------------------------- |
+| `-u`, `--user-id` | TEXT | Yes      | User ID associated with the override token                      |
+| `--token`         | TEXT | Yes      | Override token to use for authentication                        |
+| `--expires-at`    | TEXT | No       | Token expiration time (Unix timestamp, ISO 8601, or `+seconds`) |
+| `--json-output`   | Flag | No       | Output raw JSON response                                        |
 
 ```bash
 vamscli auth set-override -u john.doe@example.com --token "eyJhbGciOiJIUzI1NiIs..."
@@ -261,6 +360,52 @@ vamscli features check AUTHPROVIDER_COGNITO
 
 ---
 
+## features example-govcloud
+
+Demonstration command that runs only when the `GOVCLOUD` feature switch is enabled. It illustrates how feature-gated commands behave; it performs no operations.
+
+```bash
+vamscli features example-govcloud [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--json-output` | Flag | No       | Output raw JSON response |
+
+```bash
+vamscli features example-govcloud
+vamscli features example-govcloud --json-output
+```
+
+:::note[Feature-Gated]
+If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.`
+:::
+
+---
+
+## features example-location
+
+Demonstration command that runs only when the `LOCATIONSERVICES` feature switch is enabled. It illustrates how feature-gated commands behave; it performs no operations.
+
+```bash
+vamscli features example-location [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--json-output` | Flag | No       | Output raw JSON response |
+
+```bash
+vamscli features example-location
+vamscli features example-location --json-output
+```
+
+:::note[Feature-Gated]
+If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.`
+:::
+
+---
+
 ## profile list
 
 List all available profiles with their status, API Gateway URLs, and authentication status.
@@ -293,6 +438,7 @@ vamscli profile delete <PROFILE_NAME> [--force]
 | --------------- | ---- | -------- | ----------------------------------- |
 | `PROFILE_NAME`  | TEXT | Yes      | Name of the profile to delete       |
 | `--force`, `-f` | Flag | No       | Force deletion without confirmation |
+| `--json-output` | Flag | No       | Output raw JSON response            |
 
 ---
 
