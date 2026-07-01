@@ -32,6 +32,7 @@ infra/
     config.json                 # Active deployment configuration
     config.template.commercial.json  # Commercial template
     config.template.govcloud.json    # GovCloud template
+    config.template.eusovereign.json # EU Sovereign Cloud template
     saml-config.ts              # SAML provider settings
     csp/                        # CSP additional config (cspAdditionalConfig.json)
     docker/                     # Docker build configurations
@@ -85,12 +86,14 @@ infra/
           dynamodb-authdefaults-admin-construct.ts
           dynamodb-authdefaults-ro-construct.ts
       apiLambda/
-        apigatewayv2-amplify-nestedStack.ts  # API Gateway V2 HttpApi + Lambda authorizer
+        api-nestedStack.ts                   # API nested stack: selects API implementation by config.app.api.apiType (IApiImplementation)
+        apiRouteRegistry.ts                  # Cross-stack route descriptor registry + attachFunctionToApi() (apiLambda-level, implementation-agnostic)
         apiBuilder-nestedStack.ts            # Primary API routes + Lambda wiring (asset, database, metadata, auth, pipeline, workflow, etc.)
         apiBuilder2-nestedStack.ts           # Secondary API stack: self-contained domains moved to free ApiBuilder headroom (currently Tags, Tag Types, Auth Constraints)
         lambdaLayersBuilder-nestedStack.ts   # Lambda layer construction
         constructs/
-          apigatewayv2-lambda-construct.ts       # Route attachment helper
+          rest-api-gateway-construct.ts          # RestApiGatewayConstruct (API Gateway REST IApiImplementation) + resolveApiGatewayVpcEndpointId()
+          buildOpenApiSpec.ts                    # OpenAPI spec generator from registry (REST-specific; auth + anon security schemes)
           amplify-config-lambda-construct.ts     # /api/amplify-config endpoint
           vams-version-lambda-construct.ts       # /api/version endpoint
           dynamodb-metadataschema-defaults-construct.ts
@@ -276,14 +279,15 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 
 ### Key Constants (config/config.ts)
 
-| Constant                          | Value                                     |
-| --------------------------------- | ----------------------------------------- |
-| `VAMS_VERSION`                    | `"2.X.0"`                                 |
-| `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                     |
-| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                     |
-| `LAMBDA_MEMORY_SIZE`              | `5308`                                    |
-| `OPENSEARCH_VERSION`              | `OPENSEARCH_2_7`                          |
-| `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]` |
+| Constant                          | Value                                                                                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `VAMS_VERSION`                    | `"2.X.0"`                                                                                                                                                                      |
+| `LAMBDA_PYTHON_RUNTIME`           | `Runtime.PYTHON_3_12`                                                                                                                                                          |
+| `LAMBDA_NODE_RUNTIME`             | `Runtime.NODEJS_22_X`                                                                                                                                                          |
+| `LAMBDA_MEMORY_SIZE`              | `5308`                                                                                                                                                                         |
+| `OPENSEARCH_VERSION`              | `OPENSEARCH_3_5` (standard partitions)                                                                                                                                         |
+| `OPENSEARCH_VERSION_EUSOVEREIGN`  | `OPENSEARCH_2_19` (AWS European Sovereign Cloud `aws-eusc`; OpenSearch 3.x not yet supported there). The provisioned construct selects this when `Partition() === "aws-eusc"`. |
+| `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]`                                                                                                                                      |
 
 ### ConfigPublic Interface
 
@@ -298,7 +302,7 @@ The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all depl
 -   `app.pipelines`: useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useUserPasswordAuthFlow), useExternalOAuthIdp, authorizerOptions.allowedIpRanges
--   `app.api`: globalRateLimit (default 50), globalBurstLimit (default 100)
+-   `app.api`: apiType (fixed `"APIGATEWAY_REST"`), apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE). The REST API stage name is NOT a config field — it is the fixed constant `API_GATEWAY_STAGE_NAME` (`"api"`) in `config/config.ts`, shared with the VamsCLI endpoint constants and the web `/api/*` fronting.
 -   `app.govCloud`: enabled, il6Compliant
 -   `app.iamRoleConfig`: useCustomBootstrapRoles, useCustomVamsStackRoles (advanced; mappings live in `config/policy/iamRoleConfig.json`)
 -   `app.webUi`: optionalBannerHtmlMessage, allowUnsafeEvalFeatures
@@ -399,7 +403,7 @@ every nested stack and bloated the synthesized CloudFormation templates. Scope t
 
 -   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
 -   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Adds env vars for AUTH_TABLE_NAME, CONSTRAINTS_TABLE_NAME, USER_ROLES_TABLE_NAME, ROLES_TABLE_NAME + 9 audit log group env vars. Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all audit log groups.
--   **`globalLambdaEnvironmentsAndPermissions`**: Sets COGNITO_AUTH_ENABLED based on Cognito + VPC configuration
+-   **`globalLambdaEnvironmentsAndPermissions`**: Sets `COGNITO_AUTH_ENABLED` — `TRUE` whenever Cognito is the auth provider, and `FALSE` only when Lambda functions run in the VPC **and** the partition is AWS GovCloud (US) (`aws-us-gov`) or AWS European Sovereign Cloud (`aws-eusc`), where Cognito PrivateLink is unavailable so an in-VPC Lambda cannot reach Cognito for the MFA check. `addVpcEndpoints = false` does **not** disable it: in that mode the VPC builder skips endpoint creation because the operator hand-creates the same endpoints (including `cognito-idp`/`cognito-identity`), so Cognito remains reachable and the check stays enabled. In every supported (non-GovCloud/EU-Sovereign) partition the VPC builder creates the `cognito-idp`/`cognito-identity` interface endpoints so in-VPC Lambda functions can reach Cognito.
 -   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
@@ -408,31 +412,39 @@ every nested stack and bloated the synthesized CloudFormation templates. Scope t
 
 ## API Gateway Pattern
 
-### HttpApi Setup (apigatewayv2-amplify-nestedStack.ts)
+### REST API Setup (api-nestedStack.ts + constructs/rest-api-gateway-construct.ts)
 
--   API Gateway V2 HttpApi with custom Lambda authorizer
--   Authorizer: `HttpLambdaResponseType.SIMPLE`, cache TTL 30 seconds, identity source `$request.header.Authorization`
--   CORS: all origins (`*`), standard + auth headers, all HTTP methods, credentials=false
--   Rate limiting: `config.app.api.globalRateLimit` (default 50) / `config.app.api.globalBurstLimit` (default 100)
+-   `ApiNestedStack` (`api-nestedStack.ts`) is implementation-agnostic: it selects an API implementation by `config.app.api.apiType` and exposes the result via `IApiImplementation` (`apiEndpoint`, `invokeUrlWithStage`, `stageName`). Today the only supported type is `API_TYPE_APIGATEWAY_REST` (`"APIGATEWAY_REST"`, the only value in `SUPPORTED_API_TYPES`); it instantiates `RestApiGatewayConstruct`. A future entry point (e.g. ALB) adds a `SUPPORTED_API_TYPES` value, a construct under `constructs/` implementing `IApiImplementation`, and a branch here — downstream consumers stay unchanged.
+-   REST API (v1) built from a cross-stack route registry, materialized as a single `SpecRestApi` with an inline OpenAPI spec
+-   Custom Lambda authorizer: REQUEST type, returns IAM policy with wildcard resource (for cache correctness). Authenticated routes use the `VamsAuthorizer` scheme (identity source `method.request.header.Authorization`, 30s cache TTL); anonymous/ignored routes use the `VamsAnonymousAuthorizer` scheme (identity source `context.identity.sourceIp`, 900s cache TTL) — the same Lambda still runs the IP-restriction check, so no route is left without an authorizer.
+-   Explicit Deployment + Stage (stage name = the fixed constant `API_GATEWAY_STAGE_NAME` = `"api"`)
+-   CORS: all origins (`*`), standard + auth headers, all HTTP methods, credentials=false. Set in three places because REST responses come from three layers: (1) the per-path OPTIONS **MOCK** method (unauthenticated — no `security` on OPTIONS) returns the preflight ACAO from `buildOpenApiSpec.ts`; (2) **GatewayResponses** (`DEFAULT_4XX`/`DEFAULT_5XX`, added in `rest-api-gateway-construct.ts`) inject ACAO on authorizer denials (401/403), missing-auth-token, and errors — these never reach a Lambda, so the handler cannot add it; (3) the Lambda handler adds ACAO to its own proxy response body (`commonHeaders()`), which API Gateway returns verbatim.
+-   Resource policy: **always** written explicitly to match `endpointType` (`buildOpenApiSpec.ts`) — `aws:SourceVpce`-restricted for `PRIVATE`, public allow-all for `REGIONAL`. API Gateway does not clear a prior resource policy when an update omits one, so emitting it for both types ensures a `PRIVATE`↔`REGIONAL` switch overwrites the old policy. A stale `PRIVATE` policy left on a `REGIONAL` API denies every request (incl. the CORS preflight) with `403 AccessDeniedException` at the resource-policy layer, which a browser misreports as a CORS-preflight failure.
+-   Endpoint type: `config.app.api.apiGatewayRest.endpointType` (`"REGIONAL"` default, public, never routed through a VPC endpoint; `"PRIVATE"` reachable only through the execute-api VPC interface endpoint, requires `useGlobalVpc.enabled` + either `useGlobalVpc.addVpcEndpoints` or `optionalExternalPrivateApigVPCEId`, incompatible with CloudFront, and must be fronted by an ALB in isolated (non-public) subnets — `useAlb.enabled` + `useAlb.usePublicSubnet = false`)
+-   Stage name: fixed constant `API_GATEWAY_STAGE_NAME` (`"api"`) in `config/config.ts` — not a config field, because the value is also baked into the VamsCLI endpoint constants and the web `/api/*` fronting. Absorbed by CloudFront originPath / ALB redirect.
+-   VPC endpoint: only a `PRIVATE` endpoint uses an execute-api interface endpoint. The VPC builder creates it (gated on `apiType === APIGATEWAY_REST` and `endpointType === "PRIVATE"`) when `config.app.useGlobalVpc.addVpcEndpoints` is enabled; otherwise the operator supplies one via `config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId`. `REGIONAL` ignores any endpoint. `resolveApiGatewayVpcEndpointId()` in the construct encodes this.
+-   Rate limiting: `config.app.api.apiGatewayRest.globalRateLimit` (default 50) / `config.app.api.apiGatewayRest.globalBurstLimit` (default 100)
 -   Access logging to CloudWatch with structured JSON format
 
-### Route Attachment (attachFunctionToApi helper)
+### Route Registration (attachFunctionToApi helper)
 
-Routes are wired in `apiBuilder-nestedStack.ts` using:
+Routes are registered across nested stacks (`apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts`) using:
 
 ```typescript
 attachFunctionToApi(this, lambdaFunction, {
     routePath: "/database/{databaseId}",
-    method: apigateway.HttpMethod.GET,
-    api: api,
+    method: "GET",
+    registry: routeRegistry,
+    allowAnonymous: false, // optional, default false
 });
 ```
 
-This creates an `ApiGatewayV2LambdaConstruct` which:
+This adds a route descriptor to the `RouteRegistry` (imported from the REST API builder stack output). The REST API builder then renders all registered descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`.
 
-1. Grants invoke permission to the API Gateway service principal
-2. Creates an HttpLambdaIntegration
-3. Adds the route to the API
+For each registered route, `attachFunctionToApi`:
+
+1. Grants the REST API's execution role invoke permission on the Lambda
+2. Adds the route descriptor to the registry (path, method, function ARN, allow-anonymous flag)
 
 ### RESTful Route Convention
 
@@ -588,7 +600,7 @@ The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the Op
 1. Add new properties to `ConfigPublic` interface in `config/config.ts`
 2. Add backward-compatibility defaults in `getConfig()` (check for `undefined`)
 3. Add validation logic in `getConfig()` if constraints exist
-4. Update BOTH template files: `config.template.commercial.json` and `config.template.govcloud.json`
+4. Update **ALL** config template files: `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json`. A new or changed config option must be reflected in every template; a missed template silently falls back to `getConfig()` defaults and drops any operator-set value, leaving the templates inconsistent.
 5. Update `config.json` for the active deployment
 
 ### 2. Adding a New Lambda Function
@@ -891,23 +903,23 @@ Note: The test file uses the legacy `@aws-cdk/assert` library and has an outdate
 
 ## Key Files Quick Reference
 
-| Purpose                          | File                                                              |
-| -------------------------------- | ----------------------------------------------------------------- |
-| CDK entry point                  | `bin/infra.ts`                                                    |
-| Config & constants               | `config/config.ts`                                                |
-| Root stack                       | `lib/core-stack.ts`                                               |
-| Storage (DynamoDB, S3, SNS, SQS) | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts`          |
-| API routes                       | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`            |
-| API Gateway setup                | `lib/nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts`  |
-| Auth (Cognito/SAML/OAuth)        | `lib/nestedStacks/auth/authBuilder-nestedStack.ts`                |
-| Security helpers                 | `lib/helper/security.ts`                                          |
-| Service helper (ARN/endpoint)    | `lib/helper/service-helper.ts`                                    |
-| Partition lookup                 | `lib/helper/const.ts`                                             |
-| S3 bucket registry               | `lib/helper/s3AssetBuckets.ts`                                    |
-| Feature flags enum               | `common/vamsAppFeatures.ts`                                       |
-| WAF stack                        | `lib/cf-waf-stack.ts`                                             |
-| IAM role aspect                  | `lib/aspects/iam-role-transform.aspect.ts`                        |
-| Log retention aspect             | `lib/aspects/log-retention.aspect.ts`                             |
-| Pipeline orchestrator            | `lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`       |
-| Static web hosting               | `lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`   |
-| OpenSearch                       | `lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts` |
+| Purpose                          | File                                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------- |
+| CDK entry point                  | `bin/infra.ts`                                                                               |
+| Config & constants               | `config/config.ts`                                                                           |
+| Root stack                       | `lib/core-stack.ts`                                                                          |
+| Storage (DynamoDB, S3, SNS, SQS) | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                     |
+| API routes                       | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`                                       |
+| API Gateway setup                | `lib/nestedStacks/apiLambda/api-nestedStack.ts` + `constructs/rest-api-gateway-construct.ts` |
+| Auth (Cognito/SAML/OAuth)        | `lib/nestedStacks/auth/authBuilder-nestedStack.ts`                                           |
+| Security helpers                 | `lib/helper/security.ts`                                                                     |
+| Service helper (ARN/endpoint)    | `lib/helper/service-helper.ts`                                                               |
+| Partition lookup                 | `lib/helper/const.ts`                                                                        |
+| S3 bucket registry               | `lib/helper/s3AssetBuckets.ts`                                                               |
+| Feature flags enum               | `common/vamsAppFeatures.ts`                                                                  |
+| WAF stack                        | `lib/cf-waf-stack.ts`                                                                        |
+| IAM role aspect                  | `lib/aspects/iam-role-transform.aspect.ts`                                                   |
+| Log retention aspect             | `lib/aspects/log-retention.aspect.ts`                                                        |
+| Pipeline orchestrator            | `lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`                                  |
+| Static web hosting               | `lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`                              |
+| OpenSearch                       | `lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`                            |

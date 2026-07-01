@@ -81,6 +81,8 @@ cd web && nvm use && npm install && npm run build
 cd ../infra && npm install
 
 # 3. Bootstrap CDK (first time only)
+#    If importing an existing VPC, add: --context loadContextIgnoreVPCStacks=true
+#    See documentation/docs/deployment/deploy-the-solution.md (Bootstrap step)
 cdk bootstrap aws://ACCOUNT_ID/REGION
 
 # 4. Configure deployment (edit config.json and viewerConfig.json)

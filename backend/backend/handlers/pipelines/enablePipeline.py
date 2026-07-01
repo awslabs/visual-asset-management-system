@@ -11,6 +11,7 @@ from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from models.common import (
     APIGatewayProxyResponseV2,
+    commonHeaders,
     success,
     validation_error,
     authorization_error,
@@ -121,10 +122,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result['statusCode'],
-            headers={
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store',
-            },
+            headers=commonHeaders(),
             body=json.dumps({'message': result['message']})
         )
 

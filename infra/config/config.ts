@@ -22,6 +22,8 @@ export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
 export const LAMBDA_MEMORY_SIZE = 5308;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_3_5;
+export const OPENSEARCH_VERSION_EUSOVEREIGN =
+    cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_19;
 export const CODEBUILD_BUILD_IMAGE = codebuild.LinuxBuildImage.STANDARD_7_0;
 
 export const STACK_WAF_DESCRIPTION =
@@ -35,6 +37,19 @@ export const STACK_CORE_DESCRIPTION =
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
+
+// Backend API implementation type. Only API Gateway REST is supported today; the value is
+// fixed so the api-nestedStack can select an implementation construct and future API types
+// (e.g. an ALB-based entry point) can be added without changing the selection contract.
+export const API_TYPE_APIGATEWAY_REST = "APIGATEWAY_REST";
+export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
+
+// Fixed REST API deployment stage name. This is intentionally NOT a per-deployment config
+// option: the value is also baked into the VamsCLI endpoint constants and the web app's
+// /api/* fronting, so it must stay constant across the stack and clients. The web
+// distribution (CloudFront originPath / ALB redirect) absorbs this stage so browser/CLI
+// base URLs remain /api/*.
+export const API_GATEWAY_STAGE_NAME = "api";
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
@@ -371,10 +386,29 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    if (config.app.addons.useGarnetFramework == undefined) {
+        config.app.addons.useGarnetFramework = {
+            enabled: false,
+            garnetApiEndpoint: "",
+            garnetApiToken: "",
+            garnetIngestionQueueSqsUrl: "",
+        };
+    }
     if (config.app.addons.useGarnetFramework.enabled == undefined) {
         config.app.addons.useGarnetFramework.enabled = false;
     }
 
+    if (config.app.addons.usePhysnaSync == undefined) {
+        config.app.addons.usePhysnaSync = {
+            enabled: false,
+            tenantId: "",
+            apiBaseEndpoint: "https://app-api.physna.com/v3/",
+            authTokenEndpoint: "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
+            authType: "cognito",
+            clientId: "",
+            clientSecret: "",
+        };
+    }
     if (config.app.addons.usePhysnaSync.enabled == undefined) {
         config.app.addons.usePhysnaSync.enabled = false;
     }
@@ -433,15 +467,47 @@ export function getConfig(app: cdk.App): Config {
     }
 
     if (config.app.api == undefined) {
-        config.app.api = { globalRateLimit: 50, globalBurstLimit: 100 };
+        config.app.api = {
+            apiType: API_TYPE_APIGATEWAY_REST,
+            apiGatewayRest: {
+                globalRateLimit: 50,
+                globalBurstLimit: 100,
+                endpointType: "REGIONAL",
+                optionalExternalPrivateApigVPCEId: "",
+            },
+        };
     }
 
-    if (config.app.api.globalRateLimit == undefined) {
-        config.app.api.globalRateLimit = 50;
+    if (config.app.api.apiType == undefined || config.app.api.apiType === "") {
+        config.app.api.apiType = API_TYPE_APIGATEWAY_REST;
+    }
+    if (config.app.api.apiGatewayRest == undefined) {
+        // Carry over any values from the legacy flat `app.api` layout (globalRateLimit /
+        // globalBurstLimit / endpointType lived directly under `api` before the
+        // apiGatewayRest sub-block) so an in-place upgrade does not silently drop operator
+        // settings; fall back to the defaults when a field is absent.
+        const legacyApi = config.app.api as any;
+        config.app.api.apiGatewayRest = {
+            globalRateLimit: legacyApi.globalRateLimit ?? 50,
+            globalBurstLimit: legacyApi.globalBurstLimit ?? 100,
+            endpointType: legacyApi.endpointType ?? "REGIONAL",
+            optionalExternalPrivateApigVPCEId: legacyApi.externalRegionalAPIGatewayVPCEId ?? "",
+        };
     }
 
-    if (config.app.api.globalBurstLimit == undefined) {
-        config.app.api.globalBurstLimit = 100;
+    if (config.app.api.apiGatewayRest.globalRateLimit == undefined) {
+        config.app.api.apiGatewayRest.globalRateLimit = 50;
+    }
+
+    if (config.app.api.apiGatewayRest.globalBurstLimit == undefined) {
+        config.app.api.apiGatewayRest.globalBurstLimit = 100;
+    }
+
+    if (config.app.api.apiGatewayRest.endpointType == undefined) {
+        config.app.api.apiGatewayRest.endpointType = "REGIONAL";
+    }
+    if (config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId == undefined) {
+        config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId = "";
     }
 
     // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
@@ -1242,22 +1308,90 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //API Configuration Error Checks
-    if (config.app.api.globalRateLimit <= 0) {
+
+    // API type: only API Gateway REST is supported today.
+    if (SUPPORTED_API_TYPES.indexOf(config.app.api.apiType) === -1) {
+        throw new Error(
+            `Configuration Error: app.api.apiType must be one of [${SUPPORTED_API_TYPES.join(
+                ", "
+            )}]. Got: '${config.app.api.apiType}'.`
+        );
+    }
+
+    const apiGatewayRest = config.app.api.apiGatewayRest;
+
+    if (apiGatewayRest.globalRateLimit <= 0) {
         throw new Error(
             "Configuration Error: API globalRateLimit must be a positive number greater than 0."
         );
     }
 
-    if (config.app.api.globalBurstLimit <= 0) {
+    if (apiGatewayRest.globalBurstLimit <= 0) {
         throw new Error(
             "Configuration Error: API globalBurstLimit must be a positive number greater than 0."
         );
     }
 
-    if (config.app.api.globalBurstLimit < config.app.api.globalRateLimit) {
+    if (apiGatewayRest.globalBurstLimit < apiGatewayRest.globalRateLimit) {
         throw new Error(
             "Configuration Error: API globalBurstLimit must be greater than or equal to globalRateLimit."
         );
+    }
+
+    if (apiGatewayRest.endpointType !== "REGIONAL" && apiGatewayRest.endpointType !== "PRIVATE") {
+        throw new Error(
+            "Configuration Error: app.api.apiGatewayRest.endpointType must be 'REGIONAL' or 'PRIVATE'."
+        );
+    }
+
+    const externalPrivateVpceId = apiGatewayRest.optionalExternalPrivateApigVPCEId || "";
+
+    if (apiGatewayRest.endpointType === "PRIVATE") {
+        // PRIVATE requires a VPC and an execute-api VPC interface endpoint — either created
+        // by VAMS (addVpcEndpoints) or supplied externally. It cannot be fronted by public
+        // CloudFront, and must be fronted by an ALB that lives in non-public (isolated)
+        // subnets (useAlb.usePublicSubnet = false).
+        if (!config.app.useGlobalVpc.enabled) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.endpointType 'PRIVATE' requires app.useGlobalVpc.enabled = true."
+            );
+        }
+        if (!config.app.useGlobalVpc.addVpcEndpoints && externalPrivateVpceId === "") {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.endpointType 'PRIVATE' requires an execute-api " +
+                    "interface VPC endpoint. Set app.useGlobalVpc.addVpcEndpoints = true to have VAMS create one, " +
+                    "or provide app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId with an existing endpoint id."
+            );
+        }
+        if (config.app.useCloudFront.enabled) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.endpointType 'PRIVATE' is incompatible with public CloudFront (app.useCloudFront.enabled). Use ALB/VPC fronting."
+            );
+        }
+        // A PRIVATE API is reachable only from inside the VPC, so it must be fronted by the
+        // ALB, and that ALB must sit in private (non-public) subnets. A public-subnet ALB
+        // would expose an internet-facing path that forwards to the private API, defeating
+        // the point of making the API private.
+        if (!config.app.useAlb.enabled) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.endpointType 'PRIVATE' requires app.useAlb.enabled = true (a private API must be fronted by the ALB)."
+            );
+        }
+        if (config.app.useAlb.usePublicSubnet) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.endpointType 'PRIVATE' requires app.useAlb.usePublicSubnet = false. A public-subnet ALB would expose an internet-facing path to the private API."
+            );
+        }
+    } else {
+        // REGIONAL is a public endpoint and does not use any execute-api VPC endpoint, even
+        // when a VPC is enabled. An external private endpoint id is only meaningful for
+        // PRIVATE, so warn if one is set here.
+        if (externalPrivateVpceId !== "") {
+            console.warn(
+                "Configuration Warning: app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId is set but will not be used. " +
+                    "It applies only to a PRIVATE endpoint. A REGIONAL endpoint is public and does not route through a VPC endpoint."
+            );
+        }
     }
 
     // Validate IP ranges configuration
@@ -1845,8 +1979,13 @@ export interface ConfigPublic {
             allowUnsafeEvalFeatures: boolean;
         };
         api: {
-            globalRateLimit: number;
-            globalBurstLimit: number;
+            apiType: string;
+            apiGatewayRest: {
+                globalRateLimit: number;
+                globalBurstLimit: number;
+                endpointType: "REGIONAL" | "PRIVATE";
+                optionalExternalPrivateApigVPCEId: string;
+            };
         };
         metadataSchema: {
             autoLoadDefaultAssetLinksSchema: boolean;

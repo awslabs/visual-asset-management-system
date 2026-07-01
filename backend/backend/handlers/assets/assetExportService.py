@@ -24,7 +24,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -193,7 +193,7 @@ def compress_response(response_dict: Dict) -> Dict:
         return {
             'statusCode': 200,
             'headers': {
-                'Content-Type': 'application/json',
+                **commonHeaders(),
                 'Content-Encoding': 'gzip'
             },
             'body': base64.b64encode(compressed).decode('utf-8'),
@@ -202,7 +202,7 @@ def compress_response(response_dict: Dict) -> Dict:
     else:
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json'},
+            'headers': commonHeaders(),
             'body': json_str
         }
 

@@ -246,7 +246,7 @@ def build_constraint_data(constraint, role_name, claims_and_roles):
     """
     constraint_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-    username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM"
+    username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
 
     # Map template groupPermissions to API format
     group_permissions = []

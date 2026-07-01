@@ -13,6 +13,7 @@ import { GarnetFrameworkBuilderNestedStack } from "./garnetFramework/garnetFrame
 import { PhysnaSyncBuilderNestedStack } from "./physna/physnaSyncBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
+import { RouteRegistry } from "../apiLambda/apiRouteRegistry";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
@@ -27,7 +28,7 @@ export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    api: apigwv2.HttpApi;
+    registry: RouteRegistry;
 }
 
 /**
@@ -71,7 +72,7 @@ export class AddonBuilderNestedStack extends NestedStack {
                     vpc: props.vpc,
                     isolatedSubnets: props.isolatedSubnets,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    api: props.api,
+                    registry: props.registry,
                 }
             );
         }

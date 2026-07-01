@@ -251,10 +251,6 @@ DELETE /asset-links/{assetLinkId}
 | ------------- | ------ | -------- | ------------------------------- |
 | `assetLinkId` | string | Yes      | Asset link identifier to delete |
 
-:::note[Path parameter name]
-In the API route, this parameter is named `relationId`, but it represents the asset link ID.
-:::
-
 ### Response
 
 ```json

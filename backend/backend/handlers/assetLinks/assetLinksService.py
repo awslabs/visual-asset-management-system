@@ -727,34 +727,34 @@ def handle_put_request(event):
 def handle_delete_request(event):
     """Handle DELETE requests for asset links"""
     path_parameters = event.get('pathParameters', {})
-    
+
     try:
         # Validate required path parameters
-        if 'relationId' not in path_parameters:
-            return validation_error(body={'message': "Asset link ID (relationId) is required"}, event=event)
-        
+        if 'assetLinkId' not in path_parameters:
+            return validation_error(body={'message': "Asset link ID is required"}, event=event)
+
         # Parse and validate path parameters using request model
         try:
             request_model = parse(path_parameters, model=DeleteAssetLinkRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error in path parameters: {v}")
             return validation_error(body={'message': str(v)}, event=event)
-        
-        # Validate relation ID
+
+        # Validate asset link ID
         (valid, message) = validate({
-            'relationId': {
-                'value': request_model.relationId,
+            'assetLinkId': {
+                'value': request_model.assetLinkId,
                 'validator': 'ID'
             }
         })
         if not valid:
             logger.error(message)
             return validation_error(body={'message': message}, event=event)
-        
-        logger.info(f"Deleting asset link {request_model.relationId}")
-        
+
+        logger.info(f"Deleting asset link {request_model.assetLinkId}")
+
         # Delete the asset link
-        response = delete_asset_link(request_model.relationId, claims_and_roles)
+        response = delete_asset_link(request_model.assetLinkId, claims_and_roles)
         return success(body=response.dict())
         
     except ValueError as v:

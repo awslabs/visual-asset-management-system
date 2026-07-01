@@ -325,5 +325,9 @@ STANDARD_JSON_RESPONSE = {
     'headers': {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache, no-store',
+        # The REST API integration returns Lambda responses verbatim, so the CORS origin
+        # header must be set on the response itself (OPTIONS preflight is handled by the
+        # API's MOCK method). Mirrors the preflight allow-origin for cross-origin callers.
+        'Access-Control-Allow-Origin': '*',
     }
 }

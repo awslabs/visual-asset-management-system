@@ -25,7 +25,7 @@ def test_large_upload_change_metadata():
 def test_large_upload_change_metadata_defaults_system():
     from backend.backend.handlers.assets import sqsUploadFileLarge
     md = sqsUploadFileLarge.build_upload_change_metadata(None)
-    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"
 
 
 @pytest.mark.unit
@@ -45,4 +45,4 @@ def test_large_upload_change_metadata_without_changeUserId_from_message():
     file_info_no_user = {}
     change_user_id = file_info_no_user.get("changeUserId")
     md = sqsUploadFileLarge.build_upload_change_metadata(change_user_id)
-    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"

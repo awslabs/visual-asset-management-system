@@ -54,6 +54,9 @@ sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
 sys.modules['common.validators'] = MagicMock()
 sys.modules['common.validators'].validate = lambda params: (True, "")
+# Regex pattern constants used in Pydantic Field(regex=...) must be real strings,
+# not auto-generated MagicMock attributes; re.compile() rejects a MagicMock.
+sys.modules['common.validators'].bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
 sys.modules['common.dynamodb'] = MagicMock()
 sys.modules['common.dynamodb'].get_asset_object_from_id = lambda asset_id: {"assetId": asset_id}
 sys.modules['common.constants'] = MagicMock()

@@ -58,7 +58,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 
 ## API Features
 
-VAMS exposes a REST API through Amazon API Gateway V2 HttpApi, secured by a custom Lambda authorizer.
+VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda authorizer.
 
 ### Core API Capabilities
 

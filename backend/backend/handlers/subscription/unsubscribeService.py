@@ -6,6 +6,7 @@ import boto3
 import json
 
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -111,6 +112,7 @@ def delete_subscription(body):
 
 
 def lambda_handler(event, context):
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
     try:
         httpMethod = event['requestContext']['http']['method']

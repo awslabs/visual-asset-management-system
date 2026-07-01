@@ -90,10 +90,10 @@ function convertConstraintToNewFormat(constraint: any): any[] {
             S: new Date().toISOString(),
         },
         createdBy: {
-            S: "SYSTEM",
+            S: "SYSTEM_USER",
         },
         modifiedBy: {
-            S: "SYSTEM",
+            S: "SYSTEM_USER",
         },
     };
 

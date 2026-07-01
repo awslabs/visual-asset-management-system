@@ -72,7 +72,7 @@ class GetSingleAssetLinkRequestModel(BaseModel):
     assetLinkId: str = Field(..., description="Asset link ID")
 
 class DeleteAssetLinkRequestModel(BaseModel):
-    relationId: str = Field(..., description="Asset link ID to delete")
+    assetLinkId: str = Field(..., description="Asset link ID to delete")
 
 # Asset Links Tree View Models
 class AssetNodeModel(BaseModel):

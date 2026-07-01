@@ -19,6 +19,11 @@ def commonHeaders() -> Dict[str, str]:
     return {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache, no-store',
+        # The REST API integration returns Lambda responses verbatim, so the CORS
+        # origin header must be set on the response itself (the OPTIONS preflight is
+        # handled separately by the API's MOCK method). Mirrors the preflight's
+        # allow-origin so cross-origin browser callers can read the response.
+        'Access-Control-Allow-Origin': '*',
     }
 
 

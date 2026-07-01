@@ -972,7 +972,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Update asset record with archived status
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         
         # Add archive metadata
         asset['status'] = 'archived'
@@ -1065,7 +1065,7 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Update asset record
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         
         # Remove archive metadata - INCLUDING status field
         asset.pop('status', None)  # Remove status entirely

@@ -248,7 +248,7 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         lambda_payload["requestContext"]["http"]["path"] = API_UPLOAD_COMPLETE_EXTERNAL.path.replace(
             "{uploadId}", upload_id
         )
-        lambda_payload["requestContext"]["http"]["httpMethod"] = f"POST"
+        lambda_payload["requestContext"]["http"]["method"] = "POST"
         
         # Invoke the Lambda function
         response = _lambda_file_ingestion(lambda_payload)

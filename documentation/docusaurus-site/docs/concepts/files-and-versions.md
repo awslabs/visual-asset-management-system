@@ -165,7 +165,7 @@ When viewing file details with `includeVersions: true`, the response lists all A
 | `isArchived`      | Whether this version is a delete marker.                                        |
 | `assetVersionIds` | Which asset versions reference this file version.                               |
 | `changeSource`    | How this version was created (see [File change history](#file-change-history)). |
-| `changeUserId`    | User (or SYSTEM) that created this version.                                     |
+| `changeUserId`    | User (or `SYSTEM_USER`) that created this version.                              |
 
 Each version also carries change provenance fields (`changeWorkflowId`, `changeWorkflowExecutionId`, `changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`, `changeAssetFileVersionFrom`) for workflow-produced, copied, moved, renamed, and reverted versions. See [File change history](#file-change-history) for details.
 

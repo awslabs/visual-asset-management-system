@@ -60,7 +60,7 @@ root/
 ### **Request Flow**
 
 ```
-User → CloudFront/ALB → API Gateway V2 HttpApi
+User → CloudFront/ALB → API Gateway REST API (v1)
   → Custom Lambda Authorizer (JWT validation + IP check)
     → Lambda Handler (Casbin two-tier enforcement)
       → DynamoDB / S3
@@ -204,6 +204,8 @@ enforcer = CasbinEnforcer(user_id, role_constraints)
 if not enforcer.check_permission(object_type, resource_id, action):
     return {"statusCode": 403, "body": json.dumps({"error": "Forbidden"})}
 ```
+
+**System user:** The reserved user ID `SYSTEM_USER` is the official identity for all system-process actions (lambda cross-calls, pipeline workflow executions, bucket-sync ingestion, seeded `createdBy`/`modifiedBy` values, `changeUserId` provenance fallbacks). It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role so system actions pass both authorization tiers. Never introduce other variants (`SYSTEM`, `system`, etc.) — handlers compare against the exact string. See `backend/CLAUDE.md` "System User" for usage patterns.
 
 ### **Pattern 3: Configuration Flows CDK -> DynamoDB -> Frontend**
 
@@ -553,7 +555,7 @@ For user-facing documentation:
 | AWS CDK (TypeScript)     | Infrastructure as code        |
 | 10 nested stacks         | Modular resource organization |
 | CDK Nag                  | Security compliance checks    |
-| API Gateway V2 HttpApi   | REST API layer                |
+| REST API (v1)            | API layer                     |
 | Custom Lambda Authorizer | Unified JWT + IP auth         |
 
 ### **CLI (`tools/VamsCLI/`)**

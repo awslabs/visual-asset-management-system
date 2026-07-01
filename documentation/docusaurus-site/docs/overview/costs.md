@@ -56,7 +56,7 @@ The following tables provide approximate monthly cost estimates based on three d
 | **Amazon S3**          | $0.26 | $2.50  | $25.00 | 10 GB / 100 GB / 1 TB storage with proportional PUT/GET requests                     |
 | **Amazon DynamoDB**    | $1.18 | $5.00  | $15.00 | On-demand pricing. Scales with number of assets, versions, and metadata records.     |
 | **AWS Lambda**         | $6.00 | $15.00 | $40.00 | 5,308 MB memory, 15-minute timeout. Scales with API request volume.                  |
-| **Amazon API Gateway** | $0.16 | $1.50  | $5.00  | HTTP API pricing at $1.00 per million requests                                       |
+| **Amazon API Gateway** | $0.16 | $1.50  | $5.00  | REST API pricing at $3.50 per million requests (low-volume estimate)                 |
 | **AWS Step Functions** | $2.21 | $10.00 | $30.00 | Scales with workflow execution frequency                                             |
 | **AWS KMS**            | $1.00 | $1.00  | $3.00  | $1 per month per CMK + $0.03 per 10,000 API calls                                    |
 | **Amazon Cognito**     | $0.00 | $0.00  | $27.50 | Free for first 50,000 MAU. $0.0055 per MAU beyond.                                   |
@@ -68,7 +68,7 @@ The following tables provide approximate monthly cost estimates based on three d
 | AWS Service                       | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                                                                                                                                             |
 | --------------------------------- | ------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Amazon OpenSearch Serverless**  | $0 -- ~$703.20            | N/A                     | Next-generation Serverless scales to zero OCUs when idle (cost approaches $0 between uses); a minimum of 2 index + 2 search OCUs applies when minimums are held above zero. 100 GB data included. |
-| **Amazon OpenSearch Provisioned** | ~$743.66                  | ~$915.52                | 3 data nodes (r6g.large.search) + 3 master nodes (r6g.large.search), 240 GB EBS                                                                                                                   |
+| **Amazon OpenSearch Provisioned** | ~$743.66                  | ~$915.52                | Data nodes (r7g.large.search, one per Availability Zone) + 2 master nodes (r7g.large.search), 120 GB EBS per node. Cost varies with instance type and node count.                                 |
 | **No Amazon OpenSearch**          | $0.00                     | $0.00                   | Search features disabled. Asset browsing and management remain functional.                                                                                                                        |
 
 :::info[Amazon OpenSearch Serverless Minimum]

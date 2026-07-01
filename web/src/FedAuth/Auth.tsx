@@ -391,6 +391,12 @@ const Auth: React.FC<AuthProps> = (props) => {
     // being cached forever in localStorage.
     const secureConfigFetchedRef = useRef(false);
 
+    // Tracks whether amplify-config has been re-fetched for this page load, so the
+    // runtime Amplify/OAuth configuration is refreshed from the backend on every
+    // reload (parallel to secure-config) instead of being served from the stale
+    // localStorage cache until site data is cleared.
+    const amplifyConfigFetchedRef = useRef(false);
+
     const [ampInit, setAmpInit] = useState(false);
 
     const [isLoggedIn, setisLoggedIn] = useState(false);
@@ -444,8 +450,40 @@ const Auth: React.FC<AuthProps> = (props) => {
 
             //Configure Amplify
             configureAmplify(config, setAmpInit);
+
+            //Refresh amplify-config from the backend once per page load even when a
+            //cached config exists, so a changed runtime configuration (Cognito pool,
+            //OAuth endpoints, IDP settings) is picked up on reload instead of serving
+            //the stale cache until site data is cleared. Mirrors the secure-config
+            //refetch. The cached config above still drives the synchronous first render.
+            if (!amplifyConfigFetchedRef.current) {
+                amplifyConfigFetchedRef.current = true;
+                getAmplifyConfig().then((fetchedConfig) => {
+                    if (
+                        fetchedConfig &&
+                        typeof fetchedConfig === "object" &&
+                        !Array.isArray(fetchedConfig) &&
+                        !fetchedConfig._configError &&
+                        fetchedConfig.api
+                    ) {
+                        // Merge fresh amplify-config over the cached config so
+                        // secure-config-derived fields (featuresEnabled, etc.) are
+                        // preserved. Only re-render/reconfigure if something changed.
+                        const merged = { ...config, ...fetchedConfig };
+                        if (JSON.stringify(merged) !== JSON.stringify(config)) {
+                            appCache.setItem("config", merged);
+                            setConfig(merged);
+                        }
+                    } else {
+                        // Fetch failed or returned invalid data: keep using the cached
+                        // config (it rendered fine) rather than breaking the page.
+                        console.error("Failed to refresh amplify-config:", fetchedConfig);
+                    }
+                });
+            }
         } else {
             getAmplifyConfig().then(async (fetchedConfig) => {
+                amplifyConfigFetchedRef.current = true;
                 // Check if getAmplifyConfig returned an error object
                 if (fetchedConfig?._configError) {
                     setConfig(fetchedConfig);
@@ -1001,8 +1039,9 @@ const Auth: React.FC<AuthProps> = (props) => {
                         style={{
                             flex: 1,
                             display: "flex",
-                            justifyContent: "center",
-                            alignItems: "flex-start",
+                            flexDirection: "column",
+                            justifyContent: "flex-start",
+                            alignItems: "center",
                             paddingTop: "5vh",
                         }}
                     >
@@ -1036,6 +1075,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         style={{
                             flex: 1,
                             display: "flex",
+                            flexDirection: "column",
                             alignItems: "center",
                             justifyContent: "center",
                         }}

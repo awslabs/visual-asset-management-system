@@ -190,7 +190,16 @@ done
 
 ## Step 4: Delete Amazon CloudWatch log groups
 
-VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
+VAMS creates Lambda function log groups and explicitly named log groups under `/aws/vendedlogs/` that may persist after stack deletion. The named log groups (audit, REST API access, workflow, orchestration bus, VPC flow logs, AWS CloudTrail, and per-pipeline state machine groups) use deterministic names derived from the stack name and account ID. If any are left behind, they will conflict with the same-named groups on a subsequent redeploy using the same configuration name and account, so delete them before redeploying.
+
+The key named log groups are:
+
+-   `/aws/vendedlogs/VAMSAudit*-{hash}` — Audit log groups (authentication, authorization, file upload/download, actions, errors)
+-   `/aws/vendedlogs/vamsPipelineWorkflows-{hash}` — Step Functions workflow execution logs
+-   `/aws/vendedlogs/VAMSOrchestrationBusAudit-{hash}` — EventBridge orchestration bus audit
+-   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
+-   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
+-   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
 
 ```bash
 # List VAMS-related log groups

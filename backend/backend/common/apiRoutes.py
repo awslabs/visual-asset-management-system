@@ -352,7 +352,7 @@ WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
 API_ASSET_LINKS = ApiRoute("/asset-links", (POST,), "assetLinks")
 API_ASSET_LINKS_SINGLE = ApiRoute("/asset-links/single/{assetLinkId}", (GET,), "assetLinks")
 API_ASSET_LINKS_UPDATE = ApiRoute("/asset-links/{assetLinkId}", (PUT,), "assetLinks")
-API_ASSET_LINKS_DELETE = ApiRoute("/asset-links/{relationId}", (DELETE,), "assetLinks")
+API_ASSET_LINKS_DELETE = ApiRoute("/asset-links/{assetLinkId}", (DELETE,), "assetLinks")
 API_ASSET_LINKS_FOR_ASSET = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/asset-links", (GET,), "assetLinks"
 )

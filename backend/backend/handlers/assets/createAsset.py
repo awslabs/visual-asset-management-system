@@ -7,6 +7,7 @@ import json
 import uuid
 from datetime import datetime
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -131,12 +132,27 @@ def get_default_bucket_details(databaseId):
     
 
 def save_asset_details(asset_data):
-    """Save asset details to DynamoDB"""
+    """Save a NEW asset record to DynamoDB.
+
+    Conditional on the (databaseId, assetId) not already existing so a concurrent
+    or duplicate create (e.g. a redelivered bucket-sync event) cannot silently
+    overwrite an existing asset. Callers treat the conditional failure as
+    "asset already exists".
+    """
     try:
-        asset_table.put_item(Item=asset_data)
+        asset_table.put_item(
+            Item=asset_data,
+            ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(assetId)'
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.info(f"Asset already exists on conditional create: {asset_data.get('assetId')}")
+            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
+        logger.exception(f"Error saving asset details: {e}")
+        raise VAMSGeneralErrorResponse("Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error saving asset.")
+        raise VAMSGeneralErrorResponse("Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset"""
@@ -579,7 +595,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         create_prefix_folder(s3_bucket, s3_key)
     
     # Get username for version creation
-    username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
     
     # Create initial version record in versions table
     initial_version_id = create_initial_version_record(

@@ -10,7 +10,7 @@ VAMS supports multiple authentication providers: Amazon Cognito (with optional S
 sequenceDiagram
     participant User
     participant IDP as Cognito / External OAuth IDP
-    participant APIGW as API Gateway V2
+    participant APIGW as API Gateway REST API
     participant Authorizer as Custom Lambda Authorizer
     participant DDB as DynamoDB (Auth Tables)
     participant Handler as Lambda Handler

@@ -8,6 +8,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from common.validators import validate
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
@@ -404,7 +405,7 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     if method_allowed_on_api:
 
         #Get user ID of person making request
-        userId = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        userId = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         logger.info(
             f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",
@@ -428,6 +429,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: lambda context dictionary
     :returns: Http response object (statusCode, headers, body)
     """
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
     pathParameters = event.get("pathParameters", {})

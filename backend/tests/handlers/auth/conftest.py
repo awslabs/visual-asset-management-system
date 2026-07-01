@@ -37,6 +37,18 @@ _install_real_constants()
 # collection, before any fixture runs, so these must be set at conftest load time.
 os.environ.setdefault("USER_STORAGE_TABLE_NAME", "test-user-table")
 os.environ.setdefault("COGNITO_AUTH_ENABLED", "true")
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AUTH_MODE", "cognito")
+os.environ.setdefault("API_FRONTED", "none")
+os.environ.setdefault("USER_POOL_ID", "test-pool-id")
+os.environ.setdefault("APP_CLIENT_ID", "test-client-id")
+os.environ.setdefault("COGNITO_BASE_URL", "https://cognito-idp.us-east-1.amazonaws.com")
+os.environ.setdefault("JWT_ISSUER_URL", "https://test.issuer.com")
+os.environ.setdefault("JWT_AUDIENCE", "test-audience")
+os.environ.setdefault("ALLOWED_IP_RANGES", "[]")
+os.environ.setdefault("IGNORED_PATHS", "[]")
+os.environ.setdefault("API_KEY_STORAGE_TABLE_NAME", "test-apikey-table")
+os.environ.setdefault("USER_ROLES_STORAGE_TABLE_NAME", "test-userroles-table")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -44,4 +56,15 @@ def setup_environment():
     """Set up environment variables for all tests"""
     os.environ["USER_STORAGE_TABLE_NAME"] = "test-user-table"
     os.environ["COGNITO_AUTH_ENABLED"] = "true"
-    # Add any other required environment variables here
+    os.environ["AWS_REGION"] = "us-east-1"
+    os.environ["AUTH_MODE"] = "cognito"
+    os.environ["API_FRONTED"] = "none"
+    os.environ["USER_POOL_ID"] = "test-pool-id"
+    os.environ["APP_CLIENT_ID"] = "test-client-id"
+    os.environ["COGNITO_BASE_URL"] = "https://cognito-idp.us-east-1.amazonaws.com"
+    os.environ["JWT_ISSUER_URL"] = "https://test.issuer.com"
+    os.environ["JWT_AUDIENCE"] = "test-audience"
+    os.environ["ALLOWED_IP_RANGES"] = "[]"
+    os.environ["IGNORED_PATHS"] = "[]"
+    os.environ["API_KEY_STORAGE_TABLE_NAME"] = "test-apikey-table"
+    os.environ["USER_ROLES_STORAGE_TABLE_NAME"] = "test-userroles-table"

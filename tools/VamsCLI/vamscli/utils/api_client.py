@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from urllib.parse import urljoin
 
 from ..constants import (
-    API_VERSION, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION, 
+    API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
@@ -506,7 +506,7 @@ class APIClient:
     def get_amplify_config(self) -> Dict[str, Any]:
         """Get Amplify configuration from API."""
         try:
-            response = self.get('/api/amplify-config', include_auth=False)
+            response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
             return response.json()
         except Exception as e:
             raise APIError(f"Failed to get Amplify configuration: {e}")
@@ -2360,7 +2360,7 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_DELETE.format(relationId=asset_link_id)
+            endpoint = API_ASSET_LINKS_DELETE.format(assetLinkId=asset_link_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             

@@ -17,7 +17,7 @@ import {
     buildAssetIndexingFunction,
     buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
-import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
+import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
@@ -35,7 +35,7 @@ export class SearchBuilderNestedStack extends NestedStack {
         parent: Construct,
         name: string,
         config: Config.Config,
-        api: apigwv2.HttpApi,
+        registry: RouteRegistry,
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
@@ -46,7 +46,7 @@ export class SearchBuilderNestedStack extends NestedStack {
         this.reindexerFunctionName = searchBuilder(
             this,
             config,
-            api,
+            registry,
             storageResources,
             lambdaCommonBaseLayer,
             vpc,
@@ -58,7 +58,7 @@ export class SearchBuilderNestedStack extends NestedStack {
 export function searchBuilder(
     scope: Construct,
     config: Config.Config,
-    api: apigwv2.HttpApi,
+    registry: RouteRegistry,
     storageResources: storageResources,
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
@@ -76,19 +76,19 @@ export function searchBuilder(
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,
-        api: api,
+        registry: registry,
     });
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.GET,
-        api: api,
+        registry: registry,
     });
 
     // Add simple search endpoint
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search/simple",
         method: apigwv2.HttpMethod.POST,
-        api: api,
+        registry: registry,
     });
 
     let fileIndexingFunction: lambda.Function | undefined = undefined;

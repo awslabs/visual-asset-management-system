@@ -5,15 +5,13 @@
 
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { IAMArn, Service } from "../../../helper/service-helper";
+import { IAMArn, Service, Partition } from "../../../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput, CustomResource } from "aws-cdk-lib";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";
 import { Port, SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
-import { CfnServiceLinkedRole } from "aws-cdk-lib/aws-iam";
-import { IAMClient, ListRolesCommand } from "@aws-sdk/client-iam";
 import * as Config from "../../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -40,15 +38,8 @@ export interface OpensearchProvisionedConstructProps {
 }
 
 const defaultProps: Partial<OpensearchProvisionedConstructProps> = {
-    //  masterNodeInstanceType: 'r6g.2xlarge.search',
-    //  dataNodeInstanceType: 'r6g.2xlarge.search',
-    // masterNodeInstanceType: 'r6g.large.search',
-    masterNodeInstanceType: "r6g.large.search",
-    // masterNodeInstanceType: 'r5.large.search',
-    // dataNodeInstanceType:   'r6g.large.search',
-    // dataNodeInstanceType: 'r6g.2xlarge.search',
-    // dataNodeInstanceType: 'i3.2xlarge.search',
-    dataNodeInstanceType: "r6gd.large.search",
+    masterNodeInstanceType: "r7g.large.search",
+    dataNodeInstanceType: "r7g.large.search",
     masterNodesCount: 3, //Minimum of 3
     //dataNodesCount intentionally not defaulted here: it is derived from availabilityZoneCount in
     //the constructor so it stays valid for the zone-awareness mode (multiple of 3 for Multi-AZ with
@@ -57,8 +48,6 @@ const defaultProps: Partial<OpensearchProvisionedConstructProps> = {
     ebsVolumeType: cdk.aws_ec2.EbsDeviceVolumeType.GENERAL_PURPOSE_SSD_GP3,
     availabilityZoneCount: 2,
 };
-
-const iam = new IAMClient({});
 
 /*
 Deploys an Amazon Opensearch Domain
@@ -96,47 +85,43 @@ export class OpensearchProvisionedConstruct extends Construct {
 
         //https://github.com/aws-samples/opensearch-vpc-cdk/blob/main/lib/opensearch-vpc-cdk-stack.ts
 
-        // Service-linked role(s) that Amazon OpenSearch Service will use
-        let serviceLinkedRoleEs: CfnServiceLinkedRole | undefined;
-        (async () => {
-            const response = await iam.send(
-                new ListRolesCommand({
-                    PathPrefix: `/aws-service-role/es.amazonaws.com/`, //Currently fixed name and not related to principal name
-                })
-            );
-
-            // Only if the role for OpenSearch Service doesn't exist, it will be created.
-            if (response.Roles && response.Roles?.length == 0) {
-                serviceLinkedRoleEs = new CfnServiceLinkedRole(
-                    this,
-                    "OpensearchServiceLinkedRoleEs",
-                    {
-                        awsServiceName: "es.amazonaws.com", //Currently fixed name and not related to principal name
-                    }
-                );
-            }
-        })();
-
-        //Test service linked role to make sure we cover other partitions. No harm in creating additional service linked role right now.
-        let serviceLinkedRoleAos: CfnServiceLinkedRole | undefined;
-        (async () => {
-            const response = await iam.send(
-                new ListRolesCommand({
-                    PathPrefix: `/aws-service-role/${Service("ES").PrincipalString}/`,
-                })
-            );
-
-            // Only if the role for OpenSearch Service doesn't exist, it will be created.
-            if (response.Roles && response.Roles?.length == 0) {
-                serviceLinkedRoleAos = new CfnServiceLinkedRole(
-                    this,
-                    "OpensearchServiceLinkedRoleAos",
-                    {
-                        awsServiceName: `${Service("ES").PrincipalString}`,
-                    }
-                );
-            }
-        })();
+        // Service-linked role for Amazon OpenSearch Service. The domain cannot be created in a VPC until the
+        // "AWSServiceRoleForAmazonOpenSearchService" service-linked role exists in the account.
+        //
+        // Create it idempotently with a deploy-time custom resource: CreateServiceLinkedRole creates the role
+        // when missing and returns InvalidInput ("has been taken in this account") when it already exists, so
+        // we ignore InvalidInput to make the call a safe check-or-create. The partition-aware OpenSearch
+        // service principal is resolved via the service helper.
+        const openSearchServicePrincipal = Service("ES").PrincipalString;
+        const serviceLinkedRole = new cr.AwsCustomResource(this, "OpensearchServiceLinkedRole", {
+            onCreate: {
+                service: "IAM",
+                action: "createServiceLinkedRole",
+                parameters: {
+                    AWSServiceName: openSearchServicePrincipal,
+                    Description:
+                        "Service-linked role for Amazon OpenSearch Service (created by VAMS)",
+                },
+                //Stable physical id so the role is not recreated/deleted on update or delete. The
+                //service-linked role is account-wide and shared, so VAMS does not manage its lifecycle
+                //beyond ensuring it exists.
+                physicalResourceId: cr.PhysicalResourceId.of(
+                    `vams-opensearch-slr-${openSearchServicePrincipal}`
+                ),
+                //If the role already exists, CreateServiceLinkedRole returns InvalidInput — treat as success.
+                ignoreErrorCodesMatching: "InvalidInput",
+            },
+            //No onUpdate/onDelete: the shared, account-wide service-linked role must not be deleted when
+            //this stack is torn down (other resources may depend on it).
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new cdk.aws_iam.PolicyStatement({
+                    effect: cdk.aws_iam.Effect.ALLOW,
+                    actions: ["iam:CreateServiceLinkedRole"],
+                    resources: ["*"],
+                }),
+            ]),
+            installLatestAwsSdk: false,
+        });
 
         //Select exactly one subnet per AZ, up to the configured Availability Zone count.
         //Note: OpenSearch domains require the number of subnets to match the zone-aware AZ count,
@@ -154,8 +139,16 @@ export class OpensearchProvisionedConstruct extends Construct {
             }
         });
 
+        //OpenSearch engine version is partition-dependent: the AWS European Sovereign Cloud (aws-eusc) does
+        //not yet support OpenSearch 3.x, so it uses OPENSEARCH_VERSION_EUSOVEREIGN (2.x). All other partitions
+        //use the standard OPENSEARCH_VERSION (3.x).
+        const openSearchVersion =
+            Partition() === "aws-eusc"
+                ? Config.OPENSEARCH_VERSION_EUSOVEREIGN
+                : Config.OPENSEARCH_VERSION;
+
         const osDomain = new cdk.aws_opensearchservice.Domain(this, "OpenSearchDomain", {
-            version: Config.OPENSEARCH_VERSION,
+            version: openSearchVersion,
 
             ebs: {
                 enabled: true,
@@ -200,14 +193,9 @@ export class OpensearchProvisionedConstruct extends Construct {
             },
         });
 
-        //Add dependency to the service-linked role if it exists. This is required for the domain to be created in the VPC.
-        if (serviceLinkedRoleEs) {
-            osDomain.node.addDependency(serviceLinkedRoleEs);
-        }
-
-        if (serviceLinkedRoleAos) {
-            osDomain.node.addDependency(serviceLinkedRoleAos);
-        }
+        //The domain can only be created in the VPC after the OpenSearch Service service-linked role exists,
+        //so order the domain after the check-or-create custom resource.
+        osDomain.node.addDependency(serviceLinkedRole);
 
         this.domain = osDomain;
         this.domainEndpoint = "https://" + osDomain.domainEndpoint;
@@ -310,6 +298,25 @@ export class OpensearchProvisionedConstruct extends Construct {
                 reason: "Configured as intended. Provisioned configuration meant primarily for GovCloud deployment that won't be public and restricted to individual lambda roles for access to the domain.",
             },
         ]);
+
+        NagSuppressions.addResourceSuppressions(
+            serviceLinkedRole,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "iam:CreateServiceLinkedRole requires a wildcard resource; it can only create the AWS-managed OpenSearch Service service-linked role and creates no other IAM resources.",
+                },
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "The AwsCustomResource provider Lambda uses the AWS managed AWSLambdaBasicExecutionRole; acceptable for this short-lived deploy-time helper.",
+                },
+                {
+                    id: "AwsSolutions-L1",
+                    reason: "The AwsCustomResource provider Lambda runtime is managed by the CDK custom-resources framework.",
+                },
+            ],
+            true
+        );
     }
 
     public grantOSDomainAccess(lambdaFunction: lambda.Function & { role?: cdk.aws_iam.IRole }) {

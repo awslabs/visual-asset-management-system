@@ -154,27 +154,30 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 
 #### VPC Interface Endpoints
 
-| Endpoint        | Created When                                                        | Subnet Type                     |
-| --------------- | ------------------------------------------------------------------- | ------------------------------- |
-| API Gateway     | `addVpcEndpoints=true`                                              | Isolated                        |
-| SSM             | `addVpcEndpoints=true`                                              | Isolated                        |
-| Lambda          | `addVpcEndpoints=true`                                              | Isolated                        |
-| STS             | `addVpcEndpoints=true`                                              | Isolated                        |
-| CloudWatch Logs | `addVpcEndpoints=true`                                              | Isolated                        |
-| Step Functions  | `addVpcEndpoints=true`                                              | Isolated                        |
-| SNS             | `addVpcEndpoints=true`                                              | Isolated                        |
-| SQS             | `addVpcEndpoints=true`                                              | Isolated                        |
-| KMS             | `useKmsCmkEncryption.enabled=true`                                  | Isolated                        |
-| KMS FIPS        | `useKmsCmkEncryption.enabled=true` + `useFips=true`                 | Isolated                        |
-| AWS Batch       | Any pipeline enabled                                                | Isolated                        |
-| ECR API         | Any pipeline enabled                                                | Isolated                        |
-| ECR Docker      | Any pipeline enabled                                                | Isolated                        |
-| EFS             | `useNvidiaCosmos.enabled=true`                                      | Isolated                        |
-| ECS             | Pipelines with Batch compute                                        | Private (preferred) or Isolated |
-| ECS Agent       | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
-| ECS Telemetry   | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
-| Bedrock Runtime | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
-| Rekognition     | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
+| Endpoint                              | Created When                                                             | Subnet Type                     |
+| ------------------------------------- | ------------------------------------------------------------------------ | ------------------------------- |
+| API Gateway                           | `addVpcEndpoints=true`                                                   | Isolated                        |
+| SSM                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| Lambda                                | `addVpcEndpoints=true`                                                   | Isolated                        |
+| STS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| CloudWatch Logs                       | `addVpcEndpoints=true`                                                   | Isolated                        |
+| Step Functions                        | `addVpcEndpoints=true`                                                   | Isolated                        |
+| SNS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| SQS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| Cognito IDP (`cognito-idp`)           | `useCognito.enabled=true` (not GovCloud / EU Sovereign)                  | Isolated                        |
+| Cognito Identity (`cognito-identity`) | `useCognito.enabled=true` (not GovCloud / EU Sovereign)                  | Isolated                        |
+| Cognito IDP/Identity FIPS             | `useCognito.enabled=true` + `useFips=true` (not GovCloud / EU Sovereign) | Isolated                        |
+| KMS                                   | `useKmsCmkEncryption.enabled=true`                                       | Isolated                        |
+| KMS FIPS                              | `useKmsCmkEncryption.enabled=true` + `useFips=true`                      | Isolated                        |
+| AWS Batch                             | Any pipeline enabled                                                     | Isolated                        |
+| ECR API                               | Any pipeline enabled                                                     | Isolated                        |
+| ECR Docker                            | Any pipeline enabled                                                     | Isolated                        |
+| EFS                                   | `useNvidiaCosmos.enabled=true`                                           | Isolated                        |
+| ECS                                   | Pipelines with Batch compute                                             | Private (preferred) or Isolated |
+| ECS Agent                             | `useIsaacLabTraining.enabled=true`                                       | Isolated                        |
+| ECS Telemetry                         | `useIsaacLabTraining.enabled=true`                                       | Isolated                        |
+| Bedrock Runtime                       | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`      | Isolated                        |
+| Rekognition                           | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`      | Isolated                        |
 
 #### Gateway Endpoints (Always Created)
 
@@ -185,6 +188,10 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 
 :::note
 Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
+:::
+
+:::warning[Manually created endpoints must include Cognito for in-VPC MFA]
+When `addVpcEndpoints=false` (you create the VPC endpoints by hand, for example under an organizational policy that prohibits the solution from creating them), include the `cognito-idp` and `cognito-identity` interface endpoints from the table above whenever Amazon Cognito is the auth provider. VAMS keeps the Cognito MFA check enabled in this configuration on the assumption that those endpoints exist; if they are omitted, in-VPC Lambda functions cannot reach Amazon Cognito and the MFA check will fail. (Amazon Cognito PrivateLink is not available in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions, where VAMS disables the MFA check automatically.)
 :::
 
 ## Amazon OpenSearch Service (`app.openSearch`)
@@ -203,8 +210,8 @@ Only one Amazon ECS interface endpoint can exist per VPC when private DNS is ena
 | `app.openSearch.useProvisioned.enabled`                  | boolean | `false`            | Deploys a provisioned Amazon OpenSearch Service domain. Requires a VPC with at least `availabilityZoneCount` Availability Zones.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `app.openSearch.useProvisioned.availabilityZoneCount`    | number  | `2`                | Number of Availability Zones the zone-aware provisioned domain and its VPC subnets span (one data node per zone). Must be `2` or `3`. At `2` the domain runs Multi-AZ **without** Standby; at `3` it runs Multi-AZ **with** Standby (the asset/file indexes are created with two replicas to give the multiple-of-three copies Standby requires). Switching an existing domain to `3` in place is rejected by the service — a 3-AZ Standby domain must be created fresh (disable and re-enable OpenSearch, then reindex). Keep `2` for Regions or partitions that expose only two Availability Zones, such as the AWS European Sovereign Cloud Region `eusc-de-east-1`.                                                                                                               |
 | `app.openSearch.useProvisioned.numberOfShards`           | number  | `1`                | Number of primary shards per provisioned OpenSearch index (asset and file). Must be an integer of `1` or greater. Defaults to `1`. Increase for large indexes — as a guideline, an index expected to exceed roughly 60 GB (about 3 million asset or file records for VAMS) should use more than one shard. Changing this value requires re-creating the index: disable and re-enable OpenSearch (or otherwise recreate the domain), then reindex. Existing indexes are not re-sharded in place.                                                                                                                                                                                                                                                                                       |
-| `app.openSearch.useProvisioned.dataNodeInstanceType`     | string  | `r6g.large.search` | Instance type for the data nodes in the provisioned domain (one data node per Availability Zone by default).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `app.openSearch.useProvisioned.masterNodeInstanceType`   | string  | `r6g.large.search` | Instance type for the 3 dedicated master nodes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `app.openSearch.useProvisioned.dataNodeInstanceType`     | string  | `r7g.large.search` | Instance type for the data nodes in the provisioned domain (one data node per Availability Zone by default).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `app.openSearch.useProvisioned.masterNodeInstanceType`   | string  | `r7g.large.search` | Instance type for the 3 dedicated master nodes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `app.openSearch.useProvisioned.ebsInstanceNodeSizeGb`    | number  | `120`              | Amazon EBS volume size in GB per data node.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `app.openSearch.reindexOnCdkDeploy`                      | boolean | `false`            | Triggers automatic reindexing of all assets and files during deployment via a CloudFormation custom resource. **Important:** Enable only for a second deployment after initial deployment or version upgrade, then set back to `false`. Can be overridden with CDK context `reindexOnCdkDeploy=true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
@@ -224,8 +231,12 @@ The VPC endpoint type is selected automatically by the collection generation, be
 The next-generation endpoint is a standard Amazon EC2 interface endpoint, so it follows `app.useGlobalVpc.addVpcEndpoints` like every other interface endpoint: when that is `false`, VAMS does not create the endpoint or the collection's VPC network access policy, and you must create them manually after deployment (the classic managed endpoint is not governed by this flag and is always created). See [OpenSearch — deferred next-gen setup](../developer/opensearch.md#deferred-next-gen-setup-manual-vpc-endpoint) for the manual setup procedure.
 :::
 
-:::tip[OpenSearch Provisioned first deployment]
-OpenSearch Provisioned creates service-linked roles that may not propagate immediately. If you encounter the error _"Before you can proceed, you must enable a service-linked role"_, wait 5 minutes and redeploy. See [Common deployment errors](deploy-the-solution.md#common-deployment-errors) for additional troubleshooting.
+:::note[OpenSearch engine version by partition]
+Provisioned domains deploy the OpenSearch engine version pinned in `config.ts`. Commercial AWS, AWS GovCloud, and other partitions use the standard version (`OPENSEARCH_VERSION`, currently OpenSearch 3.x). The **AWS European Sovereign Cloud** (partition `aws-eusc`, Region `eusc-de-east-1`) does not yet support OpenSearch 3.x, so VAMS automatically deploys `OPENSEARCH_VERSION_EUSOVEREIGN` (OpenSearch 2.x) there instead. The selection is partition-based and requires no configuration.
+:::
+
+:::tip[OpenSearch Provisioned service-linked role]
+A provisioned domain in a VPC requires the `AWSServiceRoleForAmazonOpenSearchService` service-linked role to exist in the account. AWS normally creates it automatically, but in some accounts it is missing, which fails the deploy with _"Before you can proceed, you must enable a service-linked role"_. VAMS now creates this role idempotently during deployment (it is created if missing and left unchanged if it already exists), so this error should no longer occur. The role is account-wide and is not removed on stack teardown. See [Common deployment errors](deploy-the-solution.md#common-deployment-errors) for additional troubleshooting.
 :::
 
 :::warning[OpenSearch Provisioned is for advanced deployments]
@@ -233,7 +244,7 @@ Amazon OpenSearch Serverless is the recommended option for most VAMS deployments
 
 -   **VPC requirement** -- A VPC with at least 3 Availability Zones must already exist or be created by the same deploy.
 -   **Fragile AWS CloudFormation updates** -- Domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the AWS CloudFormation custom-resource timeout. Major engine-version upgrades (for example 2.7 to 3.5 in v2.6) sometimes fail in place and require redeploying with OpenSearch disabled, then re-enabling, before the upgrade succeeds.
--   **Service-linked role propagation** -- First-time deploys may fail with a service-linked-role error and require waiting 5 minutes before retrying.
+-   **Service-linked role** -- A provisioned domain in a VPC requires the OpenSearch Service service-linked role. VAMS creates it idempotently during deployment (created if missing, left unchanged if present), so the _"you must enable a service-linked role"_ error should no longer require a manual retry.
 -   **Reindex required after index-name or schema bumps** -- Provisioned domains do not auto-populate new indexes; you must run the version-specific data migration script to repopulate them. See [Update the solution](update-the-solution.md) and the migration READMEs under `infra/deploymentDataMigration/`.
 
 If you do not have a specific requirement that mandates Provisioned, prefer `app.openSearch.useServerless.enabled = true`.
@@ -324,12 +335,29 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 When external OAuth IdP is enabled, **all** fields in this section are required. Deployment will fail if any field is null or empty.
 :::
 
-## API throttling (`app.api`)
+## API configuration (`app.api`)
 
-| Field                      | Type   | Default | Description                                                                                        |
-| -------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------- |
-| `app.api.globalRateLimit`  | number | `50`    | Global rate limit in requests per second for the Amazon API Gateway. Must be a positive number.    |
-| `app.api.globalBurstLimit` | number | `100`   | Global burst limit for the Amazon API Gateway. Must be greater than or equal to `globalRateLimit`. |
+| Field                                                      | Type   | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.api.apiType`                                          | string | `"APIGATEWAY_REST"` | Backend API implementation type. Only `"APIGATEWAY_REST"` (an Amazon API Gateway REST API) is supported; any other value fails configuration validation.                                                                                                                                                                                                                                                                           |
+| `app.api.apiGatewayRest.endpointType`                      | string | `"REGIONAL"`        | API Gateway endpoint type. `"REGIONAL"` creates a public regional REST API (default) that does not route through any VPC endpoint. `"PRIVATE"` creates a private REST API reachable only through an execute-api VPC interface endpoint; it requires `useGlobalVpc.enabled` and either `useGlobalVpc.addVpcEndpoints = true` or `optionalExternalPrivateApigVPCEId` set, and is incompatible with Amazon CloudFront (requires ALB). |
+| `app.api.apiGatewayRest.globalRateLimit`                   | number | `50`                | Global rate limit in requests per second for the Amazon API Gateway. Must be a positive number.                                                                                                                                                                                                                                                                                                                                    |
+| `app.api.apiGatewayRest.globalBurstLimit`                  | number | `100`               | Global burst limit for the Amazon API Gateway. Must be greater than or equal to `globalRateLimit`.                                                                                                                                                                                                                                                                                                                                 |
+| `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` | string | `""`                | Id of a pre-existing execute-api interface VPC endpoint to use for a `"PRIVATE"` endpoint when VAMS does not create one (`useGlobalVpc.addVpcEndpoints = false`). Applies only to `"PRIVATE"`; it is ignored (with a configuration warning) for a `"REGIONAL"` endpoint.                                                                                                                                                           |
+
+:::warning[PRIVATE endpoint requirements]
+Setting `app.api.apiGatewayRest.endpointType` to `"PRIVATE"` requires `useGlobalVpc.enabled = true` and an execute-api interface VPC endpoint: either set `useGlobalVpc.addVpcEndpoints = true` so VAMS creates one, or set `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` to an existing endpoint id. A `PRIVATE` endpoint is incompatible with Amazon CloudFront (which cannot reach a private API); you must front it with the ALB (`useCloudFront.enabled = false`, `useAlb.enabled = true`), and that ALB must run in isolated (non-public) subnets (`useAlb.usePublicSubnet = false`). A public-subnet ALB would expose an internet-facing path to the private API, defeating its isolation. Configuration validation enforces all of these.
+:::
+
+:::note[Execute-API VPC endpoint]
+A `REGIONAL` endpoint is public and does not route through a VPC endpoint, even when a VPC and its endpoints are enabled. Only a `PRIVATE` endpoint uses the execute-api interface VPC endpoint: VAMS creates it when `useGlobalVpc.addVpcEndpoints = true`, otherwise supply an existing one through `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId`.
+:::
+
+:::warning[Switching `endpointType` between `PRIVATE` and `REGIONAL` on an existing deployment]
+Changing `app.api.apiGatewayRest.endpointType` on a deployment that already exists is fully supported. A `PRIVATE` endpoint carries an API Gateway resource policy that only allows invocation through the execute-api VPC interface endpoint (an `aws:SourceVpce` condition); a `REGIONAL` endpoint uses a public allow-all resource policy. VAMS sets the correct resource policy for each endpoint type on every deployment, so switching in either direction updates the policy — no manual action is required.
+
+Amazon API Gateway itself does **not** remove a previously-set resource policy when an update simply stops supplying one, which is why VAMS always writes an explicit policy: switching `PRIVATE` → `REGIONAL` overwrites the `aws:SourceVpce`-restricted policy with the public allow-all policy, and `REGIONAL` → `PRIVATE` re-applies the VPC-endpoint restriction. If a resource policy left over from an out-of-band change ever remains in place after a switch (for example, a `PRIVATE` policy on a now-public endpoint), every request — including the CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial precedes the CORS response, a browser reports it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization error. Re-running the VAMS deployment restores the correct policy for the configured `endpointType`.
+:::
 
 ## Web UI (`app.webUi`)
 

@@ -100,6 +100,7 @@ One folder per domain. The current domains:
 
 -   [ ] **Create Handler File**: Add handler in `handlers/[domain]/[handler].py`
 -   [ ] **Follow Gold Standard**: Use `assetService.py` patterns for structure
+-   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
 -   [ ] **Add Logging**: Use `safeLogger` for structured logging
@@ -454,6 +455,35 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return internal_error(event=event)
 ```
 
+**Event normalization (`normalize_event`):** The REST API (v1) proxy event differs from the
+HTTP API v2 layout handlers are written against in **two** ways that `normalize_event(event)`
+(from `common.auth.apiEvent`) reconciles. It mutates in place, is idempotent, and no-ops on
+`lambdaCrossCall` events.
+
+1.  **`requestContext.http` block.** Handlers read
+    `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`; the REST event
+    exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`.
+    `normalize_event` injects the v2-style `requestContext.http` block.
+2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
+    explicit JSON `null` when empty (HTTP API v2 omitted them), so `event.get('pathParameters', {})`
+    / `event.get('queryStringParameters', {})` returns `None` — the default applies only when
+    the **key is absent**, not present-but-`null`. A handler that then does `params['id']`,
+    `'id' in params`, or `int(params['maxItems'])` crashes with `TypeError: 'NoneType' object
+is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-but-`null`
+    value of either key to `{}`.
+
+-   **`request_to_claims(event)` calls `normalize_event(event)` internally** (first line),
+    so the Gold Standard order above — `request_to_claims(event)` as the handler's first
+    event access, _then_ read `path`/`method`/params — is already covered for both
+    normalizations and needs **no** import or explicit call.
+-   **Only when a handler must read `requestContext['http']`, `pathParameters`, or
+    `queryStringParameters` _before_ `request_to_claims`** does it
+    `from common.auth.apiEvent import normalize_event` and call `normalize_event(event)` as the
+    first statement of `lambda_handler`. Reading those before normalization raises
+    `KeyError`/`TypeError` → 500 on a real REST request — a failure invisible to CDK synth and
+    to unit tests that hand-build a v2-shaped event, so cover the REST-shaped event (including
+    `null` params) in tests.
+
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 
 ```python
@@ -591,6 +621,17 @@ def handle_get_request(event):
         logger.exception(f"Error handling GET request: {e}")
         return internal_error(event=event)
 ```
+
+#### **System User (`SYSTEM_USER`)**
+
+`SYSTEM_USER` is the **only** valid user ID for system-process actions — never use `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it consistently for:
+
+-   **Lambda cross-calls**: `{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — and it is the default in `request_to_claims()` when a cross-call omits `userName`
+-   **Username fallbacks**: `claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]` when no user context exists
+-   **Provenance / audit values**: `createdBy`, `modifiedBy`, `changeUserId` fallbacks (`user_id or "SYSTEM_USER"`)
+-   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
+
+Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
@@ -1127,7 +1168,7 @@ def create_[domain]([domain]_data, claims_and_roles):
 
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("username", "SYSTEM")
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
 

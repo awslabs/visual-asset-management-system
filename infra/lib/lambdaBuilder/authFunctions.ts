@@ -334,7 +334,7 @@ export function buildApiKeyServiceFunction(
     return fun;
 }
 
-export function buildApiGatewayAuthorizerHttpFunction(
+export function buildApiGatewayAuthorizerRestFunction(
     scope: Construct,
     lambdaAuthorizerLayer: LayerVersion,
     storageResources: storageResources,
@@ -342,7 +342,7 @@ export function buildApiGatewayAuthorizerHttpFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "apiGatewayAuthorizerHttp";
+    const name = "apiGatewayAuthorizerRest";
 
     // Determine auth mode based on configuration
     const authMode = config.app.authProvider.useCognito.enabled
@@ -351,9 +351,18 @@ export function buildApiGatewayAuthorizerHttpFunction(
         ? "external"
         : "cognito";
 
+    // Front type lets the authorizer resolve the true client IP (not the proxy IP)
+    // when behind CloudFront/ALB. See backend clientIp.resolve_client_ip.
+    const fronted = config.app.useCloudFront.enabled
+        ? "cloudfront"
+        : config.app.useAlb.enabled
+        ? "alb"
+        : "none";
+
     // Build environment variables
     const environment: { [key: string]: string } = {
         AUTH_MODE: authMode,
+        API_FRONTED: fronted,
         ALLOWED_IP_RANGES: JSON.stringify(
             config.app.authProvider.authorizerOptions.allowedIpRanges || []
         ),
@@ -407,75 +416,6 @@ export function buildApiGatewayAuthorizerHttpFunction(
 
     // Add KMS permissions for encrypted DynamoDB table access
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-
-    // Add global permissions
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-
-    return fun;
-}
-
-export function buildApiGatewayAuthorizerWebsocketFunction(
-    scope: Construct,
-    lambdaAuthorizerLayer: LayerVersion,
-    storageResources: storageResources,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "apiGatewayAuthorizerWebsocket";
-
-    // Determine auth mode based on configuration
-    const authMode = config.app.authProvider.useCognito.enabled
-        ? "cognito"
-        : config.app.authProvider.useExternalOAuthIdp.enabled
-        ? "external"
-        : "cognito";
-
-    // Build environment variables
-    const environment: { [key: string]: string } = {
-        AUTH_MODE: authMode,
-        ALLOWED_IP_RANGES: JSON.stringify(
-            config.app.authProvider.authorizerOptions.allowedIpRanges || []
-        ),
-        IGNORED_PATHS: JSON.stringify(CUSTOM_AUTHORIZER_IGNORED_PATHS),
-    };
-
-    // Add Cognito-specific environment variables
-    if (config.app.authProvider.useCognito.enabled) {
-        environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
-        environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
-    }
-
-    // Add External IDP-specific environment variables
-    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
-        environment.JWT_ISSUER_URL =
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
-        environment.JWT_AUDIENCE =
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
-    }
-
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.auth.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaAuthorizerLayer],
-        timeout: Duration.minutes(1),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: environment,
-    });
-
-    // Grant API Gateway invoke permissions
-    fun.grantInvoke(Service("APIGATEWAY").Principal);
 
     // Add global permissions
     globalLambdaEnvironmentsAndPermissions(fun, config);

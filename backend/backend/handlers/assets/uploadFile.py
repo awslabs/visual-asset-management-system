@@ -41,7 +41,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
@@ -503,14 +503,14 @@ def build_upload_change_metadata(user_id):
     """Build the change-provenance metadata for a user-initiated upload.
 
     Args:
-        user_id: Acting user id; ``None`` falls back to "SYSTEM".
+        user_id: Acting user id; ``None`` falls back to "SYSTEM_USER".
 
     Returns:
         Dict of vams-change* S3 metadata keys describing an "upload" change.
     """
     return {
         VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
-        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM",
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
     }
 
 def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
@@ -523,7 +523,7 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         return {}
     return {
         VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
-        VAMS_CHANGE_USER_ID_METADATA_KEY: change_user_id or "SYSTEM",
+        VAMS_CHANGE_USER_ID_METADATA_KEY: change_user_id or "SYSTEM_USER",
         VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: workflow_id or "",
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
@@ -979,7 +979,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     uploadType = request_model.uploadType
     
     # Extract user ID and check rate limit
-    user_id = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
     
     if not check_user_rate_limit(user_id):
         # Return 429 Too Many Requests
@@ -1149,7 +1149,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     uploadType = request_model.uploadType
 
     # Extract user ID for provenance
-    user_id = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Extract validated workflow provenance fields from request model
     workflow_id = request_model.workflowId
@@ -1645,7 +1645,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     uploadType = request_model.uploadType
 
     # Extract user ID for provenance
-    user_id = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Get upload details from DynamoDB (just for basic validation)
     upload_details = get_upload_details(uploadId, assetId)
@@ -2499,8 +2499,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return {
                 'statusCode': 429,
                 'headers': {
-                    'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache, no-store',
+                    **commonHeaders(),
                     'Retry-After': '60'  # Suggest retry after 60 seconds
                 },
                 'body': json.dumps({'message': str(v)})

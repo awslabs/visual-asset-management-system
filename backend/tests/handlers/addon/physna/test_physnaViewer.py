@@ -106,6 +106,9 @@ class TestPhysnaViewerResponses:
             response = _pv.lambda_handler(event, MagicMock())
         assert response["statusCode"] == 400
         assert response["headers"]["Content-Type"].startswith("application/json")
+        # REST API returns the Lambda response verbatim, so the handler must set the CORS
+        # origin header itself (regression guard for the browser CORS fix).
+        assert response["headers"].get("Access-Control-Allow-Origin") == "*"
         body = json.loads(response["body"])
         assert body["status"] == "unsupported"
 

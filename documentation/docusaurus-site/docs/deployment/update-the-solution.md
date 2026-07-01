@@ -292,6 +292,7 @@ The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteIte
 
 **Breaking changes:**
 
+-   The backend API moves from API Gateway HTTP API (v2) to REST API (v1), served under a stage path (default `/api`). The API Gateway identifier and invoke URL change on deployment. **Any client registered directly against the old API Gateway endpoint URL must be re-setup against the new endpoint** — re-run `vamscli setup` for the CLI, and update any external integrations or scripts that stored the API base URL. Clients that reach the API through the CloudFront or ALB front (the web application, and CLIs configured with the front's `/api` URL) continue to work without change. See [API Gateway REST API endpoint change](#api-gateway-rest-api-endpoint-change).
 -   New OpenSearch index names: `vams-assets-v3` and `vams-files-v3`. The new mapping adds a `geo_MD_location` field of type `geo_shape` that powers the new geospatial search filter and map view. The previous v2 indexes are abandoned and remain in OpenSearch until you delete them manually.
 -   Provisioned OpenSearch domains are upgraded from engine version 2.7 to 3.5. Serverless collections are reworked separately (see below).
 -   OpenSearch Serverless collections are reshaped onto a next-generation collection group with new `app.openSearch.useServerless` settings (`nextGen`, `allowPublic`, `enableStandbyReplicas`, and configurable OCU capacity). The collection cannot be updated in place — it must be removed and re-created, then reindexed. See [OpenSearch Serverless next-gen upgrade](#opensearch-serverless-next-gen-upgrade).
@@ -415,6 +416,27 @@ You have two options:
 :::warning[Plan the Availability Zone choice before first v2.6 deploy]
 Decide on `availabilityZoneCount` (`2` or `3`) before upgrading. Setting it to `3` preserves the existing VPC with no teardown. Accepting the default of `2` removes a subnet and may require the manual VPC teardown above if elastic network interfaces have not finished detaching.
 :::
+
+#### API Gateway REST API endpoint change
+
+In v2.6 the backend API is an API Gateway REST API (v1) served under the fixed stage path `/api`, replacing the previous HTTP API (v2). On deployment the API Gateway identifier and invoke URL change.
+
+The `app.api` configuration block is also restructured in v2.6: the per-implementation settings move under a new `app.api.apiGatewayRest` sub-block, and a new `app.api.apiType` field (fixed to `"APIGATEWAY_REST"`) selects the API implementation. Update an existing `config.json` so that `globalRateLimit`, `globalBurstLimit`, and `endpointType` live under `app.api.apiGatewayRest` (see the [API configuration reference](configuration-reference.md#api-configuration-appapi)). The execute-api VPC endpoint id field is now `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` and applies only to a `PRIVATE` endpoint. The REST API stage name is not a configuration option — it is the fixed value `api`.
+
+The web application is unaffected: it reads the API base URL at runtime from `/api/amplify-config`, and the CloudFront `/api/*` behavior (or ALB redirect) absorbs the stage path so browser URLs remain `/api/*`.
+
+The change affects any client that was configured directly against the **old** API Gateway endpoint URL:
+
+-   **VAMS CLI:** re-run `vamscli setup` and provide the new API URL. When pointing the CLI at the deployment's front (CloudFront/ALB) the base URL is unchanged; when pointing it directly at the execute-api endpoint, pass the bare endpoint URL (`https://{rest-api-id}.execute-api.{region}.amazonaws.com`) — the CLI appends the `/api` stage path automatically.
+-   **External integrations and scripts:** update any stored API base URL to the new endpoint.
+
+The deployment exposes the new endpoint as the CloudFormation output `APIGatewayEndpointOutput`. IP allow-list enforcement continues to work for both fronted and direct callers — the authorizer resolves the true client IP from the front's forwarded headers when present, and from the direct connection otherwise — so existing direct integrations keep working once re-pointed at the new URL.
+
+#### Switching `endpointType` between `PRIVATE` and `REGIONAL`
+
+Changing `app.api.apiGatewayRest.endpointType` on an existing deployment is supported and requires no manual steps. A `PRIVATE` endpoint carries an API Gateway resource policy that only permits invocation through the execute-api VPC interface endpoint (an `aws:SourceVpce` condition); a `REGIONAL` endpoint uses a public allow-all resource policy. VAMS writes the correct resource policy for the configured endpoint type on every deployment, so a `PRIVATE` → `REGIONAL` switch overwrites the VPC-restricted policy with the public one, and a `REGIONAL` → `PRIVATE` switch re-applies the restriction.
+
+This explicit-policy behavior exists because Amazon API Gateway does not clear a previously-set resource policy when an update stops supplying one. If a stale `PRIVATE` resource policy is ever left on a now-`REGIONAL` API (for example, after an out-of-band change to the API), every public request — including the browser CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial happens before any CORS headers are applied, the browser surfaces it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization failure. Re-running the VAMS deployment re-asserts the correct policy for the configured `endpointType` and resolves it.
 
 ## Breaking changes checklist
 

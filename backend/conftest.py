@@ -62,6 +62,30 @@ backend_path = os.path.join(os.path.dirname(__file__), 'backend')
 if not os.path.exists(backend_path):
     os.makedirs(backend_path, exist_ok=True)
 
+# Early setup: load common.auth modules BEFORE test collection (handlers import them at module level)
+import importlib.util
+
+def import_module_from_path_early(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+# Load common.auth package and apiEvent module early (handlers import at top-level)
+common_auth_pkg = import_module_from_path_early(
+    'common.auth',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', '__init__.py')
+)
+sys.modules['common.auth'] = common_auth_pkg
+
+common_auth_apievent = import_module_from_path_early(
+    'common.auth.apiEvent',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
+)
+sys.modules['common.auth.apiEvent'] = common_auth_apievent
+
 # Set up mock imports
 import pytest
 from unittest.mock import MagicMock
@@ -136,6 +160,19 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')
     )
     sys.modules['common.apiRoutes'] = api_routes_module
+
+    # common.auth modules are pure logic with no AWS state dependencies - load real modules
+    auth_pkg_module = import_module_from_path(
+        'common.auth',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', '__init__.py')
+    )
+    sys.modules['common.auth'] = auth_pkg_module
+
+    api_event_module = import_module_from_path(
+        'common.auth.apiEvent',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
+    )
+    sys.modules['common.auth.apiEvent'] = api_event_module
 
     # s3 is a simple validation module; load the mock by path
     s3_mock_module = import_module_from_path('common.s3', os.path.join(mocks_base_path, 'common', 's3.py'))

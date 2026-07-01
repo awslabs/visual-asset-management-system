@@ -9,6 +9,7 @@ uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
 filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
 relative_file_path_pattern = r'^\/.*$'
+bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
 id_regex = re.compile(id_pattern)

@@ -49,15 +49,15 @@ graph TD
 
 ### Key Nested Stacks
 
-| Stack                   | File                                                         | Purpose                                                                                |
-| ----------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                 | VPC, subnets, VPC endpoints                                                            |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`         | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
-| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`               | Amazon Cognito, SAML, external OAuth                                                   |
-| ApiGatewayV2Amplify     | `nestedStacks/apiLambda/apigatewayv2-amplify-nestedStack.ts` | Amazon API Gateway V2, Lambda authorizer                                               |
-| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`           | All API routes and Lambda wiring                                                       |
-| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`  | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
-| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`      | Processing pipeline orchestrator                                                       |
+| Stack                   | File                                                        | Purpose                                                                                |
+| ----------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                | VPC, subnets, VPC endpoints                                                            |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`        | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`              | Amazon Cognito, SAML, external OAuth                                                   |
+| RestApiBuilder          | `nestedStacks/apiLambda/restApiBuilder-nestedStack.ts`      | REST API, Lambda authorizer, route registry                                            |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`          | All API routes and Lambda wiring                                                       |
+| StaticWebBuilder        | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`     | Processing pipeline orchestrator                                                       |
 
 ### Cross-Stack Shared Interfaces
 

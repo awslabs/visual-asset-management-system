@@ -565,12 +565,12 @@ export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = fal
     }
 };
 
-export const deleteAssetLink = async ({ relationId }) => {
+export const deleteAssetLink = async ({ assetLinkId }) => {
     try {
-        if (!relationId) {
-            return [false, "relationId is required"];
+        if (!assetLinkId) {
+            return [false, "assetLinkId is required"];
         }
-        const response = await apiClient.del(`asset-links/${relationId}`, {});
+        const response = await apiClient.del(`asset-links/${assetLinkId}`, {});
         return [true, response?.message ?? response];
     } catch (error) {
         // [false, message, status] so callers can distinguish authorization
