@@ -612,7 +612,7 @@ export const FileVersionsList: React.FC = () => {
                             </div>
                             <div>
                                 <strong>Created by:</strong>{" "}
-                                {selectedVersionDetails?.createdBy || "System"}
+                                {selectedVersionDetails?.createdBy || "SYSTEM_USER"}
                             </div>
                             <div>
                                 <strong>Created on:</strong>{" "}
