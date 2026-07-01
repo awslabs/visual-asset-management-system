@@ -46,6 +46,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.config import Config as BotoConfig
 
 from customLogging.logger import safeLogger
+from models.common import commonHeaders
 
 from . import physnaCommon
 from .physnaCommon import (
@@ -143,7 +144,7 @@ def _json_response(
         "isBase64Encoded": False,
         "statusCode": status_code,
         "headers": {
-            "Content-Type": "application/json",
+            **commonHeaders(),
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
         },

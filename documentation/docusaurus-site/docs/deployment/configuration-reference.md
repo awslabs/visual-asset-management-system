@@ -154,27 +154,30 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 
 #### VPC Interface Endpoints
 
-| Endpoint        | Created When                                                        | Subnet Type                     |
-| --------------- | ------------------------------------------------------------------- | ------------------------------- |
-| API Gateway     | `addVpcEndpoints=true`                                              | Isolated                        |
-| SSM             | `addVpcEndpoints=true`                                              | Isolated                        |
-| Lambda          | `addVpcEndpoints=true`                                              | Isolated                        |
-| STS             | `addVpcEndpoints=true`                                              | Isolated                        |
-| CloudWatch Logs | `addVpcEndpoints=true`                                              | Isolated                        |
-| Step Functions  | `addVpcEndpoints=true`                                              | Isolated                        |
-| SNS             | `addVpcEndpoints=true`                                              | Isolated                        |
-| SQS             | `addVpcEndpoints=true`                                              | Isolated                        |
-| KMS             | `useKmsCmkEncryption.enabled=true`                                  | Isolated                        |
-| KMS FIPS        | `useKmsCmkEncryption.enabled=true` + `useFips=true`                 | Isolated                        |
-| AWS Batch       | Any pipeline enabled                                                | Isolated                        |
-| ECR API         | Any pipeline enabled                                                | Isolated                        |
-| ECR Docker      | Any pipeline enabled                                                | Isolated                        |
-| EFS             | `useNvidiaCosmos.enabled=true`                                      | Isolated                        |
-| ECS             | Pipelines with Batch compute                                        | Private (preferred) or Isolated |
-| ECS Agent       | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
-| ECS Telemetry   | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
-| Bedrock Runtime | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
-| Rekognition     | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
+| Endpoint                              | Created When                                                             | Subnet Type                     |
+| ------------------------------------- | ------------------------------------------------------------------------ | ------------------------------- |
+| API Gateway                           | `addVpcEndpoints=true`                                                   | Isolated                        |
+| SSM                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| Lambda                                | `addVpcEndpoints=true`                                                   | Isolated                        |
+| STS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| CloudWatch Logs                       | `addVpcEndpoints=true`                                                   | Isolated                        |
+| Step Functions                        | `addVpcEndpoints=true`                                                   | Isolated                        |
+| SNS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| SQS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
+| Cognito IDP (`cognito-idp`)           | `useCognito.enabled=true` (not GovCloud / EU Sovereign)                  | Isolated                        |
+| Cognito Identity (`cognito-identity`) | `useCognito.enabled=true` (not GovCloud / EU Sovereign)                  | Isolated                        |
+| Cognito IDP/Identity FIPS             | `useCognito.enabled=true` + `useFips=true` (not GovCloud / EU Sovereign) | Isolated                        |
+| KMS                                   | `useKmsCmkEncryption.enabled=true`                                       | Isolated                        |
+| KMS FIPS                              | `useKmsCmkEncryption.enabled=true` + `useFips=true`                      | Isolated                        |
+| AWS Batch                             | Any pipeline enabled                                                     | Isolated                        |
+| ECR API                               | Any pipeline enabled                                                     | Isolated                        |
+| ECR Docker                            | Any pipeline enabled                                                     | Isolated                        |
+| EFS                                   | `useNvidiaCosmos.enabled=true`                                           | Isolated                        |
+| ECS                                   | Pipelines with Batch compute                                             | Private (preferred) or Isolated |
+| ECS Agent                             | `useIsaacLabTraining.enabled=true`                                       | Isolated                        |
+| ECS Telemetry                         | `useIsaacLabTraining.enabled=true`                                       | Isolated                        |
+| Bedrock Runtime                       | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`      | Isolated                        |
+| Rekognition                           | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`      | Isolated                        |
 
 #### Gateway Endpoints (Always Created)
 
@@ -185,6 +188,10 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 
 :::note
 Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
+:::
+
+:::warning[Manually created endpoints must include Cognito for in-VPC MFA]
+When `addVpcEndpoints=false` (you create the VPC endpoints by hand, for example under an organizational policy that prohibits the solution from creating them), include the `cognito-idp` and `cognito-identity` interface endpoints from the table above whenever Amazon Cognito is the auth provider. VAMS keeps the Cognito MFA check enabled in this configuration on the assumption that those endpoints exist; if they are omitted, in-VPC Lambda functions cannot reach Amazon Cognito and the MFA check will fail. (Amazon Cognito PrivateLink is not available in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions, where VAMS disables the MFA check automatically.)
 :::
 
 ## Amazon OpenSearch Service (`app.openSearch`)
@@ -328,12 +335,29 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 When external OAuth IdP is enabled, **all** fields in this section are required. Deployment will fail if any field is null or empty.
 :::
 
-## API throttling (`app.api`)
+## API configuration (`app.api`)
 
-| Field                      | Type   | Default | Description                                                                                        |
-| -------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------- |
-| `app.api.globalRateLimit`  | number | `50`    | Global rate limit in requests per second for the Amazon API Gateway. Must be a positive number.    |
-| `app.api.globalBurstLimit` | number | `100`   | Global burst limit for the Amazon API Gateway. Must be greater than or equal to `globalRateLimit`. |
+| Field                                                      | Type   | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.api.apiType`                                          | string | `"APIGATEWAY_REST"` | Backend API implementation type. Only `"APIGATEWAY_REST"` (an Amazon API Gateway REST API) is supported; any other value fails configuration validation.                                                                                                                                                                                                                                                                           |
+| `app.api.apiGatewayRest.endpointType`                      | string | `"REGIONAL"`        | API Gateway endpoint type. `"REGIONAL"` creates a public regional REST API (default) that does not route through any VPC endpoint. `"PRIVATE"` creates a private REST API reachable only through an execute-api VPC interface endpoint; it requires `useGlobalVpc.enabled` and either `useGlobalVpc.addVpcEndpoints = true` or `optionalExternalPrivateApigVPCEId` set, and is incompatible with Amazon CloudFront (requires ALB). |
+| `app.api.apiGatewayRest.globalRateLimit`                   | number | `50`                | Global rate limit in requests per second for the Amazon API Gateway. Must be a positive number.                                                                                                                                                                                                                                                                                                                                    |
+| `app.api.apiGatewayRest.globalBurstLimit`                  | number | `100`               | Global burst limit for the Amazon API Gateway. Must be greater than or equal to `globalRateLimit`.                                                                                                                                                                                                                                                                                                                                 |
+| `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` | string | `""`                | Id of a pre-existing execute-api interface VPC endpoint to use for a `"PRIVATE"` endpoint when VAMS does not create one (`useGlobalVpc.addVpcEndpoints = false`). Applies only to `"PRIVATE"`; it is ignored (with a configuration warning) for a `"REGIONAL"` endpoint.                                                                                                                                                           |
+
+:::warning[PRIVATE endpoint requirements]
+Setting `app.api.apiGatewayRest.endpointType` to `"PRIVATE"` requires `useGlobalVpc.enabled = true` and an execute-api interface VPC endpoint: either set `useGlobalVpc.addVpcEndpoints = true` so VAMS creates one, or set `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` to an existing endpoint id. A `PRIVATE` endpoint is incompatible with Amazon CloudFront (which cannot reach a private API); you must front it with the ALB (`useCloudFront.enabled = false`, `useAlb.enabled = true`), and that ALB must run in isolated (non-public) subnets (`useAlb.usePublicSubnet = false`). A public-subnet ALB would expose an internet-facing path to the private API, defeating its isolation. Configuration validation enforces all of these.
+:::
+
+:::note[Execute-API VPC endpoint]
+A `REGIONAL` endpoint is public and does not route through a VPC endpoint, even when a VPC and its endpoints are enabled. Only a `PRIVATE` endpoint uses the execute-api interface VPC endpoint: VAMS creates it when `useGlobalVpc.addVpcEndpoints = true`, otherwise supply an existing one through `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId`.
+:::
+
+:::warning[Switching `endpointType` between `PRIVATE` and `REGIONAL` on an existing deployment]
+Changing `app.api.apiGatewayRest.endpointType` on a deployment that already exists is fully supported. A `PRIVATE` endpoint carries an API Gateway resource policy that only allows invocation through the execute-api VPC interface endpoint (an `aws:SourceVpce` condition); a `REGIONAL` endpoint uses a public allow-all resource policy. VAMS sets the correct resource policy for each endpoint type on every deployment, so switching in either direction updates the policy — no manual action is required.
+
+Amazon API Gateway itself does **not** remove a previously-set resource policy when an update simply stops supplying one, which is why VAMS always writes an explicit policy: switching `PRIVATE` → `REGIONAL` overwrites the `aws:SourceVpce`-restricted policy with the public allow-all policy, and `REGIONAL` → `PRIVATE` re-applies the VPC-endpoint restriction. If a resource policy left over from an out-of-band change ever remains in place after a switch (for example, a `PRIVATE` policy on a now-public endpoint), every request — including the CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial precedes the CORS response, a browser reports it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization error. Re-running the VAMS deployment restores the correct policy for the configured `endpointType`.
+:::
 
 ## Web UI (`app.webUi`)
 

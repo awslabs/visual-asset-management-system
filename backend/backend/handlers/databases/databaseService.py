@@ -14,9 +14,10 @@ from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
@@ -491,10 +492,7 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
-            headers={
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store',
-                },
+            headers=commonHeaders(),
             body=json.dumps({'message': result.message})
         )
     except VAMSGeneralErrorResponse as v:
@@ -587,17 +585,18 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
+    normalize_event(event)
     logger.info(event)
-    
+
     try:
         # Get path and query parameters
         path_parameters = event.get('pathParameters', {}) or {}
         query_parameters = event.get('queryStringParameters', {}) or {}
-        
+
         # Get HTTP method and path
         http_method = event['requestContext']['http']['method']
         path = event['requestContext']['http']['path']
-        
+
         # Get claims and roles
         claims_and_roles = request_to_claims(event)
         

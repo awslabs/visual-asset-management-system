@@ -8,6 +8,7 @@ import botocore
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
+from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -187,6 +188,11 @@ def get_executions(database_id, asset_id, workflow_database_id, workflow_id, que
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     logger.info(event)
+
+    # This handler reads pathParameters/queryStringParameters before request_to_claims,
+    # so normalize the REST event first (coerces null params to {} for the in-place
+    # pagination validation below).
+    normalize_event(event)
 
     try:
         # Parse request body if present

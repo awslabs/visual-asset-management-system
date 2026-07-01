@@ -31,20 +31,19 @@ vamscli tag create [OPTIONS]
 
 When `--json-input` is not used, `--tag-name`, `--description`, and `--tag-type-name` are all required. The referenced tag type must already exist.
 
-The batch JSON input uses a `tags` array:
+The JSON input is a single flat tag object:
 
 ```json
 {
-    "tags": [
-        { "tagName": "urgent", "description": "Urgent priority", "tagTypeName": "priority" },
-        { "tagName": "low", "description": "Low priority", "tagTypeName": "priority" }
-    ]
+    "tagName": "urgent",
+    "description": "Urgent priority",
+    "tagTypeName": "priority"
 }
 ```
 
 ```bash
 vamscli tag create --tag-name "urgent" --description "Urgent priority" --tag-type-name "priority"
-vamscli tag create --json-input '{"tags":[{"tagName":"urgent","description":"Urgent","tagTypeName":"priority"}]}'
+vamscli tag create --json-input '{"tagName":"urgent","description":"Urgent","tagTypeName":"priority"}'
 vamscli tag create --json-input tags.json --json-output
 ```
 
@@ -71,7 +70,7 @@ When not using `--json-input`, `--tag-name` is required and at least one of `--d
 ```bash
 vamscli tag update --tag-name "urgent" --description "Updated description"
 vamscli tag update --tag-name "urgent" --tag-type-name "new-priority"
-vamscli tag update --json-input '{"tags":[{"tagName":"urgent","description":"Updated","tagTypeName":"priority"}]}'
+vamscli tag update --json-input '{"tagName":"urgent","description":"Updated","tagTypeName":"priority"}'
 ```
 
 ---
@@ -132,33 +131,30 @@ Create one or more tag types in VAMS.
 vamscli tag-type create [OPTIONS]
 ```
 
-| Option            | Type | Required | Description                                                   |
-| ----------------- | ---- | -------- | ------------------------------------------------------------- |
-| `--tag-type-name` | TEXT | Yes      | Tag type name                                                 |
-| `--description`   | TEXT | Yes      | Tag type description                                          |
-| `--required`      | Flag | No       | Mark this tag type as required for asset classification       |
-| `--json-input`    | TEXT | No       | JSON string or path to a JSON file with tag type data (batch) |
-| `--json-output`   | Flag | No       | Output raw JSON response                                      |
+| Option            | Type | Required    | Description                                                 |
+| ----------------- | ---- | ----------- | ----------------------------------------------------------- |
+| `--tag-type-name` | TEXT | Conditional | Tag type name (required unless using `--json-input`)        |
+| `--description`   | TEXT | Conditional | Tag type description (required unless using `--json-input`) |
+| `--required`      | Flag | No          | Mark this tag type as required for asset classification     |
+| `--json-input`    | TEXT | No          | JSON string or path to a JSON file with tag type data       |
+| `--json-output`   | Flag | No          | Output raw JSON response                                    |
 
-:::note
-`--tag-type-name` and `--description` are always required by the command. When `--json-input` is supplied, it overrides the individual options and supplies the tag type data directly.
-:::
+When `--json-input` is not used, `--tag-type-name` and `--description` are both required. When `--json-input` is supplied, it provides the tag type data directly and the individual options are not required.
 
-In the batch JSON input, the `required` field is the string `"True"` or `"False"`:
+The JSON input is a single flat tag type object, where the `required` field is the string `"True"` or `"False"`:
 
 ```json
 {
-    "tagTypes": [
-        { "tagTypeName": "priority", "description": "Priority levels", "required": "True" },
-        { "tagTypeName": "category", "description": "Asset categories", "required": "False" }
-    ]
+    "tagTypeName": "priority",
+    "description": "Priority levels",
+    "required": "True"
 }
 ```
 
 ```bash
 vamscli tag-type create --tag-type-name "priority" --description "Priority levels"
 vamscli tag-type create --tag-type-name "status" --description "Processing status" --required
-vamscli tag-type create --json-input '{"tagTypes":[{"tagTypeName":"priority","description":"Priority levels","required":"True"}]}'
+vamscli tag-type create --json-input '{"tagTypeName":"priority","description":"Priority levels","required":"True"}'
 vamscli tag-type create --json-input tag-types.json --json-output
 ```
 
@@ -172,21 +168,21 @@ Update an existing tag type's description and/or required flag.
 vamscli tag-type update [OPTIONS]
 ```
 
-| Option                          | Type | Required | Description                                                   |
-| ------------------------------- | ---- | -------- | ------------------------------------------------------------- |
-| `--tag-type-name`               | TEXT | Yes      | Tag type name to update                                       |
-| `--description`                 | TEXT | No       | New tag type description                                      |
-| `--required` / `--not-required` | Flag | No       | Update the required flag                                      |
-| `--json-input`                  | TEXT | No       | JSON string or path to a JSON file with tag type data (batch) |
-| `--json-output`                 | Flag | No       | Output raw JSON response                                      |
+| Option                          | Type | Required    | Description                                                    |
+| ------------------------------- | ---- | ----------- | -------------------------------------------------------------- |
+| `--tag-type-name`               | TEXT | Conditional | Tag type name to update (required unless using `--json-input`) |
+| `--description`                 | TEXT | No          | New tag type description                                       |
+| `--required` / `--not-required` | Flag | No          | Update the required flag                                       |
+| `--json-input`                  | TEXT | No          | JSON string or path to a JSON file with tag type data          |
+| `--json-output`                 | Flag | No          | Output raw JSON response                                       |
 
-When not using `--json-input`, at least one of `--description` or `--required` / `--not-required` must be provided. The command retrieves the current tag type first and preserves any field not supplied.
+When not using `--json-input`, `--tag-type-name` is required and at least one of `--description` or `--required` / `--not-required` must be provided. The command retrieves the current tag type first and preserves any field not supplied.
 
 ```bash
 vamscli tag-type update --tag-type-name "priority" --description "Updated description"
 vamscli tag-type update --tag-type-name "priority" --required
 vamscli tag-type update --tag-type-name "priority" --not-required
-vamscli tag-type update --json-input '{"tagTypes":[{"tagTypeName":"priority","description":"Updated","required":"True"}]}'
+vamscli tag-type update --json-input '{"tagTypeName":"priority","description":"Updated","required":"True"}'
 ```
 
 ---

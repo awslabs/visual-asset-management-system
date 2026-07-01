@@ -125,6 +125,19 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                                 message: `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`,
                                 dismissible: true,
                             });
+                        } else {
+                            // Any other failure return (e.g. a 403 "Forbidden" string or false)
+                            // must surface an error instead of falling through silently.
+                            const failureMessage =
+                                typeof items === "string" && items.trim() !== ""
+                                    ? `Failed to load ${Synonyms.comments}: ${items}`
+                                    : `Failed to load ${Synonyms.comments}. You may not have permission to access it.`;
+                            setError(failureMessage);
+                            showMessage({
+                                type: "error",
+                                message: failureMessage,
+                                dismissible: true,
+                            });
                         }
                     } catch (error: any) {
                         console.error("Error fetching comments:", error);

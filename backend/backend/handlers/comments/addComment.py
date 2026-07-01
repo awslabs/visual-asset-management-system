@@ -7,6 +7,7 @@ import json
 import datetime
 from common.validators import validate
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from common.constants import STANDARD_JSON_RESPONSE
@@ -75,6 +76,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
     """
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
 

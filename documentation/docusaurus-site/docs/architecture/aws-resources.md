@@ -98,7 +98,7 @@ VAMS deploys approximately 50 Lambda functions across 17 builder files. All func
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset              | Asset CRUD, file upload/download  |
 | `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                           | Asset relationship management     |
-| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerHttp, apiGatewayAuthorizerWebsocket                              | Authentication and authorization  |
+| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                             | Authentication and authorization  |
 | `commentFunctions.ts`        | addComment, editComment                                                                                                                       | Asset comments                    |
 | `configFunctions.ts`         | configService                                                                                                                                 | System configuration              |
 | `databaseFunctions.ts`       | createDatabase                                                                                                                                | Database CRUD                     |
@@ -130,15 +130,17 @@ VAMS deploys approximately 50 Lambda functions across 17 builder files. All func
 
 ## Amazon API Gateway
 
-| Resource                  | Configuration                                                      |
-| ------------------------- | ------------------------------------------------------------------ |
-| **API Type**              | HTTP API (API Gateway V2)                                          |
-| **Authorizer**            | Custom Lambda authorizer (SIMPLE response, 30s cache TTL)          |
-| **Identity Source**       | `$request.header.Authorization`                                    |
-| **CORS**                  | All origins (`*`), all standard HTTP methods, credentials disabled |
-| **Rate Limiting**         | Default 50 requests/second rate, 100 burst (configurable)          |
-| **Access Logging**        | CloudWatch Logs with structured JSON format                        |
-| **Unauthenticated Paths** | `/api/amplify-config`, `/api/version`                              |
+| Resource                  | Configuration                                                                                                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API Type**              | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                     |
+| **Endpoint Type**         | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                            |
+| **Stage Name**            | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). The stage path is absorbed by the CloudFront originPath or ALB redirect, so client URLs remain `/api/*`. |
+| **Authorizer**            | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.              |
+| **Identity Source**       | `method.request.header.Authorization`                                                                                                                                                               |
+| **CORS**                  | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                  |
+| **Rate Limiting**         | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                |
+| **Access Logging**        | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                   |
+| **Unauthenticated Paths** | `/api/amplify-config`, `/api/version`                                                                                                                                                               |
 
 ## AWS Step Functions
 
@@ -203,7 +205,7 @@ All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
 | **Orchestration Bus**            | Top-level custom event bus for event-driven VAMS features                 |
 | **Orchestration Bus Audit Rule** | Routes all events from the deployment's sources to a CloudWatch log group |
 
-The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS encryption.
+The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS customer-managed-key encryption in the commercial AWS partition. Amazon EventBridge does not support customer managed keys on event buses in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions, so in those partitions the bus uses EventBridge's default AWS owned key encryption at rest regardless of the `useKmsCmkEncryption` setting.
 
 ## Amazon CloudWatch
 
@@ -229,13 +231,13 @@ Named `/aws/vendedlogs/<identifier>-<hash>`:
 
 Named `/aws/vendedlogs/<identifier>-<hash>`:
 
-| Log Group Identifier        | Purpose                                         | Condition                |
-| --------------------------- | ----------------------------------------------- | ------------------------ |
-| `VAMS-API-AccessLogs`       | API Gateway access logs (structured JSON)       | Always                   |
-| `vamsPipelineWorkflows`     | Workflow Step Functions execution logs          | Always                   |
-| `VAMSOrchestrationBusAudit` | EventBridge orchestration bus audit rule target | Always                   |
-| `VAMSCloudWatchVPCLogs`     | VPC flow logs                                   | `useGlobalVpc`           |
-| `VAMSCloudTrailLogs`        | AWS CloudTrail logs                             | `addStackCloudTrailLogs` |
+| Log Group Identifier        | Purpose                                                                                                              | Condition                | Removal Policy | Custom Name |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------- | ----------- |
+| REST API access logs        | REST API access logs (structured JSON). CloudFormation-auto-named (no fixed name), so it never collides on redeploy. | Always                   | DESTROY        | No          |
+| `vamsPipelineWorkflows`     | Workflow Step Functions execution logs                                                                               | Always                   | DESTROY        | Yes         |
+| `VAMSOrchestrationBusAudit` | EventBridge orchestration bus audit rule target                                                                      | Always                   | DESTROY        | Yes         |
+| `VAMSCloudWatchVPCLogs`     | VPC flow logs                                                                                                        | `useGlobalVpc`           | DESTROY        | Yes         |
+| `VAMSCloudTrailLogs`        | AWS CloudTrail logs                                                                                                  | `addStackCloudTrailLogs` | DESTROY        | Yes         |
 
 ### Pipeline Log Groups (per enabled pipeline)
 

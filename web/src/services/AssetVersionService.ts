@@ -40,7 +40,10 @@ export const fetchAllAssetVersions = async ({
 
             if (!success || !response) {
                 console.log("Failed to fetch page of versions");
-                break;
+                return [
+                    false,
+                    typeof response === "string" ? response : "Failed to load asset versions",
+                ];
             }
 
             const versions = response.versions || [];

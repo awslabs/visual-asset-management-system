@@ -10,11 +10,13 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
 from botocore.exceptions import ClientError
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 from models.common import (
     APIGatewayProxyResponseV2,
+    commonHeaders,
     success,
     validation_error,
     authorization_error,
@@ -434,10 +436,7 @@ def delete_handler(event, path_parameters, claims_and_roles):
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result['statusCode'],
-            headers={
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store',
-            },
+            headers=commonHeaders(),
             body=json.dumps({'message': result['message']})
         )
     except VAMSGeneralErrorResponse as v:
@@ -454,6 +453,7 @@ def delete_handler(event, path_parameters, claims_and_roles):
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for pipeline service API"""
+    normalize_event(event)
     logger.info(event)
 
     try:

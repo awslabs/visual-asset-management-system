@@ -31,6 +31,8 @@ vamscli setup https://vams.example.com
 vamscli setup https://abc123.execute-api.us-west-2.amazonaws.com
 ```
 
+When targeting the Amazon API Gateway `execute-api` endpoint directly, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) for you. A `403 Missing Authentication Token` on the first setup call usually means the endpoint URL is otherwise incorrect (wrong API id or Region) rather than a missing stage. Through a CloudFront/ALB/custom-domain front, use the front's URL unchanged.
+
 ### Failed to Fetch Amplify Configuration
 
 **Symptoms:**

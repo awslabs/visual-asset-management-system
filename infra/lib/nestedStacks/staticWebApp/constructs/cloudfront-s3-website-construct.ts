@@ -291,7 +291,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 export function addBehaviorToCloudFrontDistribution(
     scope: Construct,
     cloudFrontDistribution: cloudfront.Distribution,
-    apiUrl: string
+    apiUrl: string,
+    apiStageName: string
 ) {
     // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
     cloudFrontDistribution.addBehavior(
@@ -299,6 +300,7 @@ export function addBehaviorToCloudFrontDistribution(
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            originPath: `/${apiStageName}`,
         }),
         {
             cachePolicy: new cloudfront.CachePolicy(scope, "ApiCachePolicy", {

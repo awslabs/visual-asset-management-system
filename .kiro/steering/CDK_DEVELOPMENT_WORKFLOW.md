@@ -166,7 +166,7 @@ interface authResources {
 -   [ ] **Add Configuration Types**: Add new interfaces to `ConfigPublic` in `config.ts`
 -   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts`
 -   [ ] **Add Validation Logic**: Include configuration validation in `getConfig()`
--   [ ] **Update Templates**: Update configuration templates for different environments
+-   [ ] **Update Templates**: Update **all** configuration templates — `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json` — plus the active `config.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 
 #### **Step 2: Service Helper Integration**
 
@@ -1277,17 +1277,12 @@ export class ApiBuilderNestedStack extends cdk.NestedStack {
             props.subnets
         );
 
-        // Create API Gateway integrations
-        const createAssetIntegration = new apigatewayv2.HttpLambdaIntegration(
-            "CreateAssetIntegration",
-            createAssetFunction
-        );
-
-        // Add routes to API Gateway
-        props.apiGatewayV2.addRoutes({
-            path: "/assets",
-            methods: [apigatewayv2.HttpMethod.POST],
-            integration: createAssetIntegration,
+        // Register routes into the cross-stack route registry. RestApiBuilder
+        // renders the full registry into one OpenAPI spec on a single SpecRestApi.
+        attachFunctionToApi(this, createAssetFunction, {
+            routePath: "/assets",
+            method: apigateway.HttpMethod.POST,
+            registry: props.registry,
         });
     }
 }
@@ -1329,12 +1324,15 @@ VAMS uses a unified custom Lambda authorizer pattern for all API Gateway endpoin
 
 ```
 infra/lib/lambdaBuilder/authFunctions.ts
-├── buildApiGatewayAuthorizerHttpFunction()     # HTTP API authorizer
-└── buildApiGatewayAuthorizerWebsocketFunction() # WebSocket API authorizer
+└── buildApiGatewayAuthorizerRestFunction()      # REST API REQUEST authorizer
 
 backend/backend/handlers/auth/
-├── apiGatewayAuthorizerHttp.py      # HTTP authorizer implementation
-└── apiGatewayAuthorizerWebsocket.py # WebSocket authorizer implementation
+└── apiGatewayAuthorizerRest.py      # REST REQUEST authorizer (returns IAM policy)
+
+backend/backend/common/auth/
+├── authorizerCore.py                # Shared auth logic (Cognito/external JWT, API key, IP)
+├── clientIp.py                      # Trusted client-IP resolution + IP-range check
+└── apiEvent.py                      # REST→canonical event normalization shim
 
 infra/config/config.ts
 └── CUSTOM_AUTHORIZER_IGNORED_PATHS  # Paths that bypass authorization
@@ -1387,14 +1385,14 @@ if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
 
 ```typescript
 // ✅ CORRECT - Custom authorizer builder pattern
-export function buildApiGatewayAuthorizerHttpFunction(
+export function buildApiGatewayAuthorizerRestFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "apiGatewayAuthorizerHttp";
+    const name = "apiGatewayAuthorizerRest";
 
     // Determine auth mode based on configuration
     const authMode = config.app.authProvider.useCognito.enabled
@@ -1460,7 +1458,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         super(parent, name);
 
         // Create custom authorizer Lambda function
-        const customAuthorizerFunction = buildApiGatewayAuthorizerHttpFunction(
+        const customAuthorizerFunction = buildApiGatewayAuthorizerRestFunction(
             this,
             props.lambdaCommonBaseLayer,
             props.config,
@@ -1486,17 +1484,14 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             customAuthorizerFunction,
             {
                 authorizerName: "VamsCustomAuthorizer",
-                resultsCacheTtl: cdk.Duration.seconds(300), // 5 minutes cache
-                identitySource: ["$request.header.Authorization"],
-                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.IAM],
+                resultsCacheTtl: cdk.Duration.seconds(30),
+                identitySource: ["method.request.header.Authorization"],
             }
         );
 
-        // Use custom authorizer as default for API Gateway
-        const api = new apigw.HttpApi(this, "Api", {
-            defaultAuthorizer: apiGatewayAuthorizer,
-            // ... other API configuration
-        });
+        // The REST authorizer is declared as the OpenAPI security scheme applied
+        // to all non-anonymous routes; RestApiBuilder builds the SpecRestApi from
+        // the route registry and attaches this authorizer via the spec.
     }
 }
 ```
@@ -1507,21 +1502,28 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 // ✅ CORRECT - Define ignored paths as constants
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
-// ✅ CORRECT - Remove no-op authorizers from constructs
+// ✅ CORRECT - Anonymous endpoints register with allowAnonymous: true so the
+// OpenAPI spec omits the authorizer security scheme for that route. The authorizer
+// also bypasses CUSTOM_AUTHORIZER_IGNORED_PATHS at runtime as defense-in-depth.
 export class AmplifyConfigLambdaConstruct extends Construct {
+    public readonly lambdaFn: lambda.Function;
     constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
-        // ... lambda function creation
-
-        // No authorizer needed - path is ignored by custom authorizer
-        props.api.addRoutes({
-            path: "/api/amplify-config",
-            methods: [apigatewayv2.HttpMethod.GET],
-            integration: lambdaFnIntegration,
-            // No authorizer property - uses default custom authorizer with path bypass
-        });
+        // ... lambda function creation; RestApiBuilder registers the route:
+        // registry.register({ path: "/api/amplify-config", method: HttpMethod.GET,
+        //                     lambdaFn: this.lambdaFn, allowAnonymous: true });
     }
 }
 ```
+
+#### **REST API CORS and Resource Policy**
+
+CORS on the REST API is set in **three** places because REST responses come from three layers (the migration from HTTP API v2 removed the automatic ACAO injection HTTP APIs performed):
+
+1. **OPTIONS preflight** — `buildOpenApiSpec.ts` emits a per-path OPTIONS **MOCK** method with **no `security`** (a preflight must be unauthenticated) that returns `Access-Control-Allow-Origin` (and allow-headers/methods). If OPTIONS carried an authorizer, the preflight itself would get 401/403 with no CORS headers.
+2. **Gateway-level responses** — `rest-api-gateway-construct.ts` adds `GatewayResponse` resources for `DEFAULT_4XX` and `DEFAULT_5XX` that inject ACAO. Authorizer denials (401/403), missing-auth-token, and errors are produced by API Gateway itself and never reach a Lambda, so `commonHeaders()` cannot cover them; without this a token-expiry 401 is CORS-blocked in the browser and looks like a CORS bug.
+3. **Lambda proxy response** — the handler adds ACAO to its own response body via `commonHeaders()`; API Gateway returns proxy responses verbatim.
+
+**Resource policy** is always written explicitly to match `endpointType` (`buildOpenApiSpec.ts`): an `aws:SourceVpce`-restricted policy for `PRIVATE`, a public allow-all policy for `REGIONAL`. Amazon API Gateway does **not** remove a previously-set resource policy when an update omits one, so emitting it for both endpoint types ensures a `PRIVATE`↔`REGIONAL` switch overwrites the prior policy. A stale `PRIVATE` policy left on a now-`REGIONAL` API denies every request (including the CORS preflight) with `403 AccessDeniedException` at the resource-policy layer — a browser misreports this as a failed CORS preflight rather than an authorization error.
 
 ### **Custom Authorizer Development Rules**
 

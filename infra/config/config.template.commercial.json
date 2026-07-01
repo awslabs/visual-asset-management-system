@@ -279,8 +279,13 @@
             "allowUnsafeEvalFeatures": false
         },
         "api": {
-            "globalRateLimit": 50,
-            "globalBurstLimit": 100
+            "apiType": "APIGATEWAY_REST",
+            "apiGatewayRest": {
+                "globalRateLimit": 50,
+                "globalBurstLimit": 100,
+                "endpointType": "REGIONAL",
+                "optionalExternalPrivateApigVPCEId": ""
+            }
         },
         "metadataSchema": {
             "autoLoadDefaultAssetLinksSchema": true,

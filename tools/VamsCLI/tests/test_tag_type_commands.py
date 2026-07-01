@@ -66,17 +66,15 @@ class TestTagTypeCreateCommand:
             
             assert result.exit_code == 0
             assert '✓ Tag type(s) created successfully!' in result.output
-            
-            # Verify API call
+
+            # Verify API call (flat single-object body, matching the backend contract)
             expected_data = {
-                'tagTypes': [{
-                    'tagTypeName': 'priority',
-                    'description': 'Priority levels',
-                    'required': 'False'
-                }]
+                'tagTypeName': 'priority',
+                'description': 'Priority levels',
+                'required': 'False'
             }
             mocks['api_client'].create_tag_types.assert_called_once_with(expected_data)
-    
+
     def test_create_with_required_flag(self, cli_runner, tag_type_command_mocks):
         """Test tag type creation with required flag."""
         with tag_type_command_mocks as mocks:
@@ -93,80 +91,90 @@ class TestTagTypeCreateCommand:
             
             assert result.exit_code == 0
             assert '✓ Tag type(s) created successfully!' in result.output
-            
-            # Verify API call
+
+            # Verify API call (flat single-object body, matching the backend contract)
             expected_data = {
-                'tagTypes': [{
-                    'tagTypeName': 'status',
-                    'description': 'Processing status',
-                    'required': 'True'
-                }]
+                'tagTypeName': 'status',
+                'description': 'Processing status',
+                'required': 'True'
             }
             mocks['api_client'].create_tag_types.assert_called_once_with(expected_data)
-    
+
     def test_create_json_input_string(self, cli_runner, tag_type_command_mocks):
-        """Test tag type creation with JSON input string."""
+        """Test tag type creation with a flat JSON input string (no wrapper, no dummy options)."""
         with tag_type_command_mocks as mocks:
             mocks['api_client'].create_tag_types.return_value = {
                 'message': 'Succeeded'
             }
-            
+
+            # Flat object matching the backend contract; --json-input works WITHOUT --tag-type-name/--description
             json_data = {
-                'tagTypes': [
-                    {
-                        'tagTypeName': 'priority',
-                        'description': 'Priority levels',
-                        'required': 'True'
-                    },
-                    {
-                        'tagTypeName': 'category',
-                        'description': 'Asset categories',
-                        'required': 'False'
-                    }
-                ]
+                'tagTypeName': 'priority',
+                'description': 'Priority levels',
+                'required': 'True'
             }
-            
-            # Need to provide required parameters even with JSON input due to Click validation
+
             result = cli_runner.invoke(cli, [
                 'tag-type', 'create',
-                '--tag-type-name', 'dummy',  # Required by Click, overridden by JSON
-                '--description', 'dummy',    # Required by Click, overridden by JSON
                 '--json-input', json.dumps(json_data)
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Tag type(s) created successfully!' in result.output
-            
-            # Verify API call
+
+            # Verify API call passes the flat object through unchanged
             mocks['api_client'].create_tag_types.assert_called_once_with(json_data)
-    
-    def test_create_json_input_file(self, cli_runner, tag_type_command_mocks):
-        """Test tag type creation with JSON input file."""
+
+    def test_create_json_input_legacy_wrapper_unwrapped(self, cli_runner, tag_type_command_mocks):
+        """A legacy {"tagTypes":[{...}]} wrapper is unwrapped to a flat object for the API."""
         with tag_type_command_mocks as mocks:
-            mocks['api_client'].create_tag_types.return_value = {
-                'message': 'Succeeded'
-            }
-            
-            json_data = {
+            mocks['api_client'].create_tag_types.return_value = {'message': 'Succeeded'}
+
+            legacy_wrapped = {
                 'tagTypes': [{
                     'tagTypeName': 'priority',
                     'description': 'Priority levels',
                     'required': 'True'
                 }]
             }
-            
-            with patch('builtins.open', mock_open(read_data=json.dumps(json_data))):
-                # Need to provide required parameters even with JSON input due to Click validation
-                result = cli_runner.invoke(cli, [
-                    'tag-type', 'create',
-                    '--tag-type-name', 'dummy',  # Required by Click, overridden by JSON
-                    '--description', 'dummy',    # Required by Click, overridden by JSON
-                    '--json-input', 'tag-types.json'
-                ])
-            
+
+            result = cli_runner.invoke(cli, [
+                'tag-type', 'create',
+                '--json-input', json.dumps(legacy_wrapped)
+            ])
+
             assert result.exit_code == 0
             assert '✓ Tag type(s) created successfully!' in result.output
-            
+
+            # The wrapper is unwrapped to the flat first element before the API call
+            mocks['api_client'].create_tag_types.assert_called_once_with({
+                'tagTypeName': 'priority',
+                'description': 'Priority levels',
+                'required': 'True'
+            })
+
+    def test_create_json_input_file(self, cli_runner, tag_type_command_mocks):
+        """Test tag type creation with JSON input file (flat object)."""
+        with tag_type_command_mocks as mocks:
+            mocks['api_client'].create_tag_types.return_value = {
+                'message': 'Succeeded'
+            }
+
+            json_data = {
+                'tagTypeName': 'priority',
+                'description': 'Priority levels',
+                'required': 'True'
+            }
+
+            with patch('builtins.open', mock_open(read_data=json.dumps(json_data))):
+                result = cli_runner.invoke(cli, [
+                    'tag-type', 'create',
+                    '--json-input', 'tag-types.json'
+                ])
+
+            assert result.exit_code == 0
+            assert '✓ Tag type(s) created successfully!' in result.output
+
             # Verify API call
             mocks['api_client'].create_tag_types.assert_called_once_with(json_data)
     
@@ -205,16 +213,19 @@ class TestTagTypeCreateCommand:
                 assert '"tagTypes": ["priority"]' in result.output
     
     def test_create_missing_parameters(self, cli_runner, tag_type_command_mocks):
-        """Test tag type creation with missing required parameters."""
+        """Test tag type creation with missing required parameters (and no --json-input)."""
         with tag_type_command_mocks as mocks:
             result = cli_runner.invoke(cli, [
                 'tag-type', 'create',
                 '--tag-type-name', 'priority'
-                # Missing description
+                # Missing description, and no --json-input
             ])
-            
-            assert result.exit_code == 2  # Click parameter error for missing required option
-            assert 'Missing option' in result.output or 'required' in result.output.lower()
+
+            # Custom BadParameter validation (options are optional at the Click layer so
+            # --json-input can be used alone; the command enforces the pairing itself).
+            assert result.exit_code == 1
+            assert 'required' in result.output.lower()
+            mocks['api_client'].create_tag_types.assert_not_called()
     
     def test_create_tag_type_already_exists(self, cli_runner, tag_type_command_mocks):
         """Test tag type creation when tag type already exists."""
@@ -320,11 +331,9 @@ class TestTagTypeUpdateCommand:
             # Verify API calls
             mocks['api_client'].get_tag_types.assert_called_once()
             expected_data = {
-                'tagTypes': [{
-                    'tagTypeName': 'priority',
-                    'description': 'Updated description',
-                    'required': 'False'
-                }]
+                'tagTypeName': 'priority',
+                'description': 'Updated description',
+                'required': 'False'
             }
             mocks['api_client'].update_tag_types.assert_called_once_with(expected_data)
     
@@ -357,14 +366,12 @@ class TestTagTypeUpdateCommand:
             
             # Verify API calls
             expected_data = {
-                'tagTypes': [{
-                    'tagTypeName': 'priority',
-                    'description': 'Priority levels',
-                    'required': 'True'
-                }]
+                'tagTypeName': 'priority',
+                'description': 'Priority levels',
+                'required': 'True'
             }
             mocks['api_client'].update_tag_types.assert_called_once_with(expected_data)
-    
+
     def test_update_not_required_flag(self, cli_runner, tag_type_command_mocks):
         """Test tag type update with not-required flag."""
         with tag_type_command_mocks as mocks:
@@ -394,39 +401,34 @@ class TestTagTypeUpdateCommand:
             
             # Verify API calls
             expected_data = {
-                'tagTypes': [{
-                    'tagTypeName': 'priority',
-                    'description': 'Priority levels',
-                    'required': 'False'
-                }]
+                'tagTypeName': 'priority',
+                'description': 'Priority levels',
+                'required': 'False'
             }
             mocks['api_client'].update_tag_types.assert_called_once_with(expected_data)
-    
+
     def test_update_json_input(self, cli_runner, tag_type_command_mocks):
-        """Test tag type update with JSON input."""
+        """Test tag type update with a flat JSON input (no wrapper, no other options needed)."""
         with tag_type_command_mocks as mocks:
             mocks['api_client'].update_tag_types.return_value = {
                 'message': 'Succeeded'
             }
-            
+
             json_data = {
-                'tagTypes': [{
-                    'tagTypeName': 'priority',
-                    'description': 'Updated via JSON',
-                    'required': 'True'
-                }]
+                'tagTypeName': 'priority',
+                'description': 'Updated via JSON',
+                'required': 'True'
             }
-            
+
             result = cli_runner.invoke(cli, [
                 'tag-type', 'update',
-                '--tag-type-name', 'priority',
                 '--json-input', json.dumps(json_data)
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Tag type(s) updated successfully!' in result.output
-            
-            # Verify API call
+
+            # Verify API call passes the flat object through unchanged
             mocks['api_client'].update_tag_types.assert_called_once_with(json_data)
     
     def test_update_tag_type_not_found(self, cli_runner, tag_type_command_mocks):
@@ -803,40 +805,34 @@ class TestTagTypeCommandsJSONHandling:
         with tag_type_command_mocks as mocks:
             result = cli_runner.invoke(cli, [
                 'tag-type', 'create',
-                '--tag-type-name', 'dummy',  # Required by Click
-                '--description', 'dummy',    # Required by Click
                 '--json-input', 'invalid json string'
             ])
-            
+
             assert result.exit_code == 1  # Custom validation error
             assert 'Invalid JSON input' in result.output
-    
+
     def test_invalid_json_input_file(self, cli_runner, tag_type_command_mocks):
         """Test handling of invalid JSON input file."""
         with tag_type_command_mocks as mocks:
             with patch('builtins.open', mock_open(read_data='invalid json')):
                 result = cli_runner.invoke(cli, [
                     'tag-type', 'create',
-                    '--tag-type-name', 'dummy',  # Required by Click
-                    '--description', 'dummy',    # Required by Click
                     '--json-input', 'invalid.json'
                 ])
-            
+
             # Custom validation error for invalid JSON in file
             assert result.exit_code == 1
             assert 'Invalid' in result.output
-    
+
     def test_nonexistent_json_input_file(self, cli_runner, tag_type_command_mocks):
         """Test handling of nonexistent JSON input file."""
         with tag_type_command_mocks as mocks:
             with patch('builtins.open', side_effect=FileNotFoundError()):
                 result = cli_runner.invoke(cli, [
                     'tag-type', 'create',
-                    '--tag-type-name', 'dummy',  # Required by Click
-                    '--description', 'dummy',    # Required by Click
                     '--json-input', 'nonexistent.json'
                 ])
-            
+
             assert result.exit_code == 1  # Custom validation error
             assert 'Invalid JSON input' in result.output
 
@@ -916,24 +912,24 @@ class TestTagTypeCommandsEdgeCases:
 class TestTagTypeCommandsParameterValidation:
     """Test parameter validation for tag type commands."""
     
-    @patch('vamscli.main.ProfileManager')
-    def test_commands_require_tag_type_name(self, mock_main_profile_manager):
-        """Test that commands require tag-type-name where appropriate."""
-        mock_profile_manager = Mock()
-        mock_profile_manager.has_config.return_value = True
-        mock_main_profile_manager.return_value = mock_profile_manager
-        
-        runner = CliRunner()
-        
-        # Test create without tag-type-name
-        result = runner.invoke(cli, ['tag-type', 'create'])
-        assert result.exit_code == 2  # Click parameter error
-        assert 'Missing option' in result.output or 'required' in result.output.lower()
-        
-        # Test update without tag-type-name
-        result = runner.invoke(cli, ['tag-type', 'update'])
-        assert result.exit_code == 2  # Click parameter error
-        assert 'Missing option' in result.output or 'required' in result.output.lower()
+    def test_commands_require_tag_type_name(self, cli_runner, tag_type_command_mocks):
+        """Create/update with neither options nor --json-input fail with a clear error.
+
+        The options are optional at the Click layer (so --json-input can be used alone);
+        the command enforces that name/fields are supplied when --json-input is absent.
+        """
+        with tag_type_command_mocks as mocks:
+            # Create with no options and no --json-input
+            result = cli_runner.invoke(cli, ['tag-type', 'create'])
+            assert result.exit_code == 1
+            assert 'required' in result.output.lower()
+            mocks['api_client'].create_tag_types.assert_not_called()
+
+            # Update with no options and no --json-input
+            result = cli_runner.invoke(cli, ['tag-type', 'update'])
+            assert result.exit_code == 1
+            assert 'required' in result.output.lower()
+            mocks['api_client'].update_tag_types.assert_not_called()
     
     @patch('vamscli.main.ProfileManager')
     def test_delete_requires_tag_type_name_argument(self, mock_main_profile_manager):

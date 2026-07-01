@@ -8,6 +8,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from common.validators import validate
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
@@ -428,6 +429,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: lambda context dictionary
     :returns: Http response object (statusCode, headers, body)
     """
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
     pathParameters = event.get("pathParameters", {})

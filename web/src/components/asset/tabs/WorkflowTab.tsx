@@ -220,9 +220,26 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     // Extract existing workflows from allItems
                     workflows = allItems.filter((item) => !item.parentId);
                 } else {
-                    // Fetch all workflows for the database for initial or manual refreshes
+                    // Fetch all workflows for the database for initial or manual refreshes.
                     const workflowsDatabase = await fetchDatabaseWorkflows({ databaseId });
                     const workflowGlobal = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
+                    if (!Array.isArray(workflowsDatabase) || !Array.isArray(workflowGlobal)) {
+                        const failureMessage =
+                            (typeof workflowsDatabase === "string" && workflowsDatabase) ||
+                            (typeof workflowGlobal === "string" && workflowGlobal) ||
+                            "Failed to load workflow data. You may not have permission to access it.";
+                        setError(failureMessage);
+                        showMessage({
+                            type: "error",
+                            message: failureMessage,
+                            dismissible: true,
+                        });
+                        setRefreshing(false);
+                        setReload(false);
+                        setBackgroundRefresh(false);
+                        setInitialLoadComplete(true);
+                        return;
+                    }
                     workflows = [...workflowsDatabase, ...workflowGlobal];
                 }
 

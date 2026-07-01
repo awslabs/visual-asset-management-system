@@ -15,6 +15,7 @@ from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 from models.common import (
     APIGatewayProxyResponseV2,
+    commonHeaders,
     internal_error,
     success,
     validation_error,
@@ -300,10 +301,7 @@ def delete_handler(event, path_parameters, claims_and_roles):
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result['statusCode'],
-            headers={
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store',
-            },
+            headers=commonHeaders(),
             body=json.dumps({'message': result['message']})
         )
     except VAMSGeneralErrorResponse as v:

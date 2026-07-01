@@ -18,7 +18,7 @@ graph LR
         CF["Amazon CloudFront<br/>Distribution"]
         WAF["AWS WAF<br/>(Optional)"]
         S3W["Amazon S3<br/>(Web App Bucket)"]
-        APIGW["Amazon API Gateway V2<br/>(HttpApi)"]
+        APIGW["Amazon API Gateway<br/>REST API (v1)"]
         AUTH["Custom Lambda<br/>Authorizer"]
         HANDLERS["Lambda Handlers"]
     end
@@ -36,9 +36,10 @@ graph LR
 In this mode:
 
 -   Amazon CloudFront serves the React web application from an Amazon S3 origin bucket
--   API requests are proxied through Amazon CloudFront to Amazon API Gateway V2
+-   API requests are proxied through Amazon CloudFront to the REST API, with CloudFront's `/api/*` behavior using an originPath of `/api` (the REST API stage) to absorb the stage path
 -   An optional AWS WAF Web ACL (deployed in `us-east-1`) protects the distribution
 -   Custom domain names are supported via `useCloudFront.customDomain` configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone
+-   The API endpoint type is configurable: `REGIONAL` (default, public; not routed through any VPC endpoint) or `PRIVATE` (VPC interface endpoint only, incompatible with CloudFront)
 
 ### Application Load Balancer Deployment (GovCloud / ALB Mode)
 
@@ -54,7 +55,7 @@ graph LR
         ALB["Application Load<br/>Balancer"]
         WAF["AWS WAF<br/>(Optional, Regional)"]
         S3W["Amazon S3<br/>(Web App Bucket)"]
-        APIGW["Amazon API Gateway V2<br/>(HttpApi)"]
+        APIGW["Amazon API Gateway<br/>REST API (v1)"]
         AUTH["Custom Lambda<br/>Authorizer"]
         HANDLERS["Lambda Handlers<br/>(VPC Isolated Subnets)"]
     end
@@ -73,10 +74,12 @@ In this mode:
 
 -   An Application Load Balancer serves the web application and proxies API requests
 -   The ALB requires a domain host name and an AWS Certificate Manager certificate ARN
--   The ALB can be deployed in public or private subnets (`useAlb.usePublicSubnet`)
--   An optional AWS WAF Web ACL (regional) protects the ALB
+-   The ALB redirects `/api*` and `/secure-config*` paths by prepending `/api` (the REST API stage) to absorb the stage path
+-   The ALB can be deployed in public subnets (`useAlb.usePublicSubnet = true`) or isolated subnets (`useAlb.usePublicSubnet = false`)
+-   An optional AWS WAF Web ACL (regional) protects the ALB when WAF is enabled and CloudFront is not
 -   VPC is required (`useGlobalVpc.enabled = true`)
 -   A dedicated Amazon S3 interface VPC endpoint forwards static web file requests from the ALB to the Amazon S3 web-app bucket (see [ALB Amazon S3 interface endpoint](#vpc-endpoints))
+-   The API endpoint type is configurable: `REGIONAL` (public; not routed through any VPC endpoint) or `PRIVATE` (VPC interface endpoint only)
 
 ### VPC-Isolated Deployment (GovCloud)
 
@@ -124,6 +127,39 @@ graph TD
     VPCE --> LAMBDA
     BATCH --> VPCE
 ```
+
+## REST API Endpoint Types and Access Control
+
+VAMS uses an Amazon API Gateway REST API with configurable endpoint types that control network access to the backend.
+
+### Endpoint Type Configuration
+
+| Endpoint Type | Configuration                         | Network Access                                                                                                                                                                                                         | Compatible Distributions  |
+| ------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `REGIONAL`    | `app.api.apiGatewayRest.endpointType` | Publicly addressable. Does not route through any VPC endpoint, even when a VPC and its endpoints are enabled.                                                                                                          | CloudFront or ALB         |
+| `PRIVATE`     | `app.api.apiGatewayRest.endpointType` | Reachable only through an execute-api VPC interface endpoint. Requires `useGlobalVpc.enabled` and either `useGlobalVpc.addVpcEndpoints = true` (VAMS creates the endpoint) or `optionalExternalPrivateApigVPCEId` set. | ALB only (not CloudFront) |
+
+:::warning[PRIVATE endpoint constraints]
+A `PRIVATE` API endpoint is incompatible with Amazon CloudFront, which cannot reach a private API. When deploying with `endpointType: "PRIVATE"`, you must front it with the ALB (`useCloudFront.enabled = false`, `useAlb.enabled = true`), and that ALB must run in isolated (non-public) subnets (`useAlb.usePublicSubnet = false`) — a public-subnet ALB would expose an internet-facing path to the private API. Configuration validation enforces `useGlobalVpc.enabled = true`, the ALB requirements, and that an execute-api endpoint is available — either created by VAMS (`useGlobalVpc.addVpcEndpoints = true`) or supplied through `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId`.
+:::
+
+### Stage Path Fronting
+
+The REST API deployment stage is named `api` (a fixed internal value, not a configuration option) and is absorbed by the web distribution fronting layer so that client requests use clean `/api/*` paths:
+
+-   **CloudFront**: The `/api/*` behavior uses `originPath: "/api"`, mapping `https://example.com/api/version` to the stage's invoke URL at `https://{restApiId}.execute-api.{region}.amazonaws.com/api/version`.
+-   **ALB**: The listener redirects `/api*` and `/secure-config*` paths by prepending `/api`, mapping `https://example.com/api/version` to the same stage invoke URL.
+
+This keeps the browser/CLI base URL unchanged (`/api/version`). The stage name is shared with the VamsCLI endpoint constants, so it is fixed in the codebase rather than configurable.
+
+### WAF Protection Scope
+
+When AWS WAF is enabled (`app.useWaf = true`), the WAF Web ACL scope depends on the web distribution:
+
+-   **CloudFront deployment**: A CLOUDFRONT-scoped Web ACL (deployed in `us-east-1`) protects the distribution. The REST API stage does **not** receive a separate regional Web ACL association.
+-   **ALB deployment (without CloudFront)**: A REGIONAL Web ACL protects the REST API stage and the ALB. Both are associated with the same regional Web ACL.
+
+This ensures that every request is filtered by WAF at the entry point, whether through CloudFront or directly to the ALB and API.
 
 ## VPC Configuration Options
 
@@ -204,26 +240,33 @@ These gateway endpoints are always created when VPC endpoints are enabled:
 
 These interface endpoints are always created when VPC endpoints are enabled:
 
-| Endpoint                  | Service           | Purpose                      |
-| ------------------------- | ----------------- | ---------------------------- |
-| Amazon API Gateway        | `APIGATEWAY`      | API Gateway invocations      |
-| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access       |
-| AWS Lambda                | `LAMBDA`          | Lambda-to-Lambda invocations |
-| AWS STS                   | `STS`             | Credential federation        |
-| Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                 |
-| AWS Step Functions        | `STEP_FUNCTIONS`  | Workflow execution           |
-| Amazon SNS                | `SNS`             | Event notifications          |
-| Amazon SQS                | `SQS`             | Queue operations             |
+| Endpoint                  | Service           | Purpose                                                                                                                                                                                        |
+| ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execute-API               | `EXECUTE_API`     | REST API invoke access for a `PRIVATE` endpoint. Created only when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `REGIONAL` endpoint is public and does not use it. |
+| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access                                                                                                                                                                         |
+| AWS Lambda                | `LAMBDA`          | Lambda-to-Lambda invocations                                                                                                                                                                   |
+| AWS STS                   | `STS`             | Credential federation                                                                                                                                                                          |
+| Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                                                                                                                                                                                   |
+| AWS Step Functions        | `STEP_FUNCTIONS`  | Workflow execution                                                                                                                                                                             |
+| Amazon SNS                | `SNS`             | Event notifications                                                                                                                                                                            |
+| Amazon SQS                | `SQS`             | Queue operations                                                                                                                                                                               |
+
+:::info[Execute-API VPC endpoint]
+The execute-api interface VPC endpoint (`com.amazonaws.{region}.execute-api`) is created only for a `PRIVATE` REST API — that is, when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `PRIVATE` endpoint is reachable **only** through it (or through an operator-supplied endpoint via `optionalExternalPrivateApigVPCEId`). A `REGIONAL` endpoint is publicly addressable and does **not** route through any execute-api VPC endpoint, even when a VPC and its endpoints are enabled.
+:::
 
 ### Conditional Interface Endpoints
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint            | Condition                                      | Purpose                           |
-| ------------------- | ---------------------------------------------- | --------------------------------- |
-| AWS KMS             | `useKmsCmkEncryption.enabled`                  | KMS key operations                |
-| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`      | FIPS-compliant KMS                |
-| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint` | ALB-to-S3 static web file serving |
+| Endpoint                      | Condition                                                       | Purpose                                                      |
+| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
+| Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check |
+| Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange               |
+| Amazon Cognito (FIPS)         | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp` and `cognito-identity`          |
+| AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                           |
+| AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                           |
+| Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                            |
 
 :::info[ALB Amazon S3 interface endpoint]
 In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:

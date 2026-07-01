@@ -100,6 +100,7 @@ One folder per domain. The current domains:
 
 -   [ ] **Create Handler File**: Add handler in `handlers/[domain]/[handler].py`
 -   [ ] **Follow Gold Standard**: Use `assetService.py` patterns for structure
+-   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
 -   [ ] **Add Logging**: Use `safeLogger` for structured logging
@@ -453,6 +454,35 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
 ```
+
+**Event normalization (`normalize_event`):** The REST API (v1) proxy event differs from the
+HTTP API v2 layout handlers are written against in **two** ways that `normalize_event(event)`
+(from `common.auth.apiEvent`) reconciles. It mutates in place, is idempotent, and no-ops on
+`lambdaCrossCall` events.
+
+1.  **`requestContext.http` block.** Handlers read
+    `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`; the REST event
+    exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`.
+    `normalize_event` injects the v2-style `requestContext.http` block.
+2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
+    explicit JSON `null` when empty (HTTP API v2 omitted them), so `event.get('pathParameters', {})`
+    / `event.get('queryStringParameters', {})` returns `None` — the default applies only when
+    the **key is absent**, not present-but-`null`. A handler that then does `params['id']`,
+    `'id' in params`, or `int(params['maxItems'])` crashes with `TypeError: 'NoneType' object
+is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-but-`null`
+    value of either key to `{}`.
+
+-   **`request_to_claims(event)` calls `normalize_event(event)` internally** (first line),
+    so the Gold Standard order above — `request_to_claims(event)` as the handler's first
+    event access, _then_ read `path`/`method`/params — is already covered for both
+    normalizations and needs **no** import or explicit call.
+-   **Only when a handler must read `requestContext['http']`, `pathParameters`, or
+    `queryStringParameters` _before_ `request_to_claims`** does it
+    `from common.auth.apiEvent import normalize_event` and call `normalize_event(event)` as the
+    first statement of `lambda_handler`. Reading those before normalization raises
+    `KeyError`/`TypeError` → 500 on a real REST request — a failure invisible to CDK synth and
+    to unit tests that hand-build a v2-shaped event, so cover the REST-shaped event (including
+    `null` params) in tests.
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 

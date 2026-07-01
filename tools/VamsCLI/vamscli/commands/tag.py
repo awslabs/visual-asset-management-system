@@ -1,5 +1,6 @@
 """Tag management commands for VamsCLI."""
 
+import builtins
 import json
 import click
 from typing import Dict, Any, Optional, List
@@ -35,6 +36,22 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             raise click.BadParameter(
                 f"Invalid JSON in file '{json_input}': file contains invalid JSON format"
             )
+
+
+def flatten_tag_input(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a single flat tag object for the tags API.
+
+    The API accepts one flat object per request ({tagName, description, tagTypeName}).
+    A legacy wrapped shape ({"tags": [ {...} ]}) is unwrapped to its first element so
+    previously documented JSON input continues to work.
+    """
+    # NOTE: this module defines a `list` command, so the builtin `list` name is shadowed
+    # here — use `builtins.list` for the isinstance check.
+    if isinstance(data, dict):
+        wrapped = data.get('tags')
+        if isinstance(wrapped, builtins.list) and wrapped:
+            return wrapped[0]
+    return data
 
 
 def format_tag_output(tag_data: Dict[str, Any], json_output: bool = False) -> str:
@@ -111,34 +128,32 @@ def create(ctx: click.Context, tag_name: Optional[str], description: Optional[st
     
     Examples:
         vamscli tag create --tag-name "urgent" --description "Urgent priority" --tag-type-name "priority"
-        vamscli tag create --json-input '{"tags":[{"tagName":"urgent","description":"Urgent","tagTypeName":"priority"}]}'
+        vamscli tag create --json-input '{"tagName":"urgent","description":"Urgent","tagTypeName":"priority"}'
         vamscli tag create --json-input tags.json --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Build tag data
         if json_input:
-            # Use JSON input
-            tags_data = parse_json_input(json_input)
+            # Use JSON input (flat object; a legacy {"tags":[...]} wrapper is unwrapped)
+            tags_data = flatten_tag_input(parse_json_input(json_input))
         else:
             # Build from individual options
             if not all([tag_name, description, tag_type_name]):
                 raise click.BadParameter(
                     "All options (--tag-name, --description, --tag-type-name) are required when not using --json-input"
                 )
-            
+
             tags_data = {
-                'tags': [{
-                    'tagName': tag_name,
-                    'description': description,
-                    'tagTypeName': tag_type_name
-                }]
+                'tagName': tag_name,
+                'description': description,
+                'tagTypeName': tag_type_name
             }
-        
+
         output_status("Creating tag(s)...", json_output)
         
         # Create the tag(s)
@@ -200,57 +215,55 @@ def update(ctx: click.Context, tag_name: Optional[str], description: Optional[st
     Examples:
         vamscli tag update --tag-name "urgent" --description "Updated description"
         vamscli tag update --tag-name "urgent" --tag-type-name "new-priority"
-        vamscli tag update --json-input '{"tags":[{"tagName":"urgent","description":"Updated","tagTypeName":"priority"}]}'
+        vamscli tag update --json-input '{"tagName":"urgent","description":"Updated","tagTypeName":"priority"}'
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Build update data
         if json_input:
-            # Use JSON input
-            tags_data = parse_json_input(json_input)
+            # Use JSON input (flat object; a legacy {"tags":[...]} wrapper is unwrapped)
+            tags_data = flatten_tag_input(parse_json_input(json_input))
         else:
             # Build from individual options
             if not tag_name:
                 raise click.BadParameter(
                     "--tag-name is required when not using --json-input"
                 )
-            
+
             if not any([description, tag_type_name]):
                 raise click.BadParameter(
                     "At least one field must be provided for update. "
                     "Use --description, --tag-type-name, or --json-input."
                 )
-            
+
             # We need to get the current tag data first to preserve unchanged fields
             output_status("Retrieving current tag data...", json_output)
             current_tags = api_client.get_tags()
             current_tag = None
-            
+
             # Find the tag in the response
             tags_list = current_tags.get('message', {}).get('Items', [])
             for tag in tags_list:
                 if tag.get('tagName') == tag_name:
                     current_tag = tag
                     break
-            
+
             if not current_tag:
                 raise TagNotFoundError(f"Tag '{tag_name}' not found")
-            
+
             # Build update data with current values as defaults
             tags_data = {
-                'tags': [{
-                    'tagName': tag_name,
-                    'description': description or current_tag.get('description'),
-                    'tagTypeName': tag_type_name or current_tag.get('tagTypeName', '').replace(' [R]', '')
-                }]
+                'tagName': tag_name,
+                'description': description or current_tag.get('description'),
+                'tagTypeName': tag_type_name or current_tag.get('tagTypeName', '').replace(' [R]', '')
             }
-        
+
         # Get tag name for progress message
-        update_tag_name = tag_name if tag_name else tags_data.get('tags', [{}])[0].get('tagName', 'unknown')
+        update_tag_name = tag_name if tag_name else tags_data.get('tagName', 'unknown')
         output_status(f"Updating tag '{update_tag_name}'...", json_output)
         
         # Update the tag(s)

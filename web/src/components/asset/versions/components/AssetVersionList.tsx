@@ -600,6 +600,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         />
                         <Button
                             iconName="refresh"
+                            variant="icon"
                             onClick={refreshVersions}
                             ariaLabel="Refresh versions"
                         />

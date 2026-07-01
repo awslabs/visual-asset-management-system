@@ -1,9 +1,11 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
+      description: "Amazon API Gateway REST API invoke URL. The stage path (default: /api) is absorbed by the web distribution fronting (CloudFront or ALB)."
       variables:
           apiGatewayUrl:
               default: ""
@@ -307,16 +309,8 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - name: "assetLinkId"
-                in: "path"
-                description: "Unique identifier for asset link."
-                required: true
-                schema:
-                    $ref: "#/components/schemas/uuid_regex"
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{relationId}:
         delete:
             summary: "Delete an asset link."
             description: "Delete an asset link by its unique identifier. Also removes associated metadata."
@@ -351,15 +345,15 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - name: "relationId"
-                in: "path"
-                description: "Unique identifier for asset link (name kept for backwards compatability for CDK deployment, actually is assetLinkId)."
-                required: true
-                schema:
-                    $ref: "#/components/schemas/uuid_regex"
             security:
               - DefaultCognitoAuthorizer: []
+        parameters:
+          - name: "assetLinkId"
+            in: "path"
+            description: "Unique identifier for asset link."
+            required: true
+            schema:
+                $ref: "#/components/schemas/uuid_regex"
     /asset-links/{assetLinkId}/metadata:
         get:
             summary: "Get metadata for an asset link."

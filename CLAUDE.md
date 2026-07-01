@@ -60,7 +60,7 @@ root/
 ### **Request Flow**
 
 ```
-User → CloudFront/ALB → API Gateway V2 HttpApi
+User → CloudFront/ALB → API Gateway REST API (v1)
   → Custom Lambda Authorizer (JWT validation + IP check)
     → Lambda Handler (Casbin two-tier enforcement)
       → DynamoDB / S3
@@ -553,7 +553,7 @@ For user-facing documentation:
 | AWS CDK (TypeScript)     | Infrastructure as code        |
 | 10 nested stacks         | Modular resource organization |
 | CDK Nag                  | Security compliance checks    |
-| API Gateway V2 HttpApi   | REST API layer                |
+| REST API (v1)            | API layer                     |
 | Custom Lambda Authorizer | Unified JWT + IP auth         |
 
 ### **CLI (`tools/VamsCLI/`)**

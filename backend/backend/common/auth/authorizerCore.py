@@ -2,6 +2,16 @@
 # SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
 # Licensed under the Amazon Software License  https://aws.amazon.com/asl/
 
+"""Shared authorizer core logic for API Gateway HTTP and REST authorizers.
+
+Provides unified authentication logic for:
+- IP range validation (using clientIp module for XFF/CloudFront-aware resolution)
+- Ignored path bypass
+- API key verification with DynamoDB cache
+- Cognito JWT verification
+- External IDP JWT verification
+"""
+
 import json
 import os
 import time
@@ -9,7 +19,7 @@ import re
 import hashlib
 import requests
 import urllib.request
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from aws_lambda_powertools import Logger
 import boto3
 from boto3.dynamodb.conditions import Key as DDBKey
@@ -24,7 +34,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import base64
-from customLogging.auditLogging import log_authorization_gateway
+
+from common.auth.clientIp import resolve_client_ip, is_ip_authorized
 
 # Configure AWS Lambda Powertools logger
 logger = Logger()
@@ -32,6 +43,9 @@ logger = Logger()
 # Environment Variables - Retrieved at module load time
 AWS_REGION = os.environ.get('AWS_REGION')
 AUTH_MODE = os.environ.get('AUTH_MODE', '').lower()
+
+# Fronting configuration
+API_FRONTED = os.environ.get("API_FRONTED", "none")  # "cloudfront" | "alb" | "none"
 
 # Cognito Configuration
 USER_POOL_ID = os.environ.get('USER_POOL_ID')
@@ -145,136 +159,43 @@ EXTERNAL_JWKS_URL_TEMPLATE = "{issuer_url}/.well-known/jwks.json"
 OPENID_DISCOVERY_TEMPLATE = "{issuer_url}/.well-known/openid-configuration"
 
 
-def lambda_handler(event, context):
+def _path_from_method_arn(method_arn: str) -> str:
+    """Extract the resource path from a REST authorizer methodArn.
+
+    methodArn form: arn:partition:execute-api:region:acct:apiId/STAGE/VERB/res/path...
+    Returns "/res/path" (leading slash), or "" if it cannot be parsed.
     """
-    Lambda authorizer for HTTP API Gateway with custom JWT verification and IP validation
-    Supports both Cognito and External IDP authentication based on environment variables
-    Uses payload format version 2.0 (simple boolean response)
-    """
-    logger.info(f"Event: {json.dumps(event)}")
-    
-    try:
-        # Get source IP for validation
-        source_ip = event.get('requestContext', {}).get('http', {}).get('sourceIp')
-        
-        # Validate IP ranges first (before authentication for performance)
-        if not is_ip_authorized(source_ip):
-            logger.info(f"IP {source_ip} not in allowed ranges")
-            # AUDIT LOG: IP address not authorized
-            log_authorization_gateway(event, False, "IP address not authorized")
-            return {"isAuthorized": False}
-        
-        # Check if path should be ignored
-        request_path = event.get('requestContext', {}).get('http', {}).get('path', '')
-        if is_path_ignored(request_path):
-            logger.info(f"Path {request_path} is in ignored paths, allowing access")
-            return {"isAuthorized": True}
-        
-        # Extract the Authorization header value
-        headers = event.get('headers', {})
-        authorization_header = headers.get('Authorization') or headers.get('authorization')
+    if not method_arn:
+        return ""
+    _, _, tail = method_arn.partition(":execute-api:")
+    parts = tail.split("/") if tail else []
+    # parts = [ "region:acct:apiId", STAGE, VERB, <path segments...> ]
+    if len(parts) <= 3:
+        return ""
+    return "/" + "/".join(parts[3:])
 
-        if not authorization_header:
-            logger.info("Authorization header not found")
-            log_authorization_gateway(event, False, "Token missing or invalid format")
-            return {"isAuthorized": False}
-
-        # Check if this is an API key (starts with "vams_" or "Bearer vams_")
-        api_key_value = None
-        if authorization_header.startswith('vams_'):
-            api_key_value = authorization_header
-        elif re.match(r'^Bearer\s+vams_', authorization_header, re.IGNORECASE):
-            api_key_value = re.sub(r'^Bearer\s+', '', authorization_header, flags=re.IGNORECASE)
-
-        if api_key_value:
-            api_key_result = verify_api_key(api_key_value)
-            if api_key_result is not None:
-                if api_key_result.get('denied'):
-                    logger.info(f"API key denied: {api_key_result.get('reason')}")
-                    log_authorization_gateway(event, False, api_key_result.get('reason', 'API key denied'))
-                    return {"isAuthorized": False}
-                # Valid API key — build response
-                context = {}
-                for key, value in api_key_result.items():
-                    if value is not None:
-                        context[key] = str(value)
-                # AUDIT LOG: API key authorization successful
-                log_authorization_gateway(event, True, None)
-                return {"isAuthorized": True, "context": context}
-            # api_key_result is None means no match found — fall through to JWT
-
-        # Extract JWT token from Bearer header
-        token = extract_token_from_header(event)
-        if not token:
-            logger.info("Token not found in Authorization header")
-            log_authorization_gateway(event, False, "Token missing or invalid format")
-            return {"isAuthorized": False}
-
-        if AUTH_MODE == 'cognito':
-            claims = verify_cognito_jwt(token)
-        elif AUTH_MODE == 'external':
-            claims = verify_external_jwt(token)
-        else:
-            logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
-            log_authorization_gateway(event, False, "Token verification failed")
-            return {"isAuthorized": False}
-
-        if not claims:
-            logger.error("Token verification failed")
-            log_authorization_gateway(event, False, "Token verification failed")
-            return {"isAuthorized": False}
-
-        logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
-
-        context = {}
-        for key, value in claims.items():
-            if value is not None:
-                context[key] = str(value)
-
-        response = {
-            "isAuthorized": True,
-            "context": context
-        }
-        
-        # # AUDIT LOG: Authorization successful (with verified user context) - Captured in casbin checks instead
-        # log_authorization_gateway(response, True, None)
-    
-        return response
-        
-    except Exception as e:
-        logger.error(f"Authorizer error: {str(e)}")
-        return {"isAuthorized": False}
-
-def is_ip_authorized(source_ip: Optional[str]) -> bool:
-    """
-    Check if source IP is within allowed IP ranges
-    """
-    if not ALLOWED_IP_RANGES:
-        return True  # Allow if no IP restrictions configured
-    
-    if not source_ip:
-        logger.error("Source IP not found in event and IP restrictions defined")
-        return False
-    
-    try:
-        source_num = ip_to_num(source_ip)
-        return any(
-            ip_to_num(min_ip) <= source_num <= ip_to_num(max_ip)
-            for min_ip, max_ip in ALLOWED_IP_RANGES
-        )
-    except (ValueError, IndexError) as e:
-        logger.error(f"IP range validation error: {e}")
-        return False  # Deny on validation errors
-
-def ip_to_num(ip: str) -> int:
-    """Convert IP address to numeric representation for comparison"""
-    return int(''.join(f"{int(part):03d}" for part in ip.split('.')))
 
 def is_path_ignored(path: str) -> bool:
     """
-    Check if the request path should bypass authorization
+    Check if the request path should bypass authentication (the IP check still applies).
+
+    Matches an ignored path exactly, or as a path-segment-anchored suffix of the request
+    path. Anchoring on a leading "/" tolerates a stage prefix that a REST API
+    REQUEST-authorizer event may include (for example "/api/api/version" when the stage is
+    "api") while ensuring an unrelated route cannot become anonymous merely because its
+    tail happens to spell an ignored path (e.g. "/foo/notapi/version").
     """
-    return path in IGNORED_PATHS
+    if not path:
+        return False
+    for ignored in IGNORED_PATHS:
+        # Anchor the suffix match on a path-segment boundary ("/" + the ignored path,
+        # normalized to a single leading slash) so only a whole trailing segment sequence
+        # matches, never a partial segment.
+        anchored = "/" + ignored.lstrip("/")
+        if path == ignored or path.endswith(anchored):
+            return True
+    return False
+
 
 def extract_token_from_header(event: Dict[str, Any]) -> Optional[str]:
     """
@@ -282,16 +203,17 @@ def extract_token_from_header(event: Dict[str, Any]) -> Optional[str]:
     """
     headers = event.get('headers', {})
     authorization_header = headers.get('Authorization') or headers.get('authorization')
-    
+
     if not authorization_header:
         return None
-    
+
     # Check if the header follows the "Bearer <token>" format
     match = re.match(r'^Bearer\s+(.*)$', authorization_header, re.IGNORECASE)
     if not match:
         return None
-    
+
     return match.group(1)
+
 
 def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
     """
@@ -365,6 +287,7 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
         logger.error(f"API key verification error: {str(e)}")
         return None  # Fall through to JWT on error
 
+
 def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify Cognito JWT token using joserfc library
@@ -373,77 +296,78 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         if not USER_POOL_ID or not APP_CLIENT_ID:
             logger.error("Missing Cognito configuration")
             return None
-        
+
         # Get the kid from the headers prior to verification
         token_obj = joserfc_jws.extract_compact(token.encode())
         headers = token_obj.protected
         kid = headers.get('kid')
-        
+
         if not kid:
             logger.error("Token header missing 'kid' field")
             return None
-        
+
         # Get the public keys
         keys = get_cognito_keys(AWS_REGION, USER_POOL_ID)
-        
+
         # Search for the kid in the downloaded public keys
         key_index = -1
         for i in range(len(keys)):
             if kid == keys[i]['kid']:
                 key_index = i
                 break
-        
+
         if key_index == -1:
             logger.error(f"Public key not found in jwks.json for kid: {kid}")
             return None
-        
+
         # Import the public key using joserfc
         public_key = joserfc_jwk.import_key(keys[key_index])
-        
+
         # Decode and verify the token using joserfc
         token_result = joserfc_jwt.decode(token, public_key)
-        
+
         logger.info('JWT signature successfully verified')
-        
+
         # Extract claims from the verified token
         claims = token_result.claims
-        
+
         # Verify the token expiration
         current_time = time.time()
         if current_time > claims.get('exp', 0):
             logger.error('Token is expired')
             return None
-        
+
         # Verify the Audience (use claims['client_id'] if verifying an access token)
         # For ID tokens, use 'aud' claim
         token_audience = claims.get('aud') or claims.get('client_id')
         if token_audience != APP_CLIENT_ID:
             logger.error(f'Token was not issued for this audience. Expected: {APP_CLIENT_ID}, Got: {token_audience}')
             return None
-        
+
         # Additional validations
         # Verify issuer using configurable base URL
         if not COGNITO_BASE_URL:
             logger.error("Missing COGNITO_BASE_URL environment variable")
             return None
-        
+
         expected_issuer = f"{COGNITO_BASE_URL}/{USER_POOL_ID}"
         if claims.get('iss') != expected_issuer:
             logger.error(f'Invalid token issuer. Expected: {expected_issuer}, Got: {claims.get("iss")}')
             return None
-        
+
         # Verify token use (should be 'id' for ID tokens)
         token_use = claims.get('token_use')
         if token_use not in ['id', 'access']:
             logger.error(f'Invalid token_use: {token_use}')
             return None
-        
+
         logger.info(f'Cognito token successfully verified for user: {claims.get("sub", "unknown")}')
         return claims
-        
+
     except Exception as e:
         logger.error(f"Cognito JWT verification error: {str(e)}")
         return None
+
 
 def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
@@ -453,12 +377,12 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
         if not JWT_ISSUER_URL or not JWT_AUDIENCE:
             logger.error("Missing External IDP configuration")
             return None
-        
+
         # Get the signing key for token verification
         signing_key = get_signing_key_for_external_token(token, JWT_ISSUER_URL)
         if not signing_key:
             return None
-        
+
         # Verify and decode the token
         claims = pyjwt.decode(
             token,
@@ -473,10 +397,10 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
                 'verify_iss': True
             }
         )
-        
+
         logger.info(f'External IDP token successfully verified for user: {claims.get("sub", "unknown")}')
         return claims
-        
+
     except pyjwt.ExpiredSignatureError:
         logger.error("Token has expired")
         return None
@@ -496,46 +420,48 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
         logger.error(f"External JWT verification error: {str(e)}")
         return None
 
+
 def get_cognito_keys(region: str, user_pool_id: str) -> List[Dict[str, Any]]:
     """
     Download and cache Cognito public keys from JWKS endpoint
     """
     global keys_cache, keys_cache_expiry
-    
+
     current_time = time.time()
     cache_key = f"cognito:{region}:{user_pool_id}"
-    
+
     # Check if we have valid cached keys
     if cache_key in keys_cache and current_time < keys_cache_expiry:
         logger.info("Using cached Cognito public keys")
         return keys_cache[cache_key]
-    
+
     # Download fresh keys using configurable base URL
     if not COGNITO_BASE_URL:
         logger.error("Missing COGNITO_BASE_URL environment variable")
         raise Exception("COGNITO_BASE_URL environment variable is required")
-    
+
     keys_url = COGNITO_JWKS_URL_TEMPLATE.format(cognito_base_url=COGNITO_BASE_URL, user_pool_id=user_pool_id)
     logger.info(f"Downloading Cognito public keys from: {keys_url}")
-    
+
     try:
         with urllib.request.urlopen(keys_url) as response:
             if response.getcode() != 200:
                 raise Exception(f"Failed to fetch JWKS. Status code: {response.getcode()}")
-            
+
             jwks_data = json.loads(response.read().decode('utf-8'))
             keys = jwks_data['keys']
-            
+
             # Cache the keys
             keys_cache[cache_key] = keys
             keys_cache_expiry = current_time + CACHE_TTL
-            
+
             logger.info(f"Successfully downloaded and cached {len(keys)} public keys")
             return keys
-            
+
     except Exception as e:
         logger.error(f"Error downloading Cognito public keys: {str(e)}")
         raise
+
 
 def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optional[str]:
     """
@@ -545,25 +471,26 @@ def get_signing_key_for_external_token(token: str, jwt_issuer_url: str) -> Optio
         # Get the kid from the token header
         unverified_header = pyjwt.get_unverified_header(token)
         kid = unverified_header.get('kid')
-        
+
         if not kid:
             logger.error("Token header missing 'kid' field")
             return None
-        
+
         # Get the public keys
         keys = get_external_keys(jwt_issuer_url)
-        
+
         # Find the key with matching kid
         for key in keys:
             if key.get('kid') == kid:
                 return construct_public_key_from_jwk(key)
-        
+
         logger.error(f"Public key not found for kid: {kid}")
         return None
-        
+
     except Exception as e:
         logger.error(f"Error getting signing key: {str(e)}")
         return None
+
 
 def construct_public_key_from_jwk(jwk_key: Dict[str, Any]) -> Optional[str]:
     """
@@ -573,11 +500,11 @@ def construct_public_key_from_jwk(jwk_key: Dict[str, Any]) -> Optional[str]:
         # Extract the modulus and exponent from the JWK
         n = jwk_key.get('n')
         e = jwk_key.get('e')
-        
+
         if not n or not e:
             logger.error("JWK missing required 'n' or 'e' parameters")
             return None
-        
+
         # Decode base64url encoded values
         def base64url_decode(data):
             # Add padding if needed
@@ -585,57 +512,58 @@ def construct_public_key_from_jwk(jwk_key: Dict[str, Any]) -> Optional[str]:
             if missing_padding:
                 data += '=' * (4 - missing_padding)
             return base64.urlsafe_b64decode(data)
-        
+
         n_bytes = base64url_decode(n)
         e_bytes = base64url_decode(e)
-        
+
         # Convert to integers
         n_int = int.from_bytes(n_bytes, byteorder='big')
         e_int = int.from_bytes(e_bytes, byteorder='big')
-        
+
         # Create RSA public key
         public_numbers = rsa.RSAPublicNumbers(e_int, n_int)
         public_key = public_numbers.public_key(backend=default_backend())
-        
+
         # Convert to PEM format for PyJWT
         pem = public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        
+
         return pem.decode('utf-8')
-        
+
     except Exception as e:
         logger.error(f"Error constructing public key from JWK: {str(e)}")
         return None
 
+
 def discover_jwks_uri(issuer_url: str) -> Optional[str]:
     """
     Discover JWKS URI using OpenID Connect Discovery
-    
+
     Args:
         issuer_url: The issuer URL for the external IDP
-        
+
     Returns:
         The jwks_uri from .well-known/openid-configuration or None if discovery fails
     """
     discovery_url = OPENID_DISCOVERY_TEMPLATE.format(issuer_url=issuer_url)
     logger.info(f"Attempting OpenID Connect discovery at: {discovery_url}")
-    
+
     try:
         response = requests.get(discovery_url, timeout=10)
         response.raise_for_status()
-        
+
         discovery_data = response.json()
         jwks_uri = discovery_data.get('jwks_uri')
-        
+
         if jwks_uri:
             logger.info(f"OpenID Connect discovery successful. JWKS URI: {jwks_uri}")
             return jwks_uri
         else:
             logger.warning("OpenID Connect discovery response missing 'jwks_uri' field")
             return None
-            
+
     except requests.exceptions.RequestException as e:
         logger.warning(f"OpenID Connect discovery failed with request error: {str(e)}")
         return None
@@ -646,13 +574,14 @@ def discover_jwks_uri(issuer_url: str) -> Optional[str]:
         logger.warning(f"OpenID Connect discovery failed with unexpected error: {str(e)}")
         return None
 
+
 def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     """
     Get JWKS URI for external IDP with discovery fallback
-    
+
     Args:
         issuer_url: The issuer URL for the external IDP
-        
+
     Returns:
         The JWKS URI to use for fetching keys
     """
@@ -661,11 +590,12 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     if discovered_uri:
         logger.info(f"Using discovered JWKS URI: {discovered_uri}")
         return discovered_uri
-    
+
     # Fall back to standard .well-known/jwks.json
     fallback_uri = EXTERNAL_JWKS_URL_TEMPLATE.format(issuer_url=issuer_url)
     logger.info(f"OpenID Connect discovery failed, falling back to: {fallback_uri}")
     return fallback_uri
+
 
 def get_external_keys(jwt_issuer_url: str) -> List[Dict[str, Any]]:
     """
@@ -673,37 +603,130 @@ def get_external_keys(jwt_issuer_url: str) -> List[Dict[str, Any]]:
     Uses OpenID Connect discovery with fallback to standard JWKS endpoint
     """
     global keys_cache, keys_cache_expiry
-    
+
     current_time = time.time()
-    
+
     # Get the JWKS URI (with discovery and fallback)
     jwks_uri = get_jwks_uri_for_external_idp(jwt_issuer_url)
-    
+
     # Use the actual JWKS URI in the cache key to ensure proper cache isolation
     cache_key = f"external_jwks:{jwks_uri}"
-    
+
     # Check if we have valid cached keys for this specific JWKS URI
     if cache_key in keys_cache and current_time < keys_cache_expiry:
         logger.info(f"Using cached External IDP public keys for: {jwks_uri}")
         return keys_cache[cache_key]
-    
+
     # Download fresh keys from the determined JWKS URI
     logger.info(f"Downloading External IDP public keys from: {jwks_uri}")
-    
+
     try:
         response = requests.get(jwks_uri, timeout=10)
         response.raise_for_status()
-        
+
         jwks_data = response.json()
         keys = jwks_data['keys']
-        
+
         # Cache the keys with the specific JWKS URI
         keys_cache[cache_key] = keys
         keys_cache_expiry = current_time + CACHE_TTL
-        
+
         logger.info(f"Successfully downloaded and cached {len(keys)} public keys from: {jwks_uri}")
         return keys
-        
+
     except Exception as e:
         logger.error(f"Error downloading External IDP public keys from {jwks_uri}: {str(e)}")
         raise
+
+
+def authenticate_request(event: dict, *, fronted: str = None) -> dict:
+    """
+    Authenticate API Gateway request using IP validation, ignored paths, API key, or JWT.
+
+    Returns a provider-neutral result dict:
+        {"authorized": bool, "context": dict|None, "reason": str|None}
+
+    The IP check uses the clientIp module's resolve_client_ip to handle XFF/CloudFront-aware
+    resolution based on the fronted parameter.
+    """
+    fronted = fronted if fronted is not None else API_FRONTED
+
+    # Step 1: IP validation (using shared clientIp module)
+    client_ip = resolve_client_ip(event, fronted=fronted)
+    if not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
+        logger.info(f"IP {client_ip} not in allowed ranges")
+        return {"authorized": False, "context": None, "reason": "IP address not authorized"}
+
+    # Step 2: Check for ignored paths.
+    # Resolve the request path across event shapes: proxy events expose it at
+    # requestContext.http.path or the top-level "path"; a REST REQUEST-authorizer event
+    # exposes "path" and "methodArn" (".../STAGE/VERB/resource/path"). The methodArn
+    # fallback ensures the ignored-path check works in the authorizer context even when
+    # "path" is absent.
+    request_path = (
+        (event.get("requestContext", {}).get("http", {}) or {}).get("path")
+        or event.get("path")
+        or _path_from_method_arn(event.get("methodArn", ""))
+        or ""
+    )
+    if is_path_ignored(request_path):
+        logger.info(f"Path {request_path} is in ignored paths, allowing access")
+        return {"authorized": True, "context": None, "reason": None}
+
+    # Step 3: Extract authorization header
+    headers = event.get("headers", {}) or {}
+    authorization_header = headers.get("Authorization") or headers.get("authorization")
+
+    if not authorization_header:
+        logger.info("Authorization header not found")
+        return {"authorized": False, "context": None, "reason": "Token missing or invalid format"}
+
+    # Step 4: API key path
+    api_key_value = None
+    if authorization_header.startswith('vams_'):
+        api_key_value = authorization_header
+    elif re.match(r'^Bearer\s+vams_', authorization_header, re.IGNORECASE):
+        api_key_value = re.sub(r'^Bearer\s+', '', authorization_header, flags=re.IGNORECASE)
+
+    if api_key_value:
+        api_key_result = verify_api_key(api_key_value)
+        if api_key_result is not None:
+            if api_key_result.get('denied'):
+                logger.info(f"API key denied: {api_key_result.get('reason')}")
+                return {"authorized": False, "context": None, "reason": api_key_result.get('reason', 'API key denied')}
+            # Valid API key — build context
+            context = {}
+            for key, value in api_key_result.items():
+                if value is not None:
+                    context[key] = str(value)
+            logger.info("API key authorization successful")
+            return {"authorized": True, "context": context, "reason": None}
+        # api_key_result is None means no match found — fall through to JWT
+
+    # Step 5: JWT path
+    token = extract_token_from_header(event)
+    if not token:
+        logger.info("Token not found in Authorization header")
+        return {"authorized": False, "context": None, "reason": "Token missing or invalid format"}
+
+    if AUTH_MODE == 'cognito':
+        claims = verify_cognito_jwt(token)
+    elif AUTH_MODE == 'external':
+        claims = verify_external_jwt(token)
+    else:
+        logger.error(f"Invalid AUTH_MODE: {AUTH_MODE}")
+        return {"authorized": False, "context": None, "reason": "Token verification failed"}
+
+    if not claims:
+        logger.error("Token verification failed")
+        return {"authorized": False, "context": None, "reason": "Token verification failed"}
+
+    logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
+
+    # Build context with string coercion
+    context = {}
+    for key, value in claims.items():
+        if value is not None:
+            context[key] = str(value)
+
+    return {"authorized": True, "context": context, "reason": None}

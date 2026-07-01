@@ -7,6 +7,7 @@ import boto3
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 from common.constants import STANDARD_JSON_RESPONSE
+from models.common import commonHeaders
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ConfigService")
@@ -170,10 +171,7 @@ def lambda_handler(event, context):
         return {
             "statusCode": "200",
             "body": json.dumps(response),
-            "headers": {
-                "Content-Type": "application/json",
-                'Cache-Control': 'no-cache, no-store',
-            },
+            "headers": commonHeaders(),
         }
     except Exception as e:
         response['statusCode'] = 500

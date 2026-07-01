@@ -7,6 +7,7 @@ import json
 import datetime
 from common.validators import validate
 from handlers.comments.commentService import get_single_comment
+from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
@@ -91,6 +92,10 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :returns: Http response object (statusCode, headers, body)
     """
     response = STANDARD_JSON_RESPONSE
+
+    # This handler reads pathParameters before request_to_claims, so normalize the REST
+    # event first (coerces null pathParameters to {} for the reads below).
+    normalize_event(event)
 
     logger.info(event)
 

@@ -71,7 +71,7 @@ The IAM principal used for deployment must have sufficient permissions to create
 -   Amazon S3 buckets and policies
 -   Amazon DynamoDB tables
 -   AWS Lambda functions and layers
--   Amazon API Gateway HTTP APIs
+-   Amazon API Gateway REST APIs
 -   Amazon Cognito user pools and identity pools
 -   Amazon CloudFront distributions (commercial deployments)
 -   Elastic Load Balancing Application Load Balancers (ALB deployments)

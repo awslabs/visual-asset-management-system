@@ -60,7 +60,7 @@ API_TAG_TYPE_DELETE = "/tag-types/{tagTypeId}"
 API_ASSET_LINKS = "/asset-links"
 API_ASSET_LINKS_SINGLE = "/asset-links/single/{assetLinkId}"
 API_ASSET_LINKS_UPDATE = "/asset-links/{assetLinkId}"
-API_ASSET_LINKS_DELETE = "/asset-links/{relationId}"
+API_ASSET_LINKS_DELETE = "/asset-links/{assetLinkId}"
 API_ASSET_LINKS_FOR_ASSET = "/database/{databaseId}/assets/{assetId}/asset-links"
 
 # Asset Links Metadata API Endpoints (New unified API)

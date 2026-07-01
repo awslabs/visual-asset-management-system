@@ -31,7 +31,7 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { Service } from "../../helper/service-helper";
+import { Service, Partition } from "../../helper/service-helper";
 import {
     buildSqsBucketSyncFunction,
     buildFileIndexerSnsQueuingFunction,
@@ -740,8 +740,11 @@ export function storageResourcesBuilder(
         eventBusName: orchestrationBusName,
     });
 
-    // KMS encryption is only settable on the underlying CfnEventBus
-    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey) {
+    // KMS encryption is only settable on the underlying CfnEventBus. Event bus CMK encryption
+    // is only supported in the commercial partition; elsewhere (GovCloud, EU Sovereign Cloud)
+    // the KmsKeyIdentifier property is rejected by CloudFormation and the bus falls back to
+    // EventBridge's default AWS-owned-key encryption at rest.
+    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey && Partition() === "aws") {
         const cfnBus = orchestrationBus.node.defaultChild as events.CfnEventBus;
         cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
     }

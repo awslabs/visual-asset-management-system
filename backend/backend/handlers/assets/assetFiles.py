@@ -46,6 +46,7 @@ from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
@@ -4683,14 +4684,15 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset file operations
-    
+
     Args:
         event: The API Gateway event
         context: The Lambda context
-        
+
     Returns:
         APIGatewayProxyResponseV2 with the response
     """
+    normalize_event(event)
     try:
         # Get API path and method
         path = event['requestContext']['http']['path']

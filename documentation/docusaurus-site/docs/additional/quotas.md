@@ -8,14 +8,14 @@ This page documents the service quotas, default limits, and configurable thresho
 
 ### API Gateway Throttling
 
-VAMS uses Amazon API Gateway V2 (HTTP API) with configurable rate limiting.
+VAMS uses Amazon API Gateway REST API with configurable rate limiting.
 
-| Parameter            | Default            | Configurable | Configuration Key               |
-| -------------------- | ------------------ | ------------ | ------------------------------- |
-| Global rate limit    | 50 requests/second | Yes          | `app.api.globalRateLimit`       |
-| Global burst limit   | 100 requests       | Yes          | `app.api.globalBurstLimit`      |
-| Request timeout      | 29 seconds         | No           | Amazon API Gateway hard limit   |
-| Authorizer cache TTL | 30 seconds         | No           | Set in CDK authorizer construct |
+| Parameter            | Default            | Configurable | Configuration Key                         |
+| -------------------- | ------------------ | ------------ | ----------------------------------------- |
+| Global rate limit    | 50 requests/second | Yes          | `app.api.apiGatewayRest.globalRateLimit`  |
+| Global burst limit   | 100 requests       | Yes          | `app.api.apiGatewayRest.globalBurstLimit` |
+| Request timeout      | 29 seconds         | No           | Amazon API Gateway hard limit             |
+| Authorizer cache TTL | 30 seconds         | No           | Set in CDK authorizer construct           |
 
 :::tip
 The burst limit must be greater than or equal to the rate limit. Adjust both values in `infra/config/config.json` and redeploy to apply changes.

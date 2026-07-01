@@ -41,7 +41,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
@@ -2499,8 +2499,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return {
                 'statusCode': 429,
                 'headers': {
-                    'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache, no-store',
+                    **commonHeaders(),
                     'Retry-After': '60'  # Suggest retry after 60 seconds
                 },
                 'body': json.dumps({'message': str(v)})

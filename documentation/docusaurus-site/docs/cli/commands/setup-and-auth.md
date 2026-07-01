@@ -31,12 +31,13 @@ vamscli setup <BASE_URL> [OPTIONS]
 ### What setup does
 
 1. Validates the base URL format (accepts any HTTP/HTTPS URL).
-2. Checks API version compatibility using the base URL.
-3. Fetches Amplify configuration from `<base-url>/api/amplify-config`.
-4. Extracts the Amazon API Gateway URL from the `api` field in the response.
-5. Stores both the original base URL and extracted API Gateway URL locally.
-6. Sets the profile as active when configuration is saved.
-7. Clears existing authentication profiles (with `--force`).
+2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) absorbs the stage, so a fronted or custom-domain URL is used unchanged.
+3. Checks API version compatibility using the base URL.
+4. Fetches Amplify configuration from `<base-url>/api/amplify-config`.
+5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path).
+6. Stores both the original base URL and extracted API Gateway URL locally.
+7. Sets the profile as active when configuration is saved.
+8. Clears existing authentication profiles (with `--force`).
 
 ### Examples
 
@@ -49,6 +50,10 @@ vamscli setup https://vams.mycompany.com
 
 # Setup with ALB
 vamscli setup https://my-alb-123456789.us-west-2.elb.amazonaws.com
+
+# Setup directly against the Amazon API Gateway endpoint
+# (the CLI appends the REST API stage path automatically)
+vamscli setup https://abcdef1234.execute-api.us-west-2.amazonaws.com
 
 # Setup specific profiles for different environments
 vamscli --profile production setup https://prod-vams.example.com
@@ -63,6 +68,14 @@ vamscli setup https://vams.example.com --skip-version-check
 
 :::tip[Profile-Specific Behavior]
 Configuration is saved to `~/.config/vamscli/profiles/\{profile_name\}/`. Each profile maintains separate configuration and authentication. The profile becomes active after successful setup.
+:::
+
+:::note[Amazon API Gateway stage path]
+The VAMS backend is an Amazon API Gateway REST API served under the fixed stage path `/api`. When you point `setup` at a front (Amazon CloudFront, ALB, or a custom domain), the front maps `/api/*` onto the stage and you use the front's URL as-is. When you point `setup` directly at the `execute-api` endpoint, the CLI appends the stage segment automatically, so use the bare endpoint URL (for example `https://abcdef1234.execute-api.us-west-2.amazonaws.com`) — do not add `/api` yourself.
+:::
+
+:::warning[Re-run setup after a deployment endpoint change]
+If a profile was configured against a VAMS deployment whose backend used the previous Amazon API Gateway HTTP API, the stored Amazon API Gateway URL no longer points to a valid endpoint after the deployment is updated to the REST API. Re-run `vamscli setup <BASE_URL> --force` for that profile to fetch the current endpoint. Profiles that target a Amazon CloudFront/ALB/custom-domain front are unaffected as long as the front URL is unchanged.
 :::
 
 ---

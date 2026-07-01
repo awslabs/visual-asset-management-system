@@ -11,7 +11,7 @@
 | Item                  | Value                                                  |
 | --------------------- | ------------------------------------------------------ |
 | Runtime               | Python 3.13+                                           |
-| Framework             | AWS Lambda + API Gateway v2 (HTTP API)                 |
+| Framework             | AWS Lambda + API Gateway REST API (v1)                 |
 | Validation            | Pydantic **1.10.7** (NOT v2) via aws-lambda-powertools |
 | Auth                  | Casbin ABAC/RBAC with DynamoDB policy storage          |
 | ORM                   | boto3 DynamoDB resource + client APIs                  |
@@ -35,6 +35,11 @@ backend/
 ├── requirements-dev.txt                 # Dev/test deps (moto, pytest, mypy, flake8)
 ├── backend/
 │   ├── common/                          # Shared utilities
+│   │   ├── auth/                         # Shared auth-core modules (no AWS deps; unit-testable)
+│   │   │   ├── apiEvent.py               # REST API event shim (normalize_event: REST→HTTP-API shape;
+│   │   │   │                             #   coerces null pathParameters/queryStringParameters to {})
+│   │   │   ├── authorizerCore.py         # Shared JWT/API-key/IP validation logic (Cognito/external OAuth)
+│   │   │   └── clientIp.py               # True client-IP resolution (CloudFront/ALB-aware, anti-spoof)
 │   │   ├── constants.py                 # ABAC policy, allowed values, file blocklists
 │   │   ├── dynamodb.py                  # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
 │   │   ├── validators.py                # Input validation regex patterns and validate() dispatcher
@@ -58,6 +63,9 @@ backend/
 │   │   ├── assets/assetService.py       # GOLD STANDARD handler -- follow this pattern
 │   │   ├── assets/assetVersions.py     # Asset version CRUD + archive/unarchive + update (versionAlias)
 │   │   ├── auth/                        # Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
+│   │   │   ├── apiGatewayAuthorizerRest.py  # REST REQUEST authorizer entry point (returns IAM policy;
+│   │   │   │                                #   delegates JWT/API-key/IP validation to common/auth/authorizerCore.py)
+│   │   │   └── __init__.py              # request_to_claims() — normalizes the event, then extracts claims
 │   │   ├── authz/__init__.py            # Casbin ABAC/RBAC enforcer (CasbinEnforcer proxy)
 │   │   ├── assetLinks/                  # Asset relationship management
 │   │   ├── comments/                    # Comment CRUD
@@ -220,6 +228,61 @@ backend/
     enrich the full set, then offset-slice to the page. Limits that exist to bound
     response size or protect Lambda runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`,
     worker-pool caps) stay as named constants with a rationale comment — keep them.
+
+16. **Normalize the event before reading `requestContext['http']`, `pathParameters`, or
+    `queryStringParameters`.** The REST API (v1) proxy event differs from the HTTP API v2
+    layout that handlers are written against, in **two** ways that `normalize_event(event)`
+    (from `common.auth.apiEvent`) reconciles. It mutates the event in place, is idempotent,
+    and is a no-op for internal `lambdaCrossCall` events.
+
+    1.  **`requestContext.http` block.** Handlers read `event['requestContext']['http']['path']`
+        / `['method']` / `['sourceIp']`, but the REST event exposes these as top-level `path`
+        / `httpMethod` and `requestContext.identity.sourceIp`. `normalize_event` injects the
+        v2-style `requestContext.http` block.
+    2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
+        explicit JSON `null` when there are none, whereas HTTP API v2 omitted them — so the
+        ubiquitous `event.get('pathParameters', {})` / `event.get('queryStringParameters', {})`
+        pattern returns `None` (the default applies only when the **key is absent**, not when
+        it is present-but-`null`). A handler that then does `path_params['id']`,
+        `'id' in path_params`, or `int(query_params['maxItems'])` crashes with
+        `TypeError: 'NoneType' object is not subscriptable/iterable` → **500**.
+        `normalize_event` coerces a present-but-`null` value of either key to `{}`. (Defensive
+        call sites may still add `or {}`, but it is no longer required once the event is
+        normalized.)
+
+    -   **`request_to_claims(event)` calls `normalize_event(event)` internally** (it is the
+        first line). So a handler whose **first** access to the event is
+        `request_to_claims(event)` — the Gold Standard pattern — is already covered for both
+        normalizations and does **not** need to import or call `normalize_event` itself.
+    -   **A handler that reads `requestContext['http']`, `pathParameters`, or
+        `queryStringParameters` _before_ calling `request_to_claims`** MUST call
+        `normalize_event(event)` as the first statement of `lambda_handler`, before that read.
+        Skipping it makes the handler raise `KeyError`/`TypeError` → 500 at runtime on a real
+        REST request — a failure **invisible to CDK synth and to unit tests that hand-build a
+        v2-shaped event** (which is why these regressions reach production; cover the
+        REST-shaped event, including `null` params, in tests).
+    -   **Prefer the Gold Standard order** (call `request_to_claims(event)` first, then read
+        `path`/`method`/params) so normalization is implicit. Only add the explicit import +
+        call when a handler genuinely must inspect the event before claims extraction.
+
+    ```python
+    # ✅ Gold Standard — claims first; normalize is implicit, no import needed
+    def lambda_handler(event, context):
+        claims_and_roles = request_to_claims(event)            # normalizes internally
+        path = event['requestContext']['http']['path']         # safe — already normalized
+
+    # ✅ When http MUST be read before claims — normalize explicitly first
+    from common.auth.apiEvent import normalize_event
+    def lambda_handler(event, context):
+        normalize_event(event)                                 # first statement
+        path = event['requestContext']['http']['path']
+        claims_and_roles = request_to_claims(event)
+
+    # ❌ WRONG — reads http before any normalization -> KeyError on a REST event
+    def lambda_handler(event, context):
+        path = event['requestContext']['http']['path']         # not normalized yet
+        claims_and_roles = request_to_claims(event)
+    ```
 
 ---
 
@@ -1306,7 +1369,7 @@ class TestYourHandler:
     """Unit tests for your handler"""
 
     def _make_event(self, method='GET', path='/your-path', body=None, query_params=None):
-        """Helper to build API Gateway v2 event"""
+        """Helper to build API Gateway REST API event"""
         event = {
             'requestContext': {
                 'http': {

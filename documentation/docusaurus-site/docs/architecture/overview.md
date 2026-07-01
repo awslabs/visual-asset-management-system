@@ -16,7 +16,7 @@ graph TB
 
     subgraph VAMS Deployment
         CF["Amazon CloudFront<br/>or ALB"]
-        APIGW["Amazon API Gateway V2<br/>(HttpApi)"]
+        APIGW["Amazon API Gateway<br/>REST API (v1)"]
         AUTH["Custom Lambda Authorizer<br/>(JWT + IP Check)"]
         HANDLERS["Lambda Handlers<br/>(Casbin ABAC/RBAC)"]
         WORKFLOWS["AWS Step Functions<br/>(Pipeline Orchestration)"]
@@ -57,7 +57,7 @@ Every authenticated request to VAMS follows a consistent path through the system
 sequenceDiagram
     participant User
     participant Distribution as CloudFront / ALB
-    participant APIGW as API Gateway V2 HttpApi
+    participant APIGW as API Gateway REST API
     participant Authorizer as Custom Lambda Authorizer
     participant Handler as Lambda Handler
     participant DB as DynamoDB / S3
@@ -107,10 +107,10 @@ A centralized configuration system (`config.json`) controls which features, pipe
 
 VAMS supports two deployment modes to accommodate different compliance and network isolation requirements.
 
-| Deployment Mode       | Web Distribution                      | API Access            | VPC      | Notes                                                                                                                      |
-| --------------------- | ------------------------------------- | --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**    | Amazon CloudFront + Amazon S3         | Amazon API Gateway V2 | Optional | Default mode. Supports optional Amazon Location Service.                                                                   |
-| **AWS GovCloud (US)** | Application Load Balancer + Amazon S3 | Amazon API Gateway V2 | Required | No Amazon CloudFront. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| Deployment Mode       | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                    |
+| --------------------- | ------------------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**    | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                   |
+| **AWS GovCloud (US)** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
 
 :::note[GovCloud Requirements]
 When deploying to AWS GovCloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
@@ -133,7 +133,7 @@ graph TD
     Layers["LambdaLayers"]
     Storage["StorageResourcesBuilder<br/>(DynamoDB, S3, SNS, SQS, KMS)"]
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
-    API["ApiGatewayV2Amplify<br/>(HttpApi + Authorizer)"]
+    API["REST API Builder<br/>(SpecRestApi + Authorizer)"]
     APIBuilder["ApiBuilder<br/>(All API Route Wiring)"]
     StaticWeb["StaticWeb<br/>(CloudFront or ALB)"]
     Search["SearchBuilder<br/>(OpenSearch)"]
