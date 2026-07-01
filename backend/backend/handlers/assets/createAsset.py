@@ -595,7 +595,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         create_prefix_folder(s3_bucket, s3_key)
     
     # Get username for version creation
-    username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
     
     # Create initial version record in versions table
     initial_version_id = create_initial_version_record(
