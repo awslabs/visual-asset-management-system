@@ -33,7 +33,7 @@ def test_build_upload_change_metadata_sets_type_and_user():
 def test_build_upload_change_metadata_defaults_user_to_system():
     from backend.backend.handlers.assets import uploadFile
     md = uploadFile.build_upload_change_metadata(None)
-    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"
 
 
 @pytest.mark.unit
@@ -54,9 +54,9 @@ def test_external_upload_with_workflow_uses_workflow_type():
         VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     )
-    change_metadata = uploadFile.build_workflow_change_metadata("SYSTEM", "wf-1", "exec-1") or uploadFile.build_upload_change_metadata("SYSTEM")
+    change_metadata = uploadFile.build_workflow_change_metadata("SYSTEM_USER", "wf-1", "exec-1") or uploadFile.build_upload_change_metadata("SYSTEM_USER")
     assert change_metadata[VAMS_CHANGE_SOURCE_METADATA_KEY] == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
-    assert change_metadata[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert change_metadata[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"
     assert change_metadata[VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY] == "wf-1"
     assert change_metadata[VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY] == "exec-1"
 
@@ -72,11 +72,11 @@ def test_external_complete_model_accepts_workflow_fields():
         files=[{"relativeKey": "/a.glb", "tempKey": "temp/upload123/a.glb"}],
         workflowId="wf-abc123",
         workflowExecutionId="exec-xyz789",
-        changeUserId="SYSTEM",
+        changeUserId="SYSTEM_USER",
     )
     assert m.workflowId == "wf-abc123"
     assert m.workflowExecutionId == "exec-xyz789"
-    assert m.changeUserId == "SYSTEM"
+    assert m.changeUserId == "SYSTEM_USER"
 
 
 @pytest.mark.unit

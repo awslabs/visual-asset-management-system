@@ -68,7 +68,7 @@ def build_upload_change_metadata(user_id):
     """Build change-provenance metadata for an uploaded file version."""
     return {
         VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
-        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM",
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
     }
 
 

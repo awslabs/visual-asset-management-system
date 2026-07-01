@@ -49,6 +49,8 @@ Tier 2 determines whether the user's role is allowed to perform the specific ope
 
 A user is identified by their username from the authentication provider (Amazon Cognito or an external OAuth provider). Users are authenticated before any authorization logic runs.
 
+VAMS also defines a built-in system user with the reserved user ID `SYSTEM_USER`. This identity represents internal system processes — such as pipeline workflow executions, bucket-sync ingestion, and authorized Lambda cross-calls — that act without an interactive user context. `SYSTEM_USER` is created at deployment and assigned to the `admin` role so that system processes pass authorization checks, and it appears as the acting user (for example, in `createdBy` and `changeUserId` fields) on records created by those processes. It is not a login account; access to the internal invocation paths that assume this identity is controlled through AWS IAM permissions on direct Lambda invocation.
+
 ### Roles
 
 A role is a named permission group. Users are assigned to roles, and roles have constraints associated with them. A user can belong to multiple roles, and a role can have multiple constraints.

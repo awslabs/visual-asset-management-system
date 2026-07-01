@@ -405,7 +405,7 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     if method_allowed_on_api:
 
         #Get user ID of person making request
-        userId = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        userId = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         logger.info(
             f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",

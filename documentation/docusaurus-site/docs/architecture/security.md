@@ -133,6 +133,8 @@ elif 'lambdaCrossCall' in event:
 | External OAuth IDP | `sub`, `preferred_username`, `email`, `upn`, `username`              |
 | VAMS custom        | `vams:tokens`, `vams:roles`, `vams:externalAttributes`               |
 
+The Lambda cross-call format is used for internal Lambda-to-Lambda invocations that carry no API Gateway request context (for example, workflow execution processing and bucket-sync ingestion). The `lambdaCrossCall` object supplies a `userName` claim identifying the acting user; when no user context applies, the reserved system user ID `SYSTEM_USER` is used. Because cross-call events bypass JWT verification, access to direct Lambda invocation is controlled through AWS IAM permissions.
+
 :::note[GovCloud Token Limitation]
 AWS GovCloud deployments with the GovCloud configuration enabled only support v1 of the Amazon Cognito Lambda triggers. This means only Access tokens (not ID tokens) can be used for VAMS API authentication in GovCloud.
 :::

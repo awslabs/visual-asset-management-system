@@ -381,7 +381,7 @@ def build_change_metadata(change_source, user_id, from_db=None, from_asset=None,
 
     Args:
         change_source: One of the VAMS change source values.
-        user_id: Acting user id; None falls back to "SYSTEM".
+        user_id: Acting user id; None falls back to "SYSTEM_USER".
         from_db/from_asset/from_path: Source provenance for copy/move/rename.
         from_version: Source S3 version id for copy/move/rename/revert.
 
@@ -392,7 +392,7 @@ def build_change_metadata(change_source, user_id, from_db=None, from_asset=None,
     normalized_from_path = normalize_history_file_path(from_path) if from_path else ""
     return {
         VAMS_CHANGE_SOURCE_METADATA_KEY: change_source,
-        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM",
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
         VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "",
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "",
         VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY: from_asset or "",
@@ -2166,7 +2166,7 @@ def build_archive_history_record(database_id, asset_id, relative_file_path, vers
         "assetId": asset_id,
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
-        "changeUserId": user_id or "SYSTEM",
+        "changeUserId": user_id or "SYSTEM_USER",
         "recordCreated": datetime.utcnow().isoformat() + "Z",
         "s3LastModified": "",
     }
@@ -2241,7 +2241,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Acting user for change-history provenance
-    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Archive file(s)
     affected_files = []
@@ -2364,7 +2364,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         metadata = version_head.get('Metadata', {}).copy()
 
         # Extract acting user for provenance tracking
-        acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         # Overlay unarchive provenance (no from-fields for unarchive)
         provenance = build_change_metadata(
@@ -2536,7 +2536,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         raise VAMSGeneralErrorResponse(f"Destination file already exists.")
 
     # Extract acting user for provenance tracking
-    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Copy the file with change provenance
     success = copy_s3_object(
@@ -2683,7 +2683,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         raise VAMSGeneralErrorResponse("Error checking destination file.")
 
     # Extract acting user for provenance tracking
-    acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Classify the change source (move vs rename)
     change_source = classify_move_change_source(source_path, dest_path)
@@ -2799,7 +2799,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         # provenance so the new current version reflects the revert action.
         source_head = s3_client.head_object(Bucket=bucket, Key=full_key, VersionId=version_id)
         new_metadata = source_head.get('Metadata', {}).copy()
-        acting_user = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         new_metadata.update(build_change_metadata(VAMS_CHANGE_SOURCE_FILE_REVERT, acting_user, from_version=version_id))
 
         # Use copy() which automatically handles multipart for large files

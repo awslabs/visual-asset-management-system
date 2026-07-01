@@ -404,7 +404,7 @@ class TestFileListCommand:
                         'size': 2048,
                         'isArchived': False,
                         'changeSource': 'workflowExecution',
-                        'changeUserId': 'SYSTEM'
+                        'changeUserId': 'SYSTEM_USER'
                     }
                 ]
             }
@@ -419,7 +419,7 @@ class TestFileListCommand:
             assert 'upload' in result.output
             assert 'alice' in result.output
             assert 'workflowExecution' in result.output
-            assert 'SYSTEM' in result.output
+            assert 'SYSTEM_USER' in result.output
 
     def test_list_shows_file_detail_fields(self, cli_runner, file_command_mocks):
         """Test file list shows detail sub-lines for fields returned by the API."""
@@ -1010,7 +1010,7 @@ class TestFileInfoCommand:
                         'lastModified': '2023-01-01T00:00:00Z',
                         'size': 1024,
                         'changeSource': 'workflowExecution',
-                        'changeUserId': 'SYSTEM',
+                        'changeUserId': 'SYSTEM_USER',
                         'changeWorkflowId': 'wf-1',
                         'changeWorkflowExecutionId': 'exec-1'
                     },

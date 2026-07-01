@@ -326,7 +326,7 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM"
+        username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
         constraint_data['dateModified'] = now
         constraint_data['modifiedBy'] = username
         if 'dateCreated' not in constraint_data:

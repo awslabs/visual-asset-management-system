@@ -574,6 +574,17 @@ if not casbin_enforcer.enforce(event, item):
 -   **Object annotation**: You MUST add `object__type` field to the item dict before calling `enforce()`
 -   Valid object types: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`
 
+### System User (`SYSTEM_USER`)
+
+`SYSTEM_USER` is the **only** valid user ID for system-process actions — never use `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it consistently for:
+
+-   **Lambda cross-calls**: `{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — and it is the default in `request_to_claims()` when a cross-call omits `userName`
+-   **Username fallbacks**: `claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]` when no user context exists
+-   **Provenance / audit values**: `createdBy`, `modifiedBy`, `changeUserId` fallbacks (`user_id or "SYSTEM_USER"`)
+-   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
+
+Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
 ### Casbin Policy Model (from constants.py)
 
 ```

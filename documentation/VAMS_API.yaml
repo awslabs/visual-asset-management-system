@@ -8625,7 +8625,7 @@ components:
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
-                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
+                    description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
             required:
                 - fileName
                 - key
@@ -8726,7 +8726,7 @@ components:
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
-                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
+                    description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
                 versions:
                     type: array
                     items:
@@ -8768,7 +8768,7 @@ components:
                                 description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for legacy versions."
                             changeUserId:
                                 type: string
-                                description: "User (or SYSTEM) that created this version. Blank or absent for legacy versions."
+                                description: "User (or SYSTEM_USER) that created this version. Blank or absent for legacy versions."
                             changeWorkflowId:
                                 type: string
                                 description: "Workflow ID that created this version, when changeSource is workflowExecution."

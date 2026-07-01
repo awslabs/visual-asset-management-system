@@ -48,7 +48,7 @@ class CurrentVersionModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    createdBy: str = "SYSTEM"
+    createdBy: str = "SYSTEM_USER"
     versionAlias: Optional[str] = None
 
 class AssetVersionListItemModel(BaseModel, extra='ignore'):
@@ -57,7 +57,7 @@ class AssetVersionListItemModel(BaseModel, extra='ignore'):
     DateModified: str
     Comment: str = ""
     description: str = ""
-    createdBy: str = "SYSTEM"
+    createdBy: str = "SYSTEM_USER"
     isCurrent: bool = False
     fileCount: int = 0  # Number of available files for this version
     versionAlias: Optional[str] = None

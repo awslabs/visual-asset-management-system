@@ -205,6 +205,8 @@ if not enforcer.check_permission(object_type, resource_id, action):
     return {"statusCode": 403, "body": json.dumps({"error": "Forbidden"})}
 ```
 
+**System user:** The reserved user ID `SYSTEM_USER` is the official identity for all system-process actions (lambda cross-calls, pipeline workflow executions, bucket-sync ingestion, seeded `createdBy`/`modifiedBy` values, `changeUserId` provenance fallbacks). It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role so system actions pass both authorization tiers. Never introduce other variants (`SYSTEM`, `system`, etc.) — handlers compare against the exact string. See `backend/CLAUDE.md` "System User" for usage patterns.
+
 ### **Pattern 3: Configuration Flows CDK -> DynamoDB -> Frontend**
 
 1. CDK config (`infra/config/config.json`) drives deployment decisions

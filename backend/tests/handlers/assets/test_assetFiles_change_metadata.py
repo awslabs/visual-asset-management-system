@@ -82,7 +82,7 @@ def test_build_archive_history_record_defaults_version_null_and_user_system():
     af = _load_asset_files()
     rec = af.build_archive_history_record("db1", "a1", "x.glb", None, None)
     assert rec["versionId"] == "null"
-    assert rec["changeUserId"] == "SYSTEM"
+    assert rec["changeUserId"] == "SYSTEM_USER"
 
 
 @pytest.mark.unit
