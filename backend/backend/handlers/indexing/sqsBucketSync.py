@@ -208,6 +208,29 @@ def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """
     return is_object_version_archived(bucket, key, version_id, client=s3_client)
 
+def object_still_exists(bucket_name: str, object_key: str) -> bool:
+    """Return True if the S3 object still exists (has a live current version).
+
+    Used to guard asset auto-creation: an ObjectCreated event can be delivered
+    (or redelivered under SQS at-least-once) after the object — and its asset —
+    were deleted, which would otherwise recreate an empty ghost asset. A missing
+    object (404) or a current delete marker (405 MethodNotAllowed) means the file
+    is gone. On any other/unexpected error, fail open (return True) so a transient
+    S3 error never suppresses legitimate ingestion of a genuinely new file.
+    """
+    try:
+        s3_client.head_object(Bucket=bucket_name, Key=object_key)
+        return True
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        if code in ('404', '405', 'NoSuchKey', 'NotFound'):
+            return False
+        logger.warning(f"Unexpected error checking existence of {object_key}; failing open: {e}")
+        return True
+    except Exception as e:
+        logger.warning(f"Unexpected error checking existence of {object_key}; failing open: {e}")
+        return True
+
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
     try:
@@ -1391,6 +1414,16 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                 logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
                 return False, False, f"Could not get or create database for bucket {bucket_id}"
             
+            # Guard against recreating a ghost asset from a stale / redelivered
+            # ObjectCreated event: if the object no longer exists (deleted since the
+            # event was enqueued), do not recreate the asset. A genuinely new file
+            # still exists here and proceeds to creation as intended.
+            if not object_still_exists(bucket_name, object_key):
+                logger.info(
+                    f"Object {object_key} no longer exists; skipping asset (re)creation for {asset_id}"
+                )
+                return True, False, f"Skipped stale create event for {object_key}"
+
             # Create the asset
             logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
             created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
