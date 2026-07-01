@@ -217,14 +217,39 @@ def object_still_exists(bucket_name: str, object_key: str) -> bool:
     object (404) or a current delete marker (405 MethodNotAllowed) means the file
     is gone. On any other/unexpected error, fail open (return True) so a transient
     S3 error never suppresses legitimate ingestion of a genuinely new file.
+
+    On a 404, retry with the alternative encoding (decoded <-> raw) — the same
+    tolerance update_s3_metadata applies — so a genuinely new upload whose
+    filename contains a '+' (e.g. BACC66K41F158AM+---.CATPart) is not mistaken
+    for a deleted object when the event pipeline delivered the other shape.
     """
     try:
         s3_client.head_object(Bucket=bucket_name, Key=object_key)
         return True
     except ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
-        if code in ('404', '405', 'NoSuchKey', 'NotFound'):
+        if code == '405':
+            # Current version is a delete marker — archived/gone regardless of
+            # encoding, so do not run the +/space fallback.
             return False
+        if code in ('404', 'NoSuchKey', 'NotFound'):
+            alt_key = urllib.parse.unquote_plus(object_key)
+            if alt_key == object_key:
+                alt_key = urllib.parse.quote(object_key, safe="/+")
+            if alt_key == object_key:
+                return False  # nothing else to try
+            try:
+                s3_client.head_object(Bucket=bucket_name, Key=alt_key)
+                return True
+            except ClientError as e2:
+                code2 = e2.response.get('Error', {}).get('Code', '')
+                if code2 in ('404', 'NoSuchKey', 'NotFound'):
+                    return False
+                logger.warning(f"Unexpected error checking existence of {alt_key}; failing open: {e2}")
+                return True
+            except Exception as e2:
+                logger.warning(f"Unexpected error checking existence of {alt_key}; failing open: {e2}")
+                return True
         logger.warning(f"Unexpected error checking existence of {object_key}; failing open: {e}")
         return True
     except Exception as e:
@@ -722,7 +747,7 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         
         # Create the asset
         # Note: We're passing an empty dict for claims_and_roles since this is a system operation
-        response = create_asset(request_model, {"tokens": ["SYSTEM"]}, True)
+        response = create_asset(request_model, {"tokens": ["SYSTEM_USER"]}, True)
         
         # Add the new asset to the cache instead of clearing it
         cache_key = f"{bucket_id}:{asset_id}"

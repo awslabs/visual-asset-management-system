@@ -98,11 +98,14 @@ class TestObjectStillExists:
 
     def test_returns_false_on_405_delete_marker(self):
         # Latest version is a delete marker -> HeadObject returns 405 MethodNotAllowed.
+        # A 405 means archived/gone regardless of encoding, so no +/space fallback
+        # retry is attempted (single head_object call).
         m = _load()
         m.s3_client = MagicMock()
         err = ClientError({"Error": {"Code": "405"}}, "HeadObject")
         m.s3_client.head_object.side_effect = err
         assert m.object_still_exists("bucket", "db/asset1/file.glb") is False
+        assert m.s3_client.head_object.call_count == 1
 
     def test_returns_true_on_unexpected_error_fail_open(self):
         # An unexpected S3 error must NOT suppress legitimate creation (fail open).
@@ -111,6 +114,27 @@ class TestObjectStillExists:
         err = ClientError({"Error": {"Code": "500"}}, "HeadObject")
         m.s3_client.head_object.side_effect = err
         assert m.object_still_exists("bucket", "db/asset1/file.glb") is True
+
+    def test_returns_true_when_alt_encoding_exists(self):
+        # First head_object 404s on the delivered key shape, but the object exists
+        # under the alternative encoding. A '+' in the filename triggers the two
+        # shapes ('+' vs space). The object is a legitimate new file and must NOT
+        # be treated as gone.
+        m = _load()
+        m.s3_client = MagicMock()
+        err = ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        m.s3_client.head_object.side_effect = [err, {"ContentLength": 10}]
+        assert m.object_still_exists("bucket", "db/asset1/BACC66K41F158AM+---.CATPart") is True
+        assert m.s3_client.head_object.call_count == 2
+
+    def test_returns_false_when_both_encodings_404(self):
+        # Both the delivered key and its alternative encoding 404 -> genuinely gone.
+        m = _load()
+        m.s3_client = MagicMock()
+        err = ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        m.s3_client.head_object.side_effect = [err, err]
+        assert m.object_still_exists("bucket", "db/asset1/BACC66K41F158AM+---.CATPart") is False
+        assert m.s3_client.head_object.call_count == 2
 
 
 @pytest.mark.unit
