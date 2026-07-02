@@ -58,6 +58,7 @@ import { SignInFooter } from "./../authenticator/SignInFooter";
 import { useThemeSettings } from "../hooks/useThemeSettings";
 import { TopNavigation } from "@cloudscape-design/components";
 import logoWhite from "../../logo_white.png";
+import { ensureApiStage } from "../utils/apiEndpoint";
 
 /**
  * Additional configuration needed to use federated identities
@@ -171,8 +172,11 @@ interface Config {
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     let api_path = vamsConfig.DEV_API_ENDPOINT === "" ? config.api : vamsConfig.DEV_API_ENDPOINT;
-    if (api_path != undefined && api_path.length > 0 && api_path[api_path.length - 1] !== "/") {
-        api_path = api_path + "/";
+    // Normalize to end with the fixed API Gateway stage ("/api/"). amplify-config already
+    // includes the stage (no-op here); a hand-entered dev/base URL (e.g. a bare execute-api
+    // host without the stage) gets it appended so downstream API calls resolve correctly.
+    if (api_path != undefined && api_path.length > 0) {
+        api_path = ensureApiStage(api_path);
     }
     localStorage.setItem("api_path", api_path);
 

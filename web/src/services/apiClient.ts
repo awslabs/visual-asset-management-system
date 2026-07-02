@@ -67,7 +67,11 @@ class ApiClient {
     private buildUrl(path: string, queryParams?: Record<string, string>): string {
         const base = this.getBaseUrl();
         const fullBase = base.startsWith("http") ? base : window.location.origin + base;
-        const url = new URL(path, fullBase);
+        // Resolve every path relative to the stage-inclusive base (e.g. ".../api/").
+        // A leading "/" would make new URL() treat the path as origin-absolute and drop
+        // the base's stage segment, so strip it and always resolve relative to fullBase.
+        const relativePath = path.replace(/^\/+/, "");
+        const url = new URL(relativePath, fullBase.endsWith("/") ? fullBase : fullBase + "/");
         if (queryParams) {
             Object.entries(queryParams).forEach(([key, value]) => {
                 if (value !== null && value !== undefined) {

@@ -2064,10 +2064,10 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}:
         get:
             summary: "Stream asset files with HTTP range support."
-            description: "Stream asset files directly with HTTP range support for large files. Requires asset to be distributable. Supports partial content requests via Range headers for efficient streaming of large files. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
+            description: "Stream asset files with HTTP range support for large files. Requires asset to be distributable. Delivery uses one of two modes selected by the ALWAYS_REDIRECT_TO_PRESIGNED toggle in the streamAsset handler. In presigned-redirect mode (required on the API Gateway REST API, and the current default), every request returns a 307 redirect to a short-lived S3 presigned URL that the client follows to fetch the bytes directly from the CORS-enabled asset bucket (S3 serves Range/206 natively). In inline mode, files at or under ~4.4MB are returned inline (base64-encoded for binary) and larger files fall back to the 307 redirect. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
             responses:
                 "200":
-                    description: Asset file content streamed successfully.
+                    description: Asset file content returned inline (inline mode, files at or under ~4.4MB).
                     content:
                         application/octet-stream:
                             schema:
@@ -2130,6 +2130,13 @@ paths:
                                 type: string
                         Content-Length:
                             description: "Size of the partial content in bytes"
+                            schema:
+                                type: string
+                "307":
+                    description: "Temporary redirect to an S3 presigned URL for the file (presigned-redirect mode, and for larger files in inline mode). The client follows the Location header to fetch the bytes directly from S3."
+                    headers:
+                        Location:
+                            description: "S3 presigned URL to fetch the file content."
                             schema:
                                 type: string
                 "400":
@@ -2332,10 +2339,10 @@ paths:
     /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}:
         get:
             summary: "Stream auxiliary preview asset files with HTTP range support."
-            description: "Stream auxiliary preview asset files (e.g., converted formats, thumbnails) directly with HTTP range support. These are preview files stored in the auxiliary bucket. Supports partial content requests via Range headers for efficient streaming of large files."
+            description: "Stream auxiliary preview asset files (e.g., converted formats, thumbnails, octree / 3D tile viewer data) from the auxiliary bucket, with HTTP range support. Delivery uses one of two modes selected by the ALWAYS_REDIRECT_TO_PRESIGNED toggle in the streamAuxiliaryPreviewAsset handler. In presigned-redirect mode (required on the API Gateway REST API, and the current default), every request returns a 307 redirect to a short-lived S3 presigned URL that the client follows to fetch the bytes directly from the CORS-enabled auxiliary bucket (S3 serves Range/206 natively). In inline mode, files at or under ~4.4MB are returned inline (base64-encoded for binary) and larger files fall back to the 307 redirect."
             responses:
                 "200":
-                    description: Auxiliary preview file content streamed successfully.
+                    description: Auxiliary preview file content returned inline (inline mode, files at or under ~4.4MB).
                     content:
                         application/octet-stream:
                             schema:
@@ -2398,6 +2405,13 @@ paths:
                                 type: string
                         Content-Length:
                             description: "Size of the partial content in bytes"
+                            schema:
+                                type: string
+                "307":
+                    description: "Temporary redirect to an S3 presigned URL for the file (presigned-redirect mode, and for larger files in inline mode). The client follows the Location header to fetch the bytes directly from S3."
+                    headers:
+                        Location:
+                            description: "S3 presigned URL to fetch the file content."
                             schema:
                                 type: string
                 "400":

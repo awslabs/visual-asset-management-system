@@ -98,6 +98,12 @@ export class PotreeDependencyManager {
             }
         }
 
+        // Remove DOM that Potree's GUI appends to document.body, outside the viewer root.
+        // Must happen before the stylesheets are removed: the spectrum color-picker
+        // containers are hidden only by spectrum.css's .sp-hidden rule, so once that
+        // stylesheet unloads they render as visible input fields on every page.
+        this.removeLeakedBodyElements();
+
         // Remove all stylesheets managed by this plugin
         StylesheetManager.removePluginStylesheets(this.PLUGIN_ID);
 
@@ -105,5 +111,20 @@ export class PotreeDependencyManager {
         this.loadedDependencies.clear();
 
         console.log("PotreeDependencyManager: Cleanup completed");
+    }
+
+    private static removeLeakedBodyElements(): void {
+        const leakedSelectors = [
+            ".sp-container", // spectrum color-picker popups (one per sidebar color field)
+            "#profile_window", // height-profile window injected from profile.html
+            "#jstree-marker", // jstree drag-and-drop marker
+            ".vakata-context", // jstree context menus
+        ];
+
+        for (const selector of leakedSelectors) {
+            document.querySelectorAll(selector).forEach((element) => {
+                element.parentNode?.removeChild(element);
+            });
+        }
     }
 }

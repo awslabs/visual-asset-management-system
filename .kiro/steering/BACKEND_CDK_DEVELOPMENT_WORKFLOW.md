@@ -1072,6 +1072,29 @@ class Test[Domain]Handler:
                 assert response['statusCode'] == 403
 ```
 
+### **Rule 11: Poetry-Managed Requirements Files Are Generated — Never Edit Directly**
+
+Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a **generated artifact** exported from `poetry.lock` — never edit it by hand. Poetry-managed projects: `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+
+To change a dependency version:
+
+1. Edit the constraint in `pyproject.toml` only if the current constraint excludes the target version (exact pins like `urllib3 = "2.6.3"` must be edited; ranges like `^2.12.1` that already admit the target need no edit).
+2. Re-resolve the lock without installing: `poetry update --lock <package> [<package>...]`
+3. Re-export the requirements file(s):
+
+    ```bash
+    # Lambda layers and pipeline layers (single requirements.txt):
+    poetry export --without-hashes -f requirements.txt -o requirements.txt
+
+    # backend/ (split main vs dev):
+    poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
+    poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+    ```
+
+4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export, and the layer bundling build installs from the exported file.
+
+Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`, `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/constructs/requirements.txt`) are hand-maintained pip files and are edited directly.
+
 ## 📝 **Development Templates**
 
 ### **New Backend Handler Template**

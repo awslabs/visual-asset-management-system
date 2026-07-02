@@ -14,15 +14,15 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 ### **Version Info**
 
-| Component            | Version/Runtime                                                                                             |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| VAMS version         | (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                              |
-| Python (Lambda)      | 3.12                                                                                                        |
-| Python (development) | 3.13+                                                                                                       |
-| Node (Lambda)        | 20.x                                                                                                        |
-| React                | 17.0.2 (Vite build)                                                                                         |
-| Pydantic             | **1.10.7 (v1, NOT v2)** -- uses `@root_validator`, `@validator`, `class Config`, not v2's `model_validator` |
-| CDK                  | `aws-cdk-lib`                                                                                               |
+| Component            | Version/Runtime                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| VAMS version         | (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                               |
+| Python (Lambda)      | 3.12                                                                                                         |
+| Python (development) | 3.13+                                                                                                        |
+| Node (Lambda)        | 20.x                                                                                                         |
+| React                | 17.0.2 (Vite build)                                                                                          |
+| Pydantic             | **1.10.13 (v1, NOT v2)** -- uses `@root_validator`, `@validator`, `class Config`, not v2's `model_validator` |
+| CDK                  | `aws-cdk-lib`                                                                                                |
 
 ---
 
@@ -288,7 +288,7 @@ These rules apply project-wide. Violations will cause deployment failures, secur
 
 ### **Rule 1: Never Use Pydantic v2 Syntax**
 
-The backend uses Pydantic **1.10.7**. Using v2 syntax will fail at import time in Lambda.
+The backend uses Pydantic **1.10.13**. Using v2 syntax will fail at import time in Lambda.
 
 ```python
 # ✅ CORRECT - Pydantic v1
@@ -543,7 +543,7 @@ For user-facing documentation:
 | Technology            | Usage                                 |
 | --------------------- | ------------------------------------- |
 | Python 3.12           | Lambda runtime                        |
-| Pydantic 1.10.7       | Request/response validation (v1 only) |
+| Pydantic 1.10.13      | Request/response validation (v1 only) |
 | Casbin                | ABAC/RBAC authorization engine        |
 | boto3                 | AWS SDK                               |
 | AWS Lambda Powertools | Logging, tracing                      |

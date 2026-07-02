@@ -1163,7 +1163,7 @@ Match the comment density and style already present in the file. Describe **what
 | `maplibre-gl`                   | ^5.8.0               | Map rendering               |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                 |
 | `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^2.3.6               | HTML sanitization           |
+| `dompurify`                     | ^3.4.11              | HTML sanitization           |
 | `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
 | `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
 

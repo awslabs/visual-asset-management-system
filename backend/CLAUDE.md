@@ -8,18 +8,18 @@
 
 ## Quick Reference
 
-| Item                  | Value                                                  |
-| --------------------- | ------------------------------------------------------ |
-| Runtime               | Python 3.13+                                           |
-| Framework             | AWS Lambda + API Gateway REST API (v1)                 |
-| Validation            | Pydantic **1.10.7** (NOT v2) via aws-lambda-powertools |
-| Auth                  | Casbin ABAC/RBAC with DynamoDB policy storage          |
-| ORM                   | boto3 DynamoDB resource + client APIs                  |
-| Search                | OpenSearch (opensearch-py 2.5.0)                       |
-| Logging               | aws-lambda-powertools Logger with custom redaction     |
-| Tests                 | pytest 8.3.4 + moto 5.1.0 for AWS mocks                |
-| Gold Standard Handler | `backend/handlers/assets/assetService.py`              |
-| Gold Standard Model   | `backend/models/assetsV3.py`                           |
+| Item                  | Value                                                   |
+| --------------------- | ------------------------------------------------------- |
+| Runtime               | Python 3.13+                                            |
+| Framework             | AWS Lambda + API Gateway REST API (v1)                  |
+| Validation            | Pydantic **1.10.13** (NOT v2) via aws-lambda-powertools |
+| Auth                  | Casbin ABAC/RBAC with DynamoDB policy storage           |
+| ORM                   | boto3 DynamoDB resource + client APIs                   |
+| Search                | OpenSearch (opensearch-py 2.5.0)                        |
+| Logging               | aws-lambda-powertools Logger with custom redaction      |
+| Tests                 | pytest 9.0.3 + moto 5.1.0 for AWS mocks                 |
+| Gold Standard Handler | `backend/handlers/assets/assetService.py`               |
+| Gold Standard Model   | `backend/models/assetsV3.py`                            |
 
 ---
 
@@ -115,7 +115,7 @@ backend/
 
 ## Critical Rules
 
-1.  **ALWAYS use Pydantic v1 syntax.** This project uses `pydantic==1.10.7`. Never use
+1.  **ALWAYS use Pydantic v1 syntax.** This project uses `pydantic==1.10.13`. Never use
     Pydantic v2 APIs (`model_validate`, `model_dump`, `ConfigDict`). Use `@root_validator`,
     `@validator`, `Field(...)`, `extra='ignore'`.
 
@@ -1075,14 +1075,49 @@ os.environ['YOUR_SPECIFIC_BUCKET'] = 'test-bucket'
 | boto3                 | 1.34.84    | AWS SDK                                      |
 | botocore              | 1.34.162   | Low-level AWS SDK                            |
 | casbin                | 1.33.0     | ABAC/RBAC policy engine                      |
-| pydantic              | 1.10.7     | Data validation (v1 ONLY)                    |
+| pydantic              | 1.10.13    | Data validation (v1 ONLY)                    |
 | opensearch-py         | 2.5.0      | OpenSearch client                            |
-| simpleeval            | 1.0.3      | Safe expression evaluation (Casbin matchers) |
+| simpleeval            | 1.0.7      | Safe expression evaluation (Casbin matchers) |
 | locked-dict           | 2023.10.22 | Thread-safe dict for Casbin cache            |
 | moto                  | 5.1.0      | AWS service mocking (dev only)               |
-| pytest                | 8.3.4      | Test framework (dev only)                    |
+| pytest                | 9.0.3      | Test framework (dev only)                    |
 | mypy                  | 1.0.0      | Type checking (dev only)                     |
 | flake8                | 6.0.0      | Linting (dev only)                           |
+
+---
+
+## Updating Python Dependencies (Poetry-Managed)
+
+Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a
+**generated artifact** exported from `poetry.lock` — never edit it by hand. Poetry-managed
+projects: `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and
+`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+
+To change a dependency version:
+
+1. Edit the constraint in `pyproject.toml` only if the current constraint excludes the target
+   version (exact pins like `urllib3 = "2.6.3"` must be edited; ranges like `^2.12.1` that
+   already admit the target need no edit).
+2. Re-resolve the lock without installing: `poetry update --lock <package> [<package>...]`
+3. Re-export the requirements file(s):
+
+    ```bash
+    # Lambda layers and pipeline layers (single requirements.txt):
+    poetry export --without-hashes -f requirements.txt -o requirements.txt
+
+    # backend/ (split main vs dev):
+    poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
+    poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+    ```
+
+4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together —
+   a requirements file that drifts from its lock will be silently overwritten by the next
+   export, and the layer bundling build installs from the exported file.
+
+Requirements files with **no** side-by-side `pyproject.toml` (e.g.
+`backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`,
+`infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/constructs/requirements.txt`) are
+hand-maintained pip files and are edited directly.
 
 ---
 

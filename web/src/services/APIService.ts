@@ -5,15 +5,27 @@
 
 import { apiClient } from "./apiClient";
 import { default as vamsConfig } from "../config";
+import { ensureApiStage } from "../utils/apiEndpoint";
 
 export const getAmplifyConfig = async () => {
     console.log("getAmplifyConfig");
-    const baseUrl =
-        vamsConfig.DEV_API_ENDPOINT === "" ? window.location.origin : vamsConfig.DEV_API_ENDPOINT;
+    // amplify-config's ROUTE path is "/api/amplify-config"; the API also serves it under the
+    // fixed "/api" stage. Two addressing modes:
+    //  - Same-origin (production): the CloudFront/ALB front maps "/api/*" to the stage, so
+    //    "{origin}/api/amplify-config" reaches the route correctly.
+    //  - Direct DEV_API_ENDPOINT (local dev, no front): the request hits execute-api directly,
+    //    so the stage must be included explicitly -> "{base}/api" + "api/amplify-config".
+    //    ensureApiStage guarantees the base ends with the stage; the route is appended relative.
     let amplifyConfigUrl: URL;
     try {
-        amplifyConfigUrl = new URL("/api/amplify-config", baseUrl);
+        if (vamsConfig.DEV_API_ENDPOINT === "") {
+            amplifyConfigUrl = new URL("/api/amplify-config", window.location.origin);
+        } else {
+            const stagedBase = ensureApiStage(vamsConfig.DEV_API_ENDPOINT);
+            amplifyConfigUrl = new URL("api/amplify-config", stagedBase);
+        }
     } catch (error) {
+        const baseUrl = vamsConfig.DEV_API_ENDPOINT || window.location.origin;
         console.error("getAmplifyConfig: Invalid base URL", baseUrl);
         return {
             _configError: true,
@@ -168,12 +180,9 @@ export const downloadAsset = async ({
             body.versionId = versionId;
         }
 
-        const response = await apiClient.post(
-            `/database/${databaseId}/assets/${assetId}/download`,
-            {
-                body: body,
-            }
-        );
+        const response = await apiClient.post(`database/${databaseId}/assets/${assetId}/download`, {
+            body: body,
+        });
 
         // Handle new response structure
         if (response.downloadUrl) {

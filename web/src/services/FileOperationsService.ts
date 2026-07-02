@@ -70,12 +70,9 @@ export const moveFile = async (
     request: MoveFileRequest
 ): Promise<FileOperationResponse> => {
     try {
-        const response = await apiClient.post(
-            `/database/${databaseId}/assets/${assetId}/moveFile`,
-            {
-                body: request,
-            }
-        );
+        const response = await apiClient.post(`database/${databaseId}/assets/${assetId}/moveFile`, {
+            body: request,
+        });
 
         // The API returns the entire response object with success, message, and affectedFiles
         if (response) {
@@ -98,12 +95,9 @@ export const copyFile = async (
     request: CopyFileRequest
 ): Promise<FileOperationResponse> => {
     try {
-        const response = await apiClient.post(
-            `/database/${databaseId}/assets/${assetId}/copyFile`,
-            {
-                body: request,
-            }
-        );
+        const response = await apiClient.post(`database/${databaseId}/assets/${assetId}/copyFile`, {
+            body: request,
+        });
 
         // The API returns the entire response object with success, message, and affectedFiles
         if (response) {
@@ -127,7 +121,7 @@ export const unarchiveFile = async (
 ): Promise<FileOperationResponse> => {
     try {
         const response = await apiClient.post(
-            `/database/${databaseId}/assets/${assetId}/unarchiveFile`,
+            `database/${databaseId}/assets/${assetId}/unarchiveFile`,
             {
                 body: request,
             }
@@ -155,7 +149,7 @@ export const archiveFile = async (
 ): Promise<FileOperationResponse> => {
     try {
         const response = await apiClient.del(
-            `/database/${databaseId}/assets/${assetId}/archiveFile`,
+            `database/${databaseId}/assets/${assetId}/archiveFile`,
             {
                 body: request,
             }
@@ -182,7 +176,7 @@ export const deleteAssetPreview = async (
 ): Promise<DeleteAssetPreviewResponse> => {
     try {
         const response = await apiClient.del(
-            `/database/${databaseId}/assets/${assetId}/deleteAssetPreview`,
+            `database/${databaseId}/assets/${assetId}/deleteAssetPreview`,
             {}
         );
 
@@ -230,7 +224,7 @@ export const generatePresignedUrls = async (
                 }
 
                 const response = await apiClient.post(
-                    `/database/${databaseId}/assets/${assetId}/download`,
+                    `database/${databaseId}/assets/${assetId}/download`,
                     {
                         body: downloadBody,
                     }
