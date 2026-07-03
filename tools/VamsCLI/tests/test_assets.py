@@ -1267,7 +1267,7 @@ class TestAssetDownloadCommand:
             assert 'Total files: 1' in result.output
             
             # Verify API call
-            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', asset_version_id=None, asset_version_alias=None)
+            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', version_id=None, asset_version_id=None, asset_version_alias=None)
 
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_root_folder_filters_folders(self, mock_asyncio_run, cli_runner, assets_command_mocks):
@@ -1685,18 +1685,21 @@ class TestAssetDownloadCommand:
                     }
                 ]
             }
-            mocks['api_client'].download_asset_file.return_value = {
-                'downloadUrl': 'https://example.com/download/url',
-                'expiresIn': 86400
-            }
-            
+            mocks['api_client'].download_asset_files_bulk.side_effect = \
+                lambda db, asset, keys, **kw: {
+                    'downloadUrl': 'https://example.com/download/url',
+                    'expiresIn': 86400,
+                    'files': [{'key': k, 'success': True,
+                               'downloadUrl': 'https://example.com/download/url'} for k in keys]
+                }
+
             result = cli_runner.invoke(cli, [
                 'assets', 'download',
                 '-d', 'test-database',
                 '-a', 'test-asset',
                 '--shareable-links-only'
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Shareable links generated successfully!' in result.output
             assert 'Files (2):' in result.output
@@ -1784,36 +1787,35 @@ class TestAssetDownloadCommand:
                 ]
             }
             
-            # Mock download URLs
-            mocks['api_client'].download_asset_file.side_effect = [
-                {
-                    'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf?signature=...',
-                    'expiresIn': 86400,
-                    'downloadType': 'assetFile'
-                },
-                {
-                    'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg?signature=...',
-                    'expiresIn': 86400,
-                    'downloadType': 'assetFile'
-                }
-            ]
-            
+            # Mock bulk download URLs
+            mocks['api_client'].download_asset_files_bulk.return_value = {
+                'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf?signature=...',
+                'expiresIn': 86400,
+                'downloadType': 'assetFile',
+                'files': [
+                    {'key': '/model.gltf', 'success': True,
+                     'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf?signature=...'},
+                    {'key': '/texture.jpg', 'success': True,
+                     'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg?signature=...'}
+                ]
+            }
+
             result = cli_runner.invoke(cli, [
                 'assets', 'download',
                 '-d', 'test-database',
                 '-a', 'test-asset',
                 '--shareable-links-only'
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Shareable links generated successfully!' in result.output
             assert '/model.gltf' in result.output
             assert '/texture.jpg' in result.output
             assert 'Total: 2 file(s)' in result.output
-            
-            # Verify API calls
+
+            # Verify API calls: one bulk request covers both files
             mocks['api_client'].list_asset_files.assert_called_once()
-            assert mocks['api_client'].download_asset_file.call_count == 2
+            assert mocks['api_client'].download_asset_files_bulk.call_count == 1
     
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_whole_asset_no_files(self, mock_asyncio_run, cli_runner, assets_command_mocks):
@@ -1846,6 +1848,50 @@ class TestAssetDownloadCommand:
             ])
             assert result.exit_code == 1
             assert '--file-previews requires --file-key to be specified' in result.output
+
+    def test_download_single_file_with_version_id(self, cli_runner, assets_command_mocks):
+        """Single-file download with a specific S3 version threads version_id."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].download_asset_file.return_value = {
+                'downloadUrl': 'https://example.com/versioned', 'expiresIn': 86400
+            }
+            summary = {
+                'overall_success': True, 'total_files': 1, 'successful_files': 1,
+                'failed_files': 0, 'total_size': 10, 'total_size_formatted': '10 B',
+                'download_duration': 0.1, 'average_speed': 100,
+                'average_speed_formatted': '100 B/s',
+                'successful_downloads': [{'relative_key': '/model.gltf',
+                                          'local_path': '/local/path/model.gltf', 'size': 10}],
+                'failed_downloads': []
+            }
+            with patch('vamscli.commands.assets.asyncio.run', return_value=summary):
+                result = cli_runner.invoke(cli, [
+                    'assets', 'download', '/local/path', '-d', 'test-database',
+                    '-a', 'test-asset', '--file-key', '/model.gltf', '--version-id', 'ver-123'
+                ])
+            assert result.exit_code == 0
+            mocks['api_client'].download_asset_file.assert_called_once_with(
+                'test-database', 'test-asset', '/model.gltf',
+                version_id='ver-123', asset_version_id=None, asset_version_alias=None)
+
+    def test_download_version_id_requires_file_key(self, cli_runner, assets_command_mocks):
+        with assets_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/local/path', '-d', 'test-database',
+                '-a', 'test-asset', '--version-id', 'ver-123'
+            ])
+            assert result.exit_code == 1
+            assert '--version-id requires a single --file-key' in result.output
+
+    def test_download_version_id_conflicts_with_asset_version(self, cli_runner, assets_command_mocks):
+        with assets_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/local/path', '-d', 'test-database',
+                '-a', 'test-asset', '--file-key', '/model.gltf',
+                '--version-id', 'ver-123', '--asset-version-id', '2'
+            ])
+            assert result.exit_code == 1
+            assert 'Cannot specify --version-id with --asset-version-id' in result.output
     
     def test_download_no_files_in_asset(self, cli_runner, assets_command_mocks):
         """Test download command with no files in asset."""

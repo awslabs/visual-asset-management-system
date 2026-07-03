@@ -720,58 +720,31 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
         List of deleted file keys
     """
     deleted_files = []
-    
+
     try:
         # Get all object versions under the prefix
         paginator = s3_client.get_paginator('list_object_versions')
-        
-        # Track keys we've already processed to avoid duplicates
+
+        # Collect unique keys across all pages (versions and delete markers)
+        keys_to_delete = []
         processed_keys = set()
-        
+
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            # Process all versions
-            for version in page.get('Versions', []):
-                key = version['Key']
-                
-                # Process folder markers separately
-                if key.endswith('/'):
-                    if key not in processed_keys:
-                        # Delete all versions of this folder marker
-                        if delete_s3_object_all_versions(bucket, key):
-                            deleted_files.append(key)
-                            processed_keys.add(key)
-                    continue
-                
-                # Skip if already processed
-                if key in processed_keys:
-                    continue
-                
-                # Delete all versions of this object
-                if delete_s3_object_all_versions(bucket, key):
-                    deleted_files.append(key)
+            for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
+                key = entry['Key']
+                if key not in processed_keys:
                     processed_keys.add(key)
-            
-            # Check for any keys in delete markers that weren't in versions
-            for marker in page.get('DeleteMarkers', []):
-                key = marker['Key']
-                
-                # Process folder markers separately
-                if key.endswith('/'):
-                    if key not in processed_keys:
-                        # Delete all versions of this folder marker
-                        if delete_s3_object_all_versions(bucket, key):
-                            deleted_files.append(key)
-                            processed_keys.add(key)
-                    continue
-                
-                # Skip if already processed
-                if key in processed_keys:
-                    continue
-                
-                # Delete all versions of this object
-                if delete_s3_object_all_versions(bucket, key):
-                    deleted_files.append(key)
-                    processed_keys.add(key)
+                    keys_to_delete.append(key)
+
+        # Delete each key's versions in parallel; per-key work is independent
+        if keys_to_delete:
+            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(
+                    lambda key: (key, delete_s3_object_all_versions(bucket, key)),
+                    keys_to_delete
+                ))
+            deleted_files.extend(key for key, ok in results if ok)
         
         # Check if the prefix folder itself exists and delete it if it does
         # Ensure the prefix ends with a slash for folder check

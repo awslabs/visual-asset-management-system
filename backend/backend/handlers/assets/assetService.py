@@ -7,6 +7,7 @@ import json
 import base64
 import uuid
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -49,6 +50,10 @@ lambda_client = boto3.client('lambda', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
 s3 = boto3.client('s3', config=retry_config)
 logger = safeLogger(service_name="AssetService")
+
+# Worker pool size for per-object S3 operations (archive/unarchive loops);
+# bounds Lambda concurrency and matches the S3 client connection pool
+MAX_PARALLEL_S3_WORKERS = 10
 
 # Global variables for claims and roles
 claims_and_roles = {}
@@ -128,6 +133,14 @@ def get_default_bucket_details(bucketId):
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
+
+def get_asset_bucket_details(asset):
+    """Get bucket details for an asset record, validating the record carries a bucketId"""
+    bucket_id = asset.get('bucketId')
+    if not bucket_id:
+        logger.error(f"Asset record {asset.get('databaseId')}:{asset.get('assetId')} is missing bucketId")
+        raise VAMSGeneralErrorResponse("Asset record is invalid (missing bucket details).")
+    return get_default_bucket_details(bucket_id)
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -261,14 +274,16 @@ def delete_assetAuxiliary_files(assetLocation):
     try:
         # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
         # Use assetLocation key as root folder key for assetAuxiliaryFiles
-        assetAuxiliaryBucketFilesDeleted = []
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
             if 'Contents' in page:
-                for item in page['Contents']:
-                    assetAuxiliaryBucketFilesDeleted.append(item['Key'])
-                    logger.info(f"Deleting auxiliary asset file: {item['Key']}")
-                    s3.delete_object(Bucket=s3_assetAuxiliary_bucket, Key=item['Key'])
+                # Batch-delete the page's objects (up to 1000 per request)
+                objects_to_delete = [{'Key': item['Key']} for item in page['Contents']]
+                logger.info(f"Deleting {len(objects_to_delete)} auxiliary asset files under {key}")
+                s3.delete_objects(
+                    Bucket=s3_assetAuxiliary_bucket,
+                    Delete={'Objects': objects_to_delete}
+                )
 
     except Exception as e:
         logger.exception(f"Error deleting auxiliary files: {e}")
@@ -308,7 +323,7 @@ def archive_multi_assetFiles(location, bucket):
             for obj in page.get('Contents', []):
                 files.append(obj['Key'])
 
-    for key in files:
+    def _archive_one(key):
         try:
             response = mark_file_as_archived(key, bucket)
             logger.info(f"S3 archive response for {key}: {response}")
@@ -319,6 +334,11 @@ def archive_multi_assetFiles(location, bucket):
 
         except Exception as e:
             logger.exception(f"Error archiving file {key}: {e}")
+
+    if files:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(_archive_one, files))
 
     return
 
@@ -388,16 +408,24 @@ def unarchive_multi_assetFiles(location, bucket):
     try:
         # List all versions to find delete markers
         paginator = s3.get_paginator('list_object_versions')
+        markers_to_remove = []
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            # Remove delete markers
             for delete_marker in page.get('DeleteMarkers', []):
                 if delete_marker.get('IsLatest'):
-                    logger.info(f"Removing delete marker for {delete_marker['Key']}")
-                    s3.delete_object(
-                        Bucket=bucket,
-                        Key=delete_marker['Key'],
-                        VersionId=delete_marker['VersionId']
-                    )
+                    markers_to_remove.append((delete_marker['Key'], delete_marker['VersionId']))
+
+        def _remove_marker(marker):
+            key, version_id = marker
+            try:
+                logger.info(f"Removing delete marker for {key}")
+                s3.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+            except Exception as e:
+                logger.exception(f"Error removing delete marker for {key}: {e}")
+
+        if markers_to_remove:
+            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(markers_to_remove))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(_remove_marker, markers_to_remove))
     except Exception as e:
         logger.exception(f"Error unarchiving files: {e}")
 
@@ -955,9 +983,9 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
             return authorization_error()
 
     #Get bucket details for asset
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
-    
+
     # Archive S3 files
     logger.info(f"Archiving asset {assetId} in database {databaseId}")
     
@@ -1048,9 +1076,9 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             return authorization_error()
 
     # Get bucket details for asset
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
-    
+
     # Unarchive S3 files
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
     
@@ -1135,9 +1163,9 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             return authorization_error()
 
     #Get bucket details for asset
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
-    
+
     # Begin deletion process
     logger.info(f"Permanently deleting asset {assetId} from database {databaseId}")
     
@@ -1490,7 +1518,7 @@ def handle_get_request(event):
                 enhanced_asset = enhance_asset_with_version_info(asset)
 
                 #Get bucket details for asset
-                bucketDetails = get_default_bucket_details(asset['bucketId'])
+                bucketDetails = get_asset_bucket_details(asset)
                 enhanced_asset["bucketName"] = bucketDetails['bucketName']
                 
                 # Convert to AssetResponseModel for consistent response format
@@ -1552,10 +1580,16 @@ def handle_get_request(event):
             
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
-            
+
             # Enhance each asset with version information
             enhanced_items = []
             for item in assets_result.get('Items', []):
+                # Skip malformed records so one bad item cannot fail the whole listing
+                if not item.get('bucketId'):
+                    logger.error(f"Skipping asset record with missing bucketId: "
+                                 f"{item.get('databaseId')}:{item.get('assetId')}")
+                    continue
+
                 enhanced_item = enhance_asset_with_version_info(item)
 
                 #Get bucket details for asset
@@ -1620,10 +1654,16 @@ def handle_get_request(event):
             
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
-            
+
             # Enhance each asset with version information
             enhanced_items = []
             for item in assets_result.get('Items', []):
+                # Skip malformed records so one bad item cannot fail the whole listing
+                if not item.get('bucketId'):
+                    logger.error(f"Skipping asset record with missing bucketId: "
+                                 f"{item.get('databaseId')}:{item.get('assetId')}")
+                    continue
+
                 enhanced_item = enhance_asset_with_version_info(item)
 
                 #Get bucket details for asset

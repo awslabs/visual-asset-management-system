@@ -1772,8 +1772,8 @@ paths:
                 $ref: '#/components/schemas/id_regex'
     /database/{databaseId}/assets/{assetId}/download:
         post:
-            summary: "Generate presigned url for downloading the given or latest version of an asset"
-            description: "Generate presigned url for downloading the given or latest version of an asset. Provide an optional key to specify the file within the asset. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
+            summary: "Generate presigned url(s) for downloading the given or latest version of an asset"
+            description: "Generate presigned url(s) for downloading the given or latest version of an asset. Provide an optional key to specify a single file within the asset, or keys to generate URLs for multiple files of the same asset in one request (max 1500 keys per request; assetFile only; key and keys are mutually exclusive). Each keys entry is either a relative-path string (latest version) or an object {key, versionId} pinning that file to a specific S3 version; per-file versionIds are mutually exclusive with a request-level assetVersionId/assetVersionIdAlias. Version resolution per file: assetVersionId/assetVersionIdAlias pins ALL files to that asset version snapshot; otherwise a per-file versionId (or the single versionId for a single key) selects that S3 version; with no version specified the latest file version is returned. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified; versionId cannot be combined with keys (put versions on individual keys instead). Version parameters are not allowed for assetPreview downloads. Bulk requests skip file paths that do not exist or are not downloadable (reported per file with success=false and a warning in the message) and fail only when no URL can be generated."
             requestBody:
                 required: true
                 content:
@@ -1786,32 +1786,85 @@ paths:
                             properties:
                                 key:
                                     $ref: "#/components/schemas/asset_path_pattern_regex"
+                                keys:
+                                    type: array
+                                    maxItems: 1500
+                                    items:
+                                        oneOf:
+                                            - type: string
+                                              description: "Relative file path (leading '/'); resolves to the latest version."
+                                            - type: object
+                                              required: [key]
+                                              properties:
+                                                  key:
+                                                      type: string
+                                                      description: "Relative file path (leading '/')."
+                                                  versionId:
+                                                      type: string
+                                                      description: "S3 version ID to pin this file to; omit for latest."
+                                    description: "Optional array of file keys to generate presigned URLs for in bulk (same asset). Each entry is a path string (latest) or {key, versionId}. Mutually exclusive with key; not allowed for assetPreview; per-file versionIds cannot combine with assetVersionId/assetVersionIdAlias."
                                 versionId:
                                     type: string
-                                    description: "Optional S3 version ID to download a specific version of the file."
+                                    description: "Optional S3 version ID to download a specific version of the file. Cannot be combined with keys."
                                 assetVersionId:
                                     type: string
-                                    description: "Optional VAMS asset version ID. Resolves the S3 versionId from the asset version snapshot for the specified file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                                    description: "Optional VAMS asset version ID. Resolves the S3 versionId from the asset version snapshot for the specified file(s). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
                                 assetVersionIdAlias:
                                     type: string
                                     description: "Optional asset version alias name. Resolves the alias to an asset version ID, then resolves the S3 versionId from the asset version snapshot. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
             responses:
                 "200":
-                    description: Presigned url for asset download is generated.
+                    description: Presigned url(s) for asset download generated. Single-file requests populate downloadUrl/versionId; bulk requests (keys) additionally populate files with one entry per requested key (downloadUrl carries the first successful URL for compatibility).
                     content:
                         application/json:
                             schema:
                                 type: object
                                 properties:
+                                    downloadUrl:
+                                        type: string
+                                        description: "Presigned URL (first successful URL for bulk requests)."
+                                    expiresIn:
+                                        type: integer
+                                        description: "URL expiration in seconds."
+                                    downloadType:
+                                        type: string
+                                        enum: [assetFile, assetPreview]
+                                    versionId:
+                                        type: string
+                                        nullable: true
+                                    files:
+                                        type: array
+                                        nullable: true
+                                        description: "Per-file entries for bulk requests; null for single-file requests."
+                                        items:
+                                            type: object
+                                            properties:
+                                                key:
+                                                    type: string
+                                                downloadUrl:
+                                                    type: string
+                                                    nullable: true
+                                                versionId:
+                                                    type: string
+                                                    nullable: true
+                                                success:
+                                                    type: boolean
+                                                error:
+                                                    type: string
+                                                    nullable: true
+                                                    description: "Per-file failure reason when success is false (file missing, archived, etc.)."
                                     message:
                                         type: string
-                                        example: url
+                                        description: "Status message; includes a warning when bulk file paths were skipped."
                 "400":
                     description: |
                         Bad request. Possible reasons:
                         - DatabaseId OR AssetId invalid.
                         - Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified.
+                        - Only one of key or keys can be specified; keys not allowed for assetPreview; versionId cannot be combined with keys.
+                        - keys exceeds the maximum of 1500 entries.
                         - Version parameters are not allowed for assetPreview downloads.
+                        - No download URLs could be generated for the requested files (bulk request where every path was invalid).
                         - Ambiguous alias: multiple versions share this alias.
                     content:
                         application/json:

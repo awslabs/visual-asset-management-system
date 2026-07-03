@@ -19,6 +19,7 @@ from .commands.metadata import metadata
 from .commands.metadata_schema import metadata_schema
 from .commands.features import features
 from .commands.search import search
+from .commands.sync import sync
 from .commands.workflow import workflow
 from .commands.industry import industry
 from .commands.user import user
@@ -162,6 +163,7 @@ cli.add_command(metadata)
 cli.add_command(metadata_schema)
 cli.add_command(features)
 cli.add_command(search)
+cli.add_command(sync)
 cli.add_command(workflow)
 cli.add_command(industry)
 cli.add_command(user)

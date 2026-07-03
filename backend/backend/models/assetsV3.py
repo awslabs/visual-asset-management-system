@@ -32,6 +32,12 @@ MAX_FILES_PER_UPLOAD_REQUEST = 1000
 # re-checking the worst-case response-size math (parts x URL length).
 MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 5000
 
+# Maximum file keys accepted in a single bulk download request. Each key
+# produces one presigned URL in the response, so this cap keeps the response
+# payload under the AWS Lambda synchronous response limit (6 MB). Do not raise
+# it without re-checking the worst-case response-size math (keys x URL length).
+MAX_KEYS_PER_DOWNLOAD_REQUEST = 1500
+
 ########################Common Asset Models##########################
 
 class AssetLocationModel(BaseModel, extra='ignore'):
@@ -921,9 +927,26 @@ class AssetVersionOperationResponseModel(BaseModel, extra='ignore'):
 
 ######################## Download Asset API Models ##########################
 class DownloadAssetRequestModel(BaseModel, extra='ignore'):
-    """Request model for downloading asset files or previews"""
+    """Request model for downloading asset files or previews.
+
+    Accepts a single file via `key` or multiple files of the same asset via
+    `keys` (bulk presigned URL generation). The two fields are mutually
+    exclusive; omitting both downloads the asset's base location.
+
+    Version resolution, per file:
+      - `assetVersionId`/`assetVersionIdAlias` (request-level) pins ALL files
+        to that asset version snapshot.
+      - Otherwise each bulk key may carry its own S3 `versionId` (object form
+        `{"key": "/x", "versionId": "abc"}`), independent of other keys.
+      - A key with no version (plain string, or object without versionId, or a
+        single `key` with no `versionId`) resolves to the latest file version.
+    An asset-version pin and per-file versionIds are mutually exclusive.
+    """
     downloadType: Literal["assetFile", "assetPreview"]
     key: Optional[str] = Field(None, min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    # Bulk: each entry is a relative-path string (latest) or {key, versionId?}.
+    # Normalized in the validator to a list of {key, versionId} dicts.
+    keys: Optional[List[Any]] = None
     versionId: Optional[str] = None  # For assetFile only, get specific S3 version
     assetVersionId: Optional[str] = None  # Resolve S3 versionId from asset version snapshot
     assetVersionIdAlias: Optional[str] = None  # Resolve via version alias
@@ -934,6 +957,7 @@ class DownloadAssetRequestModel(BaseModel, extra='ignore'):
         version_id = values.get('versionId')
         asset_version_id = values.get('assetVersionId')
         asset_version_id_alias = values.get('assetVersionIdAlias')
+        keys = values.get('keys')
 
         # Count how many version params are set
         version_params = [p for p in [version_id, asset_version_id, asset_version_id_alias] if p]
@@ -944,14 +968,80 @@ class DownloadAssetRequestModel(BaseModel, extra='ignore'):
         if download_type == "assetPreview" and version_params:
             raise ValueError("Version parameters are not allowed for assetPreview downloads")
 
+        if keys is not None:
+            if download_type == "assetPreview":
+                raise ValueError("keys is not allowed for assetPreview downloads")
+            if values.get('key'):
+                raise ValueError("Only one of key or keys can be specified")
+            if version_id:
+                raise ValueError("versionId cannot be combined with keys; put the version on "
+                                 "each key ({key, versionId}) or use assetVersionId")
+            if len(keys) == 0:
+                raise ValueError("keys cannot be empty")
+            if len(keys) > MAX_KEYS_PER_DOWNLOAD_REQUEST:
+                raise ValueError(f"keys cannot contain more than {MAX_KEYS_PER_DOWNLOAD_REQUEST} entries")
+
+            # Normalize entries to {key, versionId} dicts (accept plain strings)
+            normalized = []
+            key_paths = []
+            has_per_file_version = False
+            for entry in keys:
+                if isinstance(entry, str):
+                    normalized.append({'key': entry, 'versionId': None})
+                    key_paths.append(entry)
+                elif isinstance(entry, dict):
+                    entry_key = entry.get('key')
+                    entry_version = entry.get('versionId')
+                    if not entry_key or not isinstance(entry_key, str):
+                        raise ValueError("each keys entry must include a 'key' string")
+                    if entry_version is not None and not isinstance(entry_version, str):
+                        raise ValueError("versionId in a keys entry must be a string")
+                    normalized.append({'key': entry_key, 'versionId': entry_version})
+                    key_paths.append(entry_key)
+                    if entry_version:
+                        has_per_file_version = True
+                else:
+                    raise ValueError("keys entries must be strings or {key, versionId} objects")
+
+            # Per-file versionIds cannot combine with a whole-set asset version pin
+            if has_per_file_version and (asset_version_id or asset_version_id_alias):
+                raise ValueError("Per-file versionId in keys cannot be combined with "
+                                 "assetVersionId or assetVersionIdAlias")
+
+            (valid, message) = validate({
+                'keys': {
+                    'value': key_paths,
+                    'validator': 'DOWNLOAD_KEY_ARRAY'
+                }
+            })
+            if not valid:
+                raise ValueError(message)
+
+            values['keys'] = normalized
+
         return values
 
+class DownloadAssetFileUrlModel(BaseModel, extra='ignore'):
+    """A single file entry in a bulk download response"""
+    key: str
+    downloadUrl: Optional[str] = None
+    versionId: Optional[str] = None
+    success: bool = True
+    error: Optional[str] = None  # Per-file failure reason (file missing, archived, etc.)
+
 class DownloadAssetResponseModel(BaseModel, extra='ignore'):
-    """Response model for asset download"""
+    """Response model for asset download.
+
+    Single-file requests populate the top-level downloadUrl/versionId fields.
+    Bulk requests (keys) additionally populate `files` with one entry per
+    requested key; the top-level downloadUrl carries the first successful URL
+    for compatibility with single-URL consumers.
+    """
     downloadUrl: str
     expiresIn: int = 86400  # URL expiration in seconds (24 hours)
     downloadType: Literal["assetFile", "assetPreview"]
     versionId: Optional[str] = None
+    files: Optional[List[DownloadAssetFileUrlModel]] = None
     message: str = "Download URL generated successfully"
 
 ######################## DynamoDB Table Models ##########################

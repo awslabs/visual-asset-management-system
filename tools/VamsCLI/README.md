@@ -83,6 +83,7 @@ vamscli assets --help
 | `asset-version`    | Version management (create, archive, revert) |
 | `asset-links`      | Asset relationship management                |
 | `file`             | File upload, download, copy, move, delete    |
+| `sync`             | Directory push/pull synchronization          |
 | `metadata`         | Metadata for assets, files, databases, links |
 | `metadata-schema`  | Schema management                            |
 | `search`           | OpenSearch-powered search                    |

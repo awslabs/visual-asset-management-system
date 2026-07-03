@@ -388,7 +388,7 @@ This operation permanently removes the asset and all its data. It cannot be undo
 
 `POST /database/{databaseId}/assets/{assetId}/download`
 
-Generates a presigned S3 URL for downloading a file from an asset. The URL is time-limited and provides direct access to the file in S3.
+Generates presigned S3 URLs for downloading files from an asset. The URLs are time-limited and provide direct access to the files in S3. A request can target a single file (`key`) or multiple files of the same asset in one call (`keys`, up to 1,500 per request).
 
 **Request Parameters:**
 
@@ -397,45 +397,97 @@ Generates a presigned S3 URL for downloading a file from an asset. The URL is ti
 | `databaseId` | path     | string | Yes      | Database identifier. |
 | `assetId`    | path     | string | Yes      | Asset identifier.    |
 
-**Request Body:**
+**Request Body (single file):**
 
 ```json
 {
-    "databaseId": "my-database",
-    "assetId": "asset-001",
+    "downloadType": "assetFile",
     "key": "/models/building.ifc",
     "versionId": "abc123"
 }
 ```
 
-| Field                 | Type   | Required | Description                                                                        |
-| --------------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
-| `key`                 | string | No       | Relative file path within the asset. If omitted, the asset's primary file is used. |
-| `versionId`           | string | No       | S3 version ID to download a specific version.                                      |
-| `assetVersionId`      | string | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot.          |
-| `assetVersionIdAlias` | string | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.      |
-
-:::warning[Version Parameter Exclusivity]
-Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be specified. Providing more than one returns a `400` error. Version parameters are not allowed for asset preview downloads.
-:::
-
-**Response:**
+**Request Body (bulk, latest versions):**
 
 ```json
 {
-    "message": "https://vams-asset-bucket.s3.amazonaws.com/my-database/asset-001/models/building.ifc?X-Amz-..."
+    "downloadType": "assetFile",
+    "keys": ["/models/building.ifc", "/textures/wall.png"]
 }
 ```
 
+**Request Body (bulk, per-file versions):**
+
+```json
+{
+    "downloadType": "assetFile",
+    "keys": [{ "key": "/models/building.ifc", "versionId": "abc123" }, "/textures/wall.png"]
+}
+```
+
+| Field                 | Type               | Required | Description                                                                                                                                                              |
+| --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `key`                 | string             | No       | Relative file path within the asset. If omitted, the asset's primary file is used. Mutually exclusive with `keys`.                                                       |
+| `keys`                | (string\|object)[] | No       | Files to generate URLs for in bulk (max 1,500 per request; `assetFile` only). Each entry is a path string (latest) or `{key, versionId}`. Mutually exclusive with `key`. |
+| `versionId`           | string             | No       | S3 version ID for a single `key`. Cannot be combined with `keys` (put versions on individual keys instead).                                                              |
+| `assetVersionId`      | string             | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot for all requested file(s).                                                                      |
+| `assetVersionIdAlias` | string             | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.                                                                                            |
+
+:::warning[Version Resolution and Exclusivity]
+Version resolution is applied per file: `assetVersionId`/`assetVersionIdAlias` pins **all** files to that asset version snapshot; otherwise a per-file `versionId` (or the single `versionId` for a single `key`) selects that S3 version; with no version specified the **latest** file version is returned. Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be specified at the request level. Per-file `versionId`s in `keys` cannot be combined with `assetVersionId`/`assetVersionIdAlias`. Version parameters are not allowed for asset preview downloads, and `key`/`keys` are mutually exclusive.
+:::
+
+**Response (single file):**
+
+```json
+{
+    "downloadUrl": "https://vams-asset-bucket.s3.amazonaws.com/...?X-Amz-...",
+    "expiresIn": 86400,
+    "downloadType": "assetFile",
+    "versionId": "abc123",
+    "files": null,
+    "message": "Download URL generated successfully"
+}
+```
+
+**Response (bulk):**
+
+```json
+{
+    "downloadUrl": "https://vams-asset-bucket.s3.amazonaws.com/...?X-Amz-...",
+    "expiresIn": 86400,
+    "downloadType": "assetFile",
+    "files": [
+        {
+            "key": "/models/building.ifc",
+            "downloadUrl": "https://vams-asset-bucket.s3.amazonaws.com/...?X-Amz-...",
+            "versionId": "abc123",
+            "success": true,
+            "error": null
+        },
+        {
+            "key": "/textures/missing.png",
+            "downloadUrl": null,
+            "versionId": null,
+            "success": false,
+            "error": "File not found in S3"
+        }
+    ],
+    "message": "Generated 1 of 2 download URLs. Warning: 1 file path(s) do not exist or are not downloadable and were skipped."
+}
+```
+
+Bulk requests return one entry per requested key. File paths that do not exist or are not downloadable are skipped (reported with `success: false` and an `error` reason, plus a warning in `message`); the request fails with `400` only when no URL can be generated at all. The top-level `downloadUrl` carries the first successful URL for compatibility with single-URL consumers.
+
 **Error Responses:**
 
-| Status | Description                                                                                                   |
-| ------ | ------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, multiple version parameters specified, or version parameters used with preview downloads. |
-| `401`  | Asset is not distributable.                                                                                   |
-| `403`  | Not authorized to download this asset.                                                                        |
-| `404`  | Database, asset, version, or file not found.                                                                  |
-| `500`  | Internal server error.                                                                                        |
+| Status | Description                                                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, or version parameters used with preview downloads. |
+| `401`  | Asset is not distributable.                                                                                                                                                |
+| `403`  | Not authorized to download this asset.                                                                                                                                     |
+| `404`  | Database, asset, version, or file not found.                                                                                                                               |
+| `500`  | Internal server error.                                                                                                                                                     |
 
 ---
 

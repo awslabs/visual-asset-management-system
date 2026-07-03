@@ -2,7 +2,7 @@
 
 import json
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from urllib.parse import urljoin
 
 from ..constants import (
@@ -3221,6 +3221,67 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to download asset file: {e}")
+
+    def download_asset_files_bulk(self, database_id: str, asset_id: str, file_keys: List[Any],
+                                  asset_version_id: Optional[str] = None,
+                                  asset_version_alias: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Generate presigned URLs for multiple asset files in one request using the
+        /database/{databaseId}/assets/{assetId}/download POST endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            file_keys: File keys to generate URLs for (max MAX_DOWNLOAD_KEYS_PER_REQUEST).
+                Each entry is either a relative-path string (latest version) or a
+                {'key': str, 'versionId': str} dict to pin that file to a specific
+                S3 version. Per-file versionIds are mutually exclusive with
+                asset_version_id/asset_version_alias.
+            asset_version_id: Optional asset version ID to pin all files to
+            asset_version_alias: Optional asset version alias to pin all files to
+
+        Returns:
+            API response data with per-file entries under 'files'
+            ({key, downloadUrl, versionId, success, error}).
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails or asset not distributable
+        """
+        try:
+            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            data = {
+                "downloadType": "assetFile",
+                "keys": file_keys
+            }
+            if asset_version_id:
+                data["assetVersionId"] = asset_version_id
+            if asset_version_alias:
+                data["assetVersionIdAlias"] = asset_version_alias
+
+            response = self.post(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"Invalid download request: {error_message}")
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Asset bulk download failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to generate bulk download URLs: {e}")
 
     def download_asset_preview(self, database_id: str, asset_id: str) -> Dict[str, Any]:
         """

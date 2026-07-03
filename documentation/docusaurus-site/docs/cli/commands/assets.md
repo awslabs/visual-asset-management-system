@@ -185,8 +185,9 @@ vamscli assets download [LOCAL_PATH] [OPTIONS]
 | `--flatten-download-tree`          | Flag    | No          | Ignore folder structure, download flat                                              |
 | `--asset-preview`                  | Flag    | No          | Download only the asset preview file                                                |
 | `--file-previews`                  | Flag    | No          | Additionally download file preview files                                            |
-| `--asset-version-id`               | TEXT    | No          | Download from a specific version by ID                                              |
-| `--asset-version-alias`            | TEXT    | No          | Download from a specific version by alias                                           |
+| `--asset-version-id`               | TEXT    | No          | Download files from a specific asset version snapshot (whole set)                   |
+| `--asset-version-alias`            | TEXT    | No          | Download files from a specific asset version by alias (whole set)                   |
+| `--version-id`                     | TEXT    | No          | S3 version ID for a single `--file-key` (per-file version)                          |
 | `--asset-link-children-tree-depth` | INTEGER | No          | Traverse child link tree to specified depth                                         |
 | `--shareable-links-only`           | Flag    | No          | Return presigned URLs without downloading                                           |
 | `--parallel-downloads`             | INTEGER | No          | Max parallel downloads (default: 5)                                                 |
@@ -195,8 +196,12 @@ vamscli assets download [LOCAL_PATH] [OPTIONS]
 | `--hide-progress`                  | Flag    | No          | Hide download progress display                                                      |
 | `--json-output`                    | Flag    | No          | Output raw JSON response                                                            |
 
-:::note
-`--asset-version-id` and `--asset-version-alias` are mutually exclusive. When provided, downloads retrieve files as they existed in the specified version rather than the current state.
+:::note[Version Selection]
+`--asset-version-id` and `--asset-version-alias` are mutually exclusive and pin the whole download (folder, tree, or entire asset) to that asset version snapshot — the file list itself reflects the files as they existed in that version. `--version-id` selects a specific S3 version of a single `--file-key` and cannot be combined with the asset-version flags. With no version option, the latest version of each file is downloaded.
+:::
+
+:::tip[Bulk URL Generation]
+Multi-file downloads and `--shareable-links-only` generate presigned URLs through the bulk download API (up to 1,500 files per request), so large assets prepare in a handful of API calls rather than one per file. Files that cannot be signed (missing or archived) are reported and skipped.
 :::
 
 ```bash

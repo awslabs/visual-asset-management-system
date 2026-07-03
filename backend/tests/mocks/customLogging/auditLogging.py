@@ -26,6 +26,7 @@ log_authorization_api = _noop
 log_authorization_gateway = _noop
 log_file_upload = _noop
 log_file_download = _noop
+log_file_download_bulk = _noop
 log_file_download_streamed = _noop
 log_auth_other = _noop
 log_auth_changes = _noop

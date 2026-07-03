@@ -24,7 +24,8 @@ from ..utils.exceptions import (
 )
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, StreamingDownloadProgress,
-    FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration
+    FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration,
+    parse_remote_timestamp, generate_presigned_urls
 )
 
 
@@ -46,6 +47,19 @@ def parse_json_input(json_input: str) -> Dict[str, Any]:
             raise click.BadParameter(
                 f"Invalid JSON input: '{json_input}' is neither valid JSON nor a readable file path"
             )
+
+
+def build_list_files_params(asset_version_id: Optional[str] = None,
+                            include_archived: bool = False) -> Dict[str, Any]:
+    """Build listFiles query params, scoping to an asset version snapshot when given.
+
+    When an asset version is selected, the file listing must reflect that
+    version's snapshot (files as they existed then) rather than current files.
+    """
+    params: Dict[str, Any] = {'includeArchived': 'true' if include_archived else 'false'}
+    if asset_version_id:
+        params['assetVersionId'] = asset_version_id
+    return params
 
 
 def list_all_asset_files(api_client, database_id: str, asset_id: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -988,6 +1002,9 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
 @click.option('--file-previews', is_flag=True, help='Additionally download file preview files')
 @click.option('--asset-version-id', type=str, default=None, help='Asset version ID to download files from')
 @click.option('--asset-version-alias', type=str, default=None, help='Asset version alias to download files from')
+@click.option('--version-id', 'version_id', type=str, default=None,
+              help='S3 version ID for a specific file version (single --file-key only; '
+                   'mutually exclusive with --asset-version-id/--asset-version-alias)')
 @click.option('--asset-link-children-tree-depth', type=int, help='Traverse asset link children tree to specified depth')
 @click.option('--shareable-links-only', is_flag=True, help='Return presigned URLs without downloading')
 @click.option('--parallel-downloads', type=int, default=DEFAULT_PARALLEL_DOWNLOADS,
@@ -1005,6 +1022,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             file_key: Optional[str], recursive: bool, flatten_download_tree: bool,
             asset_preview: bool, file_previews: bool,
             asset_version_id: Optional[str], asset_version_alias: Optional[str],
+            version_id: Optional[str],
             asset_link_children_tree_depth: Optional[int],
             shareable_links_only: bool, parallel_downloads: int, retry_attempts: int, timeout: int,
             json_input: Optional[str], json_output: bool, hide_progress: bool):
@@ -1076,6 +1094,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
         file_previews = json_data.get('file_previews', file_previews)
         asset_version_id = json_data.get('asset_version_id', asset_version_id)
         asset_version_alias = json_data.get('asset_version_alias', asset_version_alias)
+        version_id = json_data.get('version_id', version_id)
         asset_link_children_tree_depth = json_data.get('asset_link_children_tree_depth', asset_link_children_tree_depth)
         shareable_links_only = json_data.get('shareable_links_only', shareable_links_only)
         parallel_downloads = json_data.get('parallel_downloads', parallel_downloads)
@@ -1113,6 +1132,15 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             raise click.ClickException("Cannot specify both --asset-version-id and --asset-version-alias. Use one or the other.")
         if asset_preview and (asset_version_id or asset_version_alias):
             raise click.ClickException("Cannot specify --asset-preview with --asset-version-id or --asset-version-alias")
+        # Per-file S3 version applies to a single file only and cannot combine
+        # with a whole-set asset version pin
+        if version_id:
+            if asset_version_id or asset_version_alias:
+                raise click.ClickException("Cannot specify --version-id with --asset-version-id or --asset-version-alias")
+            if asset_preview:
+                raise click.ClickException("Cannot specify --version-id with --asset-preview")
+            if recursive or not file_key:
+                raise click.ClickException("--version-id requires a single --file-key (not a folder or whole-asset download)")
         
         # Handle shareable links only mode
         if shareable_links_only:
@@ -1153,38 +1181,45 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         }
                     else:
                         # Get all files (with pagination)
-                        all_files = list_all_asset_files(api_client, database, asset, {
-                            'includeArchived': 'false'
-                        })
+                        all_files = list_all_asset_files(api_client, database, asset,
+                            build_list_files_params(asset_version_id))
                         target_files = [f for f in all_files if not f.get('isFolder')]
 
                         if not target_files:
                             raise FileDownloadError(f"Asset '{asset}' currently has no files to download")
 
+                        url_map = generate_presigned_urls(
+                            api_client, database, asset,
+                            [f.get('relativePath', '') for f in target_files],
+                            asset_version_id=asset_version_id,
+                            asset_version_alias=asset_version_alias
+                        )
                         shareable_links = []
+                        skipped_links = []
                         for file_item in target_files:
                             relative_path = file_item.get('relativePath', '')
-                            try:
-                                download_response = api_client.download_asset_file(
-                                    database, asset, relative_path,
-                                    asset_version_id=asset_version_id,
-                                    asset_version_alias=asset_version_alias
-                                )
+                            url_entry = url_map.get(relative_path, {})
+                            if url_entry.get('downloadUrl'):
                                 shareable_links.append({
                                     "filePath": relative_path,
-                                    "downloadUrl": download_response.get('downloadUrl'),
-                                    "expiresIn": download_response.get('expiresIn', 86400),
+                                    "downloadUrl": url_entry['downloadUrl'],
+                                    "expiresIn": 86400,
                                     "downloadType": "assetFile"
                                 })
-                            except Exception as e:
-                                # Skip files that can't be downloaded
-                                pass
-                        
+                            else:
+                                skipped_links.append(relative_path)
+
+                        message = "Shareable links generated successfully"
+                        if skipped_links:
+                            message += (f" ({len(skipped_links)} file(s) skipped - "
+                                        "not available for download)")
                         result = {
                             "shareableLinks": shareable_links,
                             "totalFiles": len(shareable_links),
-                            "message": "Shareable links generated successfully"
+                            "message": message
                         }
+                        if skipped_links:
+                            result["skippedFiles"] = skipped_links
                         
                 except Exception as e:
                     raise AssetDownloadError(f"Failed to generate shareable links: {e}")
@@ -1250,7 +1285,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                     relative_key=f"{asset_id}/{relative_path}",
                                     local_path=file_local_path,
                                     download_url=download_response.get('downloadUrl'),
-                                    file_size=file_item.get('size')
+                                    file_size=file_item.get('size'),
+                                    last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
                                 ))
                             except Exception as e:
                                 output_warning(f"Skipping file {relative_path} from asset {asset_id}: {e}", json_output)
@@ -1261,9 +1297,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     
                     if recursive or file_key.endswith('/'):
                         # Download folder contents (with pagination)
-                        all_files = list_all_asset_files(api_client, database, asset, {
-                            'includeArchived': 'false'
-                        })
+                        all_files = list_all_asset_files(api_client, database, asset,
+                            build_list_files_params(asset_version_id))
 
                         # Get files under the specified prefix
                         target_files = FileTreeBuilder.get_files_under_prefix(
@@ -1292,26 +1327,30 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
 
                                 # nosemgrep: useless-inner-function
                                 async def _produce():  # nosemgrep: useless-inner-function
-                                    total = len(target_files)
-                                    for idx, file_item in enumerate(target_files):
-                                        rp = file_item.get('relativePath', '')
-                                        lp = Path(local_path) / rp.lstrip('/')
-                                        try:
-                                            dr = api_client.download_asset_file(
-                                                database, asset, rp,
-                                                asset_version_id=asset_version_id,
-                                                asset_version_alias=asset_version_alias
-                                            )
+                                    try:
+                                        url_map = generate_presigned_urls(
+                                            api_client, database, asset,
+                                            [f.get('relativePath', '') for f in target_files],
+                                            asset_version_id=asset_version_id,
+                                            asset_version_alias=asset_version_alias
+                                        )
+                                        for file_item in target_files:
+                                            rp = file_item.get('relativePath', '')
+                                            lp = Path(local_path) / rp.lstrip('/')
+                                            url_entry = url_map.get(rp, {})
+                                            if not url_entry.get('downloadUrl'):
+                                                output_warning(f"Skipping file {rp}: "
+                                                               f"{url_entry.get('error', 'URL generation failed')}",
+                                                               json_output)
+                                                continue
                                             await queue.put(DownloadFileInfo(
                                                 relative_key=rp, local_path=lp,
-                                                download_url=dr.get('downloadUrl'),
-                                                file_size=file_item.get('size')
+                                                download_url=url_entry['downloadUrl'],
+                                                file_size=file_item.get('size'),
+                                                last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
                                             ))
-                                        except Exception:
-                                            pass
-                                        if not json_output and total > 10 and (idx + 1) % 25 == 0:
-                                            output_status(f"Preparing downloads... {idx + 1}/{total} files", False)
-                                    await queue.put(None)
+                                    finally:
+                                        await queue.put(None)
 
                                 async with DownloadManager(
                                     api_client, max_parallel=parallel_downloads,
@@ -1330,33 +1369,34 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             ) for k, v in streaming_progress.file_progress.items()]
                             streamed_download_done = True
                         else:
-                            # Sequential: generate all URLs first, then download
-                            total_target = len(target_files)
-                            for idx, file_item in enumerate(target_files):
+                            # Non-streamed: generate all URLs first (bulk), then download
+                            url_map = generate_presigned_urls(
+                                api_client, database, asset,
+                                [f.get('relativePath', '') for f in target_files],
+                                asset_version_id=asset_version_id,
+                                asset_version_alias=asset_version_alias
+                            )
+                            for file_item in target_files:
                                 relative_path = file_item.get('relativePath', '')
-
-                                if not json_output and total_target > 10 and (idx + 1) % 25 == 0:
-                                    output_status(f"Preparing downloads... {idx + 1}/{total_target} files", False)
 
                                 if flatten_download_tree:
                                     file_local_path = Path(local_path) / Path(relative_path).name
                                 else:
                                     file_local_path = Path(local_path) / relative_path.lstrip('/')
 
-                                try:
-                                    download_response = api_client.download_asset_file(
-                                        database, asset, relative_path,
-                                        asset_version_id=asset_version_id,
-                                        asset_version_alias=asset_version_alias
-                                    )
-                                    files_to_download.append(DownloadFileInfo(
-                                        relative_key=relative_path,
-                                        local_path=file_local_path,
-                                        download_url=download_response.get('downloadUrl'),
-                                        file_size=file_item.get('size')
-                                    ))
-                                except Exception as e:
-                                    output_warning(f"Skipping file {relative_path}: {e}", json_output)
+                                url_entry = url_map.get(relative_path, {})
+                                if not url_entry.get('downloadUrl'):
+                                    output_warning(f"Skipping file {relative_path}: "
+                                                   f"{url_entry.get('error', 'URL generation failed')}",
+                                                   json_output)
+                                    continue
+                                files_to_download.append(DownloadFileInfo(
+                                    relative_key=relative_path,
+                                    local_path=file_local_path,
+                                    download_url=url_entry['downloadUrl'],
+                                    file_size=file_item.get('size'),
+                                    last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
+                                ))
 
                             if file_previews:
                                 for file_item in target_files:
@@ -1385,6 +1425,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         # Download single file
                         download_response = api_client.download_asset_file(
                             database, asset, file_key,
+                            version_id=version_id,
                             asset_version_id=asset_version_id,
                             asset_version_alias=asset_version_alias
                         )
@@ -1423,9 +1464,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     # Download all files from asset (with pagination)
                     output_status("Fetching all files from asset...", json_output)
 
-                    all_files = list_all_asset_files(api_client, database, asset, {
-                        'includeArchived': 'false'
-                    })
+                    all_files = list_all_asset_files(api_client, database, asset,
+                        build_list_files_params(asset_version_id))
                     target_files = [f for f in all_files if not f.get('isFolder')]
                     
                     if not target_files:
@@ -1444,26 +1484,30 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
 
                         # nosemgrep: useless-inner-function
                         async def _produce():  # nosemgrep: useless-inner-function
-                            total = len(target_files)
-                            for idx, file_item in enumerate(target_files):
-                                rp = file_item.get('relativePath', '')
-                                lp = Path(local_path) / rp.lstrip('/')
-                                try:
-                                    dr = api_client.download_asset_file(
-                                        database, asset, rp,
-                                        asset_version_id=asset_version_id,
-                                        asset_version_alias=asset_version_alias
-                                    )
+                            try:
+                                url_map = generate_presigned_urls(
+                                    api_client, database, asset,
+                                    [f.get('relativePath', '') for f in target_files],
+                                    asset_version_id=asset_version_id,
+                                    asset_version_alias=asset_version_alias
+                                )
+                                for file_item in target_files:
+                                    rp = file_item.get('relativePath', '')
+                                    lp = Path(local_path) / rp.lstrip('/')
+                                    url_entry = url_map.get(rp, {})
+                                    if not url_entry.get('downloadUrl'):
+                                        output_warning(f"Skipping file {rp}: "
+                                                       f"{url_entry.get('error', 'URL generation failed')}",
+                                                       json_output)
+                                        continue
                                     await queue.put(DownloadFileInfo(
                                         relative_key=rp, local_path=lp,
-                                        download_url=dr.get('downloadUrl'),
-                                        file_size=file_item.get('size')
+                                        download_url=url_entry['downloadUrl'],
+                                        file_size=file_item.get('size'),
+                                        last_modified=parse_remote_timestamp(file_item.get('dateCreatedCurrentVersion'))
                                     ))
-                                except Exception:
-                                    pass
-                                if not json_output and total > 10 and (idx + 1) % 25 == 0:
-                                    output_status(f"Preparing downloads... {idx + 1}/{total} files", False)
-                            await queue.put(None)
+                            finally:
+                                await queue.put(None)
 
                         async with DownloadManager(
                             api_client, max_parallel=parallel_downloads,

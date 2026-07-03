@@ -46,6 +46,7 @@ tools/VamsCLI/
       metadata_schema.py     # Metadata schema management
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
+      sync.py                # Directory sync (sync file push/pull)
       workflow.py            # Workflow execution
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
@@ -68,23 +69,29 @@ tools/VamsCLI/
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
       upload_manager.py      # Multi-part upload orchestration
-      download_manager.py    # Parallel download orchestration
+      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation)
       file_processor.py      # File validation and processing
+      sync_engine.py         # Sync plan computation (local/remote diff)
+      vamsignore.py          # .vamsignore gitignore-style pattern matching
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
     test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
 ```
 
-### Command Groups (18 top-level)
+### Command Groups (20 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, workflow,
-industry, user, role
+tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
+industry, user, role, api-key
 ```
+
+Sync has a nested sub-command group:
+
+-   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
 
 Industry has nested sub-command groups:
 
@@ -120,6 +127,7 @@ VamsCLIError (base)
     AssetError (+ 5 subclasses)
     DatabaseError (+ 5 subclasses)
     FileError (+ 14 subclasses)
+    SyncError (+ 5 subclasses)
     TagError (+ 7 subclasses)
     AssetVersionError (+ 5 subclasses, includes AssetVersionArchiveError)
     AssetLinkError (+ 7 subclasses)
@@ -987,5 +995,7 @@ class InvalidMyDomainDataError(MyDomainError):
 | `vamscli/utils/upload_manager.py`    | Multi-part upload orchestration                        |
 | `vamscli/utils/download_manager.py`  | Parallel download orchestration                        |
 | `vamscli/utils/file_processor.py`    | File validation and processing                         |
+| `vamscli/utils/sync_engine.py`       | Sync plan computation (local/remote diff)              |
+| `vamscli/utils/vamsignore.py`        | `.vamsignore` gitignore-style pattern matching         |
 | `vamscli/utils/glb_combiner.py`      | GLB binary file combination                            |
 | `tests/conftest.py`                  | Shared fixtures: mock_logging, generic_command_mocks   |

@@ -265,6 +265,37 @@ class DownloadTreeError(FileError):
     pass
 
 
+# Sync-related business logic exceptions
+class SyncError(BusinessLogicError):
+    """Base class for sync-related errors."""
+    pass
+
+
+class SyncPlanError(SyncError):
+    """Raised when a sync plan cannot be computed."""
+    pass
+
+
+class SyncPushError(SyncError):
+    """Raised when a sync push operation fails."""
+    pass
+
+
+class SyncPullError(SyncError):
+    """Raised when a sync pull operation fails."""
+    pass
+
+
+class SyncConfirmationRequiredError(SyncError):
+    """Raised when a destructive sync operation is not confirmed."""
+    pass
+
+
+class InvalidSyncIgnoreFileError(SyncError):
+    """Raised when an ignore file cannot be read or parsed."""
+    pass
+
+
 # Tag-related business logic exceptions
 class TagError(BusinessLogicError):
     """Base class for tag-related errors."""

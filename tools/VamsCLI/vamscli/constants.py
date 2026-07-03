@@ -142,6 +142,11 @@ MAX_UPLOADS_PER_USER_PER_MINUTE = 20  # Rate limit for upload initialization
 DEFAULT_PARALLEL_DOWNLOADS = 5
 DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3
 DEFAULT_DOWNLOAD_TIMEOUT = 300  # 5 minutes per file
+MAX_DOWNLOAD_KEYS_PER_REQUEST = 1500  # Backend cap per bulk presigned-URL request
+
+# Sync Configuration
+DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
+SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
 
 # File Extensions
 ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']

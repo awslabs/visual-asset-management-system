@@ -153,11 +153,21 @@ def add_sns_topic_in_asset(asset_id, database_id, sns_topic):
         logger.error(f"No asset found - {asset_id}.")
         return
 
-    asset_table.update_item(
-        Key={'databaseId': database_id, 'assetId': asset_id},
-        UpdateExpression='SET snsTopic = :sns_topic',
-        ExpressionAttributeValues={':sns_topic': sns_topic}
-    )
+    # Conditional on the record still existing: the asset may be archived or
+    # deleted between the query above and this update, and an unconditional
+    # update_item would re-create a phantom record containing only the key
+    try:
+        asset_table.update_item(
+            Key={'databaseId': database_id, 'assetId': asset_id},
+            UpdateExpression='SET snsTopic = :sns_topic',
+            ConditionExpression='attribute_exists(assetId)',
+            ExpressionAttributeValues={':sns_topic': sns_topic}
+        )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset no longer exists; skipping snsTopic update - {asset_id}")
+            return
+        raise
 
 
 def get_asset(asset_id):
@@ -187,10 +197,19 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
 
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
-        asset_table.update_item(
-            Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
-            UpdateExpression=f"REMOVE snsTopic"
-        )
+        # Conditional on the record still existing: a REMOVE-only update on a
+        # missing key would otherwise create a key-only phantom record
+        try:
+            asset_table.update_item(
+                Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
+                UpdateExpression="REMOVE snsTopic",
+                ConditionExpression='attribute_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"Asset no longer exists; skipping snsTopic removal - {asset_id}")
+            else:
+                raise
     else:
         resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
         subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]

@@ -91,7 +91,11 @@ class SimpleCache:
     def set(self, key, value, ttl=60):  # Default TTL: 60 seconds
         """Set value in cache with expiry time"""
         self.cache[key] = (value, time.time() + ttl)
-        
+
+    def delete(self, key):
+        """Remove a single cache entry if present"""
+        self.cache.pop(key, None)
+
     def clear(self):
         """Clear all cache entries"""
         self.cache = {}
@@ -356,55 +360,80 @@ def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_bas
         current_asset_type = asset_data.get('assetType')
         if asset_type and asset_type != current_asset_type:
             logger.info(f"Updating asset type for {asset_id} from {current_asset_type} to {asset_type}")
-            
-            # Update asset in DynamoDB
-            table = dynamodb.Table(asset_table_name)
-            table.update_item(
-                Key={
-                    'databaseId': asset_data['databaseId'],
-                    'assetId': asset_id
-                },
-                UpdateExpression="SET assetType = :assetType",
-                ExpressionAttributeValues={
-                    ':assetType': asset_type
-                }
-            )
-            
+
+            if not _update_asset_type_attribute(bucket_id, asset_id, asset_data['databaseId'], asset_type):
+                return False
+
             # Update cache
             cache_key = f"{bucket_id}:{asset_id}"
             asset_data['assetType'] = asset_type
             asset_cache.set(cache_key, asset_data)
-            
+
             return True
         elif not asset_type and not current_asset_type:
             # If both are None/empty, set to 'none'
             logger.info(f"Setting default asset type 'none' for {asset_id}")
-            
-            # Update asset in DynamoDB
-            table = dynamodb.Table(asset_table_name)
-            table.update_item(
-                Key={
-                    'databaseId': asset_data['databaseId'],
-                    'assetId': asset_id
-                },
-                UpdateExpression="SET assetType = :assetType",
-                ExpressionAttributeValues={
-                    ':assetType': 'none'
-                }
-            )
-            
+
+            if not _update_asset_type_attribute(bucket_id, asset_id, asset_data['databaseId'], 'none'):
+                return False
+
             # Update cache
             cache_key = f"{bucket_id}:{asset_id}"
             asset_data['assetType'] = 'none'
             asset_cache.set(cache_key, asset_data)
-            
+
             return True
-        
+
         logger.info(f"Asset type for {asset_id} remains unchanged: {current_asset_type}")
         return True
     except Exception as e:
         logger.exception(f"Error updating asset type: {e}")
         return False
+
+
+def _update_asset_type_attribute(bucket_id: str, asset_id: str, database_id: str, asset_type: str) -> bool:
+    """Set assetType on an existing asset record.
+
+    The update is conditional on the record still existing: the asset may have
+    been archived or deleted (moved out of this databaseId partition) between
+    the cached lookup and this update, and an unconditional update_item would
+    re-create a phantom record containing only the key and assetType.
+
+    Args:
+        bucket_id: The bucket ID (for cache invalidation)
+        asset_id: The asset ID
+        database_id: The databaseId partition the asset was looked up in
+        asset_type: The asset type value to set
+
+    Returns:
+        bool: True if updated, False if the record no longer exists
+    """
+    table = dynamodb.Table(asset_table_name)
+    try:
+        table.update_item(
+            Key={
+                'databaseId': database_id,
+                'assetId': asset_id
+            },
+            UpdateExpression="SET assetType = :assetType",
+            ConditionExpression="attribute_exists(assetId)",
+            ExpressionAttributeValues={
+                ':assetType': asset_type
+            }
+        )
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            # Asset moved (archived/deleted) since the cached lookup - drop the
+            # stale cache entries so later events re-query the current location
+            logger.warning(
+                f"Asset {asset_id} no longer exists in {database_id}; "
+                "skipping asset type update and invalidating cache"
+            )
+            asset_cache.delete(f"{bucket_id}:{asset_id}")
+            asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+            return False
+        raise
 
 def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
     """

@@ -483,6 +483,89 @@ Omit `--flatten-download-tree` to preserve the folder hierarchy. In interactive 
 
 ---
 
+## Directory Synchronization
+
+### Sync Reports Changed Files But Transfers Nothing
+
+`vamscli sync file push` or `pull` lists files under `skipped_modify` or `skipped_delete` without transferring or removing them.
+
+**Symptoms:**
+
+-   `Skipped (modified, use --allow-modify): ...`
+-   `Skipped (delete candidates, use --allow-delete): ...`
+
+**Cause:**
+
+By default sync only adds missing files. Modifying or deleting files each requires its own opt-in flag.
+
+**Resolution:**
+
+Add `--allow-modify` to transfer changed files, and `--allow-delete` to remove files missing from the source side. Preview the effect first:
+
+```bash
+vamscli sync file push ./models -d my-database -a my-asset --allow-modify --allow-delete --dryrun
+```
+
+### Confirmation Required for Deletions
+
+A sync with delete flags fails before doing anything.
+
+**Symptoms:**
+
+-   `Permanently deleting files in VAMS requires the --confirm flag.`
+-   `Deleting local files requires the --confirm flag.`
+
+**Cause:**
+
+Destructive sync operations are double-gated. On push, `--permanent-delete` requires `--confirm` (archiving with `--allow-delete` alone does not). On pull, `--allow-delete` always requires `--confirm` because local deletion cannot be undone.
+
+**Resolution:**
+
+Add `--confirm` after reviewing a `--dryrun` plan, or omit the delete flags to leave files in place. Archived VAMS files remain recoverable:
+
+```bash
+vamscli file unarchive -d my-database -a my-asset -p "/removed-file.glb"
+```
+
+### Files Never Appear in the Sync Plan
+
+Certain local files are always reported as ignored or unsupported.
+
+**Symptoms:**
+
+-   `Ignored by patterns: N file(s)`
+-   `Unsupported (previews or no file extension): N file(s)`
+
+**Cause:**
+
+Files matching `.vamsignore` patterns are excluded from both sides of the comparison. Preview companion files (`.previewFile.*`) and files without a file extension cannot be synced because the file APIs do not list or accept them as regular files.
+
+**Resolution:**
+
+Review the `.vamsignore` file in the sync directory (or the file passed via `--ignore-file`), or bypass patterns entirely with `--no-ignore`. Rename extension-less files to include an extension before pushing.
+
+### Every Sync Re-Transfers the Same Files
+
+Repeated syncs keep transferring files that have not changed.
+
+**Symptoms:**
+
+-   The same files appear in the plan with reason `newer` on every run.
+
+**Cause:**
+
+Timestamp comparison relies on the local file's modified time. Tools that rewrite files without changing content (build steps, checkouts) refresh local timestamps, making files look newer than the remote copy.
+
+**Resolution:**
+
+Use `--size-only` to compare by size alone when timestamps are unreliable:
+
+```bash
+vamscli sync file push ./models -d my-database -a my-asset --allow-modify --size-only
+```
+
+---
+
 ## Diagnostics
 
 When a command fails for an unclear reason, re-run it with the global `--debug` flag for detailed error information:
@@ -503,5 +586,6 @@ echo '{"assetName":"test"}' | python -m json.tool
 
 -   [Assets Commands](../commands/assets.md)
 -   [Files Commands](../commands/files.md)
+-   [Sync Commands](../commands/sync.md)
 -   [Metadata Commands](../commands/metadata.md)
 -   [General CLI Troubleshooting](./general.md)

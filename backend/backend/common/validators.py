@@ -90,6 +90,32 @@ def validate_relative_file_path(name, value):
         return (False, name + " is invalid. Must be at least 3 characters long.")
     return (True, '')
 
+def validate_relative_file_path_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array of relative file paths")
+    for value in values:
+        (valid, message) = validate_relative_file_path(name, value)
+        if not valid:
+            return (valid, message)
+    return (True, '')
+
+def validate_download_key_array(name, values):
+    """Validate bulk download file keys.
+
+    Accepts both asset-relative keys (leading '/', e.g. '/dir/file.txt') and
+    full asset-prefixed keys (e.g. 'assetId/dir/file.txt'), matching the forms
+    the single-file download key accepts. Rejects empty keys, non-strings, and
+    '..' path traversal.
+    """
+    if not isinstance(values, list):
+        return (False, name + " must be an array of file keys")
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            return (False, name + " entries must be non-empty strings")
+        if '..' in value:
+            return (False, name + " is invalid. Cannot contain '..' path segments.")
+    return (True, '')
+
 def validate_asset_path(name, value, isFolder):
     if isFolder and not asset_folder_path_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+asset_folder_path_pattern)
@@ -414,6 +440,14 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'RELATIVE_FILE_PATH':
             (valid, message) = validate_relative_file_path(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'RELATIVE_FILE_PATH_ARRAY':
+            (valid, message) = validate_relative_file_path_array(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'DOWNLOAD_KEY_ARRAY':
+            (valid, message) = validate_download_key_array(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'ASSET_PATH':

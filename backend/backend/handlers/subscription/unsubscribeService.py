@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 
+from botocore.exceptions import ClientError
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
@@ -62,10 +63,19 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
 
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
-        asset_table.update_item(
-            Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
-            UpdateExpression=f"REMOVE snsTopic"
-        )
+        # Conditional on the record still existing: a REMOVE-only update on a
+        # missing key would otherwise create a key-only phantom record
+        try:
+            asset_table.update_item(
+                Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
+                UpdateExpression="REMOVE snsTopic",
+                ConditionExpression='attribute_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"Asset no longer exists; skipping snsTopic removal - {asset_id}")
+            else:
+                raise
 
 
 def get_subscription_obj(event_name, entity_name, entity_id):
