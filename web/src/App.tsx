@@ -16,17 +16,17 @@ import { useThemeSettings } from "./hooks/useThemeSettings";
 import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 
-const HeaderPortal = ({ children }) => {
+const HeaderPortal = ({ children }: { children: any }) => {
     const domNode = document.querySelector("#headerWrapper");
-    return ReactDOM.createPortal(children, domNode);
+    return ReactDOM.createPortal(children, domNode as Element);
 };
 
 function App() {
-    const { theme, setTheme, density, setDensity } = useThemeSettings();
+    const { theme, setTheme, density, setDensity } = useThemeSettings() as any;
     const [navigationOpen, setNavigationOpen] = useState(true);
 
     const user = localStorage.getItem("user")
-        ? JSON.parse(localStorage.getItem("user"))
+        ? JSON.parse(localStorage.getItem("user") as string)
         : undefined;
 
     useEffect(() => {

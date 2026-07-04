@@ -161,11 +161,14 @@ class TestProcessS3RecordCreateGuard:
         m.update_asset_type = MagicMock(return_value=True)
 
     def test_skips_creation_when_object_gone(self):
+        # Asset (re)creation is skipped, but the record must still be forwarded
+        # to the indexers so OpenSearch and other registered indexers can
+        # reconcile their records for the now-deleted file.
         m = _load()
         self._wire_create_branch(m, object_exists=False)
         success, should_index, message = m.process_s3_record(self._record())
         m.create_new_asset.assert_not_called()
-        assert success is True and should_index is False
+        assert success is True and should_index is True
 
     def test_creates_when_object_present(self):
         m = _load()

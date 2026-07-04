@@ -8,7 +8,7 @@ import { fetchDatabasePipelines } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 import { WorkflowContext } from "../../context/WorkflowContext";
 
-const WorkflowPipelineSelector = (props) => {
+const WorkflowPipelineSelector = (props: any) => {
     const { database, index } = props;
     const [reload, setReload] = useState(true);
     const {
@@ -18,11 +18,11 @@ const WorkflowPipelineSelector = (props) => {
         workflowPipelines,
         setWorkflowPipelines,
         setActiveTab,
-    } = useContext(WorkflowContext);
-    const [allItems, setAllItems] = useState([]);
+    } = useContext(WorkflowContext) as any;
+    const [allItems, setAllItems] = useState<any[]>([]);
     useEffect(() => {
         const getData = async () => {
-            let items = [];
+            let items: any[] = [];
 
             // If database is "GLOBAL" (Global workflow), only fetch global pipelines
             if (database === "GLOBAL") {
@@ -76,8 +76,8 @@ const WorkflowPipelineSelector = (props) => {
                 setWorkflowPipelines(newPipelines);
                 setActiveTab("pipelines");
             }}
-            placeholder={<>Select pipeline from {database} database.</>}
-            options={allItems.map((item) => {
+            placeholder={(<>Select pipeline from {database} database.</>) as any}
+            options={allItems.map((item: any) => {
                 const isGlobal = item.databaseId === "GLOBAL";
                 return {
                     label: isGlobal ? `(GLOBAL) ${item.pipelineId}` : item.pipelineId,

@@ -12,7 +12,22 @@ export const actionTypes = {
     UPDATE: "UPDATE",
 };
 
-export default function FormDefinition(props) {
+interface FormDefinition {
+    entityType: any;
+    controlDefinitions: any;
+    singularName: any;
+    singularNameTitleCase: any;
+    pluralName: any;
+    customSubmitFunction: any;
+    transformForUpdate: any;
+}
+
+interface FormDefinitionConstructor {
+    new (props: any): FormDefinition;
+    propTypes: any;
+}
+
+function FormDefinitionImpl(this: FormDefinition, props: any) {
     const {
         entityType,
         controlDefinitions,
@@ -31,9 +46,9 @@ export default function FormDefinition(props) {
     this.transformForUpdate = transformForUpdate;
 }
 
-FormDefinition.propTypes = {
+(FormDefinitionImpl as any).propTypes = {
     entityType: PropTypes.oneOf(Object.values(ENTITY_TYPES_NAMES)).isRequired,
-    controlDefinitions: PropTypes.arrayOf(ControlDefinition).isRequired,
+    controlDefinitions: PropTypes.arrayOf(ControlDefinition as any).isRequired,
     singularName: PropTypes.string.isRequired,
     singularNameTitleCase: PropTypes.string.isRequired,
     pluralName: PropTypes.string.isRequired,
@@ -41,3 +56,8 @@ FormDefinition.propTypes = {
     customSubmitFunction: PropTypes.func.isRequired,
     transformForUpdate: PropTypes.func,
 };
+
+const FormDefinition = FormDefinitionImpl as unknown as FormDefinitionConstructor;
+
+export default FormDefinition;
+export type { FormDefinition };

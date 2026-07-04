@@ -24,7 +24,7 @@ import uploadAndManageImageSrc from "../resources/img/upload_and_manage.png";
 import visualize3dVrImageSrc from "../resources/img/visualize_3d_vr.png";
 import Synonyms from "../synonyms";
 
-const CarouselRadio = ({ id, setSlide, slide }) => {
+const CarouselRadio = ({ id, setSlide, slide }: { id: any; setSlide: any; slide: any }) => {
     return (
         <input
             type="radio"
@@ -36,7 +36,7 @@ const CarouselRadio = ({ id, setSlide, slide }) => {
     );
 };
 
-const LandingPage = (props) => {
+const LandingPage = (props: any) => {
     const { navigationOpen } = props;
     usePageTitle("Home");
     const [carouselHeight, setCarouselHeight] = useState(400);

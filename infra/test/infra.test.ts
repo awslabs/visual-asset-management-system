@@ -24,6 +24,10 @@ const createMockConfig = (): Config.Config => {
             assetBuckets: {
                 createNewBucket: true,
                 defaultNewBucketSyncDatabaseId: "default",
+                presignedUrlNetworkRestrictions: {
+                    allowedIpRanges: [],
+                    allowedVpceIds: [],
+                },
                 externalAssetBuckets: [] as any,
             },
             adminUserId: "test-admin",

@@ -734,11 +734,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             }
 
             // Call the API to create the folder
-            const [success, response] = await createFolder({
+            const [success, response] = (await createFolder({
                 databaseId,
                 assetId,
                 relativeKey,
-            });
+            })) as [boolean, any];
 
             if (success) {
                 // Refresh the file list

@@ -5,4 +5,4 @@
 
 import { createContext } from "react";
 
-export const AssetContext = createContext();
+export const AssetContext = createContext<any>(undefined);

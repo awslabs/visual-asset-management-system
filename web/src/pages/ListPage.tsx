@@ -22,7 +22,7 @@ import ListDefinition from "../components/list/list-definitions/types/ListDefini
 import Synonyms from "../synonyms";
 import { usePageTitle } from "../hooks/usePageTitle";
 
-export default function ListPage(props) {
+export default function ListPage(props: any) {
     const { databaseId } = useParams();
     const {
         singularNameTitleCase,
@@ -70,7 +70,7 @@ export default function ListPage(props) {
                 } else {
                     setError("Failed to load data. Please try refreshing.");
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Error loading data:", err);
                 setError(
                     err.message || "An error occurred while loading data. Please try refreshing."
@@ -105,12 +105,12 @@ export default function ListPage(props) {
                                 text: databaseId,
                                 href: `#/databases/${databaseId}/${pluralName}/`,
                             },
-                            { text: pluralNameTitleCase },
+                            { text: pluralNameTitleCase } as any,
                         ]}
                         ariaLabel="Breadcrumbs"
                     />
                 )}
-                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
+                <Grid gridDefinition={[{ colspan: { default: "12" } as any }]}>
                     <div>
                         <TextContent>
                             <h1>
@@ -121,7 +121,7 @@ export default function ListPage(props) {
                     </div>
                 </Grid>
                 {error && (
-                    <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
+                    <Grid gridDefinition={[{ colspan: { default: "12" } as any }]}>
                         <Alert
                             type="error"
                             dismissible
@@ -136,7 +136,7 @@ export default function ListPage(props) {
                         </Alert>
                     </Grid>
                 )}
-                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
+                <Grid gridDefinition={[{ colspan: { default: "12" } as any }]}>
                     <TableList
                         allItems={allItems}
                         loading={loading}

@@ -256,12 +256,15 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
 
         // 6.5) WAF association for the REST API stage (regional-scoped ACL only — see above).
         if (props.wafArn && props.wafArn !== "" && wafIsRegional) {
-            new wafv2.CfnWebACLAssociation(this, "RestApiWafAssociation", {
+            const wafAssociation = new wafv2.CfnWebACLAssociation(this, "RestApiWafAssociation", {
                 resourceArn: `arn:${Partition()}:apigateway:${config.env.region}::/restapis/${
                     this.restApi.restApiId
                 }/stages/${this.stageName}`,
                 webAclArn: props.wafArn,
             });
+            // The resource ARN is a hand-built string, so CloudFormation cannot infer
+            // that the stage must exist before the association is created.
+            wafAssociation.node.addDependency(stage);
         }
 
         // 7) Endpoint outputs (non-FIPS URL in non-GovCloud, as today)

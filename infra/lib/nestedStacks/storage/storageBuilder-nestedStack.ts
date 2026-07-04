@@ -19,6 +19,7 @@ import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
     requireTLSAndAdditionalPolicyAddToResourcePolicy,
+    addPresignedUrlNetworkRestrictionsToBucketPolicy,
     generateUniqueNameHash,
 } from "../../helper/security";
 import { NagSuppressions } from "cdk-nag";
@@ -332,6 +333,10 @@ export function storageResourcesBuilder(
             serverAccessLogsPrefix: "asset-bucket-logs/",
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(assetBucket, config);
+        addPresignedUrlNetworkRestrictionsToBucketPolicy(
+            assetBucket,
+            config.app.assetBuckets.presignedUrlNetworkRestrictions
+        );
 
         // Add to global array with default prefix '/'
         s3AssetBuckets.addS3AssetBucket(
@@ -805,6 +810,10 @@ export function storageResourcesBuilder(
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
     });
     requireTLSAndAdditionalPolicyAddToResourcePolicy(assetAuxiliaryBucket, config);
+    addPresignedUrlNetworkRestrictionsToBucketPolicy(
+        assetAuxiliaryBucket,
+        config.app.assetBuckets.presignedUrlNetworkRestrictions
+    );
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,

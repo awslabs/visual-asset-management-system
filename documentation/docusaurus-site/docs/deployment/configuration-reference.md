@@ -36,11 +36,12 @@ The `env.partition` field is automatically derived from the Region and should no
 
 Controls how Amazon S3 asset storage buckets are provisioned.
 
-| Field                                             | Type    | Default   | Description                                                                                                                           |
-| ------------------------------------------------- | ------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.assetBuckets.createNewBucket`                | boolean | `true`    | When `true`, VAMS creates a new Amazon S3 bucket for asset storage. When `false`, you must define at least one external asset bucket. |
-| `app.assetBuckets.defaultNewBucketSyncDatabaseId` | string  | `default` | Database ID to synchronize with the newly created bucket. **Required** when `createNewBucket` is `true`.                              |
-| `app.assetBuckets.externalAssetBuckets`           | array   | `null`    | Array of external Amazon S3 bucket configurations to register with VAMS. Each bucket requires the fields described below.             |
+| Field                                              | Type    | Default                                     | Description                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------- | ------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.assetBuckets.createNewBucket`                 | boolean | `true`                                      | When `true`, VAMS creates a new Amazon S3 bucket for asset storage. When `false`, you must define at least one external asset bucket.                                                                                                                                                  |
+| `app.assetBuckets.defaultNewBucketSyncDatabaseId`  | string  | `default`                                   | Database ID to synchronize with the newly created bucket. **Required** when `createNewBucket` is `true`.                                                                                                                                                                               |
+| `app.assetBuckets.externalAssetBuckets`            | array   | `null`                                      | Array of external Amazon S3 bucket configurations to register with VAMS. Each bucket requires the fields described below.                                                                                                                                                              |
+| `app.assetBuckets.presignedUrlNetworkRestrictions` | object  | `{allowedIpRanges: [], allowedVpceIds: []}` | Optional network restrictions on presigned URLs for the VAMS-created asset bucket and the auxiliary bucket. Uses a bucket policy deny statement that applies only to presigned (query-string authenticated) requests; backend operations unaffected. See the restriction object below. |
 
 ### External asset bucket object
 
@@ -55,8 +56,37 @@ Each element in `externalAssetBuckets` has the following fields:
 | `bucketRegion`          | string | Optional. The AWS Region of the bucket. Defaults to the deployment Region when omitted.                                                                                                     |
 | `bucketKmsKeyArn`       | string | Optional. ARN of the AWS KMS key the bucket is encrypted with. When set, VAMS grants this key to its Lambda and pipeline roles. Required if the bucket uses SSE-KMS.                        |
 
+### Presigned URL restriction object
+
+Optional network restrictions on presigned URL access. Used in `app.assetBuckets.presignedUrlNetworkRestrictions` for the created asset bucket and auxiliary bucket.
+
+| Field             | Type  | Default | Description                                                                                                                                                                                                                                      |
+| ----------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `allowedIpRanges` | array | `[]`    | Array of IPv4 and IPv6 CIDR blocks (e.g., `["192.168.1.0/24", "2001:db8::/32"]`) permitted to use presigned URLs. Empty array means no IP restrictions. Mutually exclusive with `allowedVpceIds`.                                                |
+| `allowedVpceIds`  | array | `[]`    | Array of Amazon S3 VPC endpoint IDs (e.g., `["vpce-1234abcd"]`) permitted to use presigned URLs. Accepts both interface and gateway VPC endpoint IDs. Empty array means no VPC endpoint restrictions. Mutually exclusive with `allowedIpRanges`. |
+
+**Example configuration with restrictions:**
+
+```json
+{
+    "app": {
+        "assetBuckets": {
+            "createNewBucket": true,
+            "defaultNewBucketSyncDatabaseId": "default",
+            "presignedUrlNetworkRestrictions": {
+                "allowedIpRanges": ["203.0.113.0/24"],
+                "allowedVpceIds": []
+            },
+            "externalAssetBuckets": null
+        }
+    }
+}
+```
+
+Restrict on one network dimension per deployment: configuration validation rejects setting both `allowedIpRanges` and `allowedVpceIds` (a request arrives either over the public path, evaluated against `aws:SourceIp`, or through a VPC endpoint, evaluated against `aws:SourceVpce`). Restrictions are enforced at URL use time through bucket policy deny statements. Restriction changes applied through a redeployment take effect immediately for both newly issued URLs and previously issued URLs that have not yet expired.
+
 :::tip[Adding external buckets]
-External buckets can be added incrementally across deployments. Each bucket requires additional IAM bucket policies. A bucket ARN may be registered more than once to map multiple databases to non-overlapping prefixes within it. See [External Amazon S3 bucket setup](external-s3-setup.md) for the full bucket policy, KMS, and cross-account requirements.
+External buckets can be added incrementally across deployments. Each bucket requires additional IAM bucket policies. A bucket ARN may be registered more than once to map multiple databases to non-overlapping prefixes within it. See [External Amazon S3 bucket setup](external-s3-setup.md) for the full bucket policy, KMS, cross-account requirements, and (if desired) how to restrict presigned URLs on external buckets.
 :::
 
 ## Security and compliance

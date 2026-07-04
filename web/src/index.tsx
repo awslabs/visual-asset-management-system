@@ -15,7 +15,7 @@ import reportWebVitals from "./reportWebVitals";
 import Auth from "./FedAuth/Auth";
 import config from "./config";
 
-window.LOG_LEVEL = "INFO";
+(window as any).LOG_LEVEL = "INFO";
 
 // Set browser tab title from config
 document.title = config.APP_TITLE;

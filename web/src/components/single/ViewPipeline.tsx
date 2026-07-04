@@ -27,16 +27,18 @@ export default function ViewPipeline() {
     const [outputType, setOutputType] = useState("");
     const [pipelineType, setPipelineType] = useState("standardFile");
     const [pipelineExecutionType, setPipelineExecutionType] = useState("Lambda");
-    const [resourceDisplay, setResourceDisplay] = useState(null);
+    const [resourceDisplay, setResourceDisplay] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const getData = async () => {
             setError(null);
-            const items = await fetchAllPipelines();
+            const items: any = await fetchAllPipelines();
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
-                const currentItem = items.find(({ pipelineId }) => pipelineId === pipelineName);
+                const currentItem: any = items.find(
+                    ({ pipelineId }: any) => pipelineId === pipelineName
+                );
                 setDatabaseId(currentItem?.databaseId);
                 setPipelineDescription(currentItem?.description);
                 setAssetType(currentItem?.assetType);
@@ -71,14 +73,14 @@ export default function ViewPipeline() {
 
     return (
         <>
-            <Grid padding={{ top: "s", horizontal: "l" }}>
+            <Grid {...({ padding: { top: "s", horizontal: "l" } } as any)}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
                         items={[
                             { text: Synonyms.Databases, href: "#/databases/" },
                             { text: databaseId, href: "#/databases/" + databaseId },
                             { text: "Pipelines", href: "#/pipelines/" },
-                            { text: pipelineName, href: "#/pipelines/" + pipelineName },
+                            { text: pipelineName as string, href: "#/pipelines/" + pipelineName },
                         ]}
                         ariaLabel="Breadcrumbs"
                     />
@@ -98,7 +100,7 @@ export default function ViewPipeline() {
                         <Input
                             placeholder="Pipeline Name"
                             name="pipelineId"
-                            value={pipelineName}
+                            value={pipelineName as string}
                             disabled
                         />
                         <TextContent>{Synonyms.Database} Name</TextContent>

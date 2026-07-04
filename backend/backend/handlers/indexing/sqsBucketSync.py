@@ -1375,7 +1375,12 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
     Returns:
         tuple: (processing_success, should_index, message) where:
             - processing_success: boolean indicating if processing was successful
-            - should_index: boolean indicating if record should be sent to indexer
+            - should_index: boolean indicating if record should be sent to indexer.
+              Independent of processing_success: benign skips and most processing
+              failures still forward to the indexers so OpenSearch and other
+              registered indexers can reconcile their own records. Only records
+              that are truly out of scope (wrong bucket/prefix, reserved folders,
+              init files, folder markers, malformed records) are withheld.
             - message: string with details about the processing result
     """
     try:
@@ -1425,26 +1430,31 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         
         # 1.b Check if bucket name and prefix have a record in the S3 asset buckets table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
+        # A missing bucket record (registration race / transient lookup failure) skips
+        # VAMS-side processing but still forwards to the indexers — the file indexer
+        # resolves bucket details independently via the object's S3 metadata.
         bucket_id = get_bucket_id(bucket_name, prefix)
         if not bucket_id:
-            logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
-            return False, False, f"No bucket ID found for {bucket_name} with prefix {prefix}"
+            logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping processing but forwarding to indexers")
+            return False, True, f"No bucket ID found for {bucket_name} with prefix {prefix}"
         
-        # Extract asset ID from the object key
+        # Extract asset ID from the object key. Failure to extract or validate an
+        # asset ID skips VAMS-side processing but still forwards to the indexers,
+        # which resolve asset/database IDs independently via S3 object metadata.
         asset_id = extract_asset_id_from_key(object_key, prefix)
         if not asset_id:
-            logger.info(f"Could not extract asset ID from {object_key}, skipping")
-            return False, False, f"Could not extract asset ID from {object_key}"
-        
+            logger.info(f"Could not extract asset ID from {object_key}, skipping processing but forwarding to indexers")
+            return False, True, f"Could not extract asset ID from {object_key}"
+
         # 1.c Check if asset ID is a special folder to skip
         if asset_id in RESERVED_S3_PREFIX_FOLDERS:
             logger.info(f"Asset ID {asset_id} is a special folder, skipping")
             return False, False, f"Asset ID {asset_id} is a special folder"
-        
+
         # 1.d Validate asset ID
         if not validate_asset_id(asset_id):
-            logger.info(f"Asset ID {asset_id} is not valid, skipping")
-            return False, False, f"Asset ID {asset_id} is not valid"
+            logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
+            return False, True, f"Asset ID {asset_id} is not valid"
         
         # 2.a. Lookup asset in assets dynamoDB table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
@@ -1463,27 +1473,30 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             
             # Get or create database for this bucket/prefix
             database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
-            
+
             if not database_id_to_use:
                 logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
-                return False, False, f"Could not get or create database for bucket {bucket_id}"
+                return False, True, f"Could not get or create database for bucket {bucket_id}"
             
             # Guard against recreating a ghost asset from a stale / redelivered
             # ObjectCreated event: if the object no longer exists (deleted since the
             # event was enqueued), do not recreate the asset. A genuinely new file
-            # still exists here and proceeds to creation as intended.
+            # still exists here and proceeds to creation as intended. The record is
+            # still forwarded to the indexers (should_index=True) so OpenSearch and
+            # other registered indexers can reconcile their records for the file.
             if not object_still_exists(bucket_name, object_key):
                 logger.info(
-                    f"Object {object_key} no longer exists; skipping asset (re)creation for {asset_id}"
+                    f"Object {object_key} no longer exists; skipping asset (re)creation for {asset_id} "
+                    "but forwarding event to indexers"
                 )
-                return True, False, f"Skipped stale create event for {object_key}"
+                return True, True, f"Skipped stale create event for {object_key}"
 
             # Create the asset
             logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
             created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
             if not created_asset_id:
                 logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
-                return False, False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
         # 3. Check if the object key ends with "init" - If so delete and skip indexing
         if object_key.endswith('init') or object_key.endswith('init/'):
@@ -1504,7 +1517,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, asset_id)
         if not update_result:
             logger.error(f"Failed to update metadata for {object_key}")
-            return False, False, f"Failed to update metadata for {object_key}"
+            return False, True, f"Failed to update metadata for {object_key}"
         
         # 5. Update asset type based on all files in the bucket
         # Construct the asset base key (prefix + assetId + /)
@@ -1537,7 +1550,9 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
-        return False, False, f"Error processing S3 record."
+        # Unexpected failure mid-processing: still forward to the indexers so
+        # OpenSearch and other registered indexers can reconcile independently.
+        return False, True, f"Error processing S3 record."
 
 def on_storage_event_created(event):
     """
@@ -1579,15 +1594,18 @@ def on_storage_event_created(event):
         try:
             # Process the S3 record - now returns (success, should_index, message)
             success, should_index, message = process_s3_record(record)
-            
+
+            # Forward to the indexers whenever should_index is True — even when
+            # VAMS-side processing failed or was skipped — so OpenSearch and other
+            # registered indexers can reconcile their records independently.
+            if should_index:
+                successful_records.append(record)
+                logger.info(f"Record queued for indexing: {message}")
+
             # Track success/failure counts
             if success:
                 success_count += 1
-                # Only add to successful_records if should_index is True
-                if should_index:
-                    successful_records.append(record)
-                    logger.info(f"Successfully processed record for indexing: {message}")
-                else:
+                if not should_index:
                     logger.info(f"Successfully processed record but skipping indexing: {message}")
             else:
                 # Classify a non-success result as a skip (benign, expected) vs
@@ -1740,46 +1758,52 @@ def lambda_handler_created(event, context):
     
     This function is the main entry point for processing file creation events.
     It parses the event from different sources (SQS, SNS, direct S3),
-    processes the storage event, and runs the OpenSearch indexing lambda
-    if there were no hard errors and only for successfully processed records.
-    
+    processes the storage event, and runs the OpenSearch indexing lambda for
+    every record flagged for indexing — including records whose VAMS-side
+    processing failed or was skipped, so OpenSearch and other registered
+    indexers can reconcile their records independently. Only truly
+    out-of-scope records (wrong bucket/prefix, reserved folders, init files,
+    folder markers, malformed records) are withheld from the indexers.
+
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
         context: The Lambda context
-        
+
     Returns:
         None
     """
     logger.info(f"File creation event received: {json.dumps(event)}")
-    
+
     try:
         # Parse the event to handle different sources
         parsed_event = parse_event(event)
-        
+
         # Process the storage event if it contains records
         if parsed_event.get('Records'):
-            # Process the storage event and get success status and successful records
+            # Process the storage event and get success status and indexable records
             success, successful_records = on_storage_event_created(parsed_event)
-            
-            # Only publish to SNS and SQS if there were no hard errors and we have successful records
-            if success and successful_records:
+
+            if not success:
+                logger.warning("Hard errors encountered during storage event processing")
+
+            # Publish every record flagged for indexing, regardless of hard errors
+            # elsewhere in the batch — withholding them would leave OpenSearch and
+            # other registered indexers out of sync.
+            if successful_records:
                 # Build filtered event preserving original structure
                 filtered_event = build_filtered_event(event, successful_records)
-                
+
                 if filtered_event:
-                    logger.info(f"Publishing {len(successful_records)} successful records to file indexer SNS")
+                    logger.info(f"Publishing {len(successful_records)} records to file indexer SNS")
                     publish_to_file_indexer_sns(filtered_event)
-                    
+
                     # Also publish to workflow auto-execute SQS for created events only
-                    logger.info(f"Publishing {len(successful_records)} successful records to workflow auto-execute SQS")
+                    logger.info(f"Publishing {len(successful_records)} records to workflow auto-execute SQS")
                     publish_to_workflow_execution_sqs(filtered_event)
                 else:
                     logger.info("All records filtered out, skipping file indexer SNS and workflow SQS publish")
             else:
-                if not success:
-                    logger.warning("Hard errors encountered, skipping file indexer SNS and workflow SQS publish")
-                else:
-                    logger.info("No successful records to publish, skipping file indexer SNS and workflow SQS publish")
+                logger.info("No records to publish, skipping file indexer SNS and workflow SQS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
@@ -1793,116 +1817,132 @@ def lambda_handler_deleted(event, context):
     This function is the entry point for processing file deletion events.
     For deletions, we update the asset type if the file is not a folder marker,
     then run the OpenSearch indexing lambda to update the search index.
-    Only successfully processed records are forwarded to the indexer.
-    
+
+    Records are forwarded to the file indexer even when VAMS-side processing is
+    skipped or fails (e.g. the asset record or file is already gone) — the
+    indexers must still see the delete so OpenSearch and other registered
+    indexers can remove their records. Only truly out-of-scope records (no S3
+    info, init files, folder markers, reserved folders) are withheld.
+
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
         context: The Lambda context
-        
+
     Returns:
         None
     """
     logger.info(f"File deletion event received: {json.dumps(event)}")
-    
+
     try:
         # Parse the event to handle different sources
         parsed_event = parse_event(event)
-        
+
         # Process records if present
         if parsed_event.get('Records'):
-            successful_records = []
-            
-            try:
-                # Check each record for files that are not folder markers
-                for record in parsed_event.get('Records', []):
-                    # Skip records without S3 information
-                    if not record.get('s3'):
-                        logger.warning("Record does not contain S3 information, skipping")
-                        continue
-                    
-                    # Extract bucket name and object key
-                    bucket_name = record['s3']['bucket']['name']
-                    object_key = record['s3']['object']['key']
-                    
-                    # Skip init files entirely (both processing and indexing)
-                    if object_key.endswith('init') or object_key.endswith('init/'):
-                        logger.info(f"Skipping init file: {object_key}")
-                        continue
-                    
-                    # Skip folder markers (objects ending with '/')
-                    if object_key.endswith('/'):
-                        logger.info(f"Skipping folder marker: {object_key}")
-                        continue
-                    
+            indexable_records = []
+
+            # Check each record for files that are not folder markers
+            for record in parsed_event.get('Records', []):
+                # Skip records without S3 information
+                if not record.get('s3'):
+                    logger.warning("Record does not contain S3 information, skipping")
+                    continue
+
+                # Extract bucket name and object key
+                bucket_name = record['s3']['bucket']['name']
+                object_key = record['s3']['object']['key']
+
+                # Skip init files entirely (both processing and indexing)
+                if object_key.endswith('init') or object_key.endswith('init/'):
+                    logger.info(f"Skipping init file: {object_key}")
+                    continue
+
+                # Skip folder markers (objects ending with '/')
+                if object_key.endswith('/'):
+                    logger.info(f"Skipping folder marker: {object_key}")
+                    continue
+
+                # VAMS-side cleanup (metadata deletion, asset type update) is
+                # best-effort per record: any skip or failure below still forwards
+                # the record to the indexers.
+                try:
                     # Copy prefix
                     prefix = asset_bucket_prefix
-                    
+
                     # Make sure prefix doesn't start with a '/'
                     if prefix and prefix != '/':
                         prefix = prefix.lstrip('/')
-                    
+
                     # Use the configured prefix or empty string
                     prefix = prefix or ""
-                    
+
                     # Get bucket ID
                     bucket_id = get_bucket_id(bucket_name, prefix)
                     if not bucket_id:
-                        logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
+                        logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping cleanup but forwarding to indexers")
+                        indexable_records.append(record)
                         continue
-                    
+
                     # Extract asset ID from the object key
                     asset_id = extract_asset_id_from_key(object_key, prefix)
                     if not asset_id:
-                        logger.info(f"Could not extract asset ID from {object_key}, skipping")
+                        logger.info(f"Could not extract asset ID from {object_key}, skipping cleanup but forwarding to indexers")
+                        indexable_records.append(record)
                         continue
-                    
-                    # Skip special folders
+
+                    # Skip special folders (never indexed)
                     if asset_id in RESERVED_S3_PREFIX_FOLDERS:
                         logger.info(f"Asset ID {asset_id} is a special folder, skipping")
                         continue
-                    
+
                     # Validate asset ID
                     if not validate_asset_id(asset_id):
-                        logger.info(f"Asset ID {asset_id} is not valid, skipping")
+                        logger.info(f"Asset ID {asset_id} is not valid, skipping cleanup but forwarding to indexers")
+                        indexable_records.append(record)
                         continue
-                    
+
                     # Construct the asset base key (prefix + assetId + /)
                     asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
-                    
-                    # Get asset data to retrieve database_id for metadata deletion
+
+                    # Get asset data to retrieve database_id for metadata deletion.
+                    # The asset record may already be gone (asset-level delete) —
+                    # the record is still forwarded so the indexers can clean up.
                     asset_data = lookup_asset(bucket_id, asset_id)
                     if asset_data:
                         database_id_for_asset = asset_data.get('databaseId')
-                        
+
                         # Extract relative file path for metadata deletion
                         relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
-                        
+
                         # Delete metadata and attributes for this file
                         logger.info(f"Deleting metadata/attributes for file: {relative_file_path}")
                         delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
-                    
+                    else:
+                        logger.info(f"Asset {asset_id} not found in bucket {bucket_id}; skipping metadata cleanup")
+
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")
                     update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
-                    
-                    # Track successfully processed record
-                    successful_records.append(record)
+
                     logger.info(f"Successfully processed deletion for {object_key}")
-            except Exception as e:
-                logger.exception(f"Error processing deletion event: {e}")
-            
-            # Only publish to SNS if we have successfully processed records
-            if successful_records:
+                except Exception as e:
+                    logger.exception(f"Error processing deletion record for {object_key}; forwarding to indexers anyway: {e}")
+
+                # Forward the record to the indexers regardless of cleanup outcome
+                indexable_records.append(record)
+
+            # Only publish to SNS if we have records to index
+            if indexable_records:
                 # Build filtered event preserving original structure
-                filtered_event = build_filtered_event(event, successful_records)
-                
+                filtered_event = build_filtered_event(event, indexable_records)
+
                 if filtered_event:
-                    logger.info(f"Publishing {len(successful_records)} successful deletion records to file indexer SNS")
+                    logger.info(f"Publishing {len(indexable_records)} deletion records to file indexer SNS")
                     publish_to_file_indexer_sns(filtered_event)
                 else:
                     logger.info("All deletion records filtered out, skipping file indexer SNS publish")
             else:
-                logger.info("No successful deletion records to publish, skipping file indexer SNS publish")
+                logger.info("No deletion records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:

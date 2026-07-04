@@ -154,7 +154,7 @@ const downloadSingleFile = async (
                     assetId,
                     key: file.keyPrefix,
                     versionId: file.versionId || "",
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 

@@ -23,7 +23,7 @@ import { fetchAssetS3Files } from "../../services/APIService";
 import Synonyms from "../../synonyms";
 
 // Helper function to check if a file has an extension (is a file, not a folder)
-const isFile = (file) => {
+const isFile = (file: any) => {
     return file.fileName && file.fileName.includes(".");
 };
 
@@ -213,16 +213,16 @@ function FileTreeItem({
     );
 }
 
-export default function WorkflowSelectorWithModal(props) {
+export default function WorkflowSelectorWithModal(props: any) {
     const { databaseId, assetId, setOpen, open, onWorkflowExecuted } = props;
     const [reload, setReload] = useState(true);
-    const [allItems, setAllItems] = useState([]);
-    const [selectedWorkflow, setSelectedWorkflow] = useState(null);
+    const [allItems, setAllItems] = useState<any[]>([]);
+    const [selectedWorkflow, setSelectedWorkflow] = useState<any>(null);
     const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
     const [selectedFilePath, setSelectedFilePath] = useState<string>("/");
-    const [assetFiles, setAssetFiles] = useState([]);
+    const [assetFiles, setAssetFiles] = useState<any[]>([]);
     const [loadingFiles, setLoadingFiles] = useState(false);
-    const [apiError, setApiError] = useState(null);
+    const [apiError, setApiError] = useState<string | null>(null);
     const [isExecuting, setIsExecuting] = useState(false);
     const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(["/"]));
     const [fileSearchTerm, setFileSearchTerm] = useState("");
@@ -230,10 +230,10 @@ export default function WorkflowSelectorWithModal(props) {
 
     useEffect(() => {
         const getData = async () => {
-            const itemsGlobal = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
-            const itemsDb = await fetchDatabaseWorkflows({ databaseId: databaseId });
+            const itemsGlobal: any = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
+            const itemsDb: any = await fetchDatabaseWorkflows({ databaseId: databaseId });
             const items = [...itemsDb, ...itemsGlobal];
-            if (items !== false && Array.isArray(items)) {
+            if ((items as any) !== false && Array.isArray(items)) {
                 setReload(false);
                 setAllItems(items);
             }
@@ -268,7 +268,7 @@ export default function WorkflowSelectorWithModal(props) {
                             : `Failed to load ${Synonyms.asset} files. Please try again.`
                     );
                 }
-            } catch (error) {
+            } catch (error: any) {
                 console.error("Error fetching asset files:", error);
                 setApiError(
                     `Failed to load ${Synonyms.asset} files: ${error.message || "Unknown error"}`
@@ -287,7 +287,7 @@ export default function WorkflowSelectorWithModal(props) {
         return buildFileTree(assetFiles);
     }, [assetFiles]);
 
-    const handleWorkflowSelection = (event) => {
+    const handleWorkflowSelection = (event: any) => {
         const selectedOption = event.detail.selectedOption.value;
         setSelectedWorkflow(selectedOption);
     };
@@ -340,7 +340,7 @@ export default function WorkflowSelectorWithModal(props) {
             } else {
                 setApiError("Received an invalid response from the server. Please try again.");
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error executing workflow:", error);
             setApiError(`An unexpected error occurred: ${error.message || "Unknown error"}`);
         } finally {
@@ -377,7 +377,7 @@ export default function WorkflowSelectorWithModal(props) {
                             const val = event.detail.selectedOption.value;
                             // Decode the string value back to object
                             const item = allItems.find(
-                                (i) => `${i.workflowId}::${i.databaseId}` === val
+                                (i: any) => `${i.workflowId}::${i.databaseId}` === val
                             );
                             setSelectedWorkflow(
                                 item
@@ -385,7 +385,7 @@ export default function WorkflowSelectorWithModal(props) {
                                     : null
                             );
                         }}
-                        options={allItems.map((item) => {
+                        options={allItems.map((item: any) => {
                             return {
                                 label: `${item.workflowId} (${item.databaseId})`,
                                 value: `${item.workflowId}::${item.databaseId}`,

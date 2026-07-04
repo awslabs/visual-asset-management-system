@@ -27,8 +27,8 @@ const actionStrings = {
     },
 };
 
-async function fillFormWithAssetMetadata(asset) {
-    const values = {};
+async function fillFormWithAssetMetadata(asset: any) {
+    const values: any = {};
     // fill in form values based on formentitty proptypes
     const assetTransfer = new DataTransfer();
     const previewTransfer = new DataTransfer();
@@ -60,7 +60,7 @@ async function fillFormWithAssetMetadata(asset) {
     return values;
 }
 
-export default function CreateUpdateElement(props) {
+export default function CreateUpdateElement(props: any) {
     const {
         open,
         setOpen,
@@ -89,7 +89,7 @@ export default function CreateUpdateElement(props) {
     //populate blank form values based on entity definition
     //TODO fields should be blank except the region!!
     //console.log(props.open)
-    let startingValues = {};
+    let startingValues: any = {};
 
     useEffect(() => {
         const getStartingValues = async () => {
@@ -98,7 +98,7 @@ export default function CreateUpdateElement(props) {
                 startingValues = await fillFormWithAssetMetadata(asset);
                 setFormValues(startingValues);
             } else {
-                startingValues = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
+                startingValues = Object.keys(formEntity.propTypes).reduce((acc: any, cur) => {
                     if (formEntity.propTypes[cur] === EntityPropTypes.ENTITY_ID_ARRAY) {
                         acc[cur] = [];
                     } else {
@@ -114,9 +114,9 @@ export default function CreateUpdateElement(props) {
         getStartingValues();
     }, [props.open]);
 
-    const [formValues, setFormValues] = useState(startingValues);
+    const [formValues, setFormValues] = useState<any>(startingValues);
     //each validatable prop needs a corresponding error message
-    const startingErrors = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
+    const startingErrors = Object.keys(formEntity.propTypes).reduce((acc: any, cur) => {
         acc[cur] = "";
         return acc;
     }, {});
@@ -124,7 +124,10 @@ export default function CreateUpdateElement(props) {
 
     useEffect(() => {
         const getData = async () => {
-            const element = await ACTIONS[ACTION_TYPES.READ][entityType](databaseId, elementId);
+            const element = await (ACTIONS as any)[ACTION_TYPES.READ][entityType](
+                databaseId,
+                elementId
+            );
             if (element) {
                 setFormValues(element);
             }
@@ -156,9 +159,9 @@ export default function CreateUpdateElement(props) {
      * @param isSubmit - in submit scenarios, we want to add new error messages
      * @returns {boolean} - true = valid, false = one or more invalid
      */
-    const validateForm = ({ isSubmit }) => {
+    const validateForm = ({ isSubmit }: { isSubmit: boolean }) => {
         if (open) {
-            const newFormErrors = Object.assign({}, formErrors);
+            const newFormErrors: any = Object.assign({}, formErrors);
             const formPropNames = Object.keys(formValues);
             for (let i = 0; i < formPropNames.length; i++) {
                 const formPropName = formPropNames[i];
@@ -188,8 +191,8 @@ export default function CreateUpdateElement(props) {
         }
     };
 
-    const handleUpdateFormValues = (prop, value) => {
-        const newFormValues = Object.assign({}, formValues);
+    const handleUpdateFormValues = (prop: any, value: any) => {
+        const newFormValues: any = Object.assign({}, formValues);
         newFormValues[prop] = value;
         setFormValues(newFormValues);
     };
@@ -197,7 +200,7 @@ export default function CreateUpdateElement(props) {
     const submitFormAfterReady = async () => {
         try {
             if (validateForm({ isSubmit: true })) {
-                const formattedFormValues = Object.keys(formValues).reduce((acc, cur) => {
+                const formattedFormValues = Object.keys(formValues).reduce((acc: any, cur) => {
                     if (Array.isArray(formValues[cur])) {
                         acc[cur] = formValues[cur].map((item) => item.value || item);
                     }
@@ -229,7 +232,9 @@ export default function CreateUpdateElement(props) {
                     setReadySubmit(false);
                     if (result[0] === false) {
                         setSubmitUpdateError(
-                            `Unable to ${actionStrings[actionType].lowerCase} ${singularName}. Error: ${result[1]}`
+                            `Unable to ${
+                                (actionStrings as any)[actionType].lowerCase
+                            } ${singularName}. Error: ${result[1]}`
                         );
                     } else {
                         handleClose();
@@ -248,9 +253,9 @@ export default function CreateUpdateElement(props) {
         }
     };
 
-    const handleSubmit = async (event) => {
+    const handleSubmit = async (event: any) => {
         event.preventDefault();
-        let customSubmitResults = {};
+        let customSubmitResults: any = {};
         if (customSubmitFunction) {
             customSubmitResults = await customSubmitFunction(formValues, formErrors);
             setFormValues(customSubmitResults?.values);
@@ -293,18 +298,18 @@ export default function CreateUpdateElement(props) {
                                 disabled={loadingSubmit}
                                 variant="primary"
                             >
-                                {actionStrings[actionType].titleCase}
+                                {(actionStrings as any)[actionType].titleCase}
                                 &nbsp;
                                 {singularNameTitleCase}
                             </Button>
                         </SpaceBetween>
                     </Box>
                 }
-                header={`${actionStrings[actionType].titleCase} ${singularNameTitleCase}`}
+                header={`${(actionStrings as any)[actionType].titleCase} ${singularNameTitleCase}`}
             >
                 <Form errorText={submitUpdateError}>
                     <SpaceBetween direction="vertical" size="s">
-                        {controlDefinitions.map((controlDefinition, i) => {
+                        {controlDefinitions.map((controlDefinition: any, i: number) => {
                             const {
                                 label,
                                 id,
@@ -350,7 +355,7 @@ export default function CreateUpdateElement(props) {
                                                         ? formValues[id]
                                                         : options
                                                         ? options.find(
-                                                              (option) =>
+                                                              (option: any) =>
                                                                   option.value === formValues[id]
                                                           )
                                                         : {
@@ -359,7 +364,7 @@ export default function CreateUpdateElement(props) {
                                                 }
                                                 selectedOptions={
                                                     Array.isArray(formValues[id]) &&
-                                                    formValues[id].map((value) => {
+                                                    formValues[id].map((value: any) => {
                                                         if (typeof value === "object") return value;
                                                         return {
                                                             label: formValues[id],
@@ -368,7 +373,7 @@ export default function CreateUpdateElement(props) {
                                                     })
                                                 }
                                                 options={options}
-                                                onChange={({ detail }) => {
+                                                onChange={({ detail }: { detail: any }) => {
                                                     handleUpdateFormValues(
                                                         id,
                                                         detail.selectedOptions ||

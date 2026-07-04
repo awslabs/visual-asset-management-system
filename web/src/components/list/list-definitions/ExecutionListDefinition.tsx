@@ -18,7 +18,7 @@ export const WorkflowListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "workflowId",
             header: "Name",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/workflows/${item.workflowId}`}>
@@ -31,7 +31,7 @@ export const WorkflowListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "databaseId",
             header: Synonyms.Database,
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
@@ -42,15 +42,15 @@ export const WorkflowListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "description",
         }),
         new ColumnDefinition({
             id: "pipelines",
             header: "Pipelines",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const displayPipelines = props?.item?.specifiedPipelines?.functions
-                    .map((item) => item.name)
+                    .map((item: any) => item.name)
                     .join(" > ");
                 return <>{displayPipelines}</>;
             },

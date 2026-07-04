@@ -24,7 +24,7 @@ export const getAmplifyConfig = async () => {
             const stagedBase = ensureApiStage(vamsConfig.DEV_API_ENDPOINT);
             amplifyConfigUrl = new URL("api/amplify-config", stagedBase);
         }
-    } catch (error) {
+    } catch (error: any) {
         const baseUrl = vamsConfig.DEV_API_ENDPOINT || window.location.origin;
         console.error("getAmplifyConfig: Invalid base URL", baseUrl);
         return {
@@ -77,7 +77,7 @@ export const getSecureConfig = async () => {
     return apiClient.get(`secure-config`, {});
 };
 
-export const webRoutes = async (body) => {
+export const webRoutes = async (body: any) => {
     console.log("webRoutes");
     try {
         const response = await apiClient.post("auth/routes", {
@@ -87,7 +87,7 @@ export const webRoutes = async (body) => {
         });
         console.log("response", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -105,7 +105,7 @@ export const fetchApiRoutes = async () => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -124,7 +124,7 @@ export const fetchConstraintPermissionObjects = async () => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -142,7 +142,7 @@ export const fetchAllowedApiRoutes = async () => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -166,11 +166,11 @@ export const downloadAsset = async ({
     versionId,
     assetVersionId = undefined,
     downloadType = "assetFile",
-}) => {
+}: any) => {
     try {
         // Build request body with new model structure
         // Only include one version parameter — assetVersionId takes priority over versionId
-        const body = {
+        const body: any = {
             downloadType: downloadType,
             key: key,
         };
@@ -202,7 +202,7 @@ export const downloadAsset = async ({
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
@@ -216,7 +216,7 @@ export const downloadAsset = async ({
  * Returns array of boolean and response/error message for the elements that the current user is deleting, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const deleteElement = async ({ deleteRoute, elementId, item }) => {
+export const deleteElement = async ({ deleteRoute, elementId, item }: any) => {
     try {
         let route = deleteRoute;
         route = route.replace("{databaseId}", item?.databaseId);
@@ -228,7 +228,7 @@ export const deleteElement = async ({ deleteRoute, elementId, item }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message, error?.message];
     }
@@ -244,10 +244,10 @@ export const runWorkflow = async ({
     workflowId,
     fileKey,
     isGlobalWorkflow = false,
-}) => {
+}: any) => {
     try {
         let endpoint;
-        let eventBody = {};
+        let eventBody: any = {};
         endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
 
         if (isGlobalWorkflow) {
@@ -273,7 +273,7 @@ export const runWorkflow = async ({
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -283,7 +283,7 @@ export const runWorkflow = async ({
  * Returns array of boolean and response/error message for the workflow that the current user is saving/updating, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const saveWorkflow = async ({ config }) => {
+export const saveWorkflow = async ({ config }: any) => {
     try {
         const response = await apiClient.put("workflows", config || config.body);
         if (response.message) {
@@ -299,7 +299,7 @@ export const saveWorkflow = async ({ config }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -309,7 +309,7 @@ export const saveWorkflow = async ({ config }) => {
  * Returns array of boolean and response/error message for the element that the current user is creating/updating, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const createUpdateElements = async ({ pluralName, config }) => {
+export const createUpdateElements = async ({ pluralName, config }: any) => {
     try {
         const response = await apiClient.put(pluralName, config || config.body);
         if (response.message) {
@@ -325,7 +325,7 @@ export const createUpdateElements = async ({ pluralName, config }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -346,8 +346,10 @@ export const fetchAllDatabases = async () => {
         }
 
         // If response has Items property, process it
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
 
         if (response && response.Items) {
             items = items.concat(response.Items);
@@ -379,7 +381,7 @@ export const fetchAllDatabases = async () => {
             return response.message;
         }
         return [];
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching databases:", error);
         // Return the error message string so list/selector consumers can surface it
         // (ListPage renders a non-empty string via setError); an array would be
@@ -396,7 +398,7 @@ export const fetchAllDatabases = async () => {
  * @param {boolean} params.showArchived - Whether to include archived assets (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAsset = async ({ databaseId, assetId, showArchived = false }) => {
+export const fetchAsset = async ({ databaseId, assetId, showArchived = false }: any) => {
     try {
         let response;
         if (databaseId && assetId) {
@@ -428,7 +430,7 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }) 
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -437,7 +439,7 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }) 
  * Returns the database that the current user can access for the given databaseId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchDatabase = async ({ databaseId }) => {
+export const fetchDatabase = async ({ databaseId }: any) => {
     try {
         let response;
         if (databaseId) {
@@ -450,7 +452,7 @@ export const fetchDatabase = async ({ databaseId }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -462,8 +464,10 @@ export const fetchDatabase = async ({ databaseId }) => {
 export const fetchTags = async () => {
     try {
         let response = await apiClient.get("tags", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -479,7 +483,7 @@ export const fetchTags = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -491,8 +495,10 @@ export const fetchTags = async () => {
 export const fetchtagTypes = async () => {
     try {
         let response = await apiClient.get("tag-types", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -508,17 +514,17 @@ export const fetchtagTypes = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
 };
 
-export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }) => {
+export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }: any) => {
     try {
         let response;
         if (assetId) {
-            const queryParams = {};
+            const queryParams: any = {};
             if (childTreeView) {
                 queryParams.childTreeView = "true";
             }
@@ -565,7 +571,7 @@ export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = fal
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         // Return the standard [false, message] error tuple so callers can
         // surface the failure instead of rendering an empty (success-shaped)
         // relationship tree.
@@ -574,14 +580,14 @@ export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = fal
     }
 };
 
-export const deleteAssetLink = async ({ assetLinkId }) => {
+export const deleteAssetLink = async ({ assetLinkId }: any) => {
     try {
         if (!assetLinkId) {
             return [false, "assetLinkId is required"];
         }
         const response = await apiClient.del(`asset-links/${assetLinkId}`, {});
         return [true, response?.message ?? response];
-    } catch (error) {
+    } catch (error: any) {
         // [false, message, status] so callers can distinguish authorization
         // failures (403) from other errors.
         console.log(error);
@@ -596,8 +602,10 @@ export const deleteAssetLink = async ({ assetLinkId }) => {
 export const fetchSubscriptionRules = async () => {
     try {
         let response = await apiClient.get("subscriptions", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -613,7 +621,7 @@ export const fetchSubscriptionRules = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -626,8 +634,10 @@ export const fetchSubscriptionRules = async () => {
 export const fetchRoles = async () => {
     try {
         let response = await apiClient.get("roles", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -643,7 +653,7 @@ export const fetchRoles = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -656,8 +666,10 @@ export const fetchRoles = async () => {
 export const fetchUserRoles = async () => {
     try {
         let response = await apiClient.get("user-roles", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -673,7 +685,7 @@ export const fetchUserRoles = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -686,8 +698,10 @@ export const fetchUserRoles = async () => {
 export const fetchConstraints = async () => {
     try {
         let response = await apiClient.get("auth/constraints", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -703,7 +717,7 @@ export const fetchConstraints = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -716,8 +730,10 @@ export const fetchConstraints = async () => {
 export const fetchCognitoUsers = async () => {
     try {
         let response = await apiClient.get("user/cognito");
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
 
         // Handle direct response with users array
         if (response.users && Array.isArray(response.users)) {
@@ -757,7 +773,7 @@ export const fetchCognitoUsers = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         // Extract the actual error message from the API response
         const errorMessage =
@@ -774,9 +790,9 @@ export const fetchCognitoUsers = async () => {
  * @param {string} params.phone - Phone number (optional, E.164 format)
  * @returns {Promise<[boolean, string]>}
  */
-export const createCognitoUser = async ({ userId, email, phone }) => {
+export const createCognitoUser = async ({ userId, email, phone }: any) => {
     try {
-        const body = { userId, email };
+        const body: any = { userId, email };
         if (phone) {
             body.phone = phone;
         }
@@ -796,7 +812,7 @@ export const createCognitoUser = async ({ userId, email, phone }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         // Extract the actual error message from the API response
         const errorMessage =
@@ -813,9 +829,9 @@ export const createCognitoUser = async ({ userId, email, phone }) => {
  * @param {string} params.phone - Phone number (optional, E.164 format)
  * @returns {Promise<[boolean, string]>}
  */
-export const updateCognitoUser = async ({ userId, email, phone }) => {
+export const updateCognitoUser = async ({ userId, email, phone }: any) => {
     try {
-        const body = {};
+        const body: any = {};
         if (email) body.email = email;
         if (phone) body.phone = phone;
 
@@ -834,7 +850,7 @@ export const updateCognitoUser = async ({ userId, email, phone }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         // Extract the actual error message from the API response
         const errorMessage =
@@ -849,7 +865,7 @@ export const updateCognitoUser = async ({ userId, email, phone }) => {
  * @param {string} params.userId - User ID
  * @returns {Promise<[boolean, string]>}
  */
-export const deleteCognitoUser = async ({ userId }) => {
+export const deleteCognitoUser = async ({ userId }: any) => {
     try {
         const response = await apiClient.del(`user/cognito/${userId}`);
 
@@ -859,7 +875,7 @@ export const deleteCognitoUser = async ({ userId }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         // Extract the actual error message from the API response
         const errorMessage =
@@ -874,7 +890,7 @@ export const deleteCognitoUser = async ({ userId }) => {
  * @param {string} params.userId - User ID
  * @returns {Promise<[boolean, string]>}
  */
-export const resetCognitoUserPassword = async ({ userId }) => {
+export const resetCognitoUserPassword = async ({ userId }: any) => {
     try {
         const response = await apiClient.post(`user/cognito/${userId}/resetPassword`, {
             body: { userId },
@@ -893,7 +909,7 @@ export const resetCognitoUserPassword = async ({ userId }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         // Extract the actual error message from the API response
         const errorMessage =
@@ -906,11 +922,13 @@ export const resetCognitoUserPassword = async ({ userId }) => {
  * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllComments = async ({ assetId }) => {
+export const fetchAllComments = async ({ assetId }: any) => {
     try {
         let response = await apiClient.get(`comments/assets/${assetId}`, {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -926,7 +944,7 @@ export const fetchAllComments = async ({ assetId }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -936,7 +954,7 @@ export const fetchAllComments = async ({ assetId }) => {
  * Deletes the given comment from the database
  * @returns {Promise<boolean|{message}|any>}
  */
-export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }) => {
+export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }: any) => {
     try {
         const response = await apiClient.del(
             `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
@@ -949,7 +967,7 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }) => 
             console.log(response);
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         if (error.status === 403) return error.status;
         return [false, error?.message];
     }
@@ -971,13 +989,13 @@ export const fetchDatabaseAssets = async ({
     maxItems = 1000,
     pageSize = 1000,
     startingToken = null,
-}) => {
+}: any) => {
     try {
         if (!databaseId) {
             return [];
         }
 
-        const queryParams = {
+        const queryParams: Record<string, any> = {
             showArchived: showArchived.toString(),
             maxItems: maxItems.toString(),
             pageSize: pageSize.toString(),
@@ -991,7 +1009,7 @@ export const fetchDatabaseAssets = async ({
             queryStringParameters: queryParams,
         });
 
-        let items = [];
+        let items: any[] = [];
 
         // Handle legacy response format with message wrapper
         if (response.message) {
@@ -1027,7 +1045,7 @@ export const fetchDatabaseAssets = async ({
         }
 
         return [];
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching database assets:", error);
         return [];
     }
@@ -1047,9 +1065,9 @@ export const fetchAllAssets = async ({
     maxItems = 1000,
     pageSize = 1000,
     startingToken = null,
-} = {}) => {
+}: any = {}) => {
     try {
-        const queryParams = {
+        const queryParams: Record<string, any> = {
             showArchived: showArchived.toString(),
             maxItems: maxItems.toString(),
             pageSize: pageSize.toString(),
@@ -1063,7 +1081,7 @@ export const fetchAllAssets = async ({
             queryStringParameters: queryParams,
         });
 
-        let items = [];
+        let items: any[] = [];
 
         // Handle legacy response format with message wrapper
         if (response.message) {
@@ -1099,7 +1117,7 @@ export const fetchAllAssets = async ({
         }
 
         return [];
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching all assets:", error);
         return [];
     }
@@ -1112,8 +1130,10 @@ export const fetchAllAssets = async ({
 export const fetchAllPipelines = async () => {
     try {
         let response = await apiClient.get(`pipelines`, {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -1129,7 +1149,7 @@ export const fetchAllPipelines = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1139,7 +1159,7 @@ export const fetchAllPipelines = async () => {
  * Returns array of all pipelines the current user can access for a given database, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchDatabasePipelines = async ({ databaseId }) => {
+export const fetchDatabasePipelines = async ({ databaseId }: any) => {
     try {
         let response;
         // If databaseId is undefined, return false
@@ -1150,8 +1170,10 @@ export const fetchDatabasePipelines = async ({ databaseId }) => {
 
         response = await apiClient.get(`database/${databaseId}/pipelines`, {});
 
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -1165,7 +1187,7 @@ export const fetchDatabasePipelines = async ({ databaseId }) => {
                 return response.message;
             }
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1175,7 +1197,7 @@ export const fetchDatabasePipelines = async ({ databaseId }) => {
  * Returns array of all workflows the current user can access for a given database, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchDatabaseWorkflows = async ({ databaseId }) => {
+export const fetchDatabaseWorkflows = async ({ databaseId }: any) => {
     try {
         let response;
         // If databaseId is undefined, return false
@@ -1186,8 +1208,10 @@ export const fetchDatabaseWorkflows = async ({ databaseId }) => {
 
         response = await apiClient.get(`database/${databaseId}/workflows`, {});
 
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -1201,7 +1225,7 @@ export const fetchDatabaseWorkflows = async ({ databaseId }) => {
                 return response.message;
             }
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1214,8 +1238,10 @@ export const fetchDatabaseWorkflows = async ({ databaseId }) => {
 export const fetchAllWorkflows = async () => {
     try {
         let response = await apiClient.get(`workflows`, {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -1231,7 +1257,7 @@ export const fetchAllWorkflows = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1241,7 +1267,7 @@ export const fetchAllWorkflows = async () => {
  * Returns array of all workflow executions the current user can access for the given databaseId & assetId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId = "" }) => {
+export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId = "" }: any) => {
     try {
         let response;
         let endpoint;
@@ -1255,8 +1281,10 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
             }
 
             response = await apiClient.get(endpoint, {});
-            let items = [];
-            const init = { queryStringParameters: { startingToken: null } };
+            let items: any[] = [];
+            const init: { queryStringParameters: Record<string, any> } = {
+                queryStringParameters: { startingToken: null },
+            };
             if (response.message) {
                 if (response.message.Items) {
                     items = items.concat(response.message.Items);
@@ -1273,7 +1301,7 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1286,8 +1314,10 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
 export const fetchAllMetadataSchema = async () => {
     try {
         let response = await apiClient.get("metadataschema/", {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
+        let items: any[] = [];
+        const init: { queryStringParameters: Record<string, any> } = {
+            queryStringParameters: { startingToken: null },
+        };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
@@ -1303,7 +1333,7 @@ export const fetchAllMetadataSchema = async () => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1313,13 +1343,15 @@ export const fetchAllMetadataSchema = async () => {
  * Returns array of  metadata fields from the backend for a particular databaseId
  * @returns {Promise<boolean|{roles}|any>}
  */
-export const fetchDatabaseMetadataSchema = async ({ databaseId }) => {
+export const fetchDatabaseMetadataSchema = async ({ databaseId }: any) => {
     try {
         let response;
         if (databaseId) {
             response = await apiClient.get(`metadataschema/${databaseId}`, {});
-            let items = [];
-            const init = { queryStringParameters: { startingToken: null } };
+            let items: any[] = [];
+            const init: { queryStringParameters: Record<string, any> } = {
+                queryStringParameters: { startingToken: null },
+            };
             if (response.message) {
                 if (response.message.Items) {
                     items = items.concat(response.message.Items);
@@ -1336,7 +1368,7 @@ export const fetchDatabaseMetadataSchema = async ({ databaseId }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return error?.message;
     }
@@ -1347,7 +1379,7 @@ export const fetchDatabaseMetadataSchema = async ({ databaseId }) => {
  * Creates a new folder in the specified asset
  * @returns {Promise<boolean|{message}|any>}
  */
-export const createFolder = async ({ databaseId, assetId, relativeKey }) => {
+export const createFolder = async ({ databaseId, assetId, relativeKey }: any) => {
     try {
         const response = await apiClient.post(
             `database/${databaseId}/assets/${assetId}/createFolder`,
@@ -1361,7 +1393,7 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }) => {
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -1371,7 +1403,7 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }) => {
  * Reverts a file to a specific version by creating a new current version with the contents of the specified version
  * @returns {Promise<boolean|{message}|any>}
  */
-export const revertFileVersion = async ({ databaseId, assetId, filePath, versionId }) => {
+export const revertFileVersion = async ({ databaseId, assetId, filePath, versionId }: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !versionId) {
             return [false, "Missing required parameters"];
@@ -1397,7 +1429,7 @@ export const revertFileVersion = async ({ databaseId, assetId, filePath, version
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error reverting file version:", error);
         return [false, error?.message || "Failed to revert file version"];
     }
@@ -1411,7 +1443,7 @@ export const revertFileVersion = async ({ databaseId, assetId, filePath, version
  * @param {Object} params.updateData - Data to update (assetName, description, isDistributable, tags)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const updateAsset = async ({ databaseId, assetId, updateData }) => {
+export const updateAsset = async ({ databaseId, assetId, updateData }: any) => {
     try {
         if (!databaseId || !assetId || !updateData) {
             return [false, "Missing required parameters"];
@@ -1435,7 +1467,7 @@ export const updateAsset = async ({ databaseId, assetId, updateData }) => {
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error updating asset:", error);
         return [false, error?.message || "Failed to update asset"];
     }
@@ -1450,7 +1482,12 @@ export const updateAsset = async ({ databaseId, assetId, updateData }) => {
  * @param {string} params.reason - Optional reason for archiving
  * @returns {Promise<boolean|{message}|any>}
  */
-export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true, reason = "" }) => {
+export const archiveAsset = async ({
+    databaseId,
+    assetId,
+    confirmArchive = true,
+    reason = "",
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1484,7 +1521,7 @@ export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true,
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error archiving asset:", error);
         return [false, error?.message || "Failed to archive asset"];
     }
@@ -1504,7 +1541,7 @@ export const deleteAssetPermanent = async ({
     assetId,
     confirmPermanentDelete = false,
     reason = "",
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1538,7 +1575,7 @@ export const deleteAssetPermanent = async ({
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error deleting asset:", error);
         return [false, error?.message || "Failed to delete asset"];
     }
@@ -1555,7 +1592,7 @@ export const fetchBuckets = async () => {
 
         // Direct return of the response which should contain Items array
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching buckets:", error);
         return { Items: [], error: error?.message };
     }
@@ -1577,7 +1614,7 @@ export const createDatabase = async ({
     defaultBucketId,
     restrictMetadataOutsideSchemas = false,
     restrictFileUploadsToExtensions = "",
-}) => {
+}: any) => {
     try {
         const response = await apiClient.post("database", {
             body: {
@@ -1595,7 +1632,7 @@ export const createDatabase = async ({
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("create database error", error);
         return [false, error?.message];
     }
@@ -1617,7 +1654,7 @@ export const updateDatabase = async ({
     defaultBucketId,
     restrictMetadataOutsideSchemas,
     restrictFileUploadsToExtensions,
-}) => {
+}: any) => {
     try {
         const response = await apiClient.put(`database/${databaseId}`, {
             body: {
@@ -1642,7 +1679,7 @@ export const updateDatabase = async ({
         } else {
             return false;
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("update database error", error);
         return [false, error?.message];
     }
@@ -1709,7 +1746,7 @@ const fetchAllMetadataPages = async (endpoint: string, baseQuery: Record<string,
  * @param {string} params.assetLinkId - Asset link ID
  * @returns {Promise<any>}
  */
-export const fetchAssetLinkMetadata = async ({ assetLinkId }) => {
+export const fetchAssetLinkMetadata = async ({ assetLinkId }: any) => {
     try {
         if (!assetLinkId) {
             return false;
@@ -1717,7 +1754,7 @@ export const fetchAssetLinkMetadata = async ({ assetLinkId }) => {
 
         // Follow NextToken to aggregate all pages of metadata.
         return await fetchAllMetadataPages(`asset-links/${assetLinkId}/metadata`);
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching asset link metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
     }
@@ -1737,7 +1774,7 @@ export const createAssetLinkMetadata = async ({
     metadataKey,
     metadataValue,
     metadataValueType,
-}) => {
+}: any) => {
     try {
         if (!assetLinkId || !metadataKey || !metadataValue || !metadataValueType) {
             return [false, "Missing required parameters"];
@@ -1765,7 +1802,7 @@ export const createAssetLinkMetadata = async ({
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error creating asset link metadata:", error);
         return [false, error?.message || "Failed to create metadata"];
     }
@@ -1785,7 +1822,7 @@ export const updateAssetLinkMetadata = async ({
     metadataKey,
     metadataValue,
     metadataValueType,
-}) => {
+}: any) => {
     try {
         if (!assetLinkId || !metadataKey || !metadataValue || !metadataValueType) {
             return [false, "Missing required parameters"];
@@ -1812,7 +1849,7 @@ export const updateAssetLinkMetadata = async ({
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error updating asset link metadata:", error);
         return [false, error?.message || "Failed to update metadata"];
     }
@@ -1825,7 +1862,7 @@ export const updateAssetLinkMetadata = async ({
  * @param {string} params.metadataKey - Metadata key
  * @returns {Promise<any>}
  */
-export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }) => {
+export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }: any) => {
     try {
         if (!assetLinkId || !metadataKey) {
             return [false, "Missing required parameters"];
@@ -1850,7 +1887,7 @@ export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }) => {
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error deleting asset link metadata:", error);
         return [false, error?.message || "Failed to delete metadata"];
     }
@@ -1872,7 +1909,7 @@ export const setPrimaryType = async ({
     filePath,
     primaryType,
     primaryTypeOther,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath) {
             return [false, "Missing required parameters"];
@@ -1905,7 +1942,7 @@ export const setPrimaryType = async ({
         } else {
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error setting primary type:", error);
         return [false, error?.message || "Failed to set primary type"];
     }
@@ -1925,13 +1962,13 @@ export const fetchAssetS3Files = async ({
     assetId,
     includeArchived = false,
     basic = false,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
         }
 
-        const queryParams = {
+        const queryParams: Record<string, any> = {
             includeArchived: includeArchived.toString(),
         };
 
@@ -1973,7 +2010,7 @@ export const fetchAssetS3Files = async ({
         }
         // Handle legacy response format with message wrapper
         else if (response.message) {
-            let items = [];
+            let items: any[] = [];
             if (response.message.Items) {
                 items = response.message.Items;
 
@@ -2003,7 +2040,7 @@ export const fetchAssetS3Files = async ({
             console.error("Unexpected response format:", response);
             return [false, "No response received"];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching asset S3 files:", error);
         return [false, error?.message || "Failed to fetch asset files"];
     }
@@ -2029,7 +2066,7 @@ export const fetchAssetS3FilesPage = async ({
     startingToken = null,
     pageSize = null,
     assetVersionId = null,
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId) {
             return {
@@ -2044,7 +2081,7 @@ export const fetchAssetS3FilesPage = async ({
         const defaultPageSize = basic ? 1500 : 100;
         const actualPageSize = pageSize || defaultPageSize;
 
-        const queryParams = {
+        const queryParams: Record<string, any> = {
             includeArchived: includeArchived.toString(),
             basic: basic.toString(),
             pageSize: actualPageSize.toString(),
@@ -2095,7 +2132,7 @@ export const fetchAssetS3FilesPage = async ({
             nextToken: null,
             error: "Unexpected response format",
         };
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching asset S3 files page:", error);
         return {
             success: false,
@@ -2124,6 +2161,13 @@ export async function* fetchAssetS3FilesStreaming({
     basic = false,
     pageSize,
     assetVersionId = null,
+}: {
+    databaseId: string;
+    assetId: string;
+    includeArchived?: boolean;
+    basic?: boolean;
+    pageSize?: any;
+    assetVersionId?: string | null | undefined;
 }) {
     let nextToken = null;
     let pageNumber = 0;
@@ -2175,7 +2219,12 @@ export async function* fetchAssetS3FilesStreaming({
  * @param {boolean} params.includeVersions - If to include file version data on the response
  * @returns {Promise<any>}
  */
-export const fetchFileInfo = async ({ databaseId, assetId, fileKey, includeVersions = false }) => {
+export const fetchFileInfo = async ({
+    databaseId,
+    assetId,
+    fileKey,
+    includeVersions = false,
+}: any) => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
@@ -2204,7 +2253,7 @@ export const fetchFileInfo = async ({ databaseId, assetId, fileKey, includeVersi
             // Direct response format
             return [true, response];
         }
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching file info:", error);
         return [false, error?.message || "Failed to fetch file information"];
     }
@@ -2221,7 +2270,7 @@ export const fetchFileInfo = async ({ databaseId, assetId, fileKey, includeVersi
  * @param {string} params.assetId - Asset ID
  * @returns {Promise<any>}
  */
-export const fetchAssetMetadata = async ({ databaseId, assetId }) => {
+export const fetchAssetMetadata = async ({ databaseId, assetId }: any) => {
     try {
         if (!databaseId || !assetId) {
             return { metadata: [], message: "Missing required parameters" };
@@ -2229,7 +2278,7 @@ export const fetchAssetMetadata = async ({ databaseId, assetId }) => {
 
         // Follow NextToken to aggregate all pages of metadata.
         return await fetchAllMetadataPages(`database/${databaseId}/assets/${assetId}/metadata`);
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching asset metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
     }
@@ -2243,7 +2292,7 @@ export const fetchAssetMetadata = async ({ databaseId, assetId }) => {
  * @param {Array} params.metadata - Array of metadata items {metadataKey, metadataValue, metadataValueType}
  * @returns {Promise<any>}
  */
-export const createAssetMetadata = async ({ databaseId, assetId, metadata }) => {
+export const createAssetMetadata = async ({ databaseId, assetId, metadata }: any) => {
     try {
         if (!databaseId || !assetId || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2255,7 +2304,7 @@ export const createAssetMetadata = async ({ databaseId, assetId, metadata }) => 
 
         console.log("createAssetMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error creating asset metadata:", error);
         throw error;
     }
@@ -2275,7 +2324,7 @@ export const updateAssetMetadata = async ({
     assetId,
     metadata,
     updateType = "update",
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2287,7 +2336,7 @@ export const updateAssetMetadata = async ({
 
         console.log("updateAssetMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error updating asset metadata:", error);
         throw error;
     }
@@ -2301,7 +2350,7 @@ export const updateAssetMetadata = async ({
  * @param {Array} params.metadataKeys - Array of metadata keys to delete
  * @returns {Promise<any>}
  */
-export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys }) => {
+export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys }: any) => {
     try {
         if (!databaseId || !assetId || !metadataKeys) {
             return { success: false, message: "Missing required parameters" };
@@ -2313,7 +2362,7 @@ export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys })
 
         console.log("deleteAssetMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error deleting asset metadata:", error);
         throw error;
     }
@@ -2328,7 +2377,7 @@ export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys })
  * @param {string} params.type - 'metadata' or 'attribute'
  * @returns {Promise<any>}
  */
-export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type }) => {
+export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type }: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !type) {
             return { metadata: [], message: "Missing required parameters" };
@@ -2339,7 +2388,7 @@ export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type })
             `database/${databaseId}/assets/${assetId}/metadata/file`,
             { filePath, type }
         );
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching file metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
     }
@@ -2355,7 +2404,13 @@ export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type })
  * @param {Array} params.metadata - Array of metadata items
  * @returns {Promise<any>}
  */
-export const createFileMetadata = async ({ databaseId, assetId, filePath, type, metadata }) => {
+export const createFileMetadata = async ({
+    databaseId,
+    assetId,
+    filePath,
+    type,
+    metadata,
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !type || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2370,7 +2425,7 @@ export const createFileMetadata = async ({ databaseId, assetId, filePath, type, 
 
         console.log("createFileMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error creating file metadata:", error);
         throw error;
     }
@@ -2394,7 +2449,7 @@ export const updateFileMetadata = async ({
     type,
     metadata,
     updateType = "update",
-}) => {
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !type || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2409,7 +2464,7 @@ export const updateFileMetadata = async ({
 
         console.log("updateFileMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error updating file metadata:", error);
         throw error;
     }
@@ -2425,7 +2480,13 @@ export const updateFileMetadata = async ({
  * @param {Array} params.metadataKeys - Array of metadata keys to delete
  * @returns {Promise<any>}
  */
-export const deleteFileMetadata = async ({ databaseId, assetId, filePath, type, metadataKeys }) => {
+export const deleteFileMetadata = async ({
+    databaseId,
+    assetId,
+    filePath,
+    type,
+    metadataKeys,
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !type || !metadataKeys) {
             return { success: false, message: "Missing required parameters" };
@@ -2440,7 +2501,7 @@ export const deleteFileMetadata = async ({ databaseId, assetId, filePath, type, 
 
         console.log("deleteFileMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error deleting file metadata:", error);
         throw error;
     }
@@ -2452,7 +2513,7 @@ export const deleteFileMetadata = async ({ databaseId, assetId, filePath, type, 
  * @param {string} params.databaseId - Database ID
  * @returns {Promise<any>}
  */
-export const fetchDatabaseMetadata = async ({ databaseId }) => {
+export const fetchDatabaseMetadata = async ({ databaseId }: any) => {
     try {
         if (!databaseId) {
             return { metadata: [], message: "Missing required parameters" };
@@ -2460,7 +2521,7 @@ export const fetchDatabaseMetadata = async ({ databaseId }) => {
 
         // Follow NextToken to aggregate all pages of metadata.
         return await fetchAllMetadataPages(`database/${databaseId}/metadata`);
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error fetching database metadata:", error);
         return { metadata: [], message: error?.message || "Error fetching metadata" };
     }
@@ -2473,7 +2534,7 @@ export const fetchDatabaseMetadata = async ({ databaseId }) => {
  * @param {Array} params.metadata - Array of metadata items
  * @returns {Promise<any>}
  */
-export const createDatabaseMetadata = async ({ databaseId, metadata }) => {
+export const createDatabaseMetadata = async ({ databaseId, metadata }: any) => {
     try {
         if (!databaseId || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2485,7 +2546,7 @@ export const createDatabaseMetadata = async ({ databaseId, metadata }) => {
 
         console.log("createDatabaseMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error creating database metadata:", error);
         throw error;
     }
@@ -2499,7 +2560,11 @@ export const createDatabaseMetadata = async ({ databaseId, metadata }) => {
  * @param {string} params.updateType - 'update' or 'replace_all'
  * @returns {Promise<any>}
  */
-export const updateDatabaseMetadata = async ({ databaseId, metadata, updateType = "update" }) => {
+export const updateDatabaseMetadata = async ({
+    databaseId,
+    metadata,
+    updateType = "update",
+}: any) => {
     try {
         if (!databaseId || !metadata) {
             return { success: false, message: "Missing required parameters" };
@@ -2511,7 +2576,7 @@ export const updateDatabaseMetadata = async ({ databaseId, metadata, updateType 
 
         console.log("updateDatabaseMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error updating database metadata:", error);
         throw error;
     }
@@ -2524,7 +2589,7 @@ export const updateDatabaseMetadata = async ({ databaseId, metadata, updateType 
  * @param {Array} params.metadataKeys - Array of metadata keys to delete
  * @returns {Promise<any>}
  */
-export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }) => {
+export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }: any) => {
     try {
         if (!databaseId || !metadataKeys) {
             return { success: false, message: "Missing required parameters" };
@@ -2536,7 +2601,7 @@ export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }) => {
 
         console.log("deleteDatabaseMetadata response:", response);
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log("Error deleting database metadata:", error);
         throw error;
     }
@@ -2556,13 +2621,13 @@ export const fetchApiKeys = async () => {
             return response;
         }
         return [false, "Failed to fetch API keys"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createApiKey = async (body) => {
+export const createApiKey = async (body: any) => {
     try {
         const response = await apiClient.post("auth/api-keys", { body });
         if (response !== false && response !== undefined) {
@@ -2576,7 +2641,7 @@ export const createApiKey = async (body) => {
             return [true, response];
         }
         return [false, "Failed to create API key"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to create API key";
@@ -2584,7 +2649,7 @@ export const createApiKey = async (body) => {
     }
 };
 
-export const updateApiKey = async ({ apiKeyId, ...body }) => {
+export const updateApiKey = async ({ apiKeyId, ...body }: any) => {
     try {
         const response = await apiClient.put(`auth/api-keys/${apiKeyId}`, { body });
         if (response !== false && response !== undefined) {
@@ -2598,7 +2663,7 @@ export const updateApiKey = async ({ apiKeyId, ...body }) => {
             return [true, response];
         }
         return [false, "Failed to update API key"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to update API key";
@@ -2606,7 +2671,7 @@ export const updateApiKey = async ({ apiKeyId, ...body }) => {
     }
 };
 
-export const deleteApiKey = async ({ apiKeyId }) => {
+export const deleteApiKey = async ({ apiKeyId }: any) => {
     try {
         const response = await apiClient.del(`auth/api-keys/${apiKeyId}`);
         if (response !== false && response !== undefined) {
@@ -2620,7 +2685,7 @@ export const deleteApiKey = async ({ apiKeyId }) => {
             return [true, response];
         }
         return [false, "Failed to delete API key"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to delete API key";
@@ -2646,7 +2711,7 @@ export const fetchUserApiKeys = async () => {
             return response;
         }
         return [false, "Failed to fetch API keys"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to fetch API keys";
@@ -2654,7 +2719,7 @@ export const fetchUserApiKeys = async () => {
     }
 };
 
-export const createUserApiKey = async (body) => {
+export const createUserApiKey = async (body: any) => {
     try {
         const response = await apiClient.post("auth/user/api-keys", { body });
         if (response !== false && response !== undefined) {
@@ -2668,7 +2733,7 @@ export const createUserApiKey = async (body) => {
             return [true, response];
         }
         return [false, "Failed to create API key"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to create API key";
@@ -2676,7 +2741,7 @@ export const createUserApiKey = async (body) => {
     }
 };
 
-export const updateUserApiKey = async ({ apiKeyId, ...body }) => {
+export const updateUserApiKey = async ({ apiKeyId, ...body }: any) => {
     try {
         const response = await apiClient.put(`auth/user/api-keys/${apiKeyId}`, { body });
         if (response !== false && response !== undefined) {
@@ -2690,7 +2755,7 @@ export const updateUserApiKey = async ({ apiKeyId, ...body }) => {
             return [true, response];
         }
         return [false, "Failed to update API key"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to update API key";
@@ -2698,7 +2763,7 @@ export const updateUserApiKey = async ({ apiKeyId, ...body }) => {
     }
 };
 
-export const deleteUserApiKey = async ({ apiKeyId }) => {
+export const deleteUserApiKey = async ({ apiKeyId }: any) => {
     try {
         const response = await apiClient.del(`auth/user/api-keys/${apiKeyId}`);
         if (response !== false && response !== undefined) {
@@ -2712,7 +2777,7 @@ export const deleteUserApiKey = async ({ apiKeyId }) => {
             return [true, response];
         }
         return [false, "Failed to delete API key"];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         const errorMsg =
             error?.response?.data?.message || error?.message || "Failed to delete API key";
@@ -2722,7 +2787,7 @@ export const deleteUserApiKey = async ({ apiKeyId }) => {
 
 // ===== Auth: Constraints =====
 
-export const deleteConstraint = async ({ constraintId }) => {
+export const deleteConstraint = async ({ constraintId }: any) => {
     try {
         const response = await apiClient.del(`auth/constraints/${constraintId}`, {});
         if (
@@ -2732,19 +2797,19 @@ export const deleteConstraint = async ({ constraintId }) => {
             return [false, response.message];
         }
         return [true, response.message];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createConstraint = async ({ constraintId, ...body }) => {
+export const createConstraint = async ({ constraintId, ...body }: any) => {
     return apiClient.post(`auth/constraints/${constraintId}`, { body: { constraintId, ...body } });
 };
 
 // ===== Auth: Roles =====
 
-export const deleteRole = async ({ roleName }) => {
+export const deleteRole = async ({ roleName }: any) => {
     try {
         const response = await apiClient.del(`roles/${roleName}`, {});
         if (
@@ -2754,23 +2819,23 @@ export const deleteRole = async ({ roleName }) => {
             return [false, response.message];
         }
         return [true, response.message];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createRole = async (body) => {
+export const createRole = async (body: any) => {
     return apiClient.post("roles", { body });
 };
 
-export const updateRole = async (body) => {
+export const updateRole = async (body: any) => {
     return apiClient.put("roles", { body });
 };
 
 // ===== Auth: User Roles =====
 
-export const deleteUserRole = async (body) => {
+export const deleteUserRole = async (body: any) => {
     try {
         const response = await apiClient.del("user-roles", { body });
         if (
@@ -2780,23 +2845,23 @@ export const deleteUserRole = async (body) => {
             return [false, response.message];
         }
         return [true, response.message];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createUserRole = async (body) => {
+export const createUserRole = async (body: any) => {
     return apiClient.post("user-roles", { body });
 };
 
-export const updateUserRole = async (body) => {
+export const updateUserRole = async (body: any) => {
     return apiClient.put("user-roles", { body });
 };
 
 // ===== Tags =====
 
-export const deleteTag = async ({ tagName }) => {
+export const deleteTag = async ({ tagName }: any) => {
     try {
         const response = await apiClient.del(`tags/${tagName}`, {});
         if (
@@ -2806,13 +2871,13 @@ export const deleteTag = async ({ tagName }) => {
             return [false, response.message];
         }
         return [true, response.message];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const deleteTagType = async ({ tagTypeName }) => {
+export const deleteTagType = async ({ tagTypeName }: any) => {
     try {
         const response = await apiClient.del(`tag-types/${tagTypeName}`, {});
         if (
@@ -2822,31 +2887,31 @@ export const deleteTagType = async ({ tagTypeName }) => {
             return [false, response.message];
         }
         return [true, response.message];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createTag = async (body) => {
+export const createTag = async (body: any) => {
     return apiClient.post("tags", { body });
 };
 
-export const updateTag = async (body) => {
+export const updateTag = async (body: any) => {
     return apiClient.put("tags", { body });
 };
 
-export const createTagType = async (body) => {
+export const createTagType = async (body: any) => {
     return apiClient.post("tag-types", { body });
 };
 
-export const updateTagType = async (body) => {
+export const updateTagType = async (body: any) => {
     return apiClient.put("tag-types", { body });
 };
 
 // ===== Subscriptions =====
 
-export const deleteSubscription = async (body) => {
+export const deleteSubscription = async (body: any) => {
     try {
         const response = await apiClient.del("subscriptions", { body });
         if (
@@ -2856,21 +2921,21 @@ export const deleteSubscription = async (body) => {
             return [false, response.message];
         }
         return [true, response.message];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createSubscription = async (body) => {
+export const createSubscription = async (body: any) => {
     return apiClient.post("subscriptions", { body });
 };
 
-export const updateSubscription = async (body) => {
+export const updateSubscription = async (body: any) => {
     return apiClient.put("subscriptions", { body });
 };
 
-export const checkSubscription = async (body) => {
+export const checkSubscription = async (body: any) => {
     try {
         const response = await apiClient.post("check-subscription", { body });
         if (response.message) {
@@ -2884,13 +2949,13 @@ export const checkSubscription = async (body) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const unsubscribeFromAsset = async (body) => {
+export const unsubscribeFromAsset = async (body: any) => {
     try {
         const response = await apiClient.del("unsubscribe", { body });
         if (response.message) {
@@ -2904,13 +2969,13 @@ export const unsubscribeFromAsset = async (body) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createComment = async ({ assetId, assetVersionIdAndCommentId, body }) => {
+export const createComment = async ({ assetId, assetVersionIdAndCommentId, body }: any) => {
     try {
         const response = await apiClient.post(
             `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
@@ -2927,13 +2992,13 @@ export const createComment = async ({ assetId, assetVersionIdAndCommentId, body 
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const updateComment = async ({ assetId, assetVersionIdAndCommentId, body }) => {
+export const updateComment = async ({ assetId, assetVersionIdAndCommentId, body }: any) => {
     try {
         const response = await apiClient.put(
             `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
@@ -2950,13 +3015,13 @@ export const updateComment = async ({ assetId, assetVersionIdAndCommentId, body 
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const createAssetLink = async (body) => {
+export const createAssetLink = async (body: any) => {
     try {
         const response = await apiClient.post("asset-links", { body });
         if (response.message) {
@@ -2970,13 +3035,13 @@ export const createAssetLink = async (body) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const savePipeline = async (body) => {
+export const savePipeline = async (body: any) => {
     try {
         const response = await apiClient.put("pipelines", { body });
         if (response.message) {
@@ -2990,13 +3055,13 @@ export const savePipeline = async (body) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const unarchiveAsset = async ({ databaseId, assetId, body }) => {
+export const unarchiveAsset = async ({ databaseId, assetId, body }: any) => {
     try {
         const response = await apiClient.put(
             `database/${databaseId}/assets/${assetId}/unarchiveAsset`,
@@ -3013,13 +3078,13 @@ export const unarchiveAsset = async ({ databaseId, assetId, body }) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const archiveAssetDelete = async ({ databaseId, assetId, body }) => {
+export const archiveAssetDelete = async ({ databaseId, assetId, body }: any) => {
     try {
         const response = await apiClient.del(
             `database/${databaseId}/assets/${assetId}/archiveAsset`,
@@ -3036,13 +3101,13 @@ export const archiveAssetDelete = async ({ databaseId, assetId, body }) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const deleteAssetPermanentDelete = async ({ databaseId, assetId, body }) => {
+export const deleteAssetPermanentDelete = async ({ databaseId, assetId, body }: any) => {
     try {
         const response = await apiClient.del(
             `database/${databaseId}/assets/${assetId}/deleteAsset`,
@@ -3059,13 +3124,13 @@ export const deleteAssetPermanentDelete = async ({ databaseId, assetId, body }) 
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const archiveFile = async ({ databaseId, assetId, body }) => {
+export const archiveFile = async ({ databaseId, assetId, body }: any) => {
     try {
         const response = await apiClient.del(
             `database/${databaseId}/assets/${assetId}/archiveFile`,
@@ -3082,13 +3147,13 @@ export const archiveFile = async ({ databaseId, assetId, body }) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const deleteFilePermanent = async ({ databaseId, assetId, body }) => {
+export const deleteFilePermanent = async ({ databaseId, assetId, body }: any) => {
     try {
         const response = await apiClient.del(
             `database/${databaseId}/assets/${assetId}/deleteFile`,
@@ -3105,33 +3170,33 @@ export const deleteFilePermanent = async ({ databaseId, assetId, body }) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const searchAssets = async (body) => {
+export const searchAssets = async (body: any) => {
     try {
         const response = await apiClient.post("search", {
             "Content-type": "application/json",
             body,
-        });
+        } as any);
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const searchAssetsSimple = async (body) => {
+export const searchAssetsSimple = async (body: any) => {
     try {
         const response = await apiClient.post("search/simple", {
             "Content-type": "application/json",
             body,
-        });
+        } as any);
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
@@ -3141,13 +3206,13 @@ export const fetchSearchMappings = async () => {
     try {
         const response = await apiClient.get("search", {});
         return response;
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return false;
     }
 };
 
-export const ingestAsset = async (body) => {
+export const ingestAsset = async (body: any) => {
     try {
         const response = await apiClient.post("ingest-asset", { body });
         if (response.message) {
@@ -3161,20 +3226,20 @@ export const ingestAsset = async (body) => {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }
 };
 
-export const fetchLoginProfile = async ({ username }) => {
+export const fetchLoginProfile = async ({ username }: any) => {
     try {
         const response = await apiClient.post(`auth/loginProfile/${username}`);
         if (response.message) {
             return [true, response.message];
         }
         return [true, response];
-    } catch (error) {
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }

@@ -5,4 +5,4 @@
 
 import { createContext } from "react";
 
-export const WorkflowContext = createContext();
+export const WorkflowContext = createContext<any>(undefined);

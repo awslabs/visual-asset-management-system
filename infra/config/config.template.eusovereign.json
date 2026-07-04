@@ -10,6 +10,10 @@
         "assetBuckets": {
             "createNewBucket": true,
             "defaultNewBucketSyncDatabaseId": "default",
+            "presignedUrlNetworkRestrictions": {
+                "allowedIpRanges": [],
+                "allowedVpceIds": []
+            },
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",

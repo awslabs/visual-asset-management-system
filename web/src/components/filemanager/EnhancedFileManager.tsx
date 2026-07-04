@@ -249,7 +249,7 @@ export function EnhancedFileManager({
             const phase = basic ? "basic-loading" : "detailed-loading";
 
             try {
-                const stream = fetchAssetS3FilesStreaming({
+                const stream = (fetchAssetS3FilesStreaming as any)({
                     databaseId,
                     assetId,
                     includeArchived: showArchived,

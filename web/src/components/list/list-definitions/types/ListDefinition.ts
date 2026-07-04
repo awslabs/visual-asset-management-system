@@ -8,7 +8,26 @@ import ColumnDefinition from "./ColumnDefinition";
 import FilterDefinition from "./FilterDefinition";
 import { deleteElement } from "../../../../services/APIService";
 
-export default function ListDefinition(props) {
+interface ListDefinitionType {
+    columnDefinitions: any;
+    visibleColumns: any;
+    filterColumns: any;
+    pluralName: any;
+    pluralNameTitleCase: any;
+    singularNameTitleCase: any;
+    elementId: any;
+    deleteRoute: any;
+    createAction: any;
+    deleteFunction: any;
+}
+
+interface ListDefinitionConstructor {
+    new (props: any): ListDefinitionType;
+    (props: any): void;
+    propTypes: any;
+}
+
+const ListDefinition = function (this: any, props: any) {
     const {
         columnDefinitions,
         visibleColumns,
@@ -33,7 +52,7 @@ export default function ListDefinition(props) {
     if (props.deleteFunction !== null && props.deleteFunction !== undefined) {
         this.deleteFunction = props.deleteFunction;
     } else {
-        this.deleteFunction = async function (item) {
+        this.deleteFunction = async function (item: any) {
             return deleteElement({
                 deleteRoute: deleteRoute,
                 elementId: elementId,
@@ -41,12 +60,14 @@ export default function ListDefinition(props) {
             });
         };
     }
-}
+} as unknown as ListDefinitionConstructor;
+
+export default ListDefinition;
 
 ListDefinition.propTypes = {
-    columnDefinitions: PropTypes.arrayOf(ColumnDefinition).isRequired,
+    columnDefinitions: PropTypes.arrayOf(ColumnDefinition as any).isRequired,
     visibleColumns: PropTypes.arrayOf(PropTypes.string).isRequired,
-    filterColumns: PropTypes.arrayOf(FilterDefinition).isRequired,
+    filterColumns: PropTypes.arrayOf(FilterDefinition as any).isRequired,
     pluralName: PropTypes.string.isRequired,
     pluralNameTitleCase: PropTypes.string.isRequired,
     singularNameTitleCase: PropTypes.string,

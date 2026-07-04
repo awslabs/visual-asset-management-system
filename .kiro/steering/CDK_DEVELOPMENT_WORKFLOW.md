@@ -34,6 +34,9 @@ infra/
 │   │   └── featureEnabled/   # Dynamic feature switch management
 │   ├── constructs/           # Reusable CDK constructs
 │   ├── helper/               # Service helpers and utility functions
+│   │   ├── const.ts          # Partition-aware service endpoints
+│   │   ├── s3AssetBuckets.ts # Global asset bucket registry
+│   │   └── security.ts       # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions
 │   ├── aspects/              # CDK aspects for cross-cutting concerns
 │   └── artefacts/            # Build artifacts and templates
 ├── test/                     # CDK unit and integration tests
@@ -244,6 +247,11 @@ export interface ConfigPublic {
                 setting2: boolean;
             };
         };
+        // assetBuckets: createNewBucket, defaultNewBucketSyncDatabaseId,
+        // externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId,
+        // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
+        // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
+        // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
     };
 }
 

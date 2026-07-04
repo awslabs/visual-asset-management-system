@@ -35,7 +35,7 @@ export const PipelineListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "pipelineId",
             header: "Name",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 return <>{props.children}</>;
             },
             sortingField: "pipelineId",
@@ -43,7 +43,7 @@ export const PipelineListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "databaseId",
             header: Synonyms.Database,
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>
@@ -54,7 +54,7 @@ export const PipelineListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description",
-            cellWrapper: (props) => (
+            cellWrapper: (props: any) => (
                 <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
                     {props.children}
                 </span>
@@ -64,25 +64,25 @@ export const PipelineListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "pipelineType",
             header: "Type",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "pipelineType",
         }),
         new ColumnDefinition({
             id: "pipelineExecutionType",
             header: "Execution Type",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "pipelineExecutionType",
         }),
         new ColumnDefinition({
             id: "assetType",
             header: "Input",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "assetType",
         }),
         new ColumnDefinition({
             id: "outputType",
             header: "Output",
-            cellWrapper: (props) => <>{props.children}</>,
+            cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "outputType",
         }),
     ],

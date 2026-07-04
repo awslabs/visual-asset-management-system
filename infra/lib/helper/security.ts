@@ -287,6 +287,54 @@ export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
     }
 }
 
+/**
+ * Adds a bucket policy Deny statement restricting where S3 presigned URLs for the
+ * bucket may be used from (allowed IP CIDR ranges and/or VPC endpoint IDs). The
+ * statement is scoped to query-string-authenticated requests (s3:authType =
+ * REST-QUERY-STRING), so SDK header-authenticated calls from Lambda functions and
+ * pipeline containers are never affected. No-op when no restrictions are configured.
+ * Only applies to VAMS-owned buckets; imported buckets do not receive resource
+ * policies from VAMS (the bucket owner applies an equivalent policy — see the
+ * external S3 setup documentation).
+ */
+export function addPresignedUrlNetworkRestrictionsToBucketPolicy(
+    bucket: s3.IBucket,
+    restrictions: Config.ConfigPresignedUrlNetworkRestrictions | undefined
+): void {
+    const allowedIpRanges = restrictions?.allowedIpRanges || [];
+    const allowedVpceIds = restrictions?.allowedVpceIds || [];
+    if (allowedIpRanges.length == 0 && allowedVpceIds.length == 0) {
+        return;
+    }
+
+    // Conditions AND together: the Deny fires only for a presigned request outside
+    // every allowed CIDR AND not through an allowed VPC endpoint (interface or
+    // gateway), exempting AWS-service forwarded calls. IP and VPCE conditions are
+    // included only when configured so an unconfigured dimension does not deny its
+    // entire request class.
+    const conditions: { [operator: string]: { [key: string]: string | string[] } } = {
+        StringEquals: { "s3:authType": "REST-QUERY-STRING" },
+        BoolIfExists: { "aws:ViaAWSService": "false" },
+    };
+    if (allowedIpRanges.length > 0) {
+        conditions["NotIpAddressIfExists"] = { "aws:SourceIp": allowedIpRanges };
+    }
+    if (allowedVpceIds.length > 0) {
+        conditions["StringNotEqualsIfExists"] = { "aws:SourceVpce": allowedVpceIds };
+    }
+
+    bucket.addToResourcePolicy(
+        new iam.PolicyStatement({
+            sid: "DenyPresignedUrlOutsideAllowedNetworks",
+            effect: iam.Effect.DENY,
+            principals: [new iam.AnyPrincipal()],
+            actions: ["s3:*"],
+            resources: [`${bucket.bucketArn}/*`],
+            conditions: conditions,
+        })
+    );
+}
+
 export function kmsKeyLambdaPermissionAddToResourcePolicy(
     lambdaFunction: lambda.IFunction,
     kmsKey?: kms.IKey

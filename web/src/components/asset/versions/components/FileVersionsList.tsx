@@ -257,7 +257,7 @@ export const FileVersionsList: React.FC = () => {
                 databaseId: databaseId!,
                 key: file.relativeKey,
                 versionId: file.versionId,
-                assetVersionId: selectedVersion?.Version || undefined,
+                assetVersionId: (selectedVersion?.Version || undefined) as any,
                 downloadType: "assetFile",
             });
 

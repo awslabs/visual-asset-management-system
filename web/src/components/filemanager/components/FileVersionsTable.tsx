@@ -193,13 +193,13 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // Handle download version
     const handleDownloadVersion = async (versionId: string) => {
         try {
-            const [success, downloadUrl] = await downloadAsset({
+            const [success, downloadUrl] = (await downloadAsset({
                 databaseId,
                 assetId,
                 key: filePath,
                 versionId: versionId,
                 downloadType: "assetFile",
-            });
+            })) as [boolean, any];
 
             if (success && downloadUrl) {
                 const link = document.createElement("a");

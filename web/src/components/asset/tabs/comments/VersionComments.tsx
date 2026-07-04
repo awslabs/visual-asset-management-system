@@ -39,6 +39,10 @@ const commentSanitizeOptions: sanitizeHtml.IOptions = {
     allowedAttributes: {
         a: ["href", "target", "rel"],
     },
+    allowedSchemes: ["http", "https", "mailto"],
+    transformTags: {
+        a: sanitizeHtml.simpleTransform("a", { rel: "noopener noreferrer" }, true),
+    },
 };
 
 // Define the type for showMessage prop

@@ -22,7 +22,7 @@ import {
 import { EmptyState } from "../../common/common-components";
 import ListDefinition from "./list-definitions/types/ListDefinition";
 
-export default function TableList(props) {
+export default function TableList(props: any) {
     //props
     const {
         allItems,
@@ -48,12 +48,12 @@ export default function TableList(props) {
         singularNameTitleCase,
         deleteFunction,
     } = listDefinition;
-    const filteredVisibleColumns = visibleColumns.filter((columnName) => {
+    const filteredVisibleColumns = visibleColumns.filter((columnName: any) => {
         if (!databaseId) return true;
         if (columnName === "databaseId") return false;
         return true;
     });
-    const filteredFilterColumns = filterColumns.filter((filterColumn) => {
+    const filteredFilterColumns = filterColumns.filter((filterColumn: any) => {
         if (!databaseId) return true;
         if (filterColumn.name === "databaseId") return false;
         return true;
@@ -62,30 +62,30 @@ export default function TableList(props) {
     const [editOpen, setEditOpen] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
 
-    const [activeFilters, setActiveFilters] = useState(
-        filteredFilterColumns.reduce((acc, cur) => {
+    const [activeFilters, setActiveFilters] = useState<any>(
+        filteredFilterColumns.reduce((acc: any, cur: any) => {
             acc[cur.name] = null;
             return acc;
         }, {})
     );
     const [deleting, setDeleting] = useState(false);
-    const [deleteResult, setDeleteResult] = useState({
+    const [deleteResult, setDeleteResult] = useState<any>({
         result: "",
         items: [],
     });
     //private functions
-    const getMatchesCountText = (items) => {
+    const getMatchesCountText = (items: any) => {
         return `Found ${items} ${pluralName}.`;
     };
-    const highlightMatches = (text, match = "") => {
+    const highlightMatches = (text: any, match: any = ""): any => {
         let newText = text + "";
         if (match !== "") {
-            match = match.split(" ").map((word) => word.toLowerCase());
+            match = match.split(" ").map((word: any) => word.toLowerCase());
             for (let i = 0; i < match.length; i++) {
                 const regEx = new RegExp(match[i], "ig");
-                newText = newText.replaceAll(regEx, ($replace) => `||${$replace}||`);
+                newText = newText.replaceAll(regEx, ($replace: any) => `||${$replace}||`);
             }
-            return newText.split("||").map((segment, i) => {
+            return newText.split("||").map((segment: any, i: number) => {
                 if (match.includes(segment.toLowerCase())) {
                     return <strong key={i}>{segment}</strong>;
                 }
@@ -117,7 +117,7 @@ export default function TableList(props) {
                         }
                     />
                 ),
-                filteringFunction: (item, filteringText) => {
+                filteringFunction: (item: any, filteringText: string) => {
                     // First check active filters
                     for (let i = 0; i < filteredFilterColumns.length; i++) {
                         const filterColumnName = filteredFilterColumns[i].name;
@@ -161,13 +161,13 @@ export default function TableList(props) {
         }
     }, [collectionProps.selectedItems, onSelectionChange]);
 
-    const handleFilterSelected = (prop, value) => {
+    const handleFilterSelected = (prop: any, value: any) => {
         const newActiveFilters = Object.assign({}, activeFilters);
         newActiveFilters[prop] = value;
         setActiveFilters(newActiveFilters);
     };
 
-    const handleDeleteElements = async (selected) => {
+    const handleDeleteElements = async (selected: any) => {
         setDeleting(true);
         for (let i = 0; i < selected.length; i++) {
             const result = await deleteFunction(selected[i]);
@@ -205,11 +205,11 @@ export default function TableList(props) {
         }
     };
 
-    function DeleteModal({ selectedItems, onCancel, onOk }) {
+    function DeleteModal({ selectedItems, onCancel, onOk }: any) {
         const length = selectedItems.length;
         const title = length > 1 ? pluralNameTitleCase : singularNameTitleCase;
         const shouldHideCancelButton = pluralName === "tag types";
-        const itemNames = [];
+        const itemNames: any[] = [];
         if (pluralName === "tag types") {
             for (let i = 0; i < length; i++) {
                 itemNames[i] = selectedItems[i]?.tagTypeName || "unknown";
@@ -314,7 +314,8 @@ export default function TableList(props) {
                                 {editEnabled && (
                                     <Button
                                         disabled={
-                                            deleting || collectionProps.selectedItems?.length !== 1
+                                            deleting ||
+                                            (collectionProps.selectedItems as any)?.length !== 1
                                         }
                                         onClick={() => {
                                             setEditOpen(true);
@@ -326,7 +327,8 @@ export default function TableList(props) {
                                 {!hideDeleteButton && (
                                     <Button
                                         disabled={
-                                            deleting || collectionProps.selectedItems.length === 0
+                                            deleting ||
+                                            (collectionProps.selectedItems as any).length === 0
                                         }
                                         onClick={() => {
                                             setShowDeleteModal(true);
@@ -343,11 +345,11 @@ export default function TableList(props) {
                     </Header>
                 }
                 columnDefinitions={columnDefinitions.map(
-                    ({ id, header, CellWrapper, sortingField }) => {
+                    ({ id, header, CellWrapper, sortingField }: any) => {
                         return {
                             id,
                             header,
-                            cell: (e) => {
+                            cell: (e: any) => {
                                 const value = e[id];
                                 // Don't pass null or undefined to highlightMatches
                                 if (value === null || value === undefined) {
@@ -361,9 +363,9 @@ export default function TableList(props) {
                                                 const textFilterCaptureElement =
                                                     document.getElementById("textFilterCapture");
                                                 const textFilterInputElement =
-                                                    textFilterCaptureElement.querySelectorAll(
+                                                    textFilterCaptureElement!.querySelectorAll(
                                                         ":scope input"
-                                                    )[0];
+                                                    )[0] as HTMLInputElement;
                                                 return textFilterInputElement?.value;
                                             })()
                                         )}
@@ -429,7 +431,7 @@ export default function TableList(props) {
                                     flexWrap: "wrap",
                                 }}
                             >
-                                {filteredFilterColumns.map((filterColumn, i) => {
+                                {filteredFilterColumns.map((filterColumn: any, i: number) => {
                                     const selectedValue = activeFilters[filterColumn.name];
                                     if (
                                         pluralName !== "tag types" &&
@@ -463,37 +465,43 @@ export default function TableList(props) {
                                                         detail?.selectedOption?.value
                                                     );
                                                 }}
-                                                options={[
-                                                    {
-                                                        label: <em>all</em>,
-                                                        value: null,
-                                                    },
-                                                ].concat(
-                                                    [
-                                                        ...new Set(
-                                                            allItems.map(
-                                                                (row) => row[filterColumn.name]
+                                                options={
+                                                    (
+                                                        [
+                                                            {
+                                                                label: <em>all</em>,
+                                                                value: null,
+                                                            },
+                                                        ] as any
+                                                    ).concat(
+                                                        [
+                                                            ...new Set(
+                                                                allItems.map(
+                                                                    (row: any) =>
+                                                                        row[filterColumn.name]
+                                                                )
+                                                            ),
+                                                        ]
+                                                            .filter(
+                                                                (v: any) =>
+                                                                    v !== undefined && v !== null
                                                             )
-                                                        ),
-                                                    ]
-                                                        .filter(
-                                                            (v) => v !== undefined && v !== null
-                                                        )
-                                                        .map((cellValue) => {
-                                                            const displayLabel =
-                                                                typeof cellValue === "boolean"
-                                                                    ? cellValue
-                                                                        ? "True"
-                                                                        : "False"
-                                                                    : cellValue === ""
-                                                                    ? "(none)"
-                                                                    : String(cellValue);
-                                                            return {
-                                                                label: displayLabel,
-                                                                value: cellValue,
-                                                            };
-                                                        })
-                                                )}
+                                                            .map((cellValue: any) => {
+                                                                const displayLabel =
+                                                                    typeof cellValue === "boolean"
+                                                                        ? cellValue
+                                                                            ? "True"
+                                                                            : "False"
+                                                                        : cellValue === ""
+                                                                        ? "(none)"
+                                                                        : String(cellValue);
+                                                                return {
+                                                                    label: displayLabel,
+                                                                    value: cellValue,
+                                                                };
+                                                            })
+                                                    ) as any
+                                                }
                                                 placeholder={filterColumn.placeholder}
                                                 selectedAriaLabel="Selected"
                                             />
@@ -513,7 +521,7 @@ export default function TableList(props) {
                 }}
             />
 
-            {UpdateSelectedElement && collectionProps.selectedItems?.length === 1 && (
+            {UpdateSelectedElement && (collectionProps.selectedItems as any)?.length === 1 && (
                 <UpdateSelectedElement
                     open={editOpen}
                     setOpen={setEditOpen}
@@ -543,7 +551,7 @@ TableList.propTypes = {
     allItems: PropTypes.array.isRequired,
     loading: PropTypes.bool.isRequired,
     setReload: PropTypes.func.isRequired,
-    listDefinition: PropTypes.instanceOf(ListDefinition).isRequired,
+    listDefinition: PropTypes.instanceOf(ListDefinition as any).isRequired,
     databaseId: PropTypes.string,
     editEnabled: PropTypes.bool,
     UpdateSelectedElement: PropTypes.func,

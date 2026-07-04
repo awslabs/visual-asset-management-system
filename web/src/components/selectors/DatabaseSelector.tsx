@@ -7,10 +7,10 @@ import React, { useEffect, useState } from "react";
 import { fetchAllDatabases } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 
-const DatabaseSelector = (props) => {
+const DatabaseSelector = (props: any) => {
     const { showGlobal = false, ...restProps } = props;
     const [reload, setReload] = useState(true);
-    const [allItems, setAllItems] = useState([]);
+    const [allItems, setAllItems] = useState<any[]>([]);
 
     useEffect(() => {
         const getData = async () => {
@@ -27,15 +27,15 @@ const DatabaseSelector = (props) => {
 
     // Create a map of databaseId to full database object for easy lookup
     const databaseMap = React.useMemo(() => {
-        const map = {};
-        allItems.forEach((item) => {
+        const map: { [key: string]: any } = {};
+        allItems.forEach((item: any) => {
             map[item.databaseId] = item;
         });
         return map;
     }, [allItems]);
 
     // Wrap the onChange to include the full database object (backwards compatible)
-    const handleChange = (event) => {
+    const handleChange = (event: any) => {
         if (props.onChange) {
             // For backwards compatibility, check if the consumer expects the enhanced event
             // If selectedDatabase is accessed, provide it; otherwise, pass through as-is

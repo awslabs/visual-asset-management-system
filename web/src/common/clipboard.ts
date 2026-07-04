@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export function copyToClipboard(text) {
+export function copyToClipboard(text: string) {
     try {
         // Try to use the modern clipboard API.
         // Some browsers only allow this API in response to a user initiated event.
@@ -11,7 +11,7 @@ export function copyToClipboard(text) {
     } catch {
         // Fall back to using a textarea. Making it asynchronous to align with clipboard API
         // https://stackoverflow.com/a/30810322/898577
-        return new Promise((resolve, reject) => {
+        return new Promise<void>((resolve, reject) => {
             const activeElement = document.activeElement;
             const textArea = document.createElement("textarea");
             textArea.value = text;
@@ -27,7 +27,7 @@ export function copyToClipboard(text) {
                 reject();
             } finally {
                 document.body.removeChild(textArea);
-                activeElement.focus();
+                (activeElement as HTMLElement)!.focus();
             }
         });
     }

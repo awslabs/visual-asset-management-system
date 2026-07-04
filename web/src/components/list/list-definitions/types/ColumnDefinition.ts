@@ -4,13 +4,28 @@
  */
 import PropTypes from "prop-types";
 
-export default function ColumnDefinition(props) {
+interface ColumnDefinitionType {
+    id: any;
+    header: any;
+    CellWrapper: any;
+    sortingField: any;
+}
+
+interface ColumnDefinitionConstructor {
+    new (props: any): ColumnDefinitionType;
+    (props: any): void;
+    propTypes: any;
+}
+
+const ColumnDefinition = function (this: any, props: any) {
     const { id, header, cellWrapper, sortingField } = props;
     this.id = id;
     this.header = header;
     this.CellWrapper = cellWrapper;
     this.sortingField = sortingField;
-}
+} as unknown as ColumnDefinitionConstructor;
+
+export default ColumnDefinition;
 
 ColumnDefinition.propTypes = {
     id: PropTypes.string.isRequired,

@@ -52,7 +52,7 @@ infra/
       iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring (app.iamRoleConfig)
       lambda.ts                 # Layer bundling commands (poetry-based)
       s3AssetBuckets.ts         # Global asset bucket registry (shared across stacks)
-      security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
+      security.ts               # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions, audit logging setup
       service-helper.ts         # ServiceFormatter class: ARN(), Endpoint, Principal
     lambdaBuilder/              # ~17 builder files, ~40+ function builders
       assetFunctions.ts
@@ -294,7 +294,7 @@ The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetCo
 The `ConfigPublic` interface (~200 lines in `config/config.ts`) defines all deployment parameters. Key sections:
 
 -   `env`: account, region, partition, coreStackName
--   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets (each entry: bucketArn, baseAssetsPrefix, defaultSyncDatabaseId, and optional bucketAccountId / bucketRegion / bucketKmsKeyArn for cross-account + SSE-KMS buckets). A bucketArn may be registered multiple times under non-overlapping prefixes (validated by `validateExternalAssetBuckets()` in `getConfig()`, which rejects overlapping prefixes and inconsistent per-bucket attributes); `storageBuilder` imports each unique ARN once so the per-prefix event notifications merge into a single S3 notification configuration.
+-   `app.assetBuckets`: createNewBucket, defaultNewBucketSyncDatabaseId, externalAssetBuckets (each entry: bucketArn, baseAssetsPrefix, defaultSyncDatabaseId, and optional bucketAccountId / bucketRegion / bucketKmsKeyArn for cross-account + SSE-KMS buckets), presignedUrlNetworkRestrictions (allowedIpRanges / allowedVpceIds; empty lists = no restriction; mutually exclusive — `getConfig()` rejects setting both). Non-empty restriction lists add a bucket policy Deny (scoped to presigned `s3:authType=REST-QUERY-STRING` requests) to the created asset bucket and auxiliary bucket via `addPresignedUrlNetworkRestrictionsToBucketPolicy()` in `helper/security.ts`; imported external buckets are not policy-managed by VAMS (the bucket owner applies the equivalent statement — see external-s3-setup docs). A bucketArn may be registered multiple times under non-overlapping prefixes (validated by `validateExternalAssetBuckets()` in `getConfig()`, which rejects overlapping prefixes and inconsistent per-bucket attributes); `storageBuilder` imports each unique ARN once so the per-prefix event notifications merge into a single S3 notification configuration.
 -   `app.useGlobalVpc`: enabled, useForAllLambdas, addVpcEndpoints, optionalExternalVpcId, vpcCidrRange
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn

@@ -7,10 +7,10 @@ import React, { useEffect, useState } from "react";
 import { fetchDatabasePipelines, fetchAllPipelines } from "../../services/APIService";
 import { Select, Multiselect } from "@cloudscape-design/components";
 
-const PipelineSelector = (props) => {
+const PipelineSelector = (props: any) => {
     const { databaseId, isMulti } = props;
     const [reload, setReload] = useState(true);
-    const [allItems, setAllItems] = useState([]);
+    const [allItems, setAllItems] = useState<any[]>([]);
 
     useEffect(() => {
         const getData = async () => {
@@ -34,7 +34,7 @@ const PipelineSelector = (props) => {
         }
     }, [reload, databaseId]);
 
-    const SelectControl = (props) => {
+    const SelectControl = (props: any) => {
         const { isMulti } = props;
         if (isMulti) {
             return <Multiselect {...props} />;
@@ -48,7 +48,7 @@ const PipelineSelector = (props) => {
                 <SelectControl
                     {...props}
                     isMulti={isMulti}
-                    options={allItems.map((item) => {
+                    options={allItems.map((item: any) => {
                         return {
                             label: item.pipelineId,
                             value: item.pipelineId,

@@ -33,7 +33,7 @@ import { usePageTitle } from "../../hooks/usePageTitle";
 
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 
-export default function CreateUpdateWorkflow(props) {
+export default function CreateUpdateWorkflow(props: any) {
     // Get parameters from URL
     const { databaseId: urlDatabaseId, workflowId } = useParams();
 
@@ -94,20 +94,22 @@ export default function CreateUpdateWorkflow(props) {
                     setAutoTriggerExtensions("");
                 }
 
-                const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
-                    return {
-                        value: item.name,
-                        databaseId: item.databaseId,
-                        pipelineType: item.pipelineType,
-                        pipelineExecutionType: item.pipelineExecutionType,
-                        outputType: item.outputType,
-                        waitForCallback: item.waitForCallback,
-                        taskTimeout: item.taskTimeout,
-                        taskHeartbeatTimeout: item.taskHeartbeatTimeout,
-                        userProvidedResource: item.userProvidedResource,
-                        inputParameters: item.inputParameters,
-                    };
-                });
+                const loadedPipelines = currentItem?.specifiedPipelines?.functions.map(
+                    (item: any) => {
+                        return {
+                            value: item.name,
+                            databaseId: item.databaseId,
+                            pipelineType: item.pipelineType,
+                            pipelineExecutionType: item.pipelineExecutionType,
+                            outputType: item.outputType,
+                            waitForCallback: item.waitForCallback,
+                            taskTimeout: item.taskTimeout,
+                            taskHeartbeatTimeout: item.taskHeartbeatTimeout,
+                            userProvidedResource: item.userProvidedResource,
+                            inputParameters: item.inputParameters,
+                        };
+                    }
+                );
                 setLoadedWorkflowPipelines(loadedPipelines);
                 setWorkflowPipelines(loadedPipelines);
                 setLoaded(true);
@@ -136,7 +138,7 @@ export default function CreateUpdateWorkflow(props) {
         }
     }, [activeTab]);
 
-    const validateAutoTriggerExtensions = (extensions) => {
+    const validateAutoTriggerExtensions = (extensions: string) => {
         if (!extensions || extensions.trim() === "") {
             return false;
         }
@@ -174,7 +176,7 @@ export default function CreateUpdateWorkflow(props) {
         setOpenCreatePipeline(true);
     };
 
-    const handleSaveWorkflow = async (event) => {
+    const handleSaveWorkflow = async (event: any) => {
         event.preventDefault();
         setSaving(true);
         // reset all workflow-related error messages when either save or run workflow is executed
@@ -206,7 +208,7 @@ export default function CreateUpdateWorkflow(props) {
             setPipelinesError("Must select pipelines.");
             setActiveTab("pipelines");
         } else {
-            const functions = workflowPipelines.map((item) => {
+            const functions = workflowPipelines.map((item: any) => {
                 return {
                     name: item.value,
                     databaseId: item.databaseId,
@@ -306,10 +308,10 @@ export default function CreateUpdateWorkflow(props) {
                         items={[
                             { text: Synonyms.Databases, href: "#/databases/" },
                             {
-                                text: databaseId,
+                                text: databaseId as string,
                                 href: "#/databases/" + databaseId + "/workflows/",
                             },
-                            { text: "Create Workflow" },
+                            { text: "Create Workflow" } as any,
                         ]}
                         ariaLabel="Breadcrumbs"
                     />
@@ -371,8 +373,10 @@ export default function CreateUpdateWorkflow(props) {
                                                 id: "details",
                                                 content: (
                                                     <Form
-                                                        errorText={createUpdateWorkflowError}
-                                                        style={{ padding: "5px 20px" }}
+                                                        {...({
+                                                            errorText: createUpdateWorkflowError,
+                                                            style: { padding: "5px 20px" },
+                                                        } as any)}
                                                     >
                                                         <SpaceBetween
                                                             direction="vertical"
@@ -388,7 +392,7 @@ export default function CreateUpdateWorkflow(props) {
                                                                 <Input
                                                                     placeholder="Workflow Name"
                                                                     name="workflowId"
-                                                                    value={workflowIdNew}
+                                                                    value={workflowIdNew as string}
                                                                     onChange={(event) =>
                                                                         setWorkflowIDNew(
                                                                             event.detail.value

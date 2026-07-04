@@ -84,7 +84,7 @@ export default function CreateTag({
     const [formState, setFormState] = useState<TagFields>({
         ...initState,
     });
-    const [selectedOption, setSelectedOption] = useState<OptionDefinition | null>(null);
+    const [selectedOption, setSelectedOption] = useState<any | null>(null);
 
     const tagBody = {
         tagName: formState.tagName,
@@ -299,7 +299,7 @@ export default function CreateTag({
                             placeholder="Tag Type"
                             options={tagTypes}
                             onChange={({ detail }) => {
-                                setSelectedOption(detail.selectedOption as OptionDefinition);
+                                setSelectedOption(detail.selectedOption as any);
                                 setFormState({
                                     ...formState,
                                     tagTypeName: detail.selectedOption.value,

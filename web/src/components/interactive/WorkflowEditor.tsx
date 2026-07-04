@@ -13,14 +13,14 @@ import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
 import { WorkflowContext } from "../../context/WorkflowContext";
 
 const AssetID = (props: any) => {
-    const { asset } = useContext(WorkflowContext);
+    const { asset } = useContext(WorkflowContext) as any;
 
     return <>{asset ? asset.value : ""}</>;
 };
 
 const PipelineDetail = (props: any) => {
     const { index, prop } = props;
-    const { pipelines, workflowPipelines } = useContext(WorkflowContext);
+    const { pipelines, workflowPipelines } = useContext(WorkflowContext) as any;
     const [pipelineId, setPipelneId] = useState(null);
     useEffect(() => {
         if (workflowPipelines[index]) {
@@ -125,7 +125,9 @@ export const workflowPipelineToElements = (
 
 const WorkflowEditor = (props: any) => {
     const { databaseId } = useParams();
-    const { workflowPipelines, setWorkflowPipelines, setActiveTab } = useContext(WorkflowContext);
+    const { workflowPipelines, setWorkflowPipelines, setActiveTab } = useContext(
+        WorkflowContext
+    ) as any;
 
     const elements = workflowPipelineToElements(workflowPipelines, databaseId);
 

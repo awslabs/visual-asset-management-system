@@ -17,7 +17,7 @@ interface TagTypeFields {
     tagTypeName: string;
     description: string;
     required: string;
-    selectedOptions: OptionDefinition[] | null;
+    selectedOptions: any[] | null;
 }
 
 interface CreateTagTypeProps {

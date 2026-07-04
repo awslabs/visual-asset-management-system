@@ -450,6 +450,20 @@ export function getConfig(app: cdk.App): Config {
         config.app.assetBuckets.createNewBucket = true;
     }
 
+    // Null/omitted restriction lists mean no restrictions (no bucket policy statement).
+    if (config.app.assetBuckets.presignedUrlNetworkRestrictions == undefined) {
+        config.app.assetBuckets.presignedUrlNetworkRestrictions = {
+            allowedIpRanges: [],
+            allowedVpceIds: [],
+        };
+    }
+    if (config.app.assetBuckets.presignedUrlNetworkRestrictions.allowedIpRanges == undefined) {
+        config.app.assetBuckets.presignedUrlNetworkRestrictions.allowedIpRanges = [];
+    }
+    if (config.app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds == undefined) {
+        config.app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds = [];
+    }
+
     if (config.app.webUi.allowUnsafeEvalFeatures == undefined) {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
@@ -872,6 +886,12 @@ export function getConfig(app: cdk.App): Config {
             config.env.account
         );
     }
+
+    //Validate presigned URL network restriction configuration
+    validatePresignedUrlRestrictions(
+        config.app.assetBuckets.presignedUrlNetworkRestrictions,
+        "app.assetBuckets.presignedUrlNetworkRestrictions"
+    );
 
     if (
         config.app.useGlobalVpc.enabled &&
@@ -1556,6 +1576,65 @@ export function getConfig(app: cdk.App): Config {
 }
 
 /**
+ * Validates a presigned URL network restriction block: each allowedIpRanges entry
+ * must be an IPv4 or IPv6 CIDR and each allowedVpceIds entry a VPC endpoint ID
+ * (interface or gateway). Throws a Configuration Error on any violation. The
+ * context string identifies which bucket entry the block belongs to in error
+ * messages. Exported for unit testing.
+ */
+export function validatePresignedUrlRestrictions(
+    restrictions: ConfigPresignedUrlNetworkRestrictions | undefined,
+    context: string
+): void {
+    if (!restrictions) {
+        return;
+    }
+
+    // IP-range and VPC-endpoint restrictions are mutually exclusive: a request
+    // arrives either over the public path (aws:SourceIp) or through a VPC endpoint
+    // (aws:SourceVpce), so restrict on one dimension per deployment.
+    if (
+        (restrictions.allowedIpRanges || []).length > 0 &&
+        (restrictions.allowedVpceIds || []).length > 0
+    ) {
+        throw new Error(
+            `Configuration Error: ${context} cannot set both allowedIpRanges and allowedVpceIds. Restrict presigned URLs by IP range or by VPC endpoint, not both.`
+        );
+    }
+
+    const ipv4CidrRegex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/;
+    const ipv6CidrRegex = /^([0-9a-fA-F:]+)\/(\d{1,3})$/;
+
+    for (const range of restrictions.allowedIpRanges || []) {
+        const v4 = range.match(ipv4CidrRegex);
+        if (v4) {
+            const octetsValid = v4.slice(1, 5).every((o) => parseInt(o) <= 255);
+            if (!octetsValid || parseInt(v4[5]) > 32) {
+                throw new Error(
+                    `Configuration Error: ${context} allowedIpRanges entry '${range}' is not a valid IPv4 CIDR.`
+                );
+            }
+            continue;
+        }
+        const v6 = range.match(ipv6CidrRegex);
+        if (v6 && range.includes(":") && parseInt(v6[2]) <= 128) {
+            continue;
+        }
+        throw new Error(
+            `Configuration Error: ${context} allowedIpRanges entry '${range}' is not a valid IPv4 or IPv6 CIDR (address/prefixLength).`
+        );
+    }
+
+    for (const vpceId of restrictions.allowedVpceIds || []) {
+        if (!/^vpce-[0-9a-f]{8,}$/.test(vpceId)) {
+            throw new Error(
+                `Configuration Error: ${context} allowedVpceIds entry '${vpceId}' is not a valid VPC endpoint ID (vpce-...).`
+            );
+        }
+    }
+}
+
+/**
  * Validates the externalAssetBuckets configuration. A single bucket ARN may be
  * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
  * only one notification configuration per bucket and cannot route an object to an
@@ -1680,6 +1759,11 @@ export function validateExternalAssetBuckets(
     }
 }
 
+export interface ConfigPresignedUrlNetworkRestrictions {
+    allowedIpRanges: string[];
+    allowedVpceIds: string[];
+}
+
 export interface ConfigPublicAssetS3Buckets {
     bucketArn: string;
     baseAssetsPrefix: string;
@@ -1709,6 +1793,7 @@ export interface ConfigPublic {
         assetBuckets: {
             createNewBucket: boolean;
             defaultNewBucketSyncDatabaseId: string;
+            presignedUrlNetworkRestrictions: ConfigPresignedUrlNetworkRestrictions;
             externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;

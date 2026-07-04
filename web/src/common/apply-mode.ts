@@ -18,25 +18,25 @@ window.addEventListener("load", function () {
 
         const mode = urlParams.get("awsui-mode");
         if (mode !== null) {
-            applyMode(mode);
+            applyMode(mode as any);
         }
 
         const density = urlParams.get("awsui-density");
         if (density !== null) {
-            applyDensity(density);
+            applyDensity(density as any);
         }
     } catch (e) {
         /*URLSearchParams is not supported by some browsers, ignore this*/
     }
 });
 
-function setSearchParam(key, value) {
+function setSearchParam(key: string, value: string) {
     const url = new URL(window.location.href);
     url.searchParams.set(key, value);
-    window.history.replaceState(null, null, url);
+    window.history.replaceState(null, null as any, url);
 }
 
-export function updateMode(mode) {
+export function updateMode(mode: any) {
     const [lightMode, darkMode] = document.getElementsByClassName("mode");
 
     if (mode === "dark") {
@@ -50,7 +50,7 @@ export function updateMode(mode) {
     applyMode(mode);
 }
 
-export function updateDensity(density) {
+export function updateDensity(density: any) {
     if (!density) {
         return;
     }

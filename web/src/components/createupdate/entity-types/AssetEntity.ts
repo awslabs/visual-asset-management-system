@@ -5,7 +5,18 @@
 
 import { EntityPropTypes } from "./EntityPropTypes";
 
-export function VersionEntity(props) {
+interface VersionEntity {
+    Comment: any;
+    S3Version: any;
+    Version: any;
+    description: any;
+    specifiedPipelines: any;
+    previewLocation: any;
+    DateModified: any;
+    FileSize: any;
+}
+
+export function VersionEntity(this: VersionEntity, props: any) {
     const {
         Comment,
         S3Version,
@@ -26,7 +37,7 @@ export function VersionEntity(props) {
     this.FileSize = FileSize;
 }
 
-VersionEntity.propTypes = {
+(VersionEntity as any).propTypes = {
     Comment: EntityPropTypes.STRING_64,
     S3Version: EntityPropTypes.STRING_32,
     Version: EntityPropTypes.STRING_32,
@@ -37,17 +48,36 @@ VersionEntity.propTypes = {
     FileSize: EntityPropTypes.STRING_32,
 };
 
-export function LocationEntity(props) {
+interface LocationEntity {
+    databaseId: any;
+    description: any;
+}
+
+export function LocationEntity(this: LocationEntity, props: any) {
     const { databaseId, description } = props;
     this.databaseId = databaseId;
     this.description = description;
 }
 
-LocationEntity.propTypes = {
+(LocationEntity as any).propTypes = {
     Key: EntityPropTypes.STRING_256,
 };
 
-export default function AssetEntity(props) {
+interface AssetEntity {
+    assetId: any;
+    databaseId: any;
+    description: any;
+    key: any;
+    assetType: any;
+    specifiedPipelines: any;
+    isDistributable: any;
+    Comment: any;
+    previewLocation: any;
+    Asset: any;
+    Preview: any;
+}
+
+export default function AssetEntity(this: AssetEntity, props: any) {
     const {
         assetId,
         databaseId,
@@ -74,7 +104,7 @@ export default function AssetEntity(props) {
     this.Preview = preview;
 }
 
-AssetEntity.propTypes = {
+(AssetEntity as any).propTypes = {
     assetId: EntityPropTypes.ENTITY_ID,
     databaseId: EntityPropTypes.ENTITY_ID,
     description: EntityPropTypes.STRING_256,

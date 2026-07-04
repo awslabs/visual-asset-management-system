@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+export const save = (key: any, value: any) => localStorage.setItem(key, JSON.stringify(value));
 
-export const load = (key) => {
+export const load = (key: any) => {
     const value = localStorage.getItem(key);
     try {
         return value && JSON.parse(value);

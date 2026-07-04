@@ -5,13 +5,18 @@
 
 import { EntityPropTypes } from "./EntityPropTypes";
 
-export default function DatabaseEntity(props) {
+interface DatabaseEntity {
+    databaseId: any;
+    description: any;
+}
+
+export default function DatabaseEntity(this: DatabaseEntity, props: any) {
     const { databaseId, description } = props;
     this.databaseId = databaseId;
     this.description = description;
 }
 
-DatabaseEntity.propTypes = {
+(DatabaseEntity as any).propTypes = {
     databaseId: EntityPropTypes.ENTITY_ID,
     description: EntityPropTypes.STRING_256,
 };
