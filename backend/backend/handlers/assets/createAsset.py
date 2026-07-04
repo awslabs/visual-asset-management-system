@@ -584,15 +584,22 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         # Create a new prefix folder
         s3_key = s3_bucket_prefix + assetId + '/'
         logger.info(f"Validating new prefix uniqueness: {s3_key} in bucket: {s3_bucket}")
-        
+
         # Check if the prefix already exists (full path: bucketPrefix/assetId/)
         if check_s3_prefix_exists(s3_bucket, s3_key):
-            error_msg = "Asset identifier is not unique for the given S3 bucket location"
-            logger.error(error_msg)
-            raise VAMSGeneralErrorResponse(error_msg)
-        
-        logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
-        create_prefix_folder(s3_bucket, s3_key)
+            # For S3-external generation (bucket sync ingestion), the prefix
+            # existing is the trigger for creation: files were placed directly
+            # in S3 and the asset record is being bound onto them. Only reject
+            # if another asset record already owns the location.
+            if not s3ExternalGenerated:
+                error_msg = "Asset identifier is not unique for the given S3 bucket location"
+                logger.error(error_msg)
+                raise VAMSGeneralErrorResponse(error_msg)
+            assert_existing_key_not_owned(s3_bucket_id, s3_key)
+            logger.info(f"Binding S3-external asset to existing prefix: {s3_key} in bucket: {s3_bucket}")
+        else:
+            logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
+            create_prefix_folder(s3_bucket, s3_key)
     
     # Get username for version creation
     username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
