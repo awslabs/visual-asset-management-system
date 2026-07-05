@@ -258,7 +258,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | Feature Flag                    | Description                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                                                                                                                               |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD)                                                                                                   |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor)                                                                                          |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |

@@ -2,23 +2,16 @@
 
 ## Overview
 
-This directory contains the custom installation system for the Cesium viewer, which dynamically loads Cesium from the public folder instead of bundling it with the main application.
+This directory contains the custom installation system for the Cesium viewer, which dynamically loads the CesiumJS rendering engine (`@cesium/engine`) from the public folder instead of bundling it with the main application.
 
 ## Architecture
 
-### Previous Approach
+The viewer uses the widget-less `@cesium/engine` package rather than the full `cesium` distribution. The engine provides the complete rendering core (Scene, Camera, Globe, 3D Tiles, imagery, terrain) plus the base `CesiumWidget`, without the `@cesium/widgets` UI layer. Viewer UI controls (home, scene mode, fullscreen, picked-feature info) are implemented as VAMS custom React components in `CesiumViewerComponent.tsx`. This keeps the runtime free of dynamic JavaScript code generation, allowing it to run free from a `unsafe-eval` Content Security Policy. However, a nnown content-type limitations under a strict CSP: KTX2/Basis compressed textures and `.spz` Gaussian splats still require `unsafe-eval` (Emscripten embind).
 
--   Cesium was installed as a direct dependency in `web/package.json`
--   Imported directly: `import * as Cesium from "cesium"`
--   Bundled into the main application at build time
--   Only asset files were copied to public folder
-
-### New Approach (Dynamic Loading)
-
--   Cesium is installed only in this custom install directory
--   Pre-built Cesium.js bundle is copied to public folder
--   All Source assets (Workers, Assets, Widgets, etc.) are also copied
--   Dependency manager loads Cesium via script tag
+-   Cesium engine is installed only in this custom install directory
+-   `@cesium/engine` is bundled with esbuild into a browser global (`window.Cesium`)
+-   Static runtime files (Workers, Assets, ThirdParty wasm, Widget CSS) are copied to the public folder
+-   Dependency manager loads the bundle via script tag
 -   Component accesses Cesium from window object via wrapper module
 -   No runtime dependency on node_modules
 
@@ -26,11 +19,11 @@ This directory contains the custom installation system for the Cesium viewer, wh
 
 ### Installation Files
 
--   **`package.json`**: NPM package configuration with cesium dependency
+-   **`package.json`**: NPM package configuration with `@cesium/engine` dependency and esbuild
 -   **`cesiumInstall.js`**: Installation script that:
-    -   Installs cesium package with `npm install`
-    -   Copies pre-built `Cesium.js` from `node_modules/cesium/Build/Cesium/`
-    -   Copies all Source files (Assets, Workers, Widgets, etc.)
+    -   Installs the engine package with `npm install`
+    -   Bundles `@cesium/engine` into `Cesium.js` (IIFE, global name `Cesium`) with esbuild
+    -   Copies Workers, ThirdParty (including wasm binaries), Assets, and Widget CSS
     -   Places everything in `web/public/viewers/cesium/`
 
 ### Application Files
@@ -38,7 +31,7 @@ This directory contains the custom installation system for the Cesium viewer, wh
 -   **`dependencies.ts`**: CesiumDependencyManager for dynamic loading
 
     -   Loads Cesium.js via script tag
-    -   Loads widgets.css via StylesheetManager
+    -   Loads Widget/CesiumWidget.css via StylesheetManager
     -   Sets CESIUM_BASE_URL for assets
     -   Accesses Cesium from `window.Cesium`
 
@@ -48,10 +41,10 @@ This directory contains the custom installation system for the Cesium viewer, wh
     -   Allows importing: `import * as Cesium from "./cesium"`
     -   Simplifies component code
 
--   **`CesiumViewerComponent.tsx`**: Updated to use dynamic loading
-    -   Imports from wrapper module instead of 'cesium' package
+-   **`CesiumViewerComponent.tsx`**: Uses dynamic loading and custom UI
+    -   Imports from wrapper module instead of a cesium package
     -   Loads Cesium via CesiumDependencyManager on mount
-    -   Waits for Cesium to load before initializing viewer
+    -   Creates a `CesiumWidget` and renders VAMS custom scene controls
 
 ## Installation Process
 
@@ -69,8 +62,9 @@ node customInstalls/cesium/cesiumInstall.js
 ### Build Steps
 
 1. **Cleanup**: Removes previous builds and node_modules
-2. **Install**: Runs `npm install` to get cesium package
-3. **Copy**: Copies pre-built Cesium.js and Source assets to public folder
+2. **Install**: Runs `npm install` to get the `@cesium/engine` package
+3. **Bundle**: Runs esbuild to produce the browser-global `Cesium.js`
+4. **Copy**: Copies Workers, ThirdParty, Assets, and Widget CSS to public folder
 
 ## Output Files
 
@@ -78,13 +72,12 @@ After installation, the following structure is created in `web/public/viewers/ce
 
 ```
 web/public/viewers/cesium/
-├── Cesium.js              # Pre-built UMD bundle (~2MB minified)
-├── Cesium.js.map          # Source map for debugging
-├── Cesium.d.ts            # TypeScript definitions
-├── Assets/                # Textures, models, etc.
-├── ThirdParty/            # Third-party dependencies
-└── Widgets/               # UI widgets and CSS
-    └── widgets.css        # Cesium widget styles
+├── Cesium.js              # esbuild IIFE bundle of @cesium/engine (~4MB minified)
+├── Assets/                # Textures, IAU data, approximate terrain heights
+├── ThirdParty/            # Zip worker + wasm binaries (draco, basis, splats, zip)
+├── Workers/               # Web workers (draco decoding, KTX2 transcoding, geometry)
+└── Widget/
+    └── CesiumWidget.css   # Base widget styles
 ```
 
 ## Usage in Application
@@ -109,22 +102,22 @@ useEffect(() => {
 import * as Cesium from "./cesium";
 
 // Use Cesium classes
-const viewer = new Cesium.Viewer(container);
+const widget = new Cesium.CesiumWidget(container);
 const tileset = await Cesium.Cesium3DTileset.fromUrl(url);
 ```
 
 ## Benefits
 
+### Content Security Policy Compatibility
+
+-   `@cesium/engine` contains no dynamic JavaScript code generation on its load and render paths
+-   Runs under `script-src 'wasm-unsafe-eval'` (WebAssembly compilation only)
+-   The full `cesium` distribution's widgets layer embeds Knockout.js, which compiles binding expressions with `new Function` and therefore requires the broader `unsafe-eval` directive; the engine-only build avoids this
+
 ### Reduced Bundle Size
 
--   **Before**: Cesium bundled with main application (~50MB+ in node_modules)
--   **After**: Cesium loaded dynamically only when needed
-
-### Improved Performance
-
--   Main application bundle is smaller
--   Cesium loads only when Cesium viewer is used
--   Better code splitting
+-   Engine-only bundle (~4MB) is significantly smaller than the full distribution
+-   Cesium loads only when the Cesium viewer is used
 
 ### Consistent Pattern
 
@@ -137,6 +130,15 @@ const tileset = await Cesium.Cesium3DTileset.fromUrl(url);
 -   Cesium not needed in main `web/package.json`
 -   Cleaner dependency tree
 -   Smaller main node_modules
+
+## Known Content-Type Limitations
+
+Two content types rely on Emscripten embind glue that generates function bindings with `new Function` and will not load under a `wasm-unsafe-eval`-only CSP:
+
+-   **KTX2/Basis compressed textures** (`KHR_texture_basisu` in glTF/3D Tiles): the `transcodeKTX2` worker fails at module init
+-   **SPZ Gaussian splats** (`.spz`): the spz-loader codec fails on first load
+
+Standard 3D Tiles, glTF/glb (including Draco compression), imagery, and terrain are unaffected.
 
 ## Troubleshooting
 
@@ -154,14 +156,14 @@ If Cesium.js fails to load:
 If Cesium can't find assets (Workers, textures, etc.):
 
 1. Verify `CESIUM_BASE_URL` is set to `/viewers/cesium/`
-2. Check that Assets/, Workers/, and Widgets/ directories exist
+2. Check that Assets/, Workers/, ThirdParty/, and Widget/ directories exist
 3. Verify file paths in browser network tab
 
 ### TypeScript Errors
 
 If you see TypeScript errors:
 
-1. Ensure you're importing from `./cesium` wrapper, not `cesium` package
+1. Ensure you're importing from `./cesium` wrapper, not a cesium package
 2. Use `any` types for complex Cesium objects if needed
 3. The wrapper provides common Cesium exports
 
@@ -169,7 +171,7 @@ If you see TypeScript errors:
 
 If the viewer doesn't initialize:
 
-1. Check that `cesiumLoaded` state is true before creating viewer
+1. Check that `cesiumLoaded` state is true before creating the widget
 2. Verify Cesium dependency manager loaded successfully
 3. Check browser console for initialization errors
 
@@ -182,7 +184,7 @@ To change what's copied, edit `cesiumInstall.js`:
 ```javascript
 // Copy additional files
 await fs.copy(
-    path.join(cesiumSourceDir, "SomeOtherDir"),
+    path.join(enginePackageDir, "Source/SomeOtherDir"),
     path.join(destinationDir, "SomeOtherDir")
 );
 ```
@@ -192,7 +194,7 @@ await fs.copy(
 To add more Cesium exports to the wrapper, edit `cesium.ts`:
 
 ```typescript
-export const NewCesiumClass = CesiumLib.NewCesiumClass;
+export const NewCesiumClass = CesiumWrapper.NewCesiumClass;
 ```
 
 ### Testing Changes
@@ -205,14 +207,14 @@ After modifying the installation:
 
 ## Version Updates
 
-To update the Cesium version:
+To update the Cesium engine version:
 
 1. Update version in `package.json`:
 
     ```json
     {
         "dependencies": {
-            "cesium": "1.119.0"
+            "@cesium/engine": "26.1.0"
         }
     }
     ```
@@ -225,27 +227,28 @@ To update the Cesium version:
     ```
 
 3. Test the updated viewer in the application
+4. Re-verify CSP compatibility: `grep -c "new Function" public/viewers/cesium/Cesium.js` should only match the spz-loader embind glue (see Known Content-Type Limitations)
 
 ## Technical Details
 
-### UMD Format
+### IIFE Bundle
 
-Cesium's pre-built bundle uses UMD (Universal Module Definition) format:
+The esbuild bundle wraps the engine's ES modules in an IIFE:
 
--   Works in browsers (exposes `window.Cesium`)
--   Compatible with AMD and CommonJS
--   Official Cesium build (tested and optimized)
+-   Exposes `window.Cesium` for classic script-tag loading
+-   Tree-shaken and minified by esbuild
+-   Workers remain separate static files fetched at runtime
 
 ### Asset Management
 
-Cesium requires extensive assets:
+The Cesium engine requires these runtime assets:
 
--   **Workers**: Web workers for 3D tiles processing
--   **Assets**: Textures, models, shaders
--   **Widgets**: UI components and styles
--   **ThirdParty**: External dependencies
+-   **Workers**: Web workers for 3D tiles, draco decoding, KTX2 transcoding
+-   **Assets**: Textures, IAU2006 orientation data, approximate terrain heights
+-   **ThirdParty**: Zip worker and wasm binaries
+-   **Widget**: Base CesiumWidget stylesheet
 
-All are copied to maintain full Cesium functionality.
+All are copied to maintain full engine functionality.
 
 ### CESIUM_BASE_URL
 
@@ -256,10 +259,3 @@ window.CESIUM_BASE_URL = "/viewers/cesium/";
 ```
 
 This must be set BEFORE loading Cesium.js.
-
-## Notes
-
--   The pre-built Cesium.js is production-ready and minified
--   Source maps are included for debugging
--   All Cesium features are available (Ion, terrain, imagery, etc.)
--   The wrapper module simplifies imports and provides type safety

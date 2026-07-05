@@ -12,6 +12,7 @@ import urllib.parse
 from datetime import datetime
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
+from handlers.assets.assetCount import update_asset_count
 from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
 from models.databases import CreateDatabaseRequestModel
@@ -260,6 +261,32 @@ def object_still_exists(bucket_name: str, object_key: str) -> bool:
         logger.warning(f"Unexpected error checking existence of {object_key}; failing open: {e}")
         return True
 
+def is_object_permanently_deleted(bucket_name: str, object_key: str) -> bool:
+    """Return True only when no versions or delete markers remain for the key.
+
+    Distinguishes a permanent delete (all versions removed — metadata cleanup is
+    safe) from an archive (delete marker over live versions — reversible, so
+    metadata must be preserved). Fails closed: on any error, treat the object as
+    NOT permanently deleted so metadata is never destroyed on uncertainty.
+    """
+    try:
+        response = s3_client.list_object_versions(
+            Bucket=bucket_name,
+            Prefix=object_key,
+            MaxKeys=25
+        )
+        for version in response.get('Versions', []):
+            if version.get('Key') == object_key:
+                return False
+        for marker in response.get('DeleteMarkers', []):
+            if marker.get('Key') == object_key:
+                return False
+        return True
+    except Exception as e:
+        logger.warning(f"Error checking version state for {object_key}; preserving metadata: {e}")
+        return False
+
+
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
     try:
@@ -454,21 +481,22 @@ def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
         return cached_result
     
     try:
-        # Query the asset table using the GSI
+        # Query the asset table using the GSI. The GSI matches records in BOTH
+        # the live and archived ({databaseId}#deleted) partitions — only a live
+        # record counts here, otherwise an archived asset would be treated as
+        # active (and its archived databaseId would leak into metadata keys).
         table = dynamodb.Table(asset_table_name)
         response = table.query(
             IndexName="BucketIdGSI",
             KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
         )
-        
-        if response.get('Items'):
-            asset_data = response['Items'][0]
-            
-            # Cache the result
-            asset_cache.set(cache_key, asset_data)
-            
-            return asset_data
-        
+
+        for item in response.get('Items', []):
+            if not item.get('databaseId', '').endswith('#deleted'):
+                # Cache the result
+                asset_cache.set(cache_key, item)
+                return item
+
         return None
     except Exception as e:
         logger.exception(f"Error looking up asset: {e}")
@@ -751,6 +779,71 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     
     return created_db_id
 
+def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) -> Optional[str]:
+    """Restore an archived asset record after a direct S3 upload to its prefix.
+
+    DynamoDB-only unarchive: the asset record moves back from the
+    {databaseId}#deleted partition to the live partition. Previously archived
+    files keep their S3 delete markers — the files now present under the prefix
+    define the asset's contents; users unarchive individual old files via the
+    file unarchive API as needed.
+
+    Concurrency: a batch of ObjectCreated events for the same archived asset can
+    race here. The live-partition write is conditional on no live record
+    existing, and the archived-record delete is keyed exactly, so the restore
+    happens once; losers treat the asset as already restored.
+
+    Returns:
+        The live database ID on success (or when already restored), None on error.
+    """
+    archived_db_id = archived_asset.get('databaseId', '')
+    if not archived_db_id.endswith('#deleted'):
+        logger.warning(f"Archived asset {asset_id} has unexpected databaseId {archived_db_id}")
+        return None
+    live_db_id = archived_db_id[:-len('#deleted')]
+
+    try:
+        table = dynamodb.Table(asset_table_name)
+
+        restored = {k: v for k, v in archived_asset.items()
+                    if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
+        restored['databaseId'] = live_db_id
+        restored['unarchivedAt'] = datetime.utcnow().isoformat()
+        restored['unarchivedBy'] = 'SYSTEM_USER'
+        restored['unarchivedReason'] = 'Auto-restored by bucket sync: new file uploaded directly to S3 under archived asset prefix'
+
+        try:
+            table.put_item(
+                Item=restored,
+                ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.info(f"Asset {asset_id} already restored in {live_db_id} by a concurrent event")
+                asset_cache.delete(f"{bucket_id}:{asset_id}")
+                asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+                return live_db_id
+            raise
+
+        table.delete_item(Key={'databaseId': archived_db_id, 'assetId': asset_id})
+
+        # Invalidate caches so subsequent events in this container see the live record
+        asset_cache.delete(f"{bucket_id}:{asset_id}")
+        asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+
+        # Keep the database's asset count in sync (best-effort, matching the
+        # API unarchive flow)
+        try:
+            update_asset_count(db_table_name, asset_table_name, {}, live_db_id)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after restoring {asset_id}: {e}")
+
+        return live_db_id
+    except Exception as e:
+        logger.exception(f"Error restoring archived asset {asset_id}: {e}")
+        return None
+
+
 def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optional[str]:
     """
     Create a new asset
@@ -1023,25 +1116,27 @@ def extract_relative_file_path(object_key: str, prefix: str, asset_id: str) -> s
 
 def delete_file_metadata_on_s3_delete(database_id: str, asset_id: str, relative_file_path: str):
     """Delete metadata and attributes when file is deleted directly in S3
-    
+
     Args:
         database_id: The database ID
         asset_id: The asset ID
         relative_file_path: The relative file path (without asset base prefix)
     """
     try:
-        # Skip if this is a folder (ends with /)
-        if relative_file_path.endswith('/'):
-            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
-            return
-        
         # Skip if relative path is empty
         if not relative_file_path:
             logger.info("Skipping metadata deletion for empty relative path")
             return
-        
-        # Construct the composite key for new metadata tables
-        # Format: {databaseId}:{assetId}:{relative_file_path}
+
+        # Skip if this is a folder (ends with /)
+        if relative_file_path.endswith('/'):
+            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
+            return
+
+        # Construct the composite key for new metadata tables. Metadata and
+        # attribute rows key file paths asset-relative with exactly one leading
+        # slash (see backend Rule 13): {databaseId}:{assetId}:/{relative_file_path}
+        relative_file_path = "/" + relative_file_path.lstrip("/")
         composite_key = f"{database_id}:{asset_id}:{relative_file_path}"
         
         deleted_metadata_count = 0
@@ -1465,38 +1560,55 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             logger.info(f"Asset {asset_id} found in bucket {bucket_id}")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # Check if asset is archived before creating new one
+            # Check if asset is archived before creating new one. A new file
+            # placed directly in S3 under an archived asset's prefix restores
+            # the asset record (DynamoDB-only unarchive): the asset becomes
+            # active again but previously archived files keep their delete
+            # markers — the files present under the prefix are the asset's
+            # files, and users unarchive individual old files via the API.
             archived_asset = lookup_archived_asset(bucket_id, asset_id)
             if archived_asset:
-                logger.info(f"Asset {asset_id} is archived, skipping processing")
-                return True, True, f"Skipped archived asset {asset_id}"  # Return true for both - indexing may care about these events
-            
-            # Get or create database for this bucket/prefix
-            database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
-
-            if not database_id_to_use:
-                logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
-                return False, True, f"Could not get or create database for bucket {bucket_id}"
-            
-            # Guard against recreating a ghost asset from a stale / redelivered
-            # ObjectCreated event: if the object no longer exists (deleted since the
-            # event was enqueued), do not recreate the asset. A genuinely new file
-            # still exists here and proceeds to creation as intended. The record is
-            # still forwarded to the indexers (should_index=True) so OpenSearch and
-            # other registered indexers can reconcile their records for the file.
-            if not object_still_exists(bucket_name, object_key):
+                if not object_still_exists(bucket_name, object_key):
+                    logger.info(
+                        f"Object {object_key} no longer exists; not restoring archived asset {asset_id}"
+                    )
+                    return True, True, f"Skipped stale create event for archived asset {asset_id}"
+                restored_database_id = restore_archived_asset(bucket_id, asset_id, archived_asset)
+                if not restored_database_id:
+                    logger.error(f"Failed to restore archived asset {asset_id}")
+                    return False, True, f"Failed to restore archived asset {asset_id}"
                 logger.info(
-                    f"Object {object_key} no longer exists; skipping asset (re)creation for {asset_id} "
-                    "but forwarding event to indexers"
+                    f"Restored archived asset {asset_id} to database {restored_database_id} "
+                    f"after direct S3 upload of {object_key}"
                 )
-                return True, True, f"Skipped stale create event for {object_key}"
+                database_id_to_use = restored_database_id
+            else:
+                # Get or create database for this bucket/prefix
+                database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
 
-            # Create the asset
-            logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-            created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
-            if not created_asset_id:
-                logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
-                return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                if not database_id_to_use:
+                    logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
+                    return False, True, f"Could not get or create database for bucket {bucket_id}"
+
+                # Guard against recreating a ghost asset from a stale / redelivered
+                # ObjectCreated event: if the object no longer exists (deleted since the
+                # event was enqueued), do not recreate the asset. A genuinely new file
+                # still exists here and proceeds to creation as intended. The record is
+                # still forwarded to the indexers (should_index=True) so OpenSearch and
+                # other registered indexers can reconcile their records for the file.
+                if not object_still_exists(bucket_name, object_key):
+                    logger.info(
+                        f"Object {object_key} no longer exists; skipping asset (re)creation for {asset_id} "
+                        "but forwarding event to indexers"
+                    )
+                    return True, True, f"Skipped stale create event for {object_key}"
+
+                # Create the asset
+                logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
+                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                if not created_asset_id:
+                    logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
+                    return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
         # 3. Check if the object key ends with "init" - If so delete and skip indexing
         if object_key.endswith('init') or object_key.endswith('init/'):
@@ -1914,9 +2026,15 @@ def lambda_handler_deleted(event, context):
                         # Extract relative file path for metadata deletion
                         relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
 
-                        # Delete metadata and attributes for this file
-                        logger.info(f"Deleting metadata/attributes for file: {relative_file_path}")
-                        delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
+                        # Only delete metadata/attributes when the file is
+                        # permanently gone (no versions or delete markers remain).
+                        # A delete-marker event from an archive flow is reversible —
+                        # unarchive restores the file and must find its metadata intact.
+                        if is_object_permanently_deleted(bucket_name, object_key):
+                            logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
+                            delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
+                        else:
+                            logger.info(f"File {object_key} still has versions (archived); preserving metadata/attributes")
                     else:
                         logger.info(f"Asset {asset_id} not found in bucket {bucket_id}; skipping metadata cleanup")
 
