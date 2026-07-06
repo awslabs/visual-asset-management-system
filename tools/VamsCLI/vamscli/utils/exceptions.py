@@ -118,6 +118,11 @@ class AssetAlreadyArchivedError(AssetError):
     pass
 
 
+class AssetNotArchivedError(AssetError):
+    """Raised when trying to unarchive an asset that is not archived"""
+    pass
+
+
 class AssetDeletionError(AssetError):
     """Raised when asset deletion operations fail"""
     pass
@@ -257,6 +262,37 @@ class AssetNotDistributableError(FileError):
 
 class DownloadTreeError(FileError):
     """Raised when asset tree traversal fails."""
+    pass
+
+
+# Sync-related business logic exceptions
+class SyncError(BusinessLogicError):
+    """Base class for sync-related errors."""
+    pass
+
+
+class SyncPlanError(SyncError):
+    """Raised when a sync plan cannot be computed."""
+    pass
+
+
+class SyncPushError(SyncError):
+    """Raised when a sync push operation fails."""
+    pass
+
+
+class SyncPullError(SyncError):
+    """Raised when a sync pull operation fails."""
+    pass
+
+
+class SyncConfirmationRequiredError(SyncError):
+    """Raised when a destructive sync operation is not confirmed."""
+    pass
+
+
+class InvalidSyncIgnoreFileError(SyncError):
+    """Raised when an ignore file cannot be read or parsed."""
     pass
 
 

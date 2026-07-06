@@ -1,6 +1,5 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
-import os
 import boto3
 from typing import Tuple
 from typing import Any
@@ -8,6 +7,7 @@ from typing import Dict
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 from models.common import VAMSGeneralErrorResponse
+from common.resourceNames import ResourceKeys, get_table_name
 
 logger = safeLogger(service_name="DynamoDBCommon")
 dynamodb_client = boto3.client('dynamodb')
@@ -43,9 +43,10 @@ def get_asset_object_from_id(databaseId, assetId):
         raise VAMSGeneralErrorResponse("Empty assetId or databaseId received")
 
     try:
-        asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+        asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     except Exception as e:
-        logger.exception("Failed Loading Environment Variables")
+        logger.exception("Failed resolving asset storage table name")
+        raise
 
     asset_table = dynamodb.Table(asset_table_name)
 

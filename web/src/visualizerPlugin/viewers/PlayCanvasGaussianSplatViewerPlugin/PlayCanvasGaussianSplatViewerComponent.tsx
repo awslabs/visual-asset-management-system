@@ -356,7 +356,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                     databaseId,
                     key: assetKey,
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 

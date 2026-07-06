@@ -35,36 +35,48 @@ def auth():
 @auth.command()
 @click.option('-u', '--username', help='Username for Cognito authentication')
 @click.option('-p', '--password', help='Password (will prompt if not provided)')
+@click.option('--new-password', help='New password to set when a forced password change is required (Cognito only)')
 @click.option('--save-credentials', is_flag=True, help='Save credentials for automatic re-authentication')
 @click.option('--user-id', help='User ID for token override authentication')
-@click.option('--token-override', help='Override token for external authentication (requires --user-id)')
+@click.option('--token-override', help='Pre-generated token to use directly, mostly for external IDP auth (requires --user-id)')
 @click.option('--expires-at', help='Token expiration time (Unix timestamp, ISO 8601, or +seconds)')
 @click.option('--skip-version-check', is_flag=True, help='Skip version mismatch confirmation prompts')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_api_access
-def login(ctx: click.Context, username: str, password: str, save_credentials: bool, user_id: str, 
-          token_override: str, expires_at: str, skip_version_check: bool, json_output: bool):
+def login(ctx: click.Context, username: str, password: str, new_password: str, save_credentials: bool,
+          user_id: str, token_override: str, expires_at: str, skip_version_check: bool, json_output: bool):
     """
-    Authenticate with VAMS using Cognito or token override.
-    
-    This command authenticates you with the VAMS system using AWS Cognito or
-    an external token override. It will handle MFA challenges and password 
-    reset requirements automatically for Cognito authentication.
-    
-    For token override authentication, provide --user-id and --token-override.
-    The token will be saved and validated against the VAMS API.
-    
+    Authenticate with VAMS using Cognito or a token override.
+
+    This command authenticates you with the VAMS system using AWS Cognito or a
+    token override. It will handle MFA challenges and password reset
+    requirements automatically for Cognito authentication.
+
+    Token override is for supplying a pre-generated token directly instead of
+    having the CLI sign you in. It is used mostly for external identity provider
+    authentication, but any valid pre-generated token works (including an AWS
+    Cognito token obtained outside VAMS). To use it, provide --user-id and
+    --token-override; the token is saved and validated against the VAMS API.
+
+    If Cognito requires a password change on login (for example, on a new
+    account's first sign-in), provide the new password with --new-password.
+    In interactive mode you will be prompted for it if omitted; with
+    --json-output, --new-password is required when a change is forced.
+
     Examples:
         # Cognito authentication
         vamscli auth login -u john.doe@example.com
         vamscli auth login -u john.doe@example.com -p mypassword
         vamscli auth login -u john.doe@example.com --save-credentials
-        
+
+        # First login when a password change is forced by Cognito
+        vamscli auth login -u john.doe@example.com -p temp-password --new-password new-password
+
         # Token override authentication
         vamscli auth login --user-id john.doe@example.com --token-override "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
         vamscli auth login --user-id john.doe@example.com --token-override "token123" --expires-at "+3600"
-        
+
         # JSON output
         vamscli auth login -u john.doe@example.com --json-output
     """
@@ -134,29 +146,28 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
             profile_manager.save_override_token(token_override, user_id, expires_at)
             
             # Call login profile API to validate the token and refresh user profile
+            api_client = APIClient(config['api_gateway_url'], profile_manager)
             try:
-                api_client = APIClient(config['api_gateway_url'], profile_manager)
                 login_profile_result = api_client.call_login_profile(user_id)
-                
                 output_status("User profile refreshed successfully.", json_output)
-                
-                # Fetch feature switches after successful validation
-                try:
-                    secure_config_result = api_client.get_secure_config()
-                    profile_manager.save_feature_switches(secure_config_result)
-                    output_status("Feature switches updated successfully.", json_output)
-                except Exception as fs_e:
-                    # Feature switches fetch failure is non-blocking
-                    output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
-                
             except AuthenticationError as e:
                 # If login profile fails with 401/403, credentials are already cleared
                 output_error(e, json_output, error_type="Authentication Error")
                 raise click.ClickException(str(e))
             except Exception as e:
                 # If login profile API fails for other reasons, warn but keep the token
+                # and continue with the rest of the auth process below.
                 output_warning(f"Could not validate token with user profile: {e}", json_output)
-            
+
+            # Fetch feature switches independently of the login-profile result
+            try:
+                secure_config_result = api_client.get_secure_config()
+                profile_manager.save_feature_switches(secure_config_result)
+                output_status("Feature switches updated successfully.", json_output)
+            except Exception as fs_e:
+                # Feature switches fetch failure is non-blocking
+                output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
+
             # Prepare result
             result = {
                 'success': True,
@@ -231,9 +242,13 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
             authenticator = get_authenticator(config)
             
             output_status("Authenticating with Cognito...", json_output)
-            
-            # Authenticate user
-            auth_result = authenticator.authenticate(username, password)
+
+            # Authenticate user. In JSON mode we must not block on interactive
+            # prompts, so unmet challenges (e.g. a forced password change with no
+            # --new-password) surface as a clean error instead.
+            auth_result = authenticator.authenticate(
+                username, password, new_password=new_password, interactive=not json_output
+            )
             
             # Add user_id to the auth result
             auth_result['user_id'] = username
@@ -242,28 +257,28 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
             profile_manager.save_auth_profile(auth_result)
             
             # Call login profile API to refresh user profile and validate authentication
+            api_client = APIClient(config['api_gateway_url'], profile_manager)
             try:
-                api_client = APIClient(config['api_gateway_url'], profile_manager)
                 login_profile_result = api_client.call_login_profile(username)
                 output_status("User profile refreshed successfully.", json_output)
-                
-                # Fetch feature switches after successful authentication
-                try:
-                    secure_config_result = api_client.get_secure_config()
-                    profile_manager.save_feature_switches(secure_config_result)
-                    output_status("Feature switches updated successfully.", json_output)
-                except Exception as fs_e:
-                    # Feature switches fetch failure is non-blocking
-                    output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
-                    
             except AuthenticationError as e:
                 # If login profile fails with 401/403, credentials are already cleared
                 output_error(e, json_output, error_type="Authentication Error")
                 raise click.ClickException(str(e))
             except Exception as e:
-                # If login profile API fails for other reasons, warn but don't fail authentication
+                # If login profile API fails for other reasons, warn but don't fail
+                # authentication or block the rest of the auth process below.
                 output_warning(f"Could not refresh user profile: {e}", json_output)
-            
+
+            # Fetch feature switches independently of the login-profile result
+            try:
+                secure_config_result = api_client.get_secure_config()
+                profile_manager.save_feature_switches(secure_config_result)
+                output_status("Feature switches updated successfully.", json_output)
+            except Exception as fs_e:
+                # Feature switches fetch failure is non-blocking
+                output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
+
             # Save credentials if requested
             if save_credentials:
                 profile_manager.save_credentials({
@@ -306,6 +321,272 @@ def login(ctx: click.Context, username: str, password: str, save_credentials: bo
         except Exception as e:
             output_error(e, json_output, error_type="Unexpected Error")
             raise click.ClickException(str(e))
+
+
+@auth.command('change-password')
+@click.option('-u', '--username', required=True, help='Username for Cognito authentication')
+@click.option('--old-password', help='Current password (will prompt if not provided)')
+@click.option('--new-password', help='New password to set (will prompt if not provided)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_api_access
+def change_password(ctx: click.Context, username: str, old_password: str, new_password: str,
+                    json_output: bool):
+    """
+    Change your Cognito password when you know your current password.
+
+    Use this command when you know your current password and want to set a new
+    one. It signs in with the current password and sets the new one. It also
+    satisfies a forced password change when Cognito requires one (for example,
+    on a new account's first sign-in).
+
+    If you have forgotten your current password, use 'vamscli auth
+    forgot-password' instead, which resets it using a code emailed by Cognito.
+
+    This command is only available for deployments that use AWS Cognito
+    authentication. In interactive mode you are prompted for any password not
+    provided on the command line; with --json-output, both --old-password and
+    --new-password are required.
+
+    Examples:
+        vamscli auth change-password -u john.doe@example.com
+        vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
+        vamscli auth change-password -u john.doe@example.com --old-password old --new-password new --json-output
+    """
+    # Get profile manager from context
+    profile_manager = get_profile_manager_from_context(ctx)
+
+    # Check if setup has been completed
+    if not profile_manager.has_config():
+        profile_name = profile_manager.profile_name
+        error_msg = (
+            f"Configuration not found for profile '{profile_name}'. "
+            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    # Load configuration
+    try:
+        config = profile_manager.load_config()
+    except Exception as e:
+        output_error(e, json_output, error_type="Configuration Error")
+        raise click.ClickException(f"Failed to load configuration: {e}")
+
+    # Verify Cognito is configured for this environment
+    amplify_config = config.get('amplify_config', {})
+    cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+
+    if not cognito_user_pool_id or cognito_user_pool_id in ['undefined', 'null', '']:
+        error_msg = (
+            "Password changes are only supported for Cognito authentication. "
+            "This deployment uses external authentication."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    # Collect passwords. In JSON mode we must not block on prompts, so both
+    # passwords are required up front.
+    if json_output:
+        if not old_password or not new_password:
+            error_msg = "--old-password and --new-password are required when using --json-output"
+            output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+            raise click.ClickException(error_msg)
+    else:
+        if not old_password:
+            old_password = click.prompt("Current password", hide_input=True)
+        if not new_password:
+            new_password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+
+    try:
+        authenticator = get_authenticator(config)
+
+        output_status("Authenticating with Cognito...", json_output)
+
+        # Sign in with the current password. If the account is in a forced
+        # password-change state, the new password is applied while answering the
+        # challenge, so a separate change call is unnecessary.
+        auth_result = authenticator.authenticate(
+            username, old_password, new_password=new_password, interactive=False
+        )
+
+        if not auth_result.get('password_changed_via_challenge'):
+            output_status("Changing password...", json_output)
+            authenticator.change_password(
+                auth_result['access_token'], old_password, new_password
+            )
+
+        result = {
+            'success': True,
+            'user_id': username,
+            'message': 'Password changed successfully'
+        }
+
+        def format_change_password_result(data):
+            """Format change-password result for CLI display."""
+            return f"  User ID: {data['user_id']}"
+
+        output_result(
+            result,
+            json_output,
+            success_message="✓ Password changed successfully!",
+            cli_formatter=format_change_password_result
+        )
+
+    except AuthenticationError as e:
+        output_error(e, json_output, error_type="Password Change Error")
+        raise click.ClickException(str(e))
+    except Exception as e:
+        output_error(e, json_output, error_type="Unexpected Error")
+        raise click.ClickException(str(e))
+
+
+@auth.command('forgot-password')
+@click.option('-u', '--username', required=True, help='Username for Cognito authentication')
+@click.option('--code', help='Verification code emailed by Cognito (confirm step)')
+@click.option('--new-password', help='New password to set (confirm step)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_api_access
+def forgot_password(ctx: click.Context, username: str, code: str, new_password: str,
+                    json_output: bool):
+    """
+    Reset a forgotten Cognito password using an emailed verification code.
+
+    Use this command when you do not know your current password. If you do know
+    your current password and simply want to change it, use 'vamscli auth
+    change-password' instead.
+
+    This is a two-step, self-service flow that does not require knowing the
+    current password:
+
+    1. Request a code: run with --username only. Cognito emails a verification
+       code to the user's verified email or phone.
+    2. Confirm the reset: run again with --code and --new-password to set the
+       new password.
+
+    In interactive mode, after the code is requested you are prompted for the
+    code and new password to complete both steps in one invocation. With
+    --json-output, prompts are not possible: provide --code and --new-password
+    together to confirm, or neither to only request a code.
+
+    This command is only available for deployments that use AWS Cognito
+    authentication. After a successful reset, sign in with 'vamscli auth login'.
+
+    Examples:
+        # Step 1: request a verification code
+        vamscli auth forgot-password -u john.doe@example.com
+
+        # Step 2: confirm with the emailed code and a new password
+        vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
+
+        # JSON output (request only)
+        vamscli auth forgot-password -u john.doe@example.com --json-output
+    """
+    # Get profile manager from context
+    profile_manager = get_profile_manager_from_context(ctx)
+
+    # Check if setup has been completed
+    if not profile_manager.has_config():
+        profile_name = profile_manager.profile_name
+        error_msg = (
+            f"Configuration not found for profile '{profile_name}'. "
+            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    # Load configuration
+    try:
+        config = profile_manager.load_config()
+    except Exception as e:
+        output_error(e, json_output, error_type="Configuration Error")
+        raise click.ClickException(f"Failed to load configuration: {e}")
+
+    # Verify Cognito is configured for this environment
+    amplify_config = config.get('amplify_config', {})
+    cognito_user_pool_id = amplify_config.get('cognitoUserPoolId')
+
+    if not cognito_user_pool_id or cognito_user_pool_id in ['undefined', 'null', '']:
+        error_msg = (
+            "Password resets are only supported for Cognito authentication. "
+            "This deployment uses external authentication."
+        )
+        output_error(ConfigurationError(error_msg), json_output, error_type="Configuration Error")
+        raise click.ClickException(error_msg)
+
+    try:
+        authenticator = get_authenticator(config)
+
+        # Confirm phase: a code and new password complete the reset directly.
+        if code or new_password:
+            if not code or not new_password:
+                error_msg = "--code and --new-password must be provided together to confirm a reset"
+                output_error(click.BadParameter(error_msg), json_output, error_type="Invalid Parameters")
+                raise click.ClickException(error_msg)
+            _confirm_forgot_password(authenticator, username, code, new_password, json_output)
+            return
+
+        # Request phase: send a verification code.
+        output_status(f"Requesting password reset code for '{username}'...", json_output)
+        request_result = authenticator.forgot_password(username)
+        destination = request_result.get('code_delivery', {}).get('Destination')
+
+        # In JSON mode we cannot prompt, so stop after requesting the code.
+        if json_output:
+            result = {
+                'code_sent': True,
+                'user_id': username,
+                'code_delivery': request_result.get('code_delivery', {}),
+                'message': 'Verification code sent. Re-run with --code and --new-password to confirm.'
+            }
+            output_result(result, json_output)
+            return
+
+        # Interactive mode: prompt for the code and new password to finish.
+        if destination:
+            output_status(f"Verification code sent to {destination}.", json_output)
+        else:
+            output_status("Verification code sent.", json_output)
+
+        code = click.prompt("Enter verification code")
+        new_password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+        _confirm_forgot_password(authenticator, username, code, new_password, json_output)
+
+    except AuthenticationError as e:
+        output_error(e, json_output, error_type="Password Reset Error")
+        raise click.ClickException(str(e))
+    except click.ClickException:
+        raise
+    except Exception as e:
+        output_error(e, json_output, error_type="Unexpected Error")
+        raise click.ClickException(str(e))
+
+
+def _confirm_forgot_password(authenticator, username: str, code: str, new_password: str,
+                             json_output: bool):
+    """Confirm a forgot-password reset and report the result."""
+    output_status("Resetting password...", json_output)
+    authenticator.confirm_forgot_password(username, code, new_password)
+
+    result = {
+        'success': True,
+        'user_id': username,
+        'message': 'Password reset successfully'
+    }
+
+    def format_forgot_password_result(data):
+        """Format forgot-password result for CLI display."""
+        lines = [f"  User ID: {data['user_id']}"]
+        lines.append("  Sign in with 'vamscli auth login' using your new password.")
+        return '\n'.join(lines)
+
+    output_result(
+        result,
+        json_output,
+        success_message="✓ Password reset successfully!",
+        cli_formatter=format_forgot_password_result
+    )
 
 
 @auth.command()
@@ -664,30 +945,29 @@ def set_override(ctx: click.Context, user_id: str, token: str, expires_at: str, 
         
         # Call login profile API to validate the token and refresh user profile
         validation_successful = False
+        api_client = APIClient(config['api_gateway_url'], profile_manager)
         try:
-            api_client = APIClient(config['api_gateway_url'], profile_manager)
             login_profile_result = api_client.call_login_profile(user_id)
-            
             output_status("User profile refreshed successfully.", json_output)
             validation_successful = True
-            
-            # Fetch feature switches after successful validation
-            try:
-                secure_config_result = api_client.get_secure_config()
-                profile_manager.save_feature_switches(secure_config_result)
-                output_status("Feature switches updated successfully.", json_output)
-            except Exception as fs_e:
-                # Feature switches fetch failure is non-blocking
-                output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
-            
         except AuthenticationError as e:
             # If login profile fails with 401/403, credentials are already cleared
             output_error(e, json_output, error_type="Authentication Error")
             raise click.ClickException(str(e))
         except Exception as e:
             # If login profile API fails for other reasons, warn but keep the token
+            # and continue with the rest of the auth process below.
             output_warning(f"Could not validate token with user profile: {e}", json_output)
-        
+
+        # Fetch feature switches independently of the login-profile result
+        try:
+            secure_config_result = api_client.get_secure_config()
+            profile_manager.save_feature_switches(secure_config_result)
+            output_status("Feature switches updated successfully.", json_output)
+        except Exception as fs_e:
+            # Feature switches fetch failure is non-blocking
+            output_warning(f"Could not fetch feature switches: {fs_e}", json_output)
+
         # Prepare result
         result = {
             'success': True,

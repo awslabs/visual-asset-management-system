@@ -7,12 +7,19 @@ import json
 import uuid
 from datetime import datetime
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from common.assetHistory import (
+    CHANGE_SOURCE_CREATE,
+    CHANGE_SOURCE_CREATE_DIRECT,
+    build_asset_snapshot,
+    write_asset_history_record,
+)
 from handlers.assets.assetCount import update_asset_count
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -37,14 +44,15 @@ logger = safeLogger(service_name="CreateAsset")
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    tag_type_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
-    tag_table_name = os.environ["TAG_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
+    from common.resourceNames import ResourceKeys, get_table_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    tag_type_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
+    tag_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -131,12 +139,27 @@ def get_default_bucket_details(databaseId):
     
 
 def save_asset_details(asset_data):
-    """Save asset details to DynamoDB"""
+    """Save a NEW asset record to DynamoDB.
+
+    Conditional on the (databaseId, assetId) not already existing so a concurrent
+    or duplicate create (e.g. a redelivered bucket-sync event) cannot silently
+    overwrite an existing asset. Callers treat the conditional failure as
+    "asset already exists".
+    """
     try:
-        asset_table.put_item(Item=asset_data)
+        asset_table.put_item(
+            Item=asset_data,
+            ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(assetId)'
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.info(f"Asset already exists on conditional create: {asset_data.get('assetId')}")
+            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
+        logger.exception(f"Error saving asset details: {e}")
+        raise VAMSGeneralErrorResponse("Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error saving asset.")
+        raise VAMSGeneralErrorResponse("Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset"""
@@ -568,18 +591,25 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         # Create a new prefix folder
         s3_key = s3_bucket_prefix + assetId + '/'
         logger.info(f"Validating new prefix uniqueness: {s3_key} in bucket: {s3_bucket}")
-        
+
         # Check if the prefix already exists (full path: bucketPrefix/assetId/)
         if check_s3_prefix_exists(s3_bucket, s3_key):
-            error_msg = "Asset identifier is not unique for the given S3 bucket location"
-            logger.error(error_msg)
-            raise VAMSGeneralErrorResponse(error_msg)
-        
-        logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
-        create_prefix_folder(s3_bucket, s3_key)
+            # For S3-external generation (bucket sync ingestion), the prefix
+            # existing is the trigger for creation: files were placed directly
+            # in S3 and the asset record is being bound onto them. Only reject
+            # if another asset record already owns the location.
+            if not s3ExternalGenerated:
+                error_msg = "Asset identifier is not unique for the given S3 bucket location"
+                logger.error(error_msg)
+                raise VAMSGeneralErrorResponse(error_msg)
+            assert_existing_key_not_owned(s3_bucket_id, s3_key)
+            logger.info(f"Binding S3-external asset to existing prefix: {s3_key} in bucket: {s3_bucket}")
+        else:
+            logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
+            create_prefix_folder(s3_bucket, s3_key)
     
     # Get username for version creation
-    username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+    username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
     
     # Create initial version record in versions table
     initial_version_id = create_initial_version_record(
@@ -609,10 +639,19 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     
     # Save asset to DynamoDB
     save_asset_details(asset)
-    
+
     # Update asset count
     update_asset_count(db_database, asset_storage_table_name, {}, databaseId)
-    
+
+    # Record creation in asset history (best-effort)
+    write_asset_history_record(
+        databaseId,
+        assetId,
+        CHANGE_SOURCE_CREATE_DIRECT if s3ExternalGenerated else CHANGE_SOURCE_CREATE,
+        username,
+        build_asset_snapshot(asset)
+    )
+
     # Return response
     return CreateAssetResponseModel(
         assetId=assetId,

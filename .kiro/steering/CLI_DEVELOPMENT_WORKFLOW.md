@@ -33,15 +33,19 @@ tools/VamsCLI/
 └── README.md               # User documentation
 ```
 
-### **Command Groups (18 top-level)**
+### **Command Groups (20 top-level)**
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, workflow,
-industry, user, role
+tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
+industry, user, role, api-key
 ```
+
+Sync has a nested sub-command group:
+
+-   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
 
 Industry has nested sub-command groups:
 
@@ -642,16 +646,19 @@ When making changes, update the appropriate documentation files:
 
 All CLI documentation lives in the Docusaurus documentation site at `documentation/docusaurus-site/docs/cli/`.
 
-**Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`):
+**Docusaurus documentation site** (`documentation/docusaurus-site/docs/cli/`) is the single source of truth for all CLI documentation:
 
 -   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
 -   **New command group** → Create new page in `cli/commands/`, update `cli/command-reference.md`, and add to `sidebars.ts`
 -   **Installation/auth changes** → Update `cli/getting-started.md` and `cli/installation.md`
 -   **Automation patterns** → Update `cli/automation.md`
+-   **Troubleshooting changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/troubleshooting/` (CLI troubleshooting lives under the CLI section, not the top-level `troubleshooting/`)
 -   **API changes** → Update relevant `documentation/docusaurus-site/docs/api/` page and `documentation/VAMS_API.yaml`
 -   **Permission changes** → Update `documentation/docusaurus-site/docs/concepts/permissions-model.md`
 
 **Docusaurus documentation style**: Use `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, `bash` language tags on code blocks. See `documentation/CLAUDE.md` for the full documentation style guide.
+
+> **Note:** The legacy in-repo docs under `tools/VamsCLI/docs/` are deprecated and retained only temporarily for migration validation. Do not add new content there. `tools/VamsCLI/README.md` keeps basic installation and quick start, then points to the official documentation site.
 
 #### **Documentation Update Checklist:**
 
@@ -664,47 +671,42 @@ All CLI documentation lives in the Docusaurus documentation site at `documentati
 -   [ ] **Accuracy Check**: Ensure all documented features actually exist in code
 -   [ ] **External Tool Integrations**: If CLI commands, parameters, output formats, or authentication flows changed, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI (Isaac Sim Python wrapper in `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`, ArcGIS Pro C# wrapper in `arcgispro-connector-for-vams/Services/VamsCliService.cs`)
 
-#### **New Documentation Structure:**
+#### **Documentation Structure (Docusaurus — single source of truth):**
 
 ```
-tools/VamsCLI/
-├── docs/
-│   ├── commands/
-│   │   ├── setup-auth.md          # Setup, auth, profile commands
-│   │   ├── asset-management.md    # Assets, asset-version, asset-links commands
-│   │   ├── file-operations.md     # File management commands
-│   │   ├── database-admin.md      # Database commands
-│   │   ├── tag-management.md      # Tag, tag-type commands
-│   │   └── global-options.md      # Global options and JSON usage
-│   │   └── ........md             # Any others that were generated afterwards
-│   ├── troubleshooting/
-│   │   ├── setup-auth-issues.md   # Setup and authentication problems
-│   │   ├── asset-file-issues.md   # Asset and file operation problems
-│   │   ├── database-tag-issues.md # Database and tag management problems
-│   │   ├── network-config-issues.md # Network, proxy, SSL issues
-│   │   └── general-troubleshooting.md # Debug mode, performance, etc.
-│   │   └── .......md              # Any others that were generated afterwards
-│   ├── INSTALLATION.md            # Installation methods and setup details
-│   ├── AUTHENTICATION.md          # Authentication system details
-│   └── DEVELOPMENT.md             # Development guidelines
-└── README.md                      # Main entry point with overview and quick start
+documentation/docusaurus-site/docs/cli/
+├── getting-started.md             # Install, first-time setup, authentication overview
+├── installation.md                # Install methods, profiles, configuration storage
+├── command-reference.md           # Index of all command groups
+├── automation.md                  # JSON output, pagination, scripting, CI/CD
+├── development.md                  # CLI contributor guide (code quality, testing, release)
+├── commands/                      # Per-command-group reference pages
+│   ├── setup-and-auth.md          # setup, auth, features, profile
+│   ├── database.md                # database commands
+│   ├── assets.md                  # assets, asset-version, asset-links, export
+│   ├── files.md                   # file management commands
+│   ├── tags.md                    # tag, tag-type commands
+│   ├── metadata.md                # metadata + metadata-schema commands
+│   ├── search.md                  # search commands
+│   ├── workflows.md               # workflow commands
+│   ├── permissions.md             # role, constraint, user-role commands
+│   ├── users-and-keys.md          # user cognito + api-key commands
+│   └── industry.md                # industry (BOM, PLM, spatial GLB) commands
+└── troubleshooting/               # CLI-specific troubleshooting (under the CLI section)
+    ├── setup-auth.md, assets-files.md, database-tags.md, search.md,
+    ├── permissions.md, users.md, industry.md, network-config.md, general.md
 ```
+
+Register any new page in `documentation/docusaurus-site/sidebars.ts` under the **CLI Reference** category (command pages under **Command Details**, troubleshooting under the **Troubleshooting** sub-category).
 
 #### **Documentation Update Process:**
 
 1. **Identify Command Group**: Determine which command group your changes affect
-2. **Update Command Documentation**: Add/modify examples in appropriate `docs/commands/` file
-3. **Update Troubleshooting**: Add error scenarios to appropriate `docs/troubleshooting/` file
-4. **Update Cross-References**: Ensure internal links work across the new structure
-5. **Test Documentation**: Verify all examples and links are accurate
-
-#### **Documentation Structure Benefits:**
-
--   **Focused Content**: Each file covers a specific functional area
--   **Easier Maintenance**: Smaller files are easier to update and review
--   **Better Navigation**: Users can find relevant information faster
--   **Scalable**: Easy to add new command groups without restructuring
--   **Reduced Conflicts**: Multiple developers can work on different areas simultaneously
+2. **Update Command Documentation**: Add/modify the appropriate `cli/commands/` page
+3. **Update Troubleshooting**: Add error scenarios to the appropriate `cli/troubleshooting/` page
+4. **Update sidebars.ts**: If a new page was added
+5. **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify links and MDX
+6. **Accuracy Check**: Ensure all documented features actually exist in code
 
 #### **When to Update CLI_DEVELOPMENT_WORKFLOW.md:**
 
@@ -716,25 +718,26 @@ tools/VamsCLI/
 -   Changing testing standards or patterns
 -   Adding new security or compliance requirements
 
-### **Rule 8: Documentation Structure MUST Follow New Organization**
+### **Rule 8: All CLI Documentation Lives in the Docusaurus Site**
 
-When updating VamsCLI documentation, use the new organized structure:
+The official Docusaurus documentation site (`documentation/docusaurus-site/docs/cli/`) is the single source of truth for CLI documentation. The legacy in-repo docs under `tools/VamsCLI/docs/` are deprecated — do not add or update content there.
 
 #### **Documentation Update Guidelines:**
 
--   **Command changes** → Update or create relevant command guides in `docs/commands/` directory
--   **Troubleshooting changes** → Update or create relevant troubleshooting guides in `docs/troubleshooting/` directory
--   **Installation/setup process** → Update `docs/INSTALLATION.md`
--   **Authentication system** → Update `docs/AUTHENTICATION.md`
--   **Development process** → Update `docs/DEVELOPMENT.md`
--   **Major feature additions** → Update main `README.md`
--   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file)
+-   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
+-   **Troubleshooting changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/troubleshooting/`
+-   **Installation/setup process** → Update `cli/getting-started.md` and `cli/installation.md`
+-   **Authentication system** → Update `cli/commands/setup-and-auth.md` (and `cli/getting-started.md` for the overview)
+-   **Automation/scripting** → Update `cli/automation.md`
+-   **CLI development process** → Update `documentation/docusaurus-site/docs/cli/development.md` (CLI-specific contributor guide); update `documentation/docusaurus-site/docs/developer/setup.md` only for changes to the full-stack/local-development setup
+-   **Basic install / quick start** → Update `tools/VamsCLI/README.md` (which then points to the official site)
+-   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file) and the mirrored `tools/VamsCLI/CLAUDE.md`
 
 #### **Documentation Organization:**
 
--   **Command Documentation** (`docs/commands/`): Organize by CLI command groups (setup/auth, assets, files, database, tags, global options)
--   **Troubleshooting Documentation** (`docs/troubleshooting/`): Organize by problem categories (setup/auth issues, asset/file issues, database/tag issues, network/config issues, general troubleshooting)
--   **Supporting Documentation** (`docs/`): Installation, authentication, and development guides
+-   **Command Documentation** (`cli/commands/`): One page per command group
+-   **Troubleshooting Documentation** (`cli/troubleshooting/`): One page per problem domain, registered under the CLI Reference → Troubleshooting sidebar sub-category
+-   **Top-level CLI pages** (`cli/`): Getting started, installation, command reference, and automation
 
 ### **Rule 9: Decorators MUST be Imported from utils.decorators**
 

@@ -96,6 +96,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                     noncurrentVersionExpiration: cdk.Duration.days(30),
                 },
             ],
+            autoDeleteObjects: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(webAppAccessLogsBucket, props.config);
 
@@ -181,7 +183,12 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             });
 
             // Bind API Gateway to /api route of cloudfront
-            addBehaviorToCloudFrontDistribution(this, website.cloudFrontDistribution, props.apiUrl);
+            addBehaviorToCloudFrontDistribution(
+                this,
+                website.cloudFrontDistribution,
+                props.apiUrl,
+                Config.API_GATEWAY_STAGE_NAME
+            );
 
             //Cloudfront Bucket Access
             webAppBucket.addToResourcePolicy(
@@ -276,6 +283,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webSiteBuildPath: props.webAppBuildPath,
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
+                apiStageName: Config.API_GATEWAY_STAGE_NAME,
                 csp: cspPolicy,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,

@@ -126,6 +126,9 @@ API_AUXILIARY_PREVIEW_ASSETS_STREAM = ApiRoute(
     "assets",
 )
 API_ASSET_EXPORT = ApiRoute("/database/{databaseId}/assets/{assetId}/export", (POST,), "assets")
+API_GET_ASSET_HISTORY = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/assetHistory", (GET,), "assetHistory"
+)
 
 ASSET_ROUTES: Tuple[ApiRoute, ...] = (
     API_ASSETS,
@@ -139,6 +142,7 @@ ASSET_ROUTES: Tuple[ApiRoute, ...] = (
     API_DOWNLOAD_ASSET_STREAM,
     API_AUXILIARY_PREVIEW_ASSETS_STREAM,
     API_ASSET_EXPORT,
+    API_GET_ASSET_HISTORY,
 )
 
 # ---------------------------------------------------------------------------
@@ -368,7 +372,7 @@ WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
 API_ASSET_LINKS = ApiRoute("/asset-links", (POST,), "assetLinks")
 API_ASSET_LINKS_SINGLE = ApiRoute("/asset-links/single/{assetLinkId}", (GET,), "assetLinks")
 API_ASSET_LINKS_UPDATE = ApiRoute("/asset-links/{assetLinkId}", (PUT,), "assetLinks")
-API_ASSET_LINKS_DELETE = ApiRoute("/asset-links/{relationId}", (DELETE,), "assetLinks")
+API_ASSET_LINKS_DELETE = ApiRoute("/asset-links/{assetLinkId}", (DELETE,), "assetLinks")
 API_ASSET_LINKS_FOR_ASSET = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/asset-links", (GET,), "assetLinks"
 )
@@ -423,6 +427,9 @@ API_AUTH_CONSTRAINT_BY_ID = ApiRoute(
     "/auth/constraints/{constraintId}", (GET, POST, PUT, DELETE), "auth"
 )
 API_AUTH_CONSTRAINTS_TEMPLATE_IMPORT = ApiRoute("/auth/constraintsTemplateImport", (POST,), "auth")
+API_AUTH_CONSTRAINT_PERMISSION_OBJECTS = ApiRoute(
+    "/auth/constraints/permissionObjects", (GET,), "auth"
+)
 API_AUTH_ROUTES = ApiRoute("/auth/routes", (POST,), "auth")
 API_AUTH_ROUTES_API = ApiRoute("/auth/routes/api", (GET,), "auth")
 API_AUTH_ROUTES_API_ALLOWED = ApiRoute("/auth/routes/api/allowed", (GET,), "auth")
@@ -443,6 +450,7 @@ AUTH_ROUTES: Tuple[ApiRoute, ...] = (
     API_AUTH_CONSTRAINTS,
     API_AUTH_CONSTRAINT_BY_ID,
     API_AUTH_CONSTRAINTS_TEMPLATE_IMPORT,
+    API_AUTH_CONSTRAINT_PERMISSION_OBJECTS,
     API_AUTH_ROUTES,
     API_AUTH_ROUTES_API,
     API_AUTH_ROUTES_API_ALLOWED,

@@ -32,7 +32,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "name",
             header: "Name",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 if (!item.name) {
                     return <></>;
@@ -57,7 +57,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "databaseId",
             header: Synonyms.Database,
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 return (
                     <Link href={`#/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
@@ -68,7 +68,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "description",
             header: "Description / File",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 const { item } = props;
                 const MAX_LENGTH = 100;
 
@@ -117,7 +117,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                         console.log(2, list);
                         return (
                             <ol>
-                                {list.map((listItemArray, i) => {
+                                {list.map((listItemArray: any, i: number) => {
                                     const listItem = Array.isArray(listItemArray)
                                         ? listItemArray[0]
                                         : {};
@@ -162,31 +162,33 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         new ColumnDefinition({
             id: "pipelines",
             header: "Pipelines",
-            cellWrapper: (props) => {
-                const displayPipelines = props?.item?.specifiedPipelines?.functions.map((item) => (
-                    <Badge key={item.name} color="grey">
-                        {item.name}
-                    </Badge>
-                ));
+            cellWrapper: (props: any) => {
+                const displayPipelines = props?.item?.specifiedPipelines?.functions.map(
+                    (item: any) => (
+                        <Badge key={item.name} color="grey">
+                            {item.name}
+                        </Badge>
+                    )
+                );
                 return <>{displayPipelines}</>;
             },
         }),
         new ColumnDefinition({
             id: "startDate",
             header: "Started",
-            cellWrapper: (props) => <>{props?.item?.startDate}</>,
+            cellWrapper: (props: any) => <>{props?.item?.startDate}</>,
             sortingField: "startDate",
         }),
         new ColumnDefinition({
             id: "stopDate",
             header: "Stopped",
-            cellWrapper: (props) => <>{props?.item?.stopDate}</>,
+            cellWrapper: (props: any) => <>{props?.item?.stopDate}</>,
             sortingField: "stopDate",
         }),
         new ColumnDefinition({
             id: "executionStatus",
             header: "Status",
-            cellWrapper: (props) => {
+            cellWrapper: (props: any) => {
                 if (!props?.item?.executionStatus || props?.item?.executionStatus === "") {
                     return <></>;
                 } else {

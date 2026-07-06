@@ -1,9 +1,11 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
+      description: "Amazon API Gateway REST API invoke URL. The stage path (default: /api) is absorbed by the web distribution fronting (CloudFront or ALB)."
       variables:
           apiGatewayUrl:
               default: ""
@@ -307,16 +309,8 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - name: "assetLinkId"
-                in: "path"
-                description: "Unique identifier for asset link."
-                required: true
-                schema:
-                    $ref: "#/components/schemas/uuid_regex"
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{relationId}:
         delete:
             summary: "Delete an asset link."
             description: "Delete an asset link by its unique identifier. Also removes associated metadata."
@@ -351,15 +345,15 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-            parameters:
-              - name: "relationId"
-                in: "path"
-                description: "Unique identifier for asset link (name kept for backwards compatability for CDK deployment, actually is assetLinkId)."
-                required: true
-                schema:
-                    $ref: "#/components/schemas/uuid_regex"
             security:
               - DefaultCognitoAuthorizer: []
+        parameters:
+          - name: "assetLinkId"
+            in: "path"
+            description: "Unique identifier for asset link."
+            required: true
+            schema:
+                $ref: "#/components/schemas/uuid_regex"
     /asset-links/{assetLinkId}/metadata:
         get:
             summary: "Get metadata for an asset link."
@@ -765,9 +759,20 @@ paths:
     /auth/loginProfile/{userId}/:
         get:
             summary: "Get loginProfile for the specified user"
+            description: "Returns the requesting user's stored login profile. A user who has authenticated but has no stored profile yet (for example, not assigned any roles) receives an identity-only profile so login can still proceed."
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/loginProfileResponse'
+                "400":
+                    description: Invalid request parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Unauthorized user.
                     content:
@@ -796,11 +801,8 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/constraint'
+                            $ref: '#/components/schemas/loginProfileUpdateRequest'
             parameters:
-            - $ref: '#/components/parameters/maxItemsParam'
-            - $ref: '#/components/parameters/pageSizeParam'
-            - $ref: '#/components/parameters/startingTokenParam'            
             - name: "userId"
               in: "path"
               description: "Unique identifier for user."
@@ -810,6 +812,16 @@ paths:
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/loginProfileResponse'
+                "400":
+                    description: Invalid request parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Unauthorized user.
                     content:
@@ -876,6 +888,29 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
+    /auth/constraints/permissionObjects:
+        get:
+            tags:
+                - auth
+            summary: "List constraint permission objects"
+            description: >-
+                Returns the master list of constraint object types (with the fields valid
+                on each), the criteria operators, the permissions (HTTP actions), and the
+                permission types. Used by the constraints editor and CLI to drive
+                objectType, field, operator, permission, and permissionType selection.
+            responses:
+                "200":
+                    description: Constraint object types, operators, permissions, and permission types
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getConstraintPermissionObjectsResponse"
+                "403":
+                    description: Forbidden
+                "500":
+                    description: Internal server error
+            security:
+                - DefaultCognitoAuthorizer: []
     /auth/routes/api/allowed:
         get:
             summary: "List the API routes the current user is authorized to call."
@@ -1737,8 +1772,8 @@ paths:
                 $ref: '#/components/schemas/id_regex'
     /database/{databaseId}/assets/{assetId}/download:
         post:
-            summary: "Generate presigned url for downloading the given or latest version of an asset"
-            description: "Generate presigned url for downloading the given or latest version of an asset. Provide an optional key to specify the file within the asset. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
+            summary: "Generate presigned url(s) for downloading the given or latest version of an asset"
+            description: "Generate presigned url(s) for downloading the given or latest version of an asset. Provide an optional key to specify a single file within the asset, or keys to generate URLs for multiple files of the same asset in one request (max 1500 keys per request; assetFile only; key and keys are mutually exclusive). Each keys entry is either a relative-path string (latest version) or an object {key, versionId} pinning that file to a specific S3 version; per-file versionIds are mutually exclusive with a request-level assetVersionId/assetVersionIdAlias. Version resolution per file: assetVersionId/assetVersionIdAlias pins ALL files to that asset version snapshot; otherwise a per-file versionId (or the single versionId for a single key) selects that S3 version; with no version specified the latest file version is returned. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified; versionId cannot be combined with keys (put versions on individual keys instead). Version parameters are not allowed for assetPreview downloads. Bulk requests skip file paths that do not exist or are not downloadable (reported per file with success=false and a warning in the message) and fail only when no URL can be generated."
             requestBody:
                 required: true
                 content:
@@ -1751,32 +1786,85 @@ paths:
                             properties:
                                 key:
                                     $ref: "#/components/schemas/asset_path_pattern_regex"
+                                keys:
+                                    type: array
+                                    maxItems: 1500
+                                    items:
+                                        oneOf:
+                                            - type: string
+                                              description: "Relative file path (leading '/'); resolves to the latest version."
+                                            - type: object
+                                              required: [key]
+                                              properties:
+                                                  key:
+                                                      type: string
+                                                      description: "Relative file path (leading '/')."
+                                                  versionId:
+                                                      type: string
+                                                      description: "S3 version ID to pin this file to; omit for latest."
+                                    description: "Optional array of file keys to generate presigned URLs for in bulk (same asset). Each entry is a path string (latest) or {key, versionId}. Mutually exclusive with key; not allowed for assetPreview; per-file versionIds cannot combine with assetVersionId/assetVersionIdAlias."
                                 versionId:
                                     type: string
-                                    description: "Optional S3 version ID to download a specific version of the file."
+                                    description: "Optional S3 version ID to download a specific version of the file. Cannot be combined with keys."
                                 assetVersionId:
                                     type: string
-                                    description: "Optional VAMS asset version ID. Resolves the S3 versionId from the asset version snapshot for the specified file. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
+                                    description: "Optional VAMS asset version ID. Resolves the S3 versionId from the asset version snapshot for the specified file(s). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
                                 assetVersionIdAlias:
                                     type: string
                                     description: "Optional asset version alias name. Resolves the alias to an asset version ID, then resolves the S3 versionId from the asset version snapshot. Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified."
             responses:
                 "200":
-                    description: Presigned url for asset download is generated.
+                    description: Presigned url(s) for asset download generated. Single-file requests populate downloadUrl/versionId; bulk requests (keys) additionally populate files with one entry per requested key (downloadUrl carries the first successful URL for compatibility).
                     content:
                         application/json:
                             schema:
                                 type: object
                                 properties:
+                                    downloadUrl:
+                                        type: string
+                                        description: "Presigned URL (first successful URL for bulk requests)."
+                                    expiresIn:
+                                        type: integer
+                                        description: "URL expiration in seconds."
+                                    downloadType:
+                                        type: string
+                                        enum: [assetFile, assetPreview]
+                                    versionId:
+                                        type: string
+                                        nullable: true
+                                    files:
+                                        type: array
+                                        nullable: true
+                                        description: "Per-file entries for bulk requests; null for single-file requests."
+                                        items:
+                                            type: object
+                                            properties:
+                                                key:
+                                                    type: string
+                                                downloadUrl:
+                                                    type: string
+                                                    nullable: true
+                                                versionId:
+                                                    type: string
+                                                    nullable: true
+                                                success:
+                                                    type: boolean
+                                                error:
+                                                    type: string
+                                                    nullable: true
+                                                    description: "Per-file failure reason when success is false (file missing, archived, etc.)."
                                     message:
                                         type: string
-                                        example: url
+                                        description: "Status message; includes a warning when bulk file paths were skipped."
                 "400":
                     description: |
                         Bad request. Possible reasons:
                         - DatabaseId OR AssetId invalid.
                         - Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified.
+                        - Only one of key or keys can be specified; keys not allowed for assetPreview; versionId cannot be combined with keys.
+                        - keys exceeds the maximum of 1500 entries.
                         - Version parameters are not allowed for assetPreview downloads.
+                        - No download URLs could be generated for the requested files (bulk request where every path was invalid).
                         - Ambiguous alias: multiple versions share this alias.
                     content:
                         application/json:
@@ -2026,13 +2114,78 @@ paths:
                       $ref: '#/components/schemas/asset_id_regex'
             security:
                 - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/assetHistory:
+        get:
+            summary: "Get asset lifecycle history records."
+            description: "Returns the lifecycle history records for an asset (create, edit, archive, unarchive, permanent delete), newest first, with the acting user and a snapshot of the asset fields after each operation. History records persist across permanent deletion and are returned again if an asset is recreated with the same asset ID. Returns 404 when no asset record exists (live or archived) for the ID."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getAssetHistoryResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view history for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+              - name: pageSize
+                in: query
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 1000
+                    default: 100
+                description: Maximum number of history records per page.
+              - name: startingToken
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: Continuation token from a previous response's NextToken.
+            security:
+              - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}:
         get:
             summary: "Stream asset files with HTTP range support."
-            description: "Stream asset files directly with HTTP range support for large files. Requires asset to be distributable. Supports partial content requests via Range headers for efficient streaming of large files. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
+            description: "Stream asset files with HTTP range support for large files. Requires asset to be distributable. Delivery uses one of two modes selected by the ALWAYS_REDIRECT_TO_PRESIGNED toggle in the streamAsset handler. In presigned-redirect mode (required on the API Gateway REST API, and the current default), every request returns a 307 redirect to a short-lived S3 presigned URL that the client follows to fetch the bytes directly from the CORS-enabled asset bucket (S3 serves Range/206 natively). In inline mode, files at or under ~4.4MB are returned inline (base64-encoded for binary) and larger files fall back to the 307 redirect. Optionally specify a version using one of versionId (S3 version), assetVersionId (VAMS asset version snapshot), or assetVersionIdAlias (named version alias). Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified. Version parameters are not allowed for assetPreview downloads."
             responses:
                 "200":
-                    description: Asset file content streamed successfully.
+                    description: Asset file content returned inline (inline mode, files at or under ~4.4MB).
                     content:
                         application/octet-stream:
                             schema:
@@ -2095,6 +2248,13 @@ paths:
                                 type: string
                         Content-Length:
                             description: "Size of the partial content in bytes"
+                            schema:
+                                type: string
+                "307":
+                    description: "Temporary redirect to an S3 presigned URL for the file (presigned-redirect mode, and for larger files in inline mode). The client follows the Location header to fetch the bytes directly from S3."
+                    headers:
+                        Location:
+                            description: "S3 presigned URL to fetch the file content."
                             schema:
                                 type: string
                 "400":
@@ -2297,10 +2457,10 @@ paths:
     /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}:
         get:
             summary: "Stream auxiliary preview asset files with HTTP range support."
-            description: "Stream auxiliary preview asset files (e.g., converted formats, thumbnails) directly with HTTP range support. These are preview files stored in the auxiliary bucket. Supports partial content requests via Range headers for efficient streaming of large files."
+            description: "Stream auxiliary preview asset files (e.g., converted formats, thumbnails, octree / 3D tile viewer data) from the auxiliary bucket, with HTTP range support. Delivery uses one of two modes selected by the ALWAYS_REDIRECT_TO_PRESIGNED toggle in the streamAuxiliaryPreviewAsset handler. In presigned-redirect mode (required on the API Gateway REST API, and the current default), every request returns a 307 redirect to a short-lived S3 presigned URL that the client follows to fetch the bytes directly from the CORS-enabled auxiliary bucket (S3 serves Range/206 natively). In inline mode, files at or under ~4.4MB are returned inline (base64-encoded for binary) and larger files fall back to the 307 redirect."
             responses:
                 "200":
-                    description: Auxiliary preview file content streamed successfully.
+                    description: Auxiliary preview file content returned inline (inline mode, files at or under ~4.4MB).
                     content:
                         application/octet-stream:
                             schema:
@@ -2363,6 +2523,13 @@ paths:
                                 type: string
                         Content-Length:
                             description: "Size of the partial content in bytes"
+                            schema:
+                                type: string
+                "307":
+                    description: "Temporary redirect to an S3 presigned URL for the file (presigned-redirect mode, and for larger files in inline mode). The client follows the Location header to fetch the bytes directly from S3."
+                    headers:
+                        Location:
+                            description: "S3 presigned URL to fetch the file content."
                             schema:
                                 type: string
                 "400":
@@ -3676,7 +3843,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/unarchiveAsset:
         put:
             summary: "Unarchive an asset (restore from soft delete)."
-            description: "Restore a previously archived asset by removing S3 delete markers and moving the asset record back to the active database partition. The databaseId can be provided with or without the #deleted suffix, which will be normalized automatically."
+            description: "Restore a previously archived asset by moving the asset record back to the active database partition. By default the asset's files remain archived. Set unarchiveFiles to true to also restore the files that the asset archive operation archived (tracked via assetArchive provenance in the file version history); files archived individually beforehand always remain archived and can be restored with the file unarchive endpoint. Assets archived before provenance tracking have no restorable file set, so no files are restored for them. The databaseId can be provided with or without the #deleted suffix, which will be normalized automatically."
             requestBody:
                 required: true
                 content:
@@ -3692,11 +3859,16 @@ paths:
                                     type: string
                                     maxLength: 256
                                     description: "Optional reason for unarchiving the asset"
+                                unarchiveFiles:
+                                    type: boolean
+                                    description: "Also restore the files archived by the asset archive operation. Files archived individually beforehand remain archived."
+                                    default: false
                             required:
                                 - confirmUnarchive
                             example:
                                 confirmUnarchive: true
                                 reason: "Restoring asset for active use"
+                                unarchiveFiles: true
             responses:
                 "200":
                     description: Asset unarchived successfully.
@@ -8319,6 +8491,22 @@ components:
         userid_regex:
             type: string
             pattern: ^[\w\-\.\+\@]{3,256}$
+        loginProfileResponse:
+            type: object
+            description: "User login profile. May include organization-specific fields beyond those listed."
+            properties:
+                userId:
+                    type: string
+                email:
+                    type: string
+            required:
+                - userId
+        loginProfileUpdateRequest:
+            type: object
+            description: "Optional body for updating a login profile. May be overridden by organization-specific profile logic."
+            properties:
+                email:
+                    type: string
         userRole:
             type: object
             properties: 
@@ -8723,6 +8911,10 @@ components:
                 versionId:
                     type: string
                     description: "S3 version ID"
+                etag:
+                    type: string
+                    description: "S3 ETag of the file's current version. Present for non-folder objects in both basic and full mode; null for folders."
+                    nullable: true
                 isArchived:
                     type: boolean
                     description: "Whether the file is archived (soft deleted)"
@@ -8741,7 +8933,7 @@ components:
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
-                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
+                    description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
             required:
                 - fileName
                 - key
@@ -8842,7 +9034,7 @@ components:
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
-                    description: "User (or SYSTEM) that created the current file version. Blank or absent for legacy versions."
+                    description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
                 versions:
                     type: array
                     items:
@@ -8884,7 +9076,7 @@ components:
                                 description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, fileRevert). Blank or absent for legacy versions."
                             changeUserId:
                                 type: string
-                                description: "User (or SYSTEM) that created this version. Blank or absent for legacy versions."
+                                description: "User (or SYSTEM_USER) that created this version. Blank or absent for legacy versions."
                             changeWorkflowId:
                                 type: string
                                 description: "Workflow ID that created this version, when changeSource is workflowExecution."
@@ -9162,7 +9354,65 @@ components:
                     description: "Token for pagination"
             required:
                 - versions
-        
+
+        assetHistoryRecord:
+            type: object
+            properties:
+                historyRecordId:
+                    type: string
+                    description: "Record sort key ({recordDate}#{suffix}); chronologically sortable"
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                recordDate:
+                    type: string
+                    description: "ISO-8601 UTC timestamp of the operation"
+                changeSource:
+                    type: string
+                    enum:
+                        - create
+                        - createDirect
+                        - edit
+                        - archive
+                        - unarchive
+                        - unarchiveDirect
+                        - permanentDelete
+                    description: "Lifecycle operation; the *Direct variants mark changes originated from S3 bucket-sync ingestion"
+                changeUserId:
+                    type: string
+                    description: "Acting user ID or SYSTEM_USER"
+                assetSnapshot:
+                    type: object
+                    additionalProperties: true
+                    description: "Open-schema snapshot of asset fields after the operation (assetName, description, isDistributable, tags, bucketId, assetLocationKey, archivedReason/unarchivedReason when applicable; fields may grow over time)"
+                migratedRecord:
+                    type: boolean
+                    description: "Present and true on records backfilled by the deployment data migration"
+            required:
+                - historyRecordId
+                - databaseId
+                - assetId
+                - recordDate
+                - changeSource
+                - changeUserId
+
+        getAssetHistoryResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetHistoryRecord"
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Token for pagination; absent when no further pages exist"
+            required:
+                - Items
+
         assetVersionOperationResponse:
             type: object
             properties:
@@ -11036,6 +11286,64 @@ components:
                 userId: "user@example.com"
                 operation: "create"
                 timestamp: "2024-01-15T10:30:00.000Z"
+        constraintObjectTypeField:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintObjectType:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+                fields:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintObjectTypeField"
+        constraintOperator:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintPermission:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        constraintPermissionType:
+            type: object
+            properties:
+                label:
+                    type: string
+                value:
+                    type: string
+        getConstraintPermissionObjectsResponse:
+            type: object
+            properties:
+                objectTypes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintObjectType"
+                operators:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintOperator"
+                permissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintPermission"
+                permissionTypes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/constraintPermissionType"
     parameters:
       maxItemsParam:
         name: maxItems

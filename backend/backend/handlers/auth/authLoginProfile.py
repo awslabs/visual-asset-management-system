@@ -1,66 +1,70 @@
-#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#  SPDX-License-Identifier: Apache-2.0
+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 import json
 import boto3
-import botocore.exceptions
-import os
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from customConfigCommon.customAuthLoginProfile import customAuthProfileLoginWriteOverride
 from handlers.auth import request_to_claims
-from handlers.authz import CasbinEnforcer
-from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
+from common.validators import validate
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_other
-from common.validators import validate
+from models.common import (
+    APIGatewayProxyResponseV2, internal_error, success,
+    validation_error, general_error, authorization_error,
+    VAMSGeneralErrorResponse
+)
+from models.authLoginProfile import UpdateLoginProfileRequestModel
 
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="AuthLoginProfile")
-dynamodb = boto3.resource('dynamodb')
 
 claims_and_roles = {}
-main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
-    user_table_name = os.environ["USER_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
-    main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
+    user_table_name = get_table_name(ResourceKeys.USER_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving user table name")
+    user_table_name = None
+
+user_table = dynamodb.Table(user_table_name) if user_table_name else None
+
 
 def create_update_user(userId, email, lambdaRequestEvent):
-
+    """Create or update the user's stored profile, applying any organization override."""
     userProfile = {
-            'userId': userId,
-            'email': email,
-        }
+        'userId': userId,
+        'email': email,
+    }
 
-    #Override with any custom organization profile information
+    # Override with any custom organization profile information
     userProfileO = customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent)
 
-    #Do some sanity checks
-    if userProfileO == None or userProfileO is not dict:
+    # Sanity check the override result
+    if userProfileO is None or not isinstance(userProfileO, dict):
         userProfileO = userProfile
 
-    #Make sure userId wasn't messed with so reset just in case
+    # Ensure userId was not altered by the override
     userProfileO['userId'] = userId
 
-    user_table = dynamodb.Table(user_table_name)
-    user_table.put_item(
-        Item=userProfileO
-    )
+    user_table.put_item(Item=userProfileO)
+    return userProfileO
 
-    return {"message": {"Items": [userProfileO]}}
 
 def get_user(userId):
-    user_table = dynamodb.Table(user_table_name)
-    response = user_table.get_item(
-        Key={
-            'userId': userId
-        }
-    )
-    return {"message": {"Items": [response["Item"]]}}
+    """Return the stored profile for userId, or an identity-only profile when none exists."""
+    response = user_table.get_item(Key={'userId': userId})
+    # A user with no stored profile (e.g. not yet assigned any roles) has no item;
+    # return the identity so login can still proceed.
+    return response.get("Item") or {'userId': userId}
 
-def lambda_handler(event, _):
-    response = STANDARD_JSON_RESPONSE
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    global claims_and_roles
 
     try:
         claims_and_roles = request_to_claims(event)
@@ -68,100 +72,65 @@ def lambda_handler(event, _):
         if len(claims_and_roles["tokens"]) > 0:
             authorizerUserId = claims_and_roles["tokens"][0]
 
-        #Format body but body not required
-        if 'body' in event:
-            try:
-                if isinstance(event['body'], str):
-                    event['body'] = json.loads(event['body'])
-            except json.JSONDecodeError as e:
-                logger.exception(f"Invalid JSON in request body: {e}")
-                response['statusCode'] = 400
-                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
-                return response
-        else:
-            event["body"] = {}
-
-        pathParameters = event.get('pathParameters', {})
-
-        pathUserId = ""
-        if 'userId' in pathParameters:
-            pathUserId = pathParameters.get('userId')
-
-        emailBody = ""
-        if 'email' in event["body"]:
-            emailBody = event["body"].get('email')
+        pathParameters = event.get('pathParameters') or {}
+        pathUserId = pathParameters.get('userId', "")
 
         method = event['requestContext']['http']['method']
 
-        #Validation Checks
-        logger.info("Validating parameters")
+        # Validate the path userId
         (valid, message) = validate({
             'userId': {
                 'value': pathUserId,
-                'validator': 'USERID',
-                #'optional': True
-            },
-            'email': {
-                'value': emailBody,
-                'validator': 'EMAIL',
-                'optional': True
-            },
+                'validator': 'USERID'
+            }
         })
         if not valid:
-            logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
+            return validation_error(body={'message': message}, event=event)
 
-        #Routes
-        if(pathUserId and (method == "POST" or method == "GET") and authorizerUserId == pathUserId):
-            #SELF-USER ROUTE - If userId and Claims UserId match, auto-authorize (they may not be in the roles systems yet but allow user profile updating)
-            logger.info("Authorizer UserId and Path UserId match, auto-authorize")
-
+        # SELF-USER ROUTE: when the path userId matches the caller, auto-authorize.
+        # Users may not be in the roles system yet but must still read/update their profile.
+        if pathUserId and method in ("POST", "GET") and authorizerUserId == pathUserId:
             if method == "POST":
-                #POST
-                #Create or update user
-                logger.info("Create or update user")
-                result = create_update_user(pathUserId, emailBody, event)
-                
+                email = ""
+                body = event.get('body')
+                if body:
+                    if isinstance(body, str):
+                        body = json.loads(body)
+                    request = parse(body, model=UpdateLoginProfileRequestModel)
+                    email = request.email or ""
+                profile = create_update_user(pathUserId, email, event)
+
                 # AUDIT LOG: User profile created/updated
                 log_auth_other(event, "userProfileUpdate", {
                     "userId": pathUserId,
                     "operation": "create_update",
                     "selfAccess": True
                 })
-                
-                response["body"] = json.dumps(result)
-                response["statusCode"] = 200
-                return response
-            elif method == "GET":
-                #GET
-                #Get user
-                logger.info("Get user")
-                result = get_user(pathUserId)
-                
-                # AUDIT LOG: User profile retrieved
-                log_auth_other(event, "userProfileGet", {
-                    "userId": pathUserId,
-                    "operation": "get",
-                    "selfAccess": True
-                })
-                
-                response["body"] = json.dumps(result)
-                response["statusCode"] = 200
-                return response
+                return success(body=profile)
 
-        else:
-            #ADMINISTRATION ROUTE
-            #logger.info("Authorizer UserId and Path UserId do not match, check roles for administration")
-            #TODO - Not done yet so just unauthorized for now
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+            # GET
+            profile = get_user(pathUserId)
 
+            # AUDIT LOG: User profile retrieved
+            log_auth_other(event, "userProfileGet", {
+                "userId": pathUserId,
+                "operation": "get",
+                "selfAccess": True
+            })
+            return success(body=profile)
+
+        # ADMINISTRATION ROUTE (viewing another user) is not implemented yet.
+        return authorization_error()
+
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)}, event=event)
     except Exception as e:
-        response["statusCode"] = 500
-        logger.exception(e)
-        response["body"] = json.dumps({"message": "Internal Server Error"})
-
-        return response
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)

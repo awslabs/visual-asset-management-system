@@ -7,13 +7,18 @@ import os
 from customLogging.logger import safeLogger
 from common.dynamodb import to_update_expr
 from boto3.dynamodb.conditions import Key
+from common.resourceNames import ResourceKeys, get_table_name
 
 logger = safeLogger(service="PreTokenGen")
 
-region = os.environ['AWS_REGION']
-dynamodb = boto3.resource('dynamodb', region_name=region)
-authEntTable = dynamodb.Table(os.environ['AUTH_TABLE_NAME'])
-userRoleTable = dynamodb.Table(os.environ['USER_ROLES_TABLE_NAME'])
+try:
+    region = os.environ['AWS_REGION']
+    dynamodb = boto3.resource('dynamodb', region_name=region)
+    authEntTable = dynamodb.Table(get_table_name(ResourceKeys.AUTH_ENTITIES_STORAGE_TABLE))
+    userRoleTable = dynamodb.Table(get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE))
+except Exception as e:
+    logger.exception("Failed loading environment variables or resolving table names")
+    raise e
 
 
 def get_vams_roles(event):

@@ -7,7 +7,22 @@ import PropTypes from "prop-types";
 import ElementDefinition from "./ElementDefinition";
 import OptionDefinition from "./OptionDefinition";
 
-export default function ControlDefinition(props) {
+interface ControlDefinition {
+    id: any;
+    label: any;
+    constraintText: any;
+    elementDefinition: any;
+    options: any;
+    defaultOption: any;
+    appearsWhen: any;
+}
+
+interface ControlDefinitionConstructor {
+    new (props: any): ControlDefinition;
+    propTypes: any;
+}
+
+function ControlDefinitionImpl(this: ControlDefinition, props: any) {
     const { label, id, constraintText, elementDefinition, options, defaultOption, appearsWhen } =
         props;
     this.id = id;
@@ -19,12 +34,17 @@ export default function ControlDefinition(props) {
     this.appearsWhen = appearsWhen;
 }
 
-ControlDefinition.propTypes = {
+(ControlDefinitionImpl as any).propTypes = {
     label: PropTypes.string.isRequired,
     id: PropTypes.string.isRequired,
     constraintText: PropTypes.string.isRequired,
-    elementDefinition: PropTypes.instanceOf(ElementDefinition),
-    options: PropTypes.arrayOf(OptionDefinition),
-    defaultOption: PropTypes.instanceOf(OptionDefinition),
+    elementDefinition: PropTypes.instanceOf(ElementDefinition as any),
+    options: PropTypes.arrayOf(OptionDefinition as any),
+    defaultOption: PropTypes.instanceOf(OptionDefinition as any),
     appearsWhen: PropTypes.array,
 };
+
+const ControlDefinition = ControlDefinitionImpl as unknown as ControlDefinitionConstructor;
+
+export default ControlDefinition;
+export type { ControlDefinition };

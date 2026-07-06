@@ -14,6 +14,7 @@ import random
 import string
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows.stepfunctions_builder import (
     create_lambda_task_state,
     create_fail_state,
@@ -74,7 +75,7 @@ sf_client = boto3.client('stepfunctions', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 try:
-    workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
+    workflow_Database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
     stack_name = os.environ["VAMS_STACK_NAME"]
     process_workflow_output_function = os.environ['PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME']
     # Interim pipeline-tracking lambda and the error-handler lambda.
@@ -88,7 +89,7 @@ try:
     # China/ISO deployments inject the matching partition so the ASL is valid there.
     aws_partition = os.environ.get('AWS_PARTITION', 'aws') or 'aws'
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 
@@ -600,7 +601,7 @@ def create_workflow(payload, claims_and_roles):
         dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
 
         # Get username from claims_and_roles tokens array
-        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "SYSTEM"
+        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "SYSTEM_USER"
 
         Item = {
             'databaseId': database_id,

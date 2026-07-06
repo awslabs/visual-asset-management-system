@@ -21,6 +21,7 @@ import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
+import { RouteRegistry } from "../../apiLambda/apiRouteRegistry";
 import * as Config from "../../../../config/config";
 import {
     buildPhysnaFileSyncFunction,
@@ -28,7 +29,7 @@ import {
     buildPhysnaViewerFunction,
 } from "./lambdaBuilder/physnaSyncFunctions";
 import { Service } from "../../../helper/service-helper";
-import { attachFunctionToApi } from "../../apiLambda/apiBuilder-nestedStack";
+import { attachFunctionToApi } from "../../apiLambda/apiRouteRegistry";
 import { NagSuppressions } from "cdk-nag";
 
 export interface PhysnaSyncBuilderNestedStackProps extends cdk.StackProps {
@@ -37,7 +38,7 @@ export interface PhysnaSyncBuilderNestedStackProps extends cdk.StackProps {
     isolatedSubnets: ec2.ISubnet[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    api: apigwv2.HttpApi;
+    registry: RouteRegistry;
 }
 
 const defaultProps: Partial<PhysnaSyncBuilderNestedStackProps> = {};
@@ -110,7 +111,7 @@ export class PhysnaSyncBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, viewerFunction, {
             routePath: "/addon/physna/viewer",
             method: apigwv2.HttpMethod.GET,
-            api: props.api,
+            registry: props.registry,
         });
 
         // SQS queues — one per SNS topic subscription

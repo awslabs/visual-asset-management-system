@@ -222,7 +222,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     databaseId,
                     key: assetKey,
                     versionId: versionId,
-                    assetVersionId: assetVersionId,
+                    assetVersionId: assetVersionId as any,
                     downloadType: "assetFile",
                 });
 

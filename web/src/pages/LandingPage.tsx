@@ -24,7 +24,7 @@ import uploadAndManageImageSrc from "../resources/img/upload_and_manage.png";
 import visualize3dVrImageSrc from "../resources/img/visualize_3d_vr.png";
 import Synonyms from "../synonyms";
 
-const CarouselRadio = ({ id, setSlide, slide }) => {
+const CarouselRadio = ({ id, setSlide, slide }: { id: any; setSlide: any; slide: any }) => {
     return (
         <input
             type="radio"
@@ -36,27 +36,43 @@ const CarouselRadio = ({ id, setSlide, slide }) => {
     );
 };
 
-const LandingPage = (props) => {
+const LandingPage = (props: any) => {
     const { navigationOpen } = props;
     usePageTitle("Home");
     const [carouselHeight, setCarouselHeight] = useState(400);
     const [slide, setSlide] = useState("img-1");
-    const firstCarouselImageEl = useRef(null);
+    const firstCarouselImageEl = useRef<HTMLImageElement>(null);
+
+    // Measure the rendered height of the first carousel image and size the carousel
+    // to match. The slides are absolutely positioned (zero intrinsic height), so the
+    // carousel only becomes visible once this height is set.
+    function measureCarouselHeight() {
+        const currentHeight = firstCarouselImageEl?.current?.clientHeight;
+        if (currentHeight && currentHeight !== carouselHeight) {
+            setCarouselHeight(currentHeight);
+        }
+    }
 
     useEffect(() => {
-        function handleResize() {
-            const currentHeight = firstCarouselImageEl?.current?.clientHeight;
-            if (currentHeight !== carouselHeight) {
-                setCarouselHeight(currentHeight);
-            }
-        }
-        setTimeout(() => handleResize(), 100);
+        // Re-measure on navigation/resize. On a cold cache the image has no height yet
+        // on first paint; the <img onLoad> handler below re-measures once it decodes.
+        measureCarouselHeight();
 
-        window.addEventListener("resize", handleResize);
+        window.addEventListener("resize", measureCarouselHeight);
         return () => {
-            window.removeEventListener("resize", handleResize);
+            window.removeEventListener("resize", measureCarouselHeight);
         };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [navigationOpen, carouselHeight]);
+
+    // Handle the case where the image is already cached and complete before React
+    // attaches the onLoad handler (the load event would not fire again).
+    useEffect(() => {
+        if (firstCarouselImageEl.current?.complete) {
+            measureCarouselHeight();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     return (
         <Box margin={{ bottom: "l" }}>
@@ -158,6 +174,7 @@ const LandingPage = (props) => {
                                                         ref={firstCarouselImageEl}
                                                         src={uploadAndManageImageSrc}
                                                         alt={`Upload & Manage ${Synonyms.Assets}`}
+                                                        onLoad={measureCarouselHeight}
                                                     />
                                                 </div>
                                             </li>

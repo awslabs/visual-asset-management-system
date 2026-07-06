@@ -59,6 +59,14 @@ Certain optional components use LGPL-2.1 licensed libraries:
 LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
 :::
 
+### Coordinate Transform Pipeline Library Notice
+
+The Coordinate Transform pipeline depends on the open-source [laspy](https://github.com/laspy/laspy) library for reading and writing LAS/LAZ point cloud files. laspy is distributed under a 3-clause BSD license (BSD-3-Clause). The license text is a verbatim instance of the standard BSD-3-Clause template — its terms are equivalent to other permissive licenses such as MIT and Apache-2.0 (permitting use, modification, and redistribution with attribution and no warranty), with the additional standard third clause prohibiting use of the copyright holders' names to endorse derived products. It imposes no copyleft obligations.
+
+:::note
+The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
+:::
+
 ### Commercial Licensed Components
 
 Some viewer plugins and processing pipelines require separate commercial licenses:

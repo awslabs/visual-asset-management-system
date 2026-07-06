@@ -33,6 +33,7 @@ interface CreatePipelineProps {
     setReload: (reload: boolean) => void;
     // initState?: PipelineFields;
     initState?: any;
+    database?: any;
 }
 
 interface PipelineFields {

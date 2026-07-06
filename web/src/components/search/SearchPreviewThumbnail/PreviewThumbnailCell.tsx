@@ -103,7 +103,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                     setLoading(true);
                     setError(false);
                     // Cache miss - fetch asset details from API
-                    console.log(`[Cache MISS] Asset details for ${assetId}`);
+                    //console.log(`[Cache MISS] Asset details for ${assetId}`);
                     const assetDetails = await fetchAsset({
                         databaseId,
                         assetId,
@@ -148,7 +148,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                     setAssetPreviewKey(assetPreviewKey);
                 }
 
-                console.log(`Loading preview for asset ${assetId} with key: ${assetPreviewKey}`);
+                //console.log(`Loading preview for asset ${assetId} with key: ${assetPreviewKey}`);
 
                 // Check preview cache before downloading
                 const previewCacheKey = `preview:${databaseId}:${assetId}:${assetPreviewKey}`;
@@ -163,7 +163,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                 }
 
                 // Cache miss - download the preview image
-                console.log(`[Cache MISS] Preview image for ${assetId}`);
+                //console.log(`[Cache MISS] Preview image for ${assetId}`);
                 const response = await downloadAsset({
                     databaseId,
                     assetId,
@@ -187,11 +187,11 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                             { dataUrl: imageDataUrl },
                             imageSize
                         );
-                        console.log(
-                            `[Cache SET] Preview image for ${assetId} (${(imageSize / 1024).toFixed(
-                                2
-                            )} KB)`
-                        );
+                        // console.log(
+                        //     `[Cache SET] Preview image for ${assetId} (${(imageSize / 1024).toFixed(
+                        //         2
+                        //     )} KB)`
+                        // );
                     }
                 } else {
                     setError(true);

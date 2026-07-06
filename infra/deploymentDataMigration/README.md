@@ -190,6 +190,14 @@ For example, the v2.1 to v2.2 upgrade scripts are located in `infra/deploymentDa
 
 Refer to the version-specific migration instructions for details on how to run these scripts.
 
+### SSM Resource-Name Lookup (v2.6+ migrations)
+
+Deployments publish their DynamoDB table names, non-asset S3 bucket names, deprecated migration-only table names, and selected Lambda function names as SSM parameters under a deployment-unique base prefix, exposed by the core stack output `ResourceNamesSSMParamPrefixOutput`. Migration scripts targeting v2.6+ deployments resolve resource names through the shared utility `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (`SsmResourceLookup` + `ResourceParamKeys`) instead of requiring operators to copy each physical name into the migration config. The operator fills in only the base prefix (and region/profile); explicit per-resource config values remain supported as optional overrides via `resolve_with_override()`.
+
+Migration scripts for upgrades **to versions before v2.6** (v2.4 to v2.5 and earlier) keep their explicit-name configs, because the source deployments do not publish the SSM parameters. The reindex utility (`tools/reindex_utility.py`) also keeps its explicit inputs since it serves those earlier upgrade paths; v2.6+ migration scripts resolve names via `SsmResourceLookup` and pass them to it.
+
+When a new DynamoDB table, audit log group, or migration-consumed Lambda function is added to the deployment, add the matching constant to `ResourceParamKeys` in `ssm_resource_lookup.py` alongside the `infra/common/resourceParamKeys.ts` and `backend/backend/common/resourceNames.py` entries.
+
 ### Migration Script Template Outline
 
 Migration script templates for A/B deployments can be found at `./infra/deploymentDataMigration/config/`.

@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const addToColumnDefinitions = (columnDefinitions, propertyName, columns) =>
-    columnDefinitions.map((colDef) => {
-        const column = (columns || []).find((col) => col.id === colDef.id);
+export const addToColumnDefinitions = (columnDefinitions: any, propertyName: any, columns: any) =>
+    columnDefinitions.map((colDef: any) => {
+        const column = (columns || []).find((col: any) => col.id === colDef.id);
         return {
             ...colDef,
             [propertyName]: (column && column[propertyName]) || colDef[propertyName],
         };
     });
 
-export const mapWithColumnDefinitionIds = (columnDefinitions, propertyName, items) =>
-    columnDefinitions.map(({ id }, i) => ({
+export const mapWithColumnDefinitionIds = (columnDefinitions: any, propertyName: any, items: any) =>
+    columnDefinitions.map(({ id }: { id: any }, i: any) => ({
         id,
         [propertyName]: items[i],
     }));

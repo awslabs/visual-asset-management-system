@@ -148,6 +148,13 @@ code {
     box-sizing: border-box;
 }
 
+// The negative margins above offset page-level padding on the asset view page;
+// inside the file viewer modal they pull the viewer under the modal header
+.file-viewer-modal-content .visualizer-container {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
 .visualizer-footer {
     background-color: #00000055;
     text-align: right;

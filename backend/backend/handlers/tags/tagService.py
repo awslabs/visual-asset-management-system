@@ -3,7 +3,6 @@
 
 """Tag service handler for VAMS API."""
 
-import os
 import boto3
 import json
 from datetime import datetime
@@ -12,6 +11,7 @@ from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -41,17 +41,20 @@ claims_and_roles = {}
 deserializer = TypeDeserializer()
 paginator = dynamodb_client.get_paginator('scan')
 
-# Load environment variables with error handling
 try:
-    tag_db_table_name = os.environ["TAGS_STORAGE_TABLE_NAME"]
-    tag_type_db_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
+    tag_db_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving tags table name")
+    tag_db_table_name = None
 
-# Initialize DynamoDB tables
-tag_table = dynamodb.Table(tag_db_table_name)
-tag_type_table = dynamodb.Table(tag_type_db_table_name)
+try:
+    tag_type_db_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving tag types table name")
+    tag_type_db_table_name = None
+
+tag_table = dynamodb.Table(tag_db_table_name) if tag_db_table_name else None
+tag_type_table = dynamodb.Table(tag_type_db_table_name) if tag_type_db_table_name else None
 
 #######################
 # Business Logic Functions

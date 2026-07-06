@@ -9,13 +9,13 @@ All functions implement silent failure - if logging fails, the error is logged
 locally but the lambda execution continues without disruption.
 """
 
-import os
 import json
 import boto3
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from handlers.auth import request_to_claims
 from customLogging.logger import mask_sensitive_data, safeLogger
+from common.resourceNames import ResourceKeys, get_log_group_name
 
 # Initialize logger for audit logging module
 logger = safeLogger(service_name="AuditLogging")
@@ -98,26 +98,41 @@ def _format_log_message(event_type: str, user_context: Dict[str, Any], custom_da
 def _write_to_cloudwatch(log_group_name: str, message: str, event: Dict[str, Any]) -> None:
     """
     Write audit log entry to CloudWatch with silent failure.
-    
+
     Args:
         log_group_name: The CloudWatch log group name
         message: The formatted log message
         event: The original event (for masking sensitive data)
     """
+    _write_batch_to_cloudwatch(log_group_name, [message], event)
+
+
+def _write_batch_to_cloudwatch(log_group_name: str, messages: list, event: Dict[str, Any]) -> None:
+    """
+    Write multiple audit log entries to CloudWatch in one call with silent failure.
+
+    Batching matters for bulk operations: one put_log_events round trip instead
+    of one per entry (CloudWatch accepts up to 10,000 events per call).
+
+    Args:
+        log_group_name: The CloudWatch log group name
+        messages: The formatted log messages
+        event: The original event (for masking sensitive data; appended to each entry)
+    """
     try:
         if not cloudwatch_logs:
             logger.error("CloudWatch Logs client not initialized, cannot write audit log")
             return
-        
+
         # Mask sensitive data from the event before logging
         if event:
             masked_event = mask_sensitive_data(event)
         else:
             masked_event = {}
-        
+
         # Create log stream name based on current date
         log_stream_name = datetime.utcnow().strftime("%Y/%m/%d")
-        
+
         # Ensure log stream exists (create if it doesn't)
         try:
             cloudwatch_logs.create_log_stream(
@@ -131,26 +146,22 @@ def _write_to_cloudwatch(log_group_name: str, message: str, event: Dict[str, Any
             logger.exception(f"Failed to create log stream {log_stream_name} in {log_group_name}: {e}")
             return
 
-        #Add event at the end of the message.
-        if masked_event:
-            message += f" --- [event: {json.dumps(masked_event)}]"
-        
-        # Prepare log event
+        #Add event at the end of each message.
+        event_suffix = f" --- [event: {json.dumps(masked_event)}]" if masked_event else ""
         timestamp = int(datetime.utcnow().timestamp() * 1000)
-        log_event = {
-            'logGroupName': log_group_name,
-            'logStreamName': log_stream_name,
-            'logEvents': [
-                {
-                    'timestamp': timestamp,
-                    'message': message
-                }
-            ]
-        }
-        
-        # Write to CloudWatch
-        cloudwatch_logs.put_log_events(**log_event)
-        
+        log_events = [
+            {'timestamp': timestamp, 'message': message + event_suffix}
+            for message in messages
+        ]
+
+        # Write to CloudWatch (batches of up to 10,000 events per call)
+        for start in range(0, len(log_events), 10000):
+            cloudwatch_logs.put_log_events(
+                logGroupName=log_group_name,
+                logStreamName=log_stream_name,
+                logEvents=log_events[start:start + 10000]
+            )
+
     except Exception as e:
         # Silent failure - log locally but don't raise
         logger.exception(f"Failed to write audit log to CloudWatch log group {log_group_name}: {e}")
@@ -159,16 +170,16 @@ def _write_to_cloudwatch(log_group_name: str, message: str, event: Dict[str, Any
 def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log authentication events with silent failure.
-    
+
     Args:
         event: The API Gateway event
         authenticated: Whether authentication was successful
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_AUTHENTICATION")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHENTICATION)
         if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHENTICATION environment variable not set")
+            logger.error("AUDIT_LOG_AUTHENTICATION resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -185,16 +196,16 @@ def log_authentication(event: Dict[str, Any], authenticated: bool, custom_data: 
 def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log authorization events with silent failure using claims_and_roles directly.
-    
+
     Args:
         claims_and_roles: The claims and roles dictionary
         authorized: Whether authorization was successful
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_AUTHORIZATION")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHORIZATION environment variable not set")
+            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return
         
         # Extract user context from claims_and_roles
@@ -230,16 +241,16 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
 def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log API authorization events with silent failure using full API Gateway event.
-    
+
     Args:
         event: The API Gateway event
         authorized: Whether authorization was successful
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_AUTHORIZATION")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHORIZATION environment variable not set")
+            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -264,7 +275,7 @@ def log_file_upload(
 ) -> None:
     """
     Log file upload events with silent failure.
-    
+
     Args:
         event: The API Gateway event
         database_id: The database ID
@@ -275,9 +286,9 @@ def log_file_upload(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_FILEUPLOAD")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEUPLOAD)
         if not log_group_name:
-            logger.error("AUDIT_LOG_FILEUPLOAD environment variable not set")
+            logger.error("AUDIT_LOG_FILEUPLOAD resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -315,7 +326,7 @@ def log_file_download(
 ) -> None:
     """
     Log file download events with silent failure.
-    
+
     Args:
         event: The API Gateway event
         database_id: The database ID
@@ -324,9 +335,9 @@ def log_file_download(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_FILEDOWNLOAD")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
         if not log_group_name:
-            logger.error("AUDIT_LOG_FILEDOWNLOAD environment variable not set")
+            logger.error("AUDIT_LOG_FILEDOWNLOAD resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -351,6 +362,53 @@ def log_file_download(
         logger.exception(f"Failed to log file download audit event: {e}")
 
 
+def log_file_download_bulk(
+    event: Dict[str, Any],
+    database_id: str,
+    asset_id: str,
+    file_entries: list,
+    custom_data_base: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    Log a bulk file download (one entry per file) with silent failure.
+
+    Args:
+        event: The API Gateway event
+        database_id: The database ID
+        asset_id: The asset ID
+        file_entries: List of dicts with 'filePath' and optional 'versionId'
+        custom_data_base: Data common to every entry (e.g. downloadType)
+    """
+    try:
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD)
+        if not log_group_name:
+            logger.error("AUDIT_LOG_FILEDOWNLOAD resource name not resolved")
+            return
+
+        user_context = _extract_user_context(event)
+        event_type = "[FILEDOWNLOAD]"
+
+        messages = []
+        for entry in file_entries:
+            download_data = {
+                "databaseId": database_id,
+                "assetId": asset_id,
+                "filePath": entry.get("filePath")
+            }
+            custom_data = dict(custom_data_base or {})
+            if entry.get("versionId") is not None:
+                custom_data["versionId"] = entry.get("versionId")
+            if custom_data:
+                download_data["customData"] = custom_data
+            messages.append(_format_log_message(event_type, user_context, download_data))
+
+        _write_batch_to_cloudwatch(log_group_name, messages, event)
+
+    except Exception as e:
+        # Silent failure - log locally but don't raise
+        logger.exception(f"Failed to log bulk file download audit event: {e}")
+
+
 def log_file_download_streamed(
     event: Dict[str, Any],
     database_id: str,
@@ -360,7 +418,7 @@ def log_file_download_streamed(
 ) -> None:
     """
     Log streamed file download events with silent failure.
-    
+
     Args:
         event: The API Gateway event
         database_id: The database ID
@@ -369,9 +427,9 @@ def log_file_download_streamed(
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_FILEDOWNLOAD_STREAMED")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED)
         if not log_group_name:
-            logger.error("AUDIT_LOG_FILEDOWNLOAD_STREAMED environment variable not set")
+            logger.error("AUDIT_LOG_FILEDOWNLOAD_STREAMED resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -399,16 +457,16 @@ def log_file_download_streamed(
 def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
     """
     Log other authentication-related events with silent failure.
-    
+
     Args:
         event: The API Gateway event
         secondary_type: The secondary type of auth event
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_AUTHOTHER")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHOTHER)
         if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHOTHER environment variable not set")
+            logger.error("AUDIT_LOG_AUTHOTHER resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -425,16 +483,16 @@ def log_auth_other(event: Dict[str, Any], secondary_type: str, custom_data: Opti
 def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
     """
     Log authentication/authorization changes with silent failure.
-    
+
     Args:
         event: The API Gateway event
         secondary_type: The secondary type of auth change
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_AUTHCHANGES")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHCHANGES)
         if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHCHANGES environment variable not set")
+            logger.error("AUDIT_LOG_AUTHCHANGES resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -451,16 +509,16 @@ def log_auth_changes(event: Dict[str, Any], secondary_type: str, custom_data: Op
 def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
     """
     Log general actions with silent failure.
-    
+
     Args:
         event: The API Gateway event
         secondary_type: The secondary type of action
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_ACTIONS")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_ACTIONS)
         if not log_group_name:
-            logger.error("AUDIT_LOG_ACTIONS environment variable not set")
+            logger.error("AUDIT_LOG_ACTIONS resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -477,16 +535,16 @@ def log_actions(event: Dict[str, Any], secondary_type: str, custom_data: Optiona
 def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional[Any] = None) -> None:
     """
     Log errors with silent failure.
-    
+
     Args:
         event: The API Gateway event
         secondary_type: The secondary type of error
         custom_data: Additional data to log (optional)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_ERRORS")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_ERRORS)
         if not log_group_name:
-            logger.error("AUDIT_LOG_ERRORS environment variable not set")
+            logger.error("AUDIT_LOG_ERRORS resource name not resolved")
             return
         
         user_context = _extract_user_context(event)
@@ -503,29 +561,29 @@ def log_errors(event: Dict[str, Any], secondary_type: str, custom_data: Optional
 def log_authorization_gateway(event: Dict[str, Any], authorized: bool, failure_reason: Optional[str] = None) -> None:
     """
     Log authorization events from API Gateway authorizer with silent failure.
-    
+
     SECURITY: This function is designed for the API Gateway authorizer which runs
     BEFORE normal request processing. It only logs non-sensitive data:
     - User ID (only from verified JWT claims after successful authorization)
     - Authorization result (success/failure)
     - Generic failure reason (no token details or sensitive data)
     - Source IP address
-    
+
     NEVER logs:
     - Raw JWT tokens
     - Authorization headers
     - Token signatures
     - Detailed validation errors that could expose token structure
-    
+
     Args:
         event: The API Gateway authorizer event
         authorized: Whether authorization was successful
         failure_reason: Generic failure reason (optional, for failures only)
     """
     try:
-        log_group_name = os.environ.get("AUDIT_LOG_AUTHORIZATION")
+        log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
         if not log_group_name:
-            logger.error("AUDIT_LOG_AUTHORIZATION environment variable not set")
+            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
             return
         
         # Extract ONLY safe user context

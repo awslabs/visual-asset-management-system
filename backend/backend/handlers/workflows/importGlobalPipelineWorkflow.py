@@ -340,17 +340,13 @@ def parse_custom_resource_event(event: Dict[str, Any]) -> Tuple[str, Dict[str, A
     
     # For DELETE operations, we only need basic validation
     if operation_type == 'Delete':
-        # For DELETE, we only need pipelineId and workflowId
-        if 'pipelineId' not in resource_properties or not resource_properties['pipelineId']:
-            raise ValidationError("Missing required field for DELETE: pipelineId")
-        if 'workflowId' not in resource_properties or not resource_properties['workflowId']:
-            raise ValidationError("Missing required field for DELETE: workflowId")
-        
-        # Set databaseId to GLOBAL for DELETE operations
+        # Identifiers may be absent if the resource was created by an older template
+        # revision. Default missing values instead of raising so a stack teardown is
+        # never blocked by this custom resource.
         validated_properties = {
             'databaseId': 'GLOBAL',
-            'pipelineId': resource_properties['pipelineId'].strip(),
-            'workflowId': resource_properties['workflowId'].strip()
+            'pipelineId': (resource_properties.get('pipelineId') or '').strip(),
+            'workflowId': (resource_properties.get('workflowId') or '').strip()
         }
     else:
         # For CREATE and UPDATE, perform full validation
@@ -1463,9 +1459,13 @@ def handle_delete_operation(resource_properties: Dict[str, Any]) -> Dict[str, An
         # Step 2: Delete Workflow First
         logger.info("Step 2: Deleting workflow")
         try:
-            workflow_response = delete_workflow(workflow_id)
-            workflow_deleted = True
-            logger.info("Workflow deleted successfully")
+            if not workflow_id:
+                logger.info("No workflowId provided - nothing to delete")
+                workflow_deleted = True
+            else:
+                workflow_response = delete_workflow(workflow_id)
+                workflow_deleted = True
+                logger.info("Workflow deleted successfully")
         except ServiceError as e:
             error_msg = f"Failed to delete workflow {workflow_id}: {str(e)}"
             logger.warning(error_msg)
@@ -1478,9 +1478,13 @@ def handle_delete_operation(resource_properties: Dict[str, Any]) -> Dict[str, An
         # Step 3: Delete Pipeline
         logger.info("Step 3: Deleting pipeline")
         try:
-            pipeline_response = delete_pipeline(pipeline_id)
-            pipeline_deleted = True
-            logger.info("Pipeline deleted successfully")
+            if not pipeline_id:
+                logger.info("No pipelineId provided - nothing to delete")
+                pipeline_deleted = True
+            else:
+                pipeline_response = delete_pipeline(pipeline_id)
+                pipeline_deleted = True
+                logger.info("Pipeline deleted successfully")
         except ServiceError as e:
             error_msg = f"Failed to delete pipeline {pipeline_id}: {str(e)}"
             logger.warning(error_msg)

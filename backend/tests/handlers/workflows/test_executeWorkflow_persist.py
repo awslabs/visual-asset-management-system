@@ -291,8 +291,11 @@ class TestLaunchWorkflow:
                       "userProvidedResource": json.dumps({"resourceId": "arn:fn1", "resourceType": "Lambda"})}]
         _eid, put_object = self._run_launch(pipelines)
         manifest = self._written(put_object, "manifest.json")
-        assert manifest["auxTempPrefix"] == "s3://t-aux/folder/x.glb/pipelines/p1/"
-        assert manifest["auxPreviewPrefix"] == "s3://t-aux/folder/x.glb/pipelines/p1/"
+        # The aux bucket resolves via ResourceKeys.ASSET_AUXILIARY_BUCKET; the root conftest's
+        # S3_ASSET_AUXILIARY_BUCKET override (highest precedence) supplies the name.
+        aux_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+        assert manifest["auxTempPrefix"] == f"s3://{aux_bucket}/folder/x.glb/pipelines/p1/"
+        assert manifest["auxPreviewPrefix"] == f"s3://{aux_bucket}/folder/x.glb/pipelines/p1/"
         assert "//" not in manifest["auxTempPrefix"].split("s3://", 1)[1]
 
     def test_manifest_outputs_use_stored_job_name(self):

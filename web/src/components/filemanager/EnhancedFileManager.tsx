@@ -160,32 +160,41 @@ export function EnhancedFileManager({
     // response to OUR `onSelectedPathChange` callback, which causes the
     // memoized prop to cycle. Without this guard we'd redundantly
     // re-dispatch SELECT_ITEM for the item that's already selected.
+    // An active multi-selection also counts as "already navigated" — the
+    // param cycling to empty during multi-select must not re-dispatch a
+    // single SELECT_ITEM that would collapse the user's selection.
     useEffect(() => {
-        if (filePathToNavigate && state.selectedItem?.relativePath === filePathToNavigate) {
+        if (
+            filePathToNavigate &&
+            (state.multiSelectMode || state.selectedItem?.relativePath === filePathToNavigate)
+        ) {
             // Treat as already-navigated so the navigation effect skips.
             hasNavigatedRef.current = true;
             return;
         }
         hasNavigatedRef.current = false;
-    }, [filePathToNavigate, state.selectedItem]);
+    }, [filePathToNavigate, state.selectedItem, state.multiSelectMode]);
 
     // Notify the parent whenever the active selection path changes so the
     // asset detail page can keep the URL `?filePath=` query param in sync.
     // We watch `state.selectedItem` (rather than `selectedItemPath`, which
     // is only populated for legacy single-selection writes) because every
     // SELECT_ITEM / TOGGLE / RANGE_SELECT path updates `selectedItem` in
-    // the reducer. Skip while the selection is still null (initial load
-    // before the deep-link navigation has settled) to avoid clobbering
-    // an inbound `?filePath=` query param before its target is selected.
+    // the reducer. A multi-selection has no single-path representation, so
+    // it reports `null` (clearing the param); returning to a single
+    // selection restores it. Skip while nothing has ever been selected
+    // (initial load before the deep-link navigation has settled) to avoid
+    // clobbering an inbound `?filePath=` query param before its target is
+    // selected.
     const lastNotifiedPathRef = useRef<string | null | undefined>(undefined);
     useEffect(() => {
         if (!onSelectedPathChange) return;
-        const path = state.selectedItem?.relativePath ?? null;
-        if (path === null) return; // initial / cleared selection — leave URL alone
+        const path = state.multiSelectMode ? null : state.selectedItem?.relativePath ?? null;
+        if (path === null && lastNotifiedPathRef.current === undefined) return;
         if (lastNotifiedPathRef.current === path) return;
         lastNotifiedPathRef.current = path;
         onSelectedPathChange(path);
-    }, [state.selectedItem, onSelectedPathChange]);
+    }, [state.selectedItem, state.multiSelectMode, onSelectedPathChange]);
 
     // Handle assetId changes - reset and reload data for new asset
     useEffect(() => {
@@ -240,7 +249,7 @@ export function EnhancedFileManager({
             const phase = basic ? "basic-loading" : "detailed-loading";
 
             try {
-                const stream = fetchAssetS3FilesStreaming({
+                const stream = (fetchAssetS3FilesStreaming as any)({
                     databaseId,
                     assetId,
                     includeArchived: showArchived,

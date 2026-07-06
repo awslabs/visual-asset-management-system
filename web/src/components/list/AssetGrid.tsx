@@ -18,23 +18,24 @@ import {
     TextContent,
 } from "@cloudscape-design/components";
 
+// @ts-ignore - legacy mock utility reference retained for future re-wire
 import { highlightMatches } from "../../common/utils/utils";
 
 import Synonyms from "../../synonyms";
 
-const API = {};
-const Storage = {};
+const API: any = {};
+const Storage: any = {};
 
-export default function AssetGrid(props) {
-    const [assetData, setAssetData] = useState([]);
+export default function AssetGrid(props: any) {
+    const [assetData, setAssetData] = useState<any[]>([]);
 
     const [loaded, setLoaded] = useState(false);
-    const [filteredList, setFilteredList] = useState([]);
+    const [filteredList, setFilteredList] = useState<any[]>([]);
     const { reload, setReload, database } = props;
     const [filterBy, setFilterBy] = useState("");
-    const [assetId, setAssetId] = useState(null);
-    const [pipelineId, setPipelineId] = useState(null);
-    const [distributable, setDistributable] = useState(null);
+    const [assetId, setAssetId] = useState<any>(null);
+    const [pipelineId, setPipelineId] = useState<any>(null);
+    const [distributable, setDistributable] = useState<any>(null);
 
     useEffect(() => {
         const getData = async () => {
@@ -96,10 +97,10 @@ export default function AssetGrid(props) {
     useEffect(() => {
         if (!loaded) {
             setFilteredList([]);
-            let newList = [];
+            let newList: any[] = [];
             newList = assetData
                 .slice()
-                .filter((asset) => {
+                .filter((asset: any) => {
                     if (
                         filterBy === "" &&
                         pipelineId === null &&
@@ -123,7 +124,7 @@ export default function AssetGrid(props) {
                     if (filterBy !== "") {
                         const filterList = filterBy.split(" ");
                         for (let i = 0; i < filterList.length; i++) {
-                            const pipelines = asset?.specifiedPipelines.map((pipeline) =>
+                            const pipelines = asset?.specifiedPipelines.map((pipeline: any) =>
                                 pipeline?.name?.toLowerCase()
                             );
                             for (let j = 0; j < pipelines.length; j++) {
@@ -146,7 +147,7 @@ export default function AssetGrid(props) {
 
                     return true;
                 })
-                .map((asset) => {
+                .map((asset: any) => {
                     return {
                         specifiedPipelines: asset.specifiedPipelines,
                         description: highlightMatches(asset.description, filterBy),
@@ -161,30 +162,30 @@ export default function AssetGrid(props) {
         }
     }, [assetData, assetId, distributable, filterBy, loaded, pipelineId]);
 
-    const handleFindResources = (filterBy) => {
+    const handleFindResources = (filterBy: any) => {
         setFilterBy(filterBy.toLowerCase());
         setLoaded(false);
     };
 
-    const handleSelectPiplineById = (id) => {
+    const handleSelectPiplineById = (id: any) => {
         if (id.value === null) id = null;
         setPipelineId(id);
         setLoaded(false);
     };
 
-    const handleSelectAssetById = (asset) => {
+    const handleSelectAssetById = (asset: any) => {
         if (asset.value === null) asset = null;
         setAssetId(asset);
         setLoaded(false);
     };
 
-    const handleSelectByDistributable = (dist) => {
+    const handleSelectByDistributable = (dist: any) => {
         if (dist.value === null) dist = null;
         setDistributable(dist);
         setLoaded(false);
     };
 
-    const [pipelines, setPipelines] = useState([]);
+    const [pipelines, setPipelines] = useState<any[]>([]);
 
     useEffect(() => {
         const getPipelines = async () => {
@@ -195,7 +196,7 @@ export default function AssetGrid(props) {
             const response = await API.post("api", "/Pipelines/list", config);
 
             setPipelines(
-                response?.message.map((pipeline) => ({
+                response?.message.map((pipeline: any) => ({
                     label: pipeline.pipelineId,
                     value: pipeline.pipelineId,
                     description: pipeline.description,
@@ -211,9 +212,9 @@ export default function AssetGrid(props) {
      * Preview control section
      */
     const [openVersions, setOpenVersions] = useState(false);
-    const [currentAsset, setCurrentAsset] = useState(null);
+    const [currentAsset, setCurrentAsset] = useState<any>(null);
 
-    const handleOpenVersions = (asset) => {
+    const handleOpenVersions = (asset: any) => {
         setCurrentAsset(asset);
         setOpenVersions(true);
     };
@@ -223,7 +224,7 @@ export default function AssetGrid(props) {
         setOpenVersions(false);
     };
 
-    const handleRevertVersion = async (version) => {
+    const handleRevertVersion = async (version: any) => {
         setLoaded(false);
 
         // API Call
@@ -247,22 +248,22 @@ export default function AssetGrid(props) {
             <Cards
                 trackBy="assetId"
                 cardDefinition={{
-                    header: (e) => {
+                    header: (e: any) => {
                         return <>{e.assetId}</>;
                     },
                     sections: [
                         {
                             id: "description",
-                            content: (e) => e.description,
+                            content: (e: any) => e.description,
                         },
                         {
                             id: "assetType",
                             header: (
                                 <Grid
                                     gridDefinition={[
-                                        { colspan: { l: "4", m: "4", default: "4" } },
-                                        { colspan: { l: "4", m: "4", default: "4" } },
-                                        { colspan: { l: "4", m: "4", default: "4" } },
+                                        { colspan: { l: 4, m: 4, default: 4 } },
+                                        { colspan: { l: 4, m: 4, default: 4 } },
+                                        { colspan: { l: 4, m: 4, default: 4 } },
                                     ]}
                                 >
                                     <div style={{ color: "var(--vams-text-secondary)" }}>
@@ -276,13 +277,13 @@ export default function AssetGrid(props) {
                                     </div>
                                 </Grid>
                             ),
-                            content: (e) => {
+                            content: (e: any) => {
                                 return (
                                     <Grid
                                         gridDefinition={[
-                                            { colspan: { l: "4", m: "4", default: "4" } },
-                                            { colspan: { l: "4", m: "4", default: "4" } },
-                                            { colspan: { l: "4", m: "4", default: "4" } },
+                                            { colspan: { l: 4, m: 4, default: 4 } },
+                                            { colspan: { l: 4, m: 4, default: 4 } },
+                                            { colspan: { l: 4, m: 4, default: 4 } },
                                         ]}
                                     >
                                         <div>{e.assetType}</div>
@@ -295,13 +296,15 @@ export default function AssetGrid(props) {
                         {
                             id: "pipeline",
                             header: "Pipeline",
-                            content: (e) => {
+                            content: (e: any) => {
                                 return (
                                     <>
                                         {e.specifiedPipelines && e.specifiedPipelines.length > 0
-                                            ? e.specifiedPipelines.map((pipeline, i) => {
-                                                  return <div key={i}>{pipeline.name}</div>;
-                                              })
+                                            ? e.specifiedPipelines.map(
+                                                  (pipeline: any, i: number) => {
+                                                      return <div key={i}>{pipeline.name}</div>;
+                                                  }
+                                              )
                                             : "none"}
                                     </>
                                 );
@@ -309,20 +312,20 @@ export default function AssetGrid(props) {
                         },
                         {
                             id: "links",
-                            content: (e) => {
+                            content: (e: any) => {
                                 const asset = e;
                                 const location = e?.assetLocation;
                                 const key = location?.Key;
-                                let signedURL;
+                                let signedURL: any;
                                 (async () => {
                                     signedURL = await Storage.get(key);
                                 })();
                                 return (
                                     <Grid
                                         gridDefinition={[
-                                            { colspan: { l: "4", m: "4", default: "4" } },
-                                            { colspan: { l: "4", m: "4", default: "4" } },
-                                            { colspan: { l: "4", m: "4", default: "4" } },
+                                            { colspan: { l: 4, m: 4, default: 4 } },
+                                            { colspan: { l: 4, m: 4, default: 4 } },
+                                            { colspan: { l: 4, m: 4, default: 4 } },
                                         ]}
                                     >
                                         <TextContent>
@@ -369,7 +372,7 @@ export default function AssetGrid(props) {
                         },
                     ],
                 }}
-                cardsPerRow={[{ cards: 3 }, { minWidth: "33%", cards: 3 }]}
+                cardsPerRow={[{ cards: 3 }, { minWidth: 33, cards: 3 }]}
                 items={[...new Set(filteredList)]}
                 loadingText="Loading resources"
                 // visibleSections={["description", "type", "size"]}
@@ -385,10 +388,10 @@ export default function AssetGrid(props) {
                 filter={
                     <Grid
                         gridDefinition={[
-                            { colspan: { l: "6", m: "6", default: "6" } },
-                            { colspan: { l: "2", m: "2", default: "2" } },
-                            { colspan: { l: "2", m: "2", default: "2" } },
-                            { colspan: { l: "2", m: "2", default: "2" } },
+                            { colspan: { l: 6, m: 6, default: 6 } },
+                            { colspan: { l: 2, m: 2, default: 2 } },
+                            { colspan: { l: 2, m: 2, default: 2 } },
+                            { colspan: { l: 2, m: 2, default: 2 } },
                         ]}
                     >
                         <TextFilter
@@ -397,7 +400,7 @@ export default function AssetGrid(props) {
                             filteringAriaLabel={`Filter ${Synonyms.assets}`}
                             onChange={({ detail }) => handleFindResources(detail.filteringText)}
                             countText={filterBy === "" ? "" : filteredList.length + " matches"}
-                            style={{ minWidth: "100%" }}
+                            {...({ style: { minWidth: "100%" } } as any)}
                         />
                         {assetData && (
                             <>
@@ -406,11 +409,13 @@ export default function AssetGrid(props) {
                                     onChange={({ detail }) =>
                                         handleSelectAssetById(detail.selectedOption)
                                     }
-                                    options={[{ label: <em>all</em>, value: null }].concat(
-                                        assetData.map((row) => {
-                                            return { label: row.assetId, value: row.assetId };
-                                        })
-                                    )}
+                                    options={
+                                        ([{ label: <em>all</em>, value: null }] as any).concat(
+                                            assetData.map((row: any) => {
+                                                return { label: row.assetId, value: row.assetId };
+                                            })
+                                        ) as any
+                                    }
                                     placeholder={`${Synonyms.Asset} Name`}
                                     selectedAriaLabel="Selected"
                                 />
@@ -419,24 +424,28 @@ export default function AssetGrid(props) {
                                     onChange={({ detail }) =>
                                         handleSelectPiplineById(detail.selectedOption)
                                     }
-                                    options={[
-                                        {
-                                            label: <em>all</em>,
-                                            value: null,
-                                        },
-                                    ].concat(
-                                        [
-                                            ...new Set(
-                                                [
-                                                    ...assetData.map(
-                                                        (asset) => asset.specifiedPipelines
-                                                    ),
-                                                ].map((row) => row.name)
-                                            ),
-                                        ].map((pipeline) => {
-                                            return { label: pipeline, value: pipeline };
-                                        })
-                                    )}
+                                    options={
+                                        (
+                                            [
+                                                {
+                                                    label: <em>all</em>,
+                                                    value: null,
+                                                },
+                                            ] as any
+                                        ).concat(
+                                            [
+                                                ...new Set(
+                                                    [
+                                                        ...assetData.map(
+                                                            (asset: any) => asset.specifiedPipelines
+                                                        ),
+                                                    ].map((row: any) => row.name)
+                                                ),
+                                            ].map((pipeline: any) => {
+                                                return { label: pipeline, value: pipeline };
+                                            })
+                                        ) as any
+                                    }
                                     placeholder={`Pipeline`}
                                     selectedAriaLabel="Selected"
                                 />
@@ -445,14 +454,16 @@ export default function AssetGrid(props) {
                                     onChange={({ detail }) =>
                                         handleSelectByDistributable(detail.selectedOption)
                                     }
-                                    options={[
-                                        { label: <em>all</em>, value: null },
-                                        { label: "Yes", value: true },
-                                        {
-                                            label: "No",
-                                            value: false,
-                                        },
-                                    ]}
+                                    options={
+                                        [
+                                            { label: (<em>all</em>) as any, value: null as any },
+                                            { label: "Yes", value: true as any },
+                                            {
+                                                label: "No",
+                                                value: false as any,
+                                            },
+                                        ] as any
+                                    }
                                     placeholder={`Distributable`}
                                     selectedAriaLabel="Selected"
                                 />
@@ -463,8 +474,8 @@ export default function AssetGrid(props) {
                 header={
                     <Grid
                         gridDefinition={[
-                            { colspan: { l: "6", m: "6", default: "6" } },
-                            { colspan: { l: "6", m: "6", default: "6" } },
+                            { colspan: { l: 6, m: 6, default: 6 } },
+                            { colspan: { l: 6, m: 6, default: 6 } },
                         ]}
                     >
                         <div>
@@ -497,26 +508,26 @@ export default function AssetGrid(props) {
                                 {
                                     id: "version",
                                     header: "Version",
-                                    cell: (e) => e.Version,
+                                    cell: (e: any) => e.Version,
                                     sortingField: "Version",
                                 },
                                 {
                                     id: "description",
                                     header: "Description",
-                                    cell: (e) => e.description,
+                                    cell: (e: any) => e.description,
                                     sortingField: "description",
                                 },
                                 {
                                     id: "DateModified",
                                     header: "Date",
-                                    cell: (e) =>
+                                    cell: (e: any) =>
                                         e.DateModified.toLocaleString("en-US", { timeZone: "UTC" }),
                                     sortingField: "DateModified",
                                 },
                                 {
                                     id: "S3Version",
                                     header: "Action",
-                                    cell: (e, i) => (
+                                    cell: ((e: any, i: number) => (
                                         <Button
                                             variant="normal"
                                             key={i}
@@ -524,7 +535,7 @@ export default function AssetGrid(props) {
                                         >
                                             Revert
                                         </Button>
-                                    ),
+                                    )) as any,
                                 },
                             ]}
                             items={currentAsset.versions}

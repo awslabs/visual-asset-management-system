@@ -32,7 +32,8 @@ class TestChangeProvenanceKeys:
     def test_change_source_values(self):
         assert VAMS_CHANGE_SOURCE_VALUES == frozenset({
             "direct", "upload", "workflowExecution", "fileCopy",
-            "fileMove", "fileRename", "fileArchive", "fileUnarchive", "fileRevert",
+            "fileMove", "fileRename", "fileArchive", "fileUnarchive",
+            "assetArchive", "assetUnarchive", "fileRevert",
         })
 
     def test_provenance_keys_are_system_excluded(self):

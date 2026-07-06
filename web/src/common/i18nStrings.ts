@@ -32,10 +32,10 @@ export const tagEditor = {
     invalidValueError:
         "Invalid value. Values can only contain alphanumeric characters, spaces and any of the following: _.:/=+@-",
     awsPrefixError: "Cannot start with aws:",
-    tagLimit: (availableTags) =>
+    tagLimit: (availableTags: any) =>
         `You can add up to ${availableTags} more tag${availableTags > 1 ? "s" : ""}.`,
-    tagLimitReached: (tagLimit) => `You have reached the limit of ${tagLimit} tags.`,
-    tagLimitExceeded: (tagLimit) => `You have exceeded the limit of ${tagLimit} tags.`,
-    enteredKeyLabel: (tag) => `Use "${tag}"`,
-    enteredValueLabel: (tag) => `Use "${tag}"`,
+    tagLimitReached: (tagLimit: any) => `You have reached the limit of ${tagLimit} tags.`,
+    tagLimitExceeded: (tagLimit: any) => `You have exceeded the limit of ${tagLimit} tags.`,
+    enteredKeyLabel: (tag: any) => `Use "${tag}"`,
+    enteredValueLabel: (tag: any) => `Use "${tag}"`,
 };

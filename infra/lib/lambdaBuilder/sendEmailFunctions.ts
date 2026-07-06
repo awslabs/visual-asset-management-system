@@ -48,9 +48,7 @@ export function buildSendEmailFunction(
                 ? { subnets: subnets }
                 : undefined,
 
-        environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
 
     fun.addToRolePolicy(

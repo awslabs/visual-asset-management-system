@@ -694,7 +694,7 @@ export async function downloadFile(
             databaseId: databaseId,
             key: keyPrefix,
             versionId: assetVersionId ? "" : versionId,
-            assetVersionId: assetVersionId,
+            assetVersionId: assetVersionId as any,
             downloadType: "assetFile",
         });
 

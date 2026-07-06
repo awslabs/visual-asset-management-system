@@ -11,7 +11,9 @@ import hashlib
 import urllib.parse
 from datetime import datetime
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
+from handlers.assets.assetCount import update_asset_count
 from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
 from models.databases import CreateDatabaseRequestModel
@@ -34,6 +36,12 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
+from common.s3 import is_object_version_archived
+from common.assetHistory import (
+    CHANGE_SOURCE_UNARCHIVE_DIRECT,
+    build_asset_snapshot,
+    write_asset_history_record,
+)
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
@@ -49,17 +57,17 @@ logger = safeLogger(service_name="sqsBucketSync")
 try:
     asset_bucket_name = os.environ.get('ASSET_BUCKET_NAME')
     asset_bucket_prefix = os.environ.get('ASSET_BUCKET_PREFIX')
-    s3_asset_buckets_table = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME')
-    asset_table_name = os.environ.get('ASSET_STORAGE_TABLE_NAME')
-    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    database_id = os.environ.get('DEFAULT_DATABASE_ID')  
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    database_id = os.environ.get('DEFAULT_DATABASE_ID')
     file_indexer_sns_topic_arn = os.environ.get("FILE_INDEXER_SNS_TOPIC_ARN", "")
     workflow_auto_execute_sqs_url = os.environ.get("WORKFLOW_AUTO_EXECUTE_SQS_URL", "")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 if not database_id:
@@ -90,7 +98,11 @@ class SimpleCache:
     def set(self, key, value, ttl=60):  # Default TTL: 60 seconds
         """Set value in cache with expiry time"""
         self.cache[key] = (value, time.time() + ttl)
-        
+
+    def delete(self, key):
+        """Remove a single cache entry if present"""
+        self.cache.pop(key, None)
+
     def clear(self):
         """Clear all cache entries"""
         self.cache = {}
@@ -200,50 +212,86 @@ def is_versioning_enabled(bucket_id: str) -> bool:
         return False
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    Determine if file is archived based on S3 delete markers
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
+    return is_object_version_archived(bucket, key, version_id, client=s3_client)
+
+def object_still_exists(bucket_name: str, object_key: str) -> bool:
+    """Return True if the S3 object still exists (has a live current version).
+
+    Used to guard asset auto-creation: an ObjectCreated event can be delivered
+    (or redelivered under SQS at-least-once) after the object — and its asset —
+    were deleted, which would otherwise recreate an empty ghost asset. A missing
+    object (404) or a current delete marker (405 MethodNotAllowed) means the file
+    is gone. On any other/unexpected error, fail open (return True) so a transient
+    S3 error never suppresses legitimate ingestion of a genuinely new file.
+
+    On a 404, retry with the alternative encoding (decoded <-> raw) — the same
+    tolerance update_s3_metadata applies — so a genuinely new upload whose
+    filename contains a '+' (e.g. BACC66K41F158AM+---.CATPart) is not mistaken
+    for a deleted object when the event pipeline delivered the other shape.
     """
     try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3_client.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
+        s3_client.head_object(Bucket=bucket_name, Key=object_key)
+        return True
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        if code == '405':
+            # Current version is a delete marker — archived/gone regardless of
+            # encoding, so do not run the +/space fallback.
             return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
+        if code in ('404', 'NoSuchKey', 'NotFound'):
+            alt_key = urllib.parse.unquote_plus(object_key)
+            if alt_key == object_key:
+                alt_key = urllib.parse.quote(object_key, safe="/+")
+            if alt_key == object_key:
+                return False  # nothing else to try
             try:
-                s3_client.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3_client.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
+                s3_client.head_object(Bucket=bucket_name, Key=alt_key)
+                return True
+            except ClientError as e2:
+                code2 = e2.response.get('Error', {}).get('Code', '')
+                if code2 in ('404', 'NoSuchKey', 'NotFound'):
+                    return False
+                logger.warning(f"Unexpected error checking existence of {alt_key}; failing open: {e2}")
+                return True
+            except Exception as e2:
+                logger.warning(f"Unexpected error checking existence of {alt_key}; failing open: {e2}")
+                return True
+        logger.warning(f"Unexpected error checking existence of {object_key}; failing open: {e}")
+        return True
     except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
+        logger.warning(f"Unexpected error checking existence of {object_key}; failing open: {e}")
+        return True
+
+def is_object_permanently_deleted(bucket_name: str, object_key: str) -> bool:
+    """Return True only when no versions or delete markers remain for the key.
+
+    Distinguishes a permanent delete (all versions removed — metadata cleanup is
+    safe) from an archive (delete marker over live versions — reversible, so
+    metadata must be preserved). Fails closed: on any error, treat the object as
+    NOT permanently deleted so metadata is never destroyed on uncertainty.
+    """
+    try:
+        response = s3_client.list_object_versions(
+            Bucket=bucket_name,
+            Prefix=object_key,
+            MaxKeys=25
+        )
+        for version in response.get('Versions', []):
+            if version.get('Key') == object_key:
+                return False
+        for marker in response.get('DeleteMarkers', []):
+            if marker.get('Key') == object_key:
+                return False
+        return True
+    except Exception as e:
+        logger.warning(f"Error checking version state for {object_key}; preserving metadata: {e}")
         return False
+
 
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
@@ -345,55 +393,80 @@ def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_bas
         current_asset_type = asset_data.get('assetType')
         if asset_type and asset_type != current_asset_type:
             logger.info(f"Updating asset type for {asset_id} from {current_asset_type} to {asset_type}")
-            
-            # Update asset in DynamoDB
-            table = dynamodb.Table(asset_table_name)
-            table.update_item(
-                Key={
-                    'databaseId': asset_data['databaseId'],
-                    'assetId': asset_id
-                },
-                UpdateExpression="SET assetType = :assetType",
-                ExpressionAttributeValues={
-                    ':assetType': asset_type
-                }
-            )
-            
+
+            if not _update_asset_type_attribute(bucket_id, asset_id, asset_data['databaseId'], asset_type):
+                return False
+
             # Update cache
             cache_key = f"{bucket_id}:{asset_id}"
             asset_data['assetType'] = asset_type
             asset_cache.set(cache_key, asset_data)
-            
+
             return True
         elif not asset_type and not current_asset_type:
             # If both are None/empty, set to 'none'
             logger.info(f"Setting default asset type 'none' for {asset_id}")
-            
-            # Update asset in DynamoDB
-            table = dynamodb.Table(asset_table_name)
-            table.update_item(
-                Key={
-                    'databaseId': asset_data['databaseId'],
-                    'assetId': asset_id
-                },
-                UpdateExpression="SET assetType = :assetType",
-                ExpressionAttributeValues={
-                    ':assetType': 'none'
-                }
-            )
-            
+
+            if not _update_asset_type_attribute(bucket_id, asset_id, asset_data['databaseId'], 'none'):
+                return False
+
             # Update cache
             cache_key = f"{bucket_id}:{asset_id}"
             asset_data['assetType'] = 'none'
             asset_cache.set(cache_key, asset_data)
-            
+
             return True
-        
+
         logger.info(f"Asset type for {asset_id} remains unchanged: {current_asset_type}")
         return True
     except Exception as e:
         logger.exception(f"Error updating asset type: {e}")
         return False
+
+
+def _update_asset_type_attribute(bucket_id: str, asset_id: str, database_id: str, asset_type: str) -> bool:
+    """Set assetType on an existing asset record.
+
+    The update is conditional on the record still existing: the asset may have
+    been archived or deleted (moved out of this databaseId partition) between
+    the cached lookup and this update, and an unconditional update_item would
+    re-create a phantom record containing only the key and assetType.
+
+    Args:
+        bucket_id: The bucket ID (for cache invalidation)
+        asset_id: The asset ID
+        database_id: The databaseId partition the asset was looked up in
+        asset_type: The asset type value to set
+
+    Returns:
+        bool: True if updated, False if the record no longer exists
+    """
+    table = dynamodb.Table(asset_table_name)
+    try:
+        table.update_item(
+            Key={
+                'databaseId': database_id,
+                'assetId': asset_id
+            },
+            UpdateExpression="SET assetType = :assetType",
+            ConditionExpression="attribute_exists(assetId)",
+            ExpressionAttributeValues={
+                ':assetType': asset_type
+            }
+        )
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            # Asset moved (archived/deleted) since the cached lookup - drop the
+            # stale cache entries so later events re-query the current location
+            logger.warning(
+                f"Asset {asset_id} no longer exists in {database_id}; "
+                "skipping asset type update and invalidating cache"
+            )
+            asset_cache.delete(f"{bucket_id}:{asset_id}")
+            asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+            return False
+        raise
 
 def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
     """
@@ -414,21 +487,22 @@ def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
         return cached_result
     
     try:
-        # Query the asset table using the GSI
+        # Query the asset table using the GSI. The GSI matches records in BOTH
+        # the live and archived ({databaseId}#deleted) partitions — only a live
+        # record counts here, otherwise an archived asset would be treated as
+        # active (and its archived databaseId would leak into metadata keys).
         table = dynamodb.Table(asset_table_name)
         response = table.query(
             IndexName="BucketIdGSI",
             KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
         )
-        
-        if response.get('Items'):
-            asset_data = response['Items'][0]
-            
-            # Cache the result
-            asset_cache.set(cache_key, asset_data)
-            
-            return asset_data
-        
+
+        for item in response.get('Items', []):
+            if not item.get('databaseId', '').endswith('#deleted'):
+                # Cache the result
+                asset_cache.set(cache_key, item)
+                return item
+
         return None
     except Exception as e:
         logger.exception(f"Error looking up asset: {e}")
@@ -711,6 +785,77 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     
     return created_db_id
 
+def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) -> Optional[str]:
+    """Restore an archived asset record after a direct S3 upload to its prefix.
+
+    DynamoDB-only unarchive: the asset record moves back from the
+    {databaseId}#deleted partition to the live partition. Previously archived
+    files keep their S3 delete markers — the files now present under the prefix
+    define the asset's contents; users unarchive individual old files via the
+    file unarchive API as needed.
+
+    Concurrency: a batch of ObjectCreated events for the same archived asset can
+    race here. The live-partition write is conditional on no live record
+    existing, and the archived-record delete is keyed exactly, so the restore
+    happens once; losers treat the asset as already restored.
+
+    Returns:
+        The live database ID on success (or when already restored), None on error.
+    """
+    archived_db_id = archived_asset.get('databaseId', '')
+    if not archived_db_id.endswith('#deleted'):
+        logger.warning(f"Archived asset {asset_id} has unexpected databaseId {archived_db_id}")
+        return None
+    live_db_id = archived_db_id[:-len('#deleted')]
+
+    try:
+        table = dynamodb.Table(asset_table_name)
+
+        restored = {k: v for k, v in archived_asset.items()
+                    if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
+        restored['databaseId'] = live_db_id
+        restored['unarchivedAt'] = datetime.utcnow().isoformat()
+        restored['unarchivedBy'] = 'SYSTEM_USER'
+        restored['unarchivedReason'] = 'Auto-restored by bucket sync: new file uploaded directly to S3 under archived asset prefix'
+
+        try:
+            table.put_item(
+                Item=restored,
+                ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.info(f"Asset {asset_id} already restored in {live_db_id} by a concurrent event")
+                asset_cache.delete(f"{bucket_id}:{asset_id}")
+                asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+                return live_db_id
+            raise
+
+        table.delete_item(Key={'databaseId': archived_db_id, 'assetId': asset_id})
+
+        # Invalidate caches so subsequent events in this container see the live record
+        asset_cache.delete(f"{bucket_id}:{asset_id}")
+        asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+
+        # Keep the database's asset count in sync (best-effort, matching the
+        # API unarchive flow)
+        try:
+            update_asset_count(db_table_name, asset_table_name, {}, live_db_id)
+        except Exception as e:
+            logger.warning(f"Asset count update failed after restoring {asset_id}: {e}")
+
+        # Record the auto-restore in asset history (best-effort)
+        write_asset_history_record(
+            live_db_id, asset_id, CHANGE_SOURCE_UNARCHIVE_DIRECT, 'SYSTEM_USER',
+            build_asset_snapshot(restored, unarchived_reason=restored.get('unarchivedReason'))
+        )
+
+        return live_db_id
+    except Exception as e:
+        logger.exception(f"Error restoring archived asset {asset_id}: {e}")
+        return None
+
+
 def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optional[str]:
     """
     Create a new asset
@@ -736,7 +881,7 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         
         # Create the asset
         # Note: We're passing an empty dict for claims_and_roles since this is a system operation
-        response = create_asset(request_model, {"tokens": ["SYSTEM"]}, True)
+        response = create_asset(request_model, {"tokens": ["SYSTEM_USER"]}, True)
         
         # Add the new asset to the cache instead of clearing it
         cache_key = f"{bucket_id}:{asset_id}"
@@ -983,25 +1128,27 @@ def extract_relative_file_path(object_key: str, prefix: str, asset_id: str) -> s
 
 def delete_file_metadata_on_s3_delete(database_id: str, asset_id: str, relative_file_path: str):
     """Delete metadata and attributes when file is deleted directly in S3
-    
+
     Args:
         database_id: The database ID
         asset_id: The asset ID
         relative_file_path: The relative file path (without asset base prefix)
     """
     try:
-        # Skip if this is a folder (ends with /)
-        if relative_file_path.endswith('/'):
-            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
-            return
-        
         # Skip if relative path is empty
         if not relative_file_path:
             logger.info("Skipping metadata deletion for empty relative path")
             return
-        
-        # Construct the composite key for new metadata tables
-        # Format: {databaseId}:{assetId}:{relative_file_path}
+
+        # Skip if this is a folder (ends with /)
+        if relative_file_path.endswith('/'):
+            logger.info(f"Skipping metadata deletion for folder: {relative_file_path}")
+            return
+
+        # Construct the composite key for new metadata tables. Metadata and
+        # attribute rows key file paths asset-relative with exactly one leading
+        # slash (see backend Rule 13): {databaseId}:{assetId}:/{relative_file_path}
+        relative_file_path = "/" + relative_file_path.lstrip("/")
         composite_key = f"{database_id}:{asset_id}:{relative_file_path}"
         
         deleted_metadata_count = 0
@@ -1335,7 +1482,12 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
     Returns:
         tuple: (processing_success, should_index, message) where:
             - processing_success: boolean indicating if processing was successful
-            - should_index: boolean indicating if record should be sent to indexer
+            - should_index: boolean indicating if record should be sent to indexer.
+              Independent of processing_success: benign skips and most processing
+              failures still forward to the indexers so OpenSearch and other
+              registered indexers can reconcile their own records. Only records
+              that are truly out of scope (wrong bucket/prefix, reserved folders,
+              init files, folder markers, malformed records) are withheld.
             - message: string with details about the processing result
     """
     try:
@@ -1385,26 +1537,31 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         
         # 1.b Check if bucket name and prefix have a record in the S3 asset buckets table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
+        # A missing bucket record (registration race / transient lookup failure) skips
+        # VAMS-side processing but still forwards to the indexers — the file indexer
+        # resolves bucket details independently via the object's S3 metadata.
         bucket_id = get_bucket_id(bucket_name, prefix)
         if not bucket_id:
-            logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
-            return False, False, f"No bucket ID found for {bucket_name} with prefix {prefix}"
+            logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping processing but forwarding to indexers")
+            return False, True, f"No bucket ID found for {bucket_name} with prefix {prefix}"
         
-        # Extract asset ID from the object key
+        # Extract asset ID from the object key. Failure to extract or validate an
+        # asset ID skips VAMS-side processing but still forwards to the indexers,
+        # which resolve asset/database IDs independently via S3 object metadata.
         asset_id = extract_asset_id_from_key(object_key, prefix)
         if not asset_id:
-            logger.info(f"Could not extract asset ID from {object_key}, skipping")
-            return False, False, f"Could not extract asset ID from {object_key}"
-        
+            logger.info(f"Could not extract asset ID from {object_key}, skipping processing but forwarding to indexers")
+            return False, True, f"Could not extract asset ID from {object_key}"
+
         # 1.c Check if asset ID is a special folder to skip
         if asset_id in RESERVED_S3_PREFIX_FOLDERS:
             logger.info(f"Asset ID {asset_id} is a special folder, skipping")
             return False, False, f"Asset ID {asset_id} is a special folder"
-        
+
         # 1.d Validate asset ID
         if not validate_asset_id(asset_id):
-            logger.info(f"Asset ID {asset_id} is not valid, skipping")
-            return False, False, f"Asset ID {asset_id} is not valid"
+            logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
+            return False, True, f"Asset ID {asset_id} is not valid"
         
         # 2.a. Lookup asset in assets dynamoDB table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
@@ -1415,25 +1572,55 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             logger.info(f"Asset {asset_id} found in bucket {bucket_id}")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # Check if asset is archived before creating new one
+            # Check if asset is archived before creating new one. A new file
+            # placed directly in S3 under an archived asset's prefix restores
+            # the asset record (DynamoDB-only unarchive): the asset becomes
+            # active again but previously archived files keep their delete
+            # markers — the files present under the prefix are the asset's
+            # files, and users unarchive individual old files via the API.
             archived_asset = lookup_archived_asset(bucket_id, asset_id)
             if archived_asset:
-                logger.info(f"Asset {asset_id} is archived, skipping processing")
-                return True, True, f"Skipped archived asset {asset_id}"  # Return true for both - indexing may care about these events
-            
-            # Get or create database for this bucket/prefix
-            database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
-            
-            if not database_id_to_use:
-                logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
-                return False, False, f"Could not get or create database for bucket {bucket_id}"
-            
-            # Create the asset
-            logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-            created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
-            if not created_asset_id:
-                logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
-                return False, False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
+                if not object_still_exists(bucket_name, object_key):
+                    logger.info(
+                        f"Object {object_key} no longer exists; not restoring archived asset {asset_id}"
+                    )
+                    return True, True, f"Skipped stale create event for archived asset {asset_id}"
+                restored_database_id = restore_archived_asset(bucket_id, asset_id, archived_asset)
+                if not restored_database_id:
+                    logger.error(f"Failed to restore archived asset {asset_id}")
+                    return False, True, f"Failed to restore archived asset {asset_id}"
+                logger.info(
+                    f"Restored archived asset {asset_id} to database {restored_database_id} "
+                    f"after direct S3 upload of {object_key}"
+                )
+                database_id_to_use = restored_database_id
+            else:
+                # Get or create database for this bucket/prefix
+                database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
+
+                if not database_id_to_use:
+                    logger.error(f"Could not get or create database for bucket {bucket_id} (may be archived)")
+                    return False, True, f"Could not get or create database for bucket {bucket_id}"
+
+                # Guard against recreating a ghost asset from a stale / redelivered
+                # ObjectCreated event: if the object no longer exists (deleted since the
+                # event was enqueued), do not recreate the asset. A genuinely new file
+                # still exists here and proceeds to creation as intended. The record is
+                # still forwarded to the indexers (should_index=True) so OpenSearch and
+                # other registered indexers can reconcile their records for the file.
+                if not object_still_exists(bucket_name, object_key):
+                    logger.info(
+                        f"Object {object_key} no longer exists; skipping asset (re)creation for {asset_id} "
+                        "but forwarding event to indexers"
+                    )
+                    return True, True, f"Skipped stale create event for {object_key}"
+
+                # Create the asset
+                logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
+                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                if not created_asset_id:
+                    logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
+                    return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
         # 3. Check if the object key ends with "init" - If so delete and skip indexing
         if object_key.endswith('init') or object_key.endswith('init/'):
@@ -1454,7 +1641,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, asset_id)
         if not update_result:
             logger.error(f"Failed to update metadata for {object_key}")
-            return False, False, f"Failed to update metadata for {object_key}"
+            return False, True, f"Failed to update metadata for {object_key}"
         
         # 5. Update asset type based on all files in the bucket
         # Construct the asset base key (prefix + assetId + /)
@@ -1487,7 +1674,9 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         return True, True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
-        return False, False, f"Error processing S3 record."
+        # Unexpected failure mid-processing: still forward to the indexers so
+        # OpenSearch and other registered indexers can reconcile independently.
+        return False, True, f"Error processing S3 record."
 
 def on_storage_event_created(event):
     """
@@ -1529,15 +1718,18 @@ def on_storage_event_created(event):
         try:
             # Process the S3 record - now returns (success, should_index, message)
             success, should_index, message = process_s3_record(record)
-            
+
+            # Forward to the indexers whenever should_index is True — even when
+            # VAMS-side processing failed or was skipped — so OpenSearch and other
+            # registered indexers can reconcile their records independently.
+            if should_index:
+                successful_records.append(record)
+                logger.info(f"Record queued for indexing: {message}")
+
             # Track success/failure counts
             if success:
                 success_count += 1
-                # Only add to successful_records if should_index is True
-                if should_index:
-                    successful_records.append(record)
-                    logger.info(f"Successfully processed record for indexing: {message}")
-                else:
+                if not should_index:
                     logger.info(f"Successfully processed record but skipping indexing: {message}")
             else:
                 # Classify a non-success result as a skip (benign, expected) vs
@@ -1690,46 +1882,52 @@ def lambda_handler_created(event, context):
     
     This function is the main entry point for processing file creation events.
     It parses the event from different sources (SQS, SNS, direct S3),
-    processes the storage event, and runs the OpenSearch indexing lambda
-    if there were no hard errors and only for successfully processed records.
-    
+    processes the storage event, and runs the OpenSearch indexing lambda for
+    every record flagged for indexing — including records whose VAMS-side
+    processing failed or was skipped, so OpenSearch and other registered
+    indexers can reconcile their records independently. Only truly
+    out-of-scope records (wrong bucket/prefix, reserved folders, init files,
+    folder markers, malformed records) are withheld from the indexers.
+
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
         context: The Lambda context
-        
+
     Returns:
         None
     """
     logger.info(f"File creation event received: {json.dumps(event)}")
-    
+
     try:
         # Parse the event to handle different sources
         parsed_event = parse_event(event)
-        
+
         # Process the storage event if it contains records
         if parsed_event.get('Records'):
-            # Process the storage event and get success status and successful records
+            # Process the storage event and get success status and indexable records
             success, successful_records = on_storage_event_created(parsed_event)
-            
-            # Only publish to SNS and SQS if there were no hard errors and we have successful records
-            if success and successful_records:
+
+            if not success:
+                logger.warning("Hard errors encountered during storage event processing")
+
+            # Publish every record flagged for indexing, regardless of hard errors
+            # elsewhere in the batch — withholding them would leave OpenSearch and
+            # other registered indexers out of sync.
+            if successful_records:
                 # Build filtered event preserving original structure
                 filtered_event = build_filtered_event(event, successful_records)
-                
+
                 if filtered_event:
-                    logger.info(f"Publishing {len(successful_records)} successful records to file indexer SNS")
+                    logger.info(f"Publishing {len(successful_records)} records to file indexer SNS")
                     publish_to_file_indexer_sns(filtered_event)
-                    
+
                     # Also publish to workflow auto-execute SQS for created events only
-                    logger.info(f"Publishing {len(successful_records)} successful records to workflow auto-execute SQS")
+                    logger.info(f"Publishing {len(successful_records)} records to workflow auto-execute SQS")
                     publish_to_workflow_execution_sqs(filtered_event)
                 else:
                     logger.info("All records filtered out, skipping file indexer SNS and workflow SQS publish")
             else:
-                if not success:
-                    logger.warning("Hard errors encountered, skipping file indexer SNS and workflow SQS publish")
-                else:
-                    logger.info("No successful records to publish, skipping file indexer SNS and workflow SQS publish")
+                logger.info("No records to publish, skipping file indexer SNS and workflow SQS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
@@ -1743,116 +1941,138 @@ def lambda_handler_deleted(event, context):
     This function is the entry point for processing file deletion events.
     For deletions, we update the asset type if the file is not a folder marker,
     then run the OpenSearch indexing lambda to update the search index.
-    Only successfully processed records are forwarded to the indexer.
-    
+
+    Records are forwarded to the file indexer even when VAMS-side processing is
+    skipped or fails (e.g. the asset record or file is already gone) — the
+    indexers must still see the delete so OpenSearch and other registered
+    indexers can remove their records. Only truly out-of-scope records (no S3
+    info, init files, folder markers, reserved folders) are withheld.
+
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
         context: The Lambda context
-        
+
     Returns:
         None
     """
     logger.info(f"File deletion event received: {json.dumps(event)}")
-    
+
     try:
         # Parse the event to handle different sources
         parsed_event = parse_event(event)
-        
+
         # Process records if present
         if parsed_event.get('Records'):
-            successful_records = []
-            
-            try:
-                # Check each record for files that are not folder markers
-                for record in parsed_event.get('Records', []):
-                    # Skip records without S3 information
-                    if not record.get('s3'):
-                        logger.warning("Record does not contain S3 information, skipping")
-                        continue
-                    
-                    # Extract bucket name and object key
-                    bucket_name = record['s3']['bucket']['name']
-                    object_key = record['s3']['object']['key']
-                    
-                    # Skip init files entirely (both processing and indexing)
-                    if object_key.endswith('init') or object_key.endswith('init/'):
-                        logger.info(f"Skipping init file: {object_key}")
-                        continue
-                    
-                    # Skip folder markers (objects ending with '/')
-                    if object_key.endswith('/'):
-                        logger.info(f"Skipping folder marker: {object_key}")
-                        continue
-                    
+            indexable_records = []
+
+            # Check each record for files that are not folder markers
+            for record in parsed_event.get('Records', []):
+                # Skip records without S3 information
+                if not record.get('s3'):
+                    logger.warning("Record does not contain S3 information, skipping")
+                    continue
+
+                # Extract bucket name and object key
+                bucket_name = record['s3']['bucket']['name']
+                object_key = record['s3']['object']['key']
+
+                # Skip init files entirely (both processing and indexing)
+                if object_key.endswith('init') or object_key.endswith('init/'):
+                    logger.info(f"Skipping init file: {object_key}")
+                    continue
+
+                # Skip folder markers (objects ending with '/')
+                if object_key.endswith('/'):
+                    logger.info(f"Skipping folder marker: {object_key}")
+                    continue
+
+                # VAMS-side cleanup (metadata deletion, asset type update) is
+                # best-effort per record: any skip or failure below still forwards
+                # the record to the indexers.
+                try:
                     # Copy prefix
                     prefix = asset_bucket_prefix
-                    
+
                     # Make sure prefix doesn't start with a '/'
                     if prefix and prefix != '/':
                         prefix = prefix.lstrip('/')
-                    
+
                     # Use the configured prefix or empty string
                     prefix = prefix or ""
-                    
+
                     # Get bucket ID
                     bucket_id = get_bucket_id(bucket_name, prefix)
                     if not bucket_id:
-                        logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
+                        logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping cleanup but forwarding to indexers")
+                        indexable_records.append(record)
                         continue
-                    
+
                     # Extract asset ID from the object key
                     asset_id = extract_asset_id_from_key(object_key, prefix)
                     if not asset_id:
-                        logger.info(f"Could not extract asset ID from {object_key}, skipping")
+                        logger.info(f"Could not extract asset ID from {object_key}, skipping cleanup but forwarding to indexers")
+                        indexable_records.append(record)
                         continue
-                    
-                    # Skip special folders
+
+                    # Skip special folders (never indexed)
                     if asset_id in RESERVED_S3_PREFIX_FOLDERS:
                         logger.info(f"Asset ID {asset_id} is a special folder, skipping")
                         continue
-                    
+
                     # Validate asset ID
                     if not validate_asset_id(asset_id):
-                        logger.info(f"Asset ID {asset_id} is not valid, skipping")
+                        logger.info(f"Asset ID {asset_id} is not valid, skipping cleanup but forwarding to indexers")
+                        indexable_records.append(record)
                         continue
-                    
+
                     # Construct the asset base key (prefix + assetId + /)
                     asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
-                    
-                    # Get asset data to retrieve database_id for metadata deletion
+
+                    # Get asset data to retrieve database_id for metadata deletion.
+                    # The asset record may already be gone (asset-level delete) —
+                    # the record is still forwarded so the indexers can clean up.
                     asset_data = lookup_asset(bucket_id, asset_id)
                     if asset_data:
                         database_id_for_asset = asset_data.get('databaseId')
-                        
+
                         # Extract relative file path for metadata deletion
                         relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
-                        
-                        # Delete metadata and attributes for this file
-                        logger.info(f"Deleting metadata/attributes for file: {relative_file_path}")
-                        delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
-                    
+
+                        # Only delete metadata/attributes when the file is
+                        # permanently gone (no versions or delete markers remain).
+                        # A delete-marker event from an archive flow is reversible —
+                        # unarchive restores the file and must find its metadata intact.
+                        if is_object_permanently_deleted(bucket_name, object_key):
+                            logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
+                            delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
+                        else:
+                            logger.info(f"File {object_key} still has versions (archived); preserving metadata/attributes")
+                    else:
+                        logger.info(f"Asset {asset_id} not found in bucket {bucket_id}; skipping metadata cleanup")
+
                     # Update asset type based on remaining files
                     logger.info(f"Updating asset type for {asset_id} after file deletion")
                     update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
-                    
-                    # Track successfully processed record
-                    successful_records.append(record)
+
                     logger.info(f"Successfully processed deletion for {object_key}")
-            except Exception as e:
-                logger.exception(f"Error processing deletion event: {e}")
-            
-            # Only publish to SNS if we have successfully processed records
-            if successful_records:
+                except Exception as e:
+                    logger.exception(f"Error processing deletion record for {object_key}; forwarding to indexers anyway: {e}")
+
+                # Forward the record to the indexers regardless of cleanup outcome
+                indexable_records.append(record)
+
+            # Only publish to SNS if we have records to index
+            if indexable_records:
                 # Build filtered event preserving original structure
-                filtered_event = build_filtered_event(event, successful_records)
-                
+                filtered_event = build_filtered_event(event, indexable_records)
+
                 if filtered_event:
-                    logger.info(f"Publishing {len(successful_records)} successful deletion records to file indexer SNS")
+                    logger.info(f"Publishing {len(indexable_records)} deletion records to file indexer SNS")
                     publish_to_file_indexer_sns(filtered_event)
                 else:
                     logger.info("All deletion records filtered out, skipping file indexer SNS publish")
             else:
-                logger.info("No successful deletion records to publish, skipping file indexer SNS publish")
+                logger.info("No deletion records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:

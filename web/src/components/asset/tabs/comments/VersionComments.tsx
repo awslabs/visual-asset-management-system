@@ -14,7 +14,36 @@ import {
     TextContent,
 } from "@cloudscape-design/components";
 import JoditEditor from "jodit-react";
+import sanitizeHtml from "sanitize-html";
 import Synonyms from "../../../../synonyms";
+
+// Tags/attributes the comment editor toolbar can produce
+const commentSanitizeOptions: sanitizeHtml.IOptions = {
+    allowedTags: [
+        "b",
+        "strong",
+        "i",
+        "em",
+        "s",
+        "del",
+        "strike",
+        "u",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "p",
+        "br",
+        "span",
+    ],
+    allowedAttributes: {
+        a: ["href", "target", "rel"],
+    },
+    allowedSchemes: ["http", "https", "mailto"],
+    transformTags: {
+        a: sanitizeHtml.simpleTransform("a", { rel: "noopener noreferrer" }, true),
+    },
+};
 
 // Define the type for showMessage prop
 type ShowMessageFunction = (props: {
@@ -238,7 +267,12 @@ export default function VersionComments(props: VersionCommentsProps) {
                                 </div>
                                 <div
                                     className="commentBody"
-                                    dangerouslySetInnerHTML={{ __html: comment.commentBody }}
+                                    dangerouslySetInnerHTML={{
+                                        __html: sanitizeHtml(
+                                            comment.commentBody,
+                                            commentSanitizeOptions
+                                        ),
+                                    }}
                                 ></div>
                                 {userId === comment.commentOwnerUsername && (
                                     <div className="commentActions">

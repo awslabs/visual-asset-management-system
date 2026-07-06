@@ -84,7 +84,7 @@ export default function CreateTag({
     const [formState, setFormState] = useState<TagFields>({
         ...initState,
     });
-    const [selectedOption, setSelectedOption] = useState<OptionDefinition | null>(null);
+    const [selectedOption, setSelectedOption] = useState<any | null>(null);
 
     const tagBody = {
         tagName: formState.tagName,
@@ -97,8 +97,8 @@ export default function CreateTag({
     };
 
     const handleApiError = (err: any) => {
-        if (err.response && err.response.status === 500) {
-            const errorMessage = err.response.data.message || "Duplicate Tag";
+        if (err?.status === 500) {
+            const errorMessage = err?.message || "Duplicate Tag";
             setErrorMessage(errorMessage);
             setShowModal(true);
         }
@@ -168,16 +168,21 @@ export default function CreateTag({
                                         })
                                         .catch((err) => {
                                             console.log("create tag error", err);
-                                            if (err.response && err.response.status === 500) {
+                                            if (err?.status === 500) {
                                                 const errorMessage =
                                                     "Tag name " +
                                                     tagBody.tagName +
                                                     " already exists or is not valid";
                                                 setNameError(errorMessage);
-                                            }
-                                            if (err.response && err.response.status === 403) {
-                                                const msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
-                                                setFormError(msg);
+                                            } else {
+                                                setFormError(
+                                                    `Unable to ${createOrUpdate} tag. ${
+                                                        err?.message ||
+                                                        (err?.status
+                                                            ? `Request failed with status code ${err.status}`
+                                                            : "Unknown error")
+                                                    }`
+                                                );
                                             }
                                         })
                                         .finally(() => {
@@ -197,11 +202,15 @@ export default function CreateTag({
                                             setFormError("");
                                         })
                                         .catch((err) => {
-                                            console.log("create tag error", err);
-                                            if (err.response && err.response.status === 403) {
-                                                const msg = `Unable to ${createOrUpdate} tag. Error: Request failed with status code 403`;
-                                                setFormError(msg);
-                                            }
+                                            console.log("update tag error", err);
+                                            setFormError(
+                                                `Unable to ${createOrUpdate} tag. ${
+                                                    err?.message ||
+                                                    (err?.status
+                                                        ? `Request failed with status code ${err.status}`
+                                                        : "Unknown error")
+                                                }`
+                                            );
                                         })
                                         .finally(() => {
                                             setInProgress(false);
@@ -290,7 +299,7 @@ export default function CreateTag({
                             placeholder="Tag Type"
                             options={tagTypes}
                             onChange={({ detail }) => {
-                                setSelectedOption(detail.selectedOption as OptionDefinition);
+                                setSelectedOption(detail.selectedOption as any);
                                 setFormState({
                                     ...formState,
                                     tagTypeName: detail.selectedOption.value,

@@ -385,7 +385,9 @@ export class SplatToolboxConstruct extends Construct {
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
-                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
+                    props.importGlobalPipelineWorkflowFunctionName
+                }`
             );
 
             const importProvider = new cr.Provider(this, "ImportProvider", {
@@ -400,7 +402,7 @@ export class SplatToolboxConstruct extends Construct {
                         id: "AwsSolutions-IAM5",
                         reason: "Custom resource provider requires wildcard permissions to invoke the import function with version qualifiers",
                         appliesTo: [
-                            `Resource::arn:aws:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
+                            `Resource::arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
                         ],
                     },
                 ],

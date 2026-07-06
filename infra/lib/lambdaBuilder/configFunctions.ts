@@ -59,8 +59,6 @@ export function buildConfigService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            APPFEATUREENABLED_STORAGE_TABLE_NAME:
-                storageResources.dynamo.appFeatureEnabledStorageTable.tableName,
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
             LOCATION_SERVICE_URL_FORMAT: urlFormat,
             WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam,

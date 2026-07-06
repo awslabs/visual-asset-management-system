@@ -23,6 +23,7 @@ The following options appear on nearly every command and are not repeated in ind
 | `database`                                                                   | Create, update, delete, and list databases and bucket configurations                           | [Database](commands/database.md)                       |
 | `assets`, `asset-version`, `asset-links`, `assets export`, `assets download` | Asset CRUD, version management, relationship links, export, and download                       | [Assets](commands/assets.md)                           |
 | `file`                                                                       | Upload, list, info, create-folder, move, copy, archive, unarchive, delete, revert, set-primary | [Files](commands/files.md)                             |
+| `sync file`                                                                  | Push/pull directory synchronization with an asset, transferring only changed files             | [Sync](commands/sync.md)                               |
 | `tag`, `tag-type`                                                            | Tag and tag type management for asset categorization                                           | [Tags](commands/tags.md)                               |
 | `metadata`, `metadata-schema`                                                | Metadata CRUD for assets, files, links, and databases; schema inspection                       | [Metadata](commands/metadata.md)                       |
 | `search`                                                                     | Search assets and files using Amazon OpenSearch Service                                        | [Search](commands/search.md)                           |
@@ -40,6 +41,8 @@ The following options appear on nearly every command and are not repeated in ind
 ```bash
 vamscli setup https://your-vams-url.example.com
 vamscli auth login -u admin@example.com
+vamscli auth change-password -u admin@example.com
+vamscli auth forgot-password -u admin@example.com
 vamscli auth status
 vamscli profile list
 ```
@@ -59,6 +62,14 @@ vamscli assets create -d my-database --name "Bridge Model" --description "3D sca
 vamscli file upload model.gltf -d my-db -a my-asset
 vamscli file list -d my-db -a my-asset --basic --auto-paginate
 vamscli file info -d my-db -a my-asset -p "/model.gltf" --include-versions
+```
+
+### Directory Synchronization
+
+```bash
+vamscli sync file push ./models -d my-db -a my-asset --dryrun
+vamscli sync file push ./models -d my-db -a my-asset --allow-modify
+vamscli sync file pull ./models -d my-db -a my-asset --allow-modify
 ```
 
 ### Search and Metadata

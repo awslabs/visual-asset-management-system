@@ -1,13 +1,14 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
@@ -16,19 +17,18 @@ from common.dynamodb import validate_pagination_info
 
 claims_and_roles = {}
 
-# Create a logger object to log the events
 logger = safeLogger(service="CommentService")
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
 main_rest_response = STANDARD_JSON_RESPONSE
-comment_database = None
 
 try:
-    comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed Loading Comment Storage Environment Variables")
-    main_rest_response["body"]["message"] = "Failed Loading Comment Storage Environment Variables"
+    comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving comment table name")
+    comment_database = None
+    main_rest_response["body"]["message"] = "Failed resolving comment table name"
 
 
 def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
@@ -404,7 +404,7 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     if method_allowed_on_api:
 
         #Get user ID of person making request
-        userId = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        userId = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         logger.info(
             f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",
@@ -428,6 +428,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: lambda context dictionary
     :returns: Http response object (statusCode, headers, body)
     """
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
     pathParameters = event.get("pathParameters", {})

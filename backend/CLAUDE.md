@@ -8,18 +8,18 @@
 
 ## Quick Reference
 
-| Item                  | Value                                                  |
-| --------------------- | ------------------------------------------------------ |
-| Runtime               | Python 3.13+                                           |
-| Framework             | AWS Lambda + API Gateway v2 (HTTP API)                 |
-| Validation            | Pydantic **1.10.7** (NOT v2) via aws-lambda-powertools |
-| Auth                  | Casbin ABAC/RBAC with DynamoDB policy storage          |
-| ORM                   | boto3 DynamoDB resource + client APIs                  |
-| Search                | OpenSearch (opensearch-py 2.5.0)                       |
-| Logging               | aws-lambda-powertools Logger with custom redaction     |
-| Tests                 | pytest 8.3.4 + moto 5.1.0 for AWS mocks                |
-| Gold Standard Handler | `backend/handlers/assets/assetService.py`              |
-| Gold Standard Model   | `backend/models/assetsV3.py`                           |
+| Item                  | Value                                                   |
+| --------------------- | ------------------------------------------------------- |
+| Runtime               | Python 3.13+                                            |
+| Framework             | AWS Lambda + API Gateway REST API (v1)                  |
+| Validation            | Pydantic **1.10.13** (NOT v2) via aws-lambda-powertools |
+| Auth                  | Casbin ABAC/RBAC with DynamoDB policy storage           |
+| ORM                   | boto3 DynamoDB resource + client APIs                   |
+| Search                | OpenSearch (opensearch-py 2.5.0)                        |
+| Logging               | aws-lambda-powertools Logger with custom redaction      |
+| Tests                 | pytest 9.0.3 + moto 5.1.0 for AWS mocks                 |
+| Gold Standard Handler | `backend/handlers/assets/assetService.py`               |
+| Gold Standard Model   | `backend/models/assetsV3.py`                            |
 
 ---
 
@@ -35,11 +35,22 @@ backend/
 ├── requirements-dev.txt                 # Dev/test deps (moto, pytest, mypy, flake8)
 ├── backend/
 │   ├── common/                          # Shared utilities
+│   │   ├── auth/                         # Shared auth-core modules (no AWS deps; unit-testable)
+│   │   │   ├── apiEvent.py               # REST API event shim (normalize_event: REST→HTTP-API shape;
+│   │   │   │                             #   coerces null pathParameters/queryStringParameters to {})
+│   │   │   ├── authorizerCore.py         # Shared JWT/API-key/IP validation logic (Cognito/external OAuth)
+│   │   │   └── clientIp.py               # True client-IP resolution (CloudFront/ALB-aware, anti-spoof)
 │   │   ├── constants.py                 # ABAC policy, allowed values, file blocklists
 │   │   ├── dynamodb.py                  # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
+│   │   ├── resourceNames.py             # SSM Parameter Store resource name resolver (get_table_name,
+│   │   │                                #   get_bucket_name, get_log_group_name; ResourceKeys class)
 │   │   ├── validators.py                # Input validation regex patterns and validate() dispatcher
 │   │   ├── s3.py                        # S3 file validation (extension + MIME type checks)
 │   │   ├── s3MetadataKeys.py            # Canonical S3 object user-metadata keys (assetid, vams-*)
+│   │   ├── assetHistory.py              # Asset lifecycle history writer (change source constants,
+│   │   │                                #   build_asset_snapshot, write_asset_history_record; best-effort)
+│   │   ├── syncTracking.py              # Outbound external-system sync record writer (status/action/
+│   │   │                                #   objectType constants, write_outbound_sync_record; best-effort)
 │   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
 │   │   │                                #   allowed preview extensions (mirrored in
 │   │   │                                #   web/src/common/constants/fileFormats.ts)
@@ -62,7 +73,11 @@ backend/
 │   ├── handlers/                        # Lambda handlers (one folder per domain)
 │   │   ├── assets/assetService.py       # GOLD STANDARD handler -- follow this pattern
 │   │   ├── assets/assetVersions.py     # Asset version CRUD + archive/unarchive + update (versionAlias)
+│   │   ├── assets/assetHistory.py      # Asset lifecycle history lookup (paged GET, newest first)
 │   │   ├── auth/                        # Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
+│   │   │   ├── apiGatewayAuthorizerRest.py  # REST REQUEST authorizer entry point (returns IAM policy;
+│   │   │   │                                #   delegates JWT/API-key/IP validation to common/auth/authorizerCore.py)
+│   │   │   └── __init__.py              # request_to_claims() — normalizes the event, then extracts claims
 │   │   ├── authz/__init__.py            # Casbin ABAC/RBAC enforcer (CasbinEnforcer proxy)
 │   │   ├── assetLinks/                  # Asset relationship management
 │   │   ├── comments/                    # Comment CRUD
@@ -107,6 +122,7 @@ backend/
 │       ├── pipelines.py                 # Pipeline models (PipelineExecutionType enum, SQS/EventBridge fields)
 │       ├── workflows.py                 # Workflow models (Step Functions ASL generation)
 │       ├── executions.py                # Workflow/pipeline execution storage models (Stage 1 data model)
+│       ├── assetHistory.py              # Asset history request/record/response models (open-schema snapshot)
 │       ├── common.py                    # Response helpers, error functions, APIGatewayProxyResponseV2
 │       └── [domain].py                  # Domain-specific models
 ├── lambdaLayers/                        # Lambda layer definitions
@@ -123,43 +139,42 @@ backend/
 
 ## Critical Rules
 
-1. **ALWAYS use Pydantic v1 syntax.** This project uses `pydantic==1.10.7`. Never use
-   Pydantic v2 APIs (`model_validate`, `model_dump`, `ConfigDict`). Use `@root_validator`,
-   `@validator`, `Field(...)`, `extra='ignore'`.
+1.  **ALWAYS use Pydantic v1 syntax.** This project uses `pydantic==1.10.13`. Never use
+    Pydantic v2 APIs (`model_validate`, `model_dump`, `ConfigDict`). Use `@root_validator`,
+    `@validator`, `Field(...)`, `extra='ignore'`.
 
-2. **ALWAYS import BaseModel from aws_lambda_powertools**, not from pydantic directly.
+2.  **ALWAYS import BaseModel from aws_lambda_powertools**, not from pydantic directly.
 
     ```python
     from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
     ```
 
-3. **ALWAYS use the validate() dispatcher** from `common.validators` for complex validation
-   in `@root_validator` methods. Never write raw regex validation inline.
+3.  **ALWAYS use the validate() dispatcher** from `common.validators` for complex validation
+    in `@root_validator` methods. Never write raw regex validation inline.
 
-4. **ALWAYS enforce two-level authorization**: `enforceAPI()` for route access, then
-   `enforce()` for object-level access inside method handlers.
+4.  **ALWAYS enforce two-level authorization**: `enforceAPI()` for route access, then
+    `enforce()` for object-level access inside method handlers.
 
-5. **ALWAYS use safeLogger** from `customLogging.logger`. Never use `print()` or raw
-   `logging.getLogger()`.
+5.  **ALWAYS use safeLogger** from `customLogging.logger`. Never use `print()` or raw
+    `logging.getLogger()`.
 
-6. **ALWAYS wrap AWS clients with retry config** at module level:
+6.  **ALWAYS wrap AWS clients with retry config** at module level:
 
     ```python
     retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
     ```
 
-7. **ALWAYS raise VAMSGeneralErrorResponse** for business logic errors. Never return
-   raw dicts with status codes.
+7.  **ALWAYS raise VAMSGeneralErrorResponse** for business logic errors. Never return
+    raw dicts with status codes.
 
-8. **ALWAYS use `extra='ignore'`** on all Pydantic model classes to silently drop
-   unexpected fields.
+8.  **ALWAYS use `extra='ignore'`** on all Pydantic model classes to silently drop
+    unexpected fields.
 
-9. **NEVER log sensitive data.** The safeLogger auto-redacts `authorization`,
-   `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
-   Do not circumvent this.
+9.  **NEVER log sensitive data.** The safeLogger auto-redacts `authorization`,
+    `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+    Do not circumvent this.
 
-10. **NEVER use `os.environ["KEY"]` outside of the module-level try/except block.**
-    All environment variable loading happens once at cold start.
+10. **ALWAYS resolve resource names at module level in the try/except block using `get_table_name()`, `get_bucket_name()`, or `get_log_group_name()` from `common.resourceNames`.** Never use `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers — SSM resolution provides centralized name management with environment variable overrides for testing.
 
 11. **NEVER echo request input into error messages returned to the client.** Keep
     error response messages generic and free of user-supplied values (IDs, names,
@@ -205,6 +220,93 @@ backend/
     composite_key = f"{database_id}:{asset_id}:{file_path}"
     ```
 
+14. **NEVER read only the first page of an S3 or DynamoDB listing when the full
+    set is needed.** S3 `list_object_versions` / `list_objects_v2` and DynamoDB
+    queries cap a single call (`MaxKeys`, `Limit`, one page). When the result must
+    be complete, page to exhaustion. For S3 versions/objects use the shared helpers
+    `common.s3.list_all_object_versions()` / `list_all_objects()` (page-size
+    constants `S3_VERSIONS_PAGE_SIZE` / `S3_OBJECTS_PAGE_SIZE`; both accept an
+    optional cap — `max_keys` / `max_objects` — for best-effort sampling). A bare
+    `list_object_versions(..., MaxKeys=N)` silently drops versions beyond `N`
+    (wrong archive status, truncated history). Existence-only checks
+    (`MaxKeys=1`) are the allowed exception.
+
+            **To check whether a single key (or a specific `versionId`) is archived, do NOT
+            list versions** — use `common.s3.is_object_version_archived(bucket, key,
+
+        version_id, client=...)`. It issues one `HeadObject`(a delete-marker version
+
+    returns 405 MethodNotAllowed; a live version returns 200; a missing version
+    returns 404), which is O(1) regardless of how many versions the key has. All
+    handler-local`is_file_archived` helpers must delegate to it rather than
+    re-implementing a version scan.
+
+15. **Paginate large GET responses; never return an unbounded in-memory set.**
+    A response that can exceed the AWS Lambda synchronous response limit (6 MB)
+    must page externally: accept `maxItems`/`pageSize`/`startingToken` and return
+    `NextToken`, defaulting the sizes to named constants (mirror the asset-listing
+    and metadata-listing handlers). Do not use DynamoDB `paginator.build_full_result()`
+    to accumulate every record for a user-facing GET. When response ordering or
+    enrichment requires the full set first (e.g. metadata schema injection/ordering),
+    enrich the full set, then offset-slice to the page. Limits that exist to bound
+    response size or protect Lambda runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`,
+    worker-pool caps) stay as named constants with a rationale comment — keep them.
+
+16. **Normalize the event before reading `requestContext['http']`, `pathParameters`, or
+    `queryStringParameters`.** The REST API (v1) proxy event differs from the HTTP API v2
+    layout that handlers are written against, in **two** ways that `normalize_event(event)`
+    (from `common.auth.apiEvent`) reconciles. It mutates the event in place, is idempotent,
+    and is a no-op for internal `lambdaCrossCall` events.
+
+    1.  **`requestContext.http` block.** Handlers read `event['requestContext']['http']['path']`
+        / `['method']` / `['sourceIp']`, but the REST event exposes these as top-level `path`
+        / `httpMethod` and `requestContext.identity.sourceIp`. `normalize_event` injects the
+        v2-style `requestContext.http` block.
+    2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
+        explicit JSON `null` when there are none, whereas HTTP API v2 omitted them — so the
+        ubiquitous `event.get('pathParameters', {})` / `event.get('queryStringParameters', {})`
+        pattern returns `None` (the default applies only when the **key is absent**, not when
+        it is present-but-`null`). A handler that then does `path_params['id']`,
+        `'id' in path_params`, or `int(query_params['maxItems'])` crashes with
+        `TypeError: 'NoneType' object is not subscriptable/iterable` → **500**.
+        `normalize_event` coerces a present-but-`null` value of either key to `{}`. (Defensive
+        call sites may still add `or {}`, but it is no longer required once the event is
+        normalized.)
+
+    -   **`request_to_claims(event)` calls `normalize_event(event)` internally** (it is the
+        first line). So a handler whose **first** access to the event is
+        `request_to_claims(event)` — the Gold Standard pattern — is already covered for both
+        normalizations and does **not** need to import or call `normalize_event` itself.
+    -   **A handler that reads `requestContext['http']`, `pathParameters`, or
+        `queryStringParameters` _before_ calling `request_to_claims`** MUST call
+        `normalize_event(event)` as the first statement of `lambda_handler`, before that read.
+        Skipping it makes the handler raise `KeyError`/`TypeError` → 500 at runtime on a real
+        REST request — a failure **invisible to CDK synth and to unit tests that hand-build a
+        v2-shaped event** (which is why these regressions reach production; cover the
+        REST-shaped event, including `null` params, in tests).
+    -   **Prefer the Gold Standard order** (call `request_to_claims(event)` first, then read
+        `path`/`method`/params) so normalization is implicit. Only add the explicit import +
+        call when a handler genuinely must inspect the event before claims extraction.
+
+    ```python
+    # ✅ Gold Standard — claims first; normalize is implicit, no import needed
+    def lambda_handler(event, context):
+        claims_and_roles = request_to_claims(event)            # normalizes internally
+        path = event['requestContext']['http']['path']         # safe — already normalized
+
+    # ✅ When http MUST be read before claims — normalize explicitly first
+    from common.auth.apiEvent import normalize_event
+    def lambda_handler(event, context):
+        normalize_event(event)                                 # first statement
+        path = event['requestContext']['http']['path']
+        claims_and_roles = request_to_claims(event)
+
+    # ❌ WRONG — reads http before any normalization -> KeyError on a REST event
+    def lambda_handler(event, context):
+        path = event['requestContext']['http']['path']         # not normalized yet
+        claims_and_roles = request_to_claims(event)
+    ```
+
 ---
 
 ## Gold Standard Handler Pattern
@@ -225,6 +327,7 @@ import json
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -248,13 +351,17 @@ logger = safeLogger(service_name="YourServiceName")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables
+# Load resource names and environment variables
 try:
-    your_table_name = os.environ["YOUR_STORAGE_TABLE_NAME"]
-    # Required: os.environ["KEY"] -- raises KeyError on missing
-    # Optional: os.environ.get("KEY") -- returns None on missing
+    # Resolve DynamoDB table names from SSM Parameter Store
+    your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
+    # Required: get_table_name(ResourceKeys.X) -- raises KeyError if not found in SSM
+    # Optional: wrap in try/except KeyError for optional resources
+
+    # Handler-specific env vars (direct from os.environ)
+    optional_env_var = os.environ.get("OPTIONAL_ENV_VAR")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names and environment variables")
     raise e
 
 # Initialize DynamoDB tables
@@ -495,6 +602,17 @@ if not casbin_enforcer.enforce(event, item):
 -   **Object annotation**: You MUST add `object__type` field to the item dict before calling `enforce()`
 -   Valid object types: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`
 
+### System User (`SYSTEM_USER`)
+
+`SYSTEM_USER` is the **only** valid user ID for system-process actions — never use `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it consistently for:
+
+-   **Lambda cross-calls**: `{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — and it is the default in `request_to_claims()` when a cross-call omits `userName`
+-   **Username fallbacks**: `claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]` when no user context exists
+-   **Provenance / audit values**: `createdBy`, `modifiedBy`, `changeUserId` fallbacks (`user_id or "SYSTEM_USER"`)
+-   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
+
+Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
 ### Casbin Policy Model (from constants.py)
 
 ```
@@ -614,9 +732,12 @@ from common.validators import (
 ### Table Initialization
 
 ```python
+from backend.common.resourceNames import get_table_name, ResourceKeys
+
 # Module-level: resource API for high-level operations
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-your_table = dynamodb.Table(os.environ["YOUR_STORAGE_TABLE_NAME"])
+your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
+your_table = dynamodb.Table(your_table_name)
 
 # Module-level: client API for low-level operations (scans, pagination)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
@@ -813,36 +934,47 @@ All responses follow `APIGatewayProxyResponseV2`:
 
 ```python
 # At module level, inside try/except:
-try:
-    # Required -- raises KeyError if missing
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 
-    # Optional -- returns None if missing
-    asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
+try:
+    # Resource names from SSM Parameter Store (with env var overrides)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    auxiliary_bucket = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+
+    # Optional resource names -- catch KeyError if not registered
+    try:
+        optional_table_name = get_table_name(ResourceKeys.OPTIONAL_TABLE)
+    except KeyError:
+        optional_table_name = None
+
+    # Handler-specific env vars (direct from os.environ)
+    send_email_function = os.environ.get("SEND_EMAIL_FUNCTION_NAME")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-# Conditional table init for optional vars
-asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
+# Initialize DynamoDB tables
+asset_table = dynamodb.Table(asset_table_name)
+database_table = dynamodb.Table(database_table_name)
+optional_table = dynamodb.Table(optional_table_name) if optional_table_name else None
 ```
+
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `ASSET_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
+
+**Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
 
 ### Common Environment Variables
 
-| Variable                            | Required | Description                        |
-| ----------------------------------- | -------- | ---------------------------------- |
-| `ASSET_STORAGE_TABLE_NAME`          | Yes      | Assets DynamoDB table              |
-| `DATABASE_STORAGE_TABLE_NAME`       | Yes      | Databases DynamoDB table           |
-| `S3_ASSET_*_BUCKET`                 | Yes      | S3 buckets for asset storage       |
-| `S3_ASSET_AUXILIARY_BUCKET`         | Yes      | S3 bucket for auxiliary/temp files |
-| `ASSET_VERSIONS_STORAGE_TABLE_NAME` | Yes      | Asset versions DynamoDB table      |
-| `*_STORAGE_TABLE_NAME`              | Varies   | Per-domain DynamoDB tables         |
-| `AUDIT_LOG_*`                       | Yes      | CloudWatch log group names         |
-| `COGNITO_AUTH_ENABLED`              | Yes      | Enable/disable Cognito auth        |
-| `AWS_REGION`                        | Auto     | AWS region (set by Lambda runtime) |
-| `SUBSCRIPTIONS_STORAGE_TABLE_NAME`  | Yes      | Subscriptions table                |
-| `SEND_EMAIL_FUNCTION_NAME`          | Yes      | Email notification Lambda name     |
+| Variable                        | Required | Description                                                                    |
+| ------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `VAMS_RESOURCE_PARAM_PREFIX`    | Yes      | SSM parameter prefix for resource name resolution (non-pipeline handlers only) |
+| `COGNITO_AUTH_ENABLED`          | Yes      | Enable/disable Cognito auth                                                    |
+| `AWS_REGION`                    | Auto     | AWS region (set by Lambda runtime)                                             |
+| `PRESIGNED_URL_TIMEOUT_SECONDS` | Yes      | S3 presigned URL TTL                                                           |
+| `SEND_EMAIL_FUNCTION_NAME`      | Varies   | Email notification Lambda name (handler-specific)                              |
+
+**Legacy environment variables** (for overrides and pipeline handlers): `ASSET_STORAGE_TABLE_NAME`, `DATABASE_STORAGE_TABLE_NAME`, `S3_ASSET_AUXILIARY_BUCKET`, `AUDIT_LOG_*`, etc. Non-pipeline handlers resolve these via SSM unless the legacy env var is explicitly set.
 
 ---
 
@@ -989,14 +1121,49 @@ os.environ['YOUR_SPECIFIC_BUCKET'] = 'test-bucket'
 | boto3                 | 1.34.84    | AWS SDK                                      |
 | botocore              | 1.34.162   | Low-level AWS SDK                            |
 | casbin                | 1.33.0     | ABAC/RBAC policy engine                      |
-| pydantic              | 1.10.7     | Data validation (v1 ONLY)                    |
+| pydantic              | 1.10.13    | Data validation (v1 ONLY)                    |
 | opensearch-py         | 2.5.0      | OpenSearch client                            |
-| simpleeval            | 1.0.3      | Safe expression evaluation (Casbin matchers) |
+| simpleeval            | 1.0.7      | Safe expression evaluation (Casbin matchers) |
 | locked-dict           | 2023.10.22 | Thread-safe dict for Casbin cache            |
 | moto                  | 5.1.0      | AWS service mocking (dev only)               |
-| pytest                | 8.3.4      | Test framework (dev only)                    |
+| pytest                | 9.0.3      | Test framework (dev only)                    |
 | mypy                  | 1.0.0      | Type checking (dev only)                     |
 | flake8                | 6.0.0      | Linting (dev only)                           |
+
+---
+
+## Updating Python Dependencies (Poetry-Managed)
+
+Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a
+**generated artifact** exported from `poetry.lock` — never edit it by hand. Poetry-managed
+projects: `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and
+`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+
+To change a dependency version:
+
+1. Edit the constraint in `pyproject.toml` only if the current constraint excludes the target
+   version (exact pins like `urllib3 = "2.6.3"` must be edited; ranges like `^2.12.1` that
+   already admit the target need no edit).
+2. Re-resolve the lock without installing: `poetry update --lock <package> [<package>...]`
+3. Re-export the requirements file(s):
+
+    ```bash
+    # Lambda layers and pipeline layers (single requirements.txt):
+    poetry export --without-hashes -f requirements.txt -o requirements.txt
+
+    # backend/ (split main vs dev):
+    poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
+    poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+    ```
+
+4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together —
+   a requirements file that drifts from its lock will be silently overwritten by the next
+   export, and the layer bundling build installs from the exported file.
+
+Requirements files with **no** side-by-side `pyproject.toml` (e.g.
+`backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`,
+`infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/constructs/requirements.txt`) are
+hand-maintained pip files and are edited directly.
 
 ---
 
@@ -1091,18 +1258,19 @@ class MyModel(BaseModel, extra='ignore'):
     pass
 ```
 
-### 8. Environment variables loaded inside handler functions
+### 8. Resource names loaded inside handler functions
 
 ```python
 # WRONG
 def lambda_handler(event, context):
-    table_name = os.environ["MY_TABLE"]  # Cold start penalty on every invocation
+    table_name = get_table_name(ResourceKeys.MY_TABLE)  # SSM fetch on every invocation
 
 # CORRECT -- at module level
+from backend.common.resourceNames import get_table_name, ResourceKeys
 try:
-    table_name = os.environ["MY_TABLE"]
+    table_name = get_table_name(ResourceKeys.MY_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 ```
 
@@ -1160,6 +1328,7 @@ import json
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -1178,9 +1347,9 @@ logger = safeLogger(service_name="CHANGE_ME")
 claims_and_roles = {}
 
 try:
-    table_name = os.environ["CHANGE_ME_STORAGE_TABLE_NAME"]
+    table_name = get_table_name(ResourceKeys.CHANGE_ME_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 
 table = dynamodb.Table(table_name)
@@ -1294,7 +1463,7 @@ class TestYourHandler:
     """Unit tests for your handler"""
 
     def _make_event(self, method='GET', path='/your-path', body=None, query_params=None):
-        """Helper to build API Gateway v2 event"""
+        """Helper to build API Gateway REST API event"""
         event = {
             'requestContext': {
                 'http': {
@@ -1325,8 +1494,8 @@ When creating or modifying a handler:
 -   [ ] Imports follow the standard order (stdlib, boto3, powertools, common, handlers, models)
 -   [ ] AWS clients created at module level with `retry_config`
 -   [ ] `safeLogger` used with descriptive `service_name`
--   [ ] Environment variables loaded in module-level `try/except`
--   [ ] DynamoDB tables initialized at module level
+-   [ ] Resource names resolved via `get_table_name(ResourceKeys.*)` in module-level `try/except`
+-   [ ] DynamoDB tables initialized at module level using resolved names
 -   [ ] `lambda_handler` extracts claims via `request_to_claims(event)`
 -   [ ] API-level auth checked via `casbin_enforcer.enforceAPI(event)`
 -   [ ] Routes dispatch to dedicated method handlers

@@ -23,6 +23,7 @@ import json
 import boto3
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 
@@ -32,16 +33,12 @@ logs_client = boto3.client('logs')
 dynamodb = boto3.resource('dynamodb')
 
 try:
-    workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
-    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
-    pipeline_execution_logs_table = os.environ["PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME"]
+    workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
+    pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
+    pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
-    if not all([workflow_execution_database_v2, pipeline_executions_table,
-                pipeline_execution_logs_table]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 FAILED_STATUS = "FAILED"

@@ -9,7 +9,7 @@ import { fetchAllWorkflows, fetchDatabaseWorkflows } from "../services/APIServic
 import { WorkflowListDefinition } from "../components/list/list-definitions/WorkflowListDefinition";
 import ListPage from "./ListPage";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
-export default function Workflows(props) {
+export default function Workflows(props: any) {
     const { databaseId } = useParams();
     const navigate = useNavigate();
     const [openModal, setOpenModal] = useState(false);
@@ -22,7 +22,7 @@ export default function Workflows(props) {
         }
     };
 
-    const handleSelectWorkflowDatabase = (event) => {
+    const handleSelectWorkflowDatabase = (event: any) => {
         const newDatabaseId = event?.detail?.selectedOption?.value;
         navigate(`/databases/${newDatabaseId}/workflows/create`);
     };

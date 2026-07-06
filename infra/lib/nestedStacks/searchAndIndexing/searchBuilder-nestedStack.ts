@@ -17,7 +17,7 @@ import {
     buildAssetIndexingFunction,
     buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
-import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
+import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
@@ -25,8 +25,10 @@ import * as cdk from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 
 export class SearchBuilderNestedStack extends NestedStack {
     public reindexerFunctionName = "";
@@ -35,7 +37,7 @@ export class SearchBuilderNestedStack extends NestedStack {
         parent: Construct,
         name: string,
         config: Config.Config,
-        api: apigwv2.HttpApi,
+        registry: RouteRegistry,
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
@@ -46,7 +48,7 @@ export class SearchBuilderNestedStack extends NestedStack {
         this.reindexerFunctionName = searchBuilder(
             this,
             config,
-            api,
+            registry,
             storageResources,
             lambdaCommonBaseLayer,
             vpc,
@@ -58,7 +60,7 @@ export class SearchBuilderNestedStack extends NestedStack {
 export function searchBuilder(
     scope: Construct,
     config: Config.Config,
-    api: apigwv2.HttpApi,
+    registry: RouteRegistry,
     storageResources: storageResources,
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
@@ -76,19 +78,19 @@ export function searchBuilder(
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,
-        api: api,
+        registry: registry,
     });
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.GET,
-        api: api,
+        registry: registry,
     });
 
     // Add simple search endpoint
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search/simple",
         method: apigwv2.HttpMethod.POST,
-        api: api,
+        registry: registry,
     });
 
     let fileIndexingFunction: lambda.Function | undefined = undefined;
@@ -264,6 +266,8 @@ export function searchBuilder(
             ebsVolumeSize: config.app.openSearch.useProvisioned.ebsInstanceNodeSizeGb
                 ? config.app.openSearch.useProvisioned.ebsInstanceNodeSizeGb
                 : undefined,
+            availabilityZoneCount: config.app.openSearch.useProvisioned.availabilityZoneCount,
+            numberOfShards: config.app.openSearch.useProvisioned.numberOfShards,
         });
 
         const osEndpointOutput = new cdk.CfnOutput(
@@ -420,6 +424,16 @@ export function searchBuilder(
                 ClearIndexes: "true",
                 Timestamp: Date.now().toString(),
             },
+        });
+    }
+
+    // Publish the reindexer function name for data-migration tooling. Created here
+    // rather than through the resource-name registry because this stack builds after
+    // the ResourceNames stack materializes the registry.
+    if (reindexerFunction) {
+        new ssm.StringParameter(scope, "ResourceNameParamCrOsReindexer", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer}`,
+            stringValue: reindexerFunction.functionName,
         });
     }
 

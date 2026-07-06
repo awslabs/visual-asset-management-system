@@ -5,11 +5,11 @@
 
 import * as React from "react";
 
-function loadError(onError) {
+function loadError(onError: any) {
     console.error(`Failed ${onError.target.src} didn't load correctly`);
 }
 
-function External(url) {
+function External(url: any) {
     React.useEffect(() => {
         const LoadExternalScript = () => {
             const externalScript = document.createElement("script");

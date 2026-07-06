@@ -13,6 +13,7 @@ import os
 
 # Set environment variables for testing
 os.environ['AWS_REGION'] = 'us-east-1'
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'  # boto3 clients created at module import time
 os.environ['REGION'] = 'us-east-1'  # Some handlers use REGION instead of AWS_REGION
 os.environ['COGNITO_AUTH_ENABLED'] = 'true'
 os.environ['COGNITO_AUTH'] = 'cognito-idp.us-east-1.amazonaws.com/us-east-1_example'
@@ -62,6 +63,45 @@ backend_path = os.path.join(os.path.dirname(__file__), 'backend')
 if not os.path.exists(backend_path):
     os.makedirs(backend_path, exist_ok=True)
 
+# Early setup: load common.auth modules BEFORE test collection (handlers import them at module level)
+import importlib.util
+
+def import_module_from_path_early(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+# Load common.auth package and apiEvent module early (handlers import at top-level)
+common_auth_pkg = import_module_from_path_early(
+    'common.auth',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', '__init__.py')
+)
+sys.modules['common.auth'] = common_auth_pkg
+
+common_auth_apievent = import_module_from_path_early(
+    'common.auth.apiEvent',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
+)
+sys.modules['common.auth.apiEvent'] = common_auth_apievent
+
+# Load resourceNames and syncTracking early too: addon handler test modules
+# (tests/handlers/addon/physna) import the real handler modules at collection
+# time, and those handlers import common.syncTracking at module level.
+common_resource_names_early = import_module_from_path_early(
+    'common.resourceNames',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
+)
+sys.modules['common.resourceNames'] = common_resource_names_early
+
+common_sync_tracking_early = import_module_from_path_early(
+    'common.syncTracking',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
+)
+sys.modules['common.syncTracking'] = common_sync_tracking_early
+
 # Set up mock imports
 import pytest
 from unittest.mock import MagicMock
@@ -94,7 +134,12 @@ def setup_mock_imports():
     validators_module = import_module_from_path('common.validators', os.path.join(mocks_base_path, 'common', 'validators.py'))
     sys.modules['common.validators'] = validators_module
     
-    constants_module = import_module_from_path('common.constants', os.path.join(mocks_base_path, 'common', 'constants.py'))
+    # constants is pure data with no AWS dependencies, so load the real module
+    # (single source of truth) rather than a duplicate mock copy.
+    constants_module = import_module_from_path(
+        'common.constants',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'constants.py')
+    )
     sys.modules['common.constants'] = constants_module
     
     dynamodb_module = import_module_from_path('common.dynamodb', os.path.join(mocks_base_path, 'common', 'dynamodb.py'))
@@ -131,6 +176,40 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')
     )
     sys.modules['common.apiRoutes'] = api_routes_module
+
+    # resourceNames is a real module with boto3 and logger dependencies, load it
+    resource_names_module = import_module_from_path(
+        'common.resourceNames',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
+    )
+    sys.modules['common.resourceNames'] = resource_names_module
+
+    # assetHistory is a real module (asset lifecycle history writer); load it
+    asset_history_module = import_module_from_path(
+        'common.assetHistory',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'assetHistory.py')
+    )
+    sys.modules['common.assetHistory'] = asset_history_module
+
+    # syncTracking is a real module (outbound system sync writer); load it
+    sync_tracking_module = import_module_from_path(
+        'common.syncTracking',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
+    )
+    sys.modules['common.syncTracking'] = sync_tracking_module
+
+    # common.auth modules are pure logic with no AWS state dependencies - load real modules
+    auth_pkg_module = import_module_from_path(
+        'common.auth',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', '__init__.py')
+    )
+    sys.modules['common.auth'] = auth_pkg_module
+
+    api_event_module = import_module_from_path(
+        'common.auth.apiEvent',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
+    )
+    sys.modules['common.auth.apiEvent'] = api_event_module
 
     # s3 is a simple validation module; load the mock by path
     s3_mock_module = import_module_from_path('common.s3', os.path.join(mocks_base_path, 'common', 's3.py'))

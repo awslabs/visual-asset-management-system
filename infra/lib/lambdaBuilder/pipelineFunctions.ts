@@ -61,11 +61,8 @@ export function buildCreatePipelineFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             ENABLE_PIPELINE_FUNCTION_NAME: enablePipelineFunction.functionName,
             ENABLE_PIPELINE_FUNCTION_ARN: enablePipelineFunction.functionArn,
-            LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET: storageResources.s3.artefactsBucket.bucketName,
             LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY:
                 "sample_lambda_pipeline/lambda_pipeline_deployment_package.zip",
             ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE: newPipelineLambdaRole.roleArn,
@@ -74,7 +71,6 @@ export function buildCreatePipelineFunction(
             SECURITYGROUP_IDS: newPipelineLambdaSecurityGroup
                 ? newPipelineLambdaSecurityGroup.securityGroupId
                 : "", //used if subnet IDs are passed in,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             // createPipeline rebuilds workflow ASL states on pipeline update (via
             // update_pipeline_workflows); the partition feeds the Step Functions
             // service-integration ARNs (arn:{partition}:states:::...) so they stay valid
@@ -215,12 +211,7 @@ export function buildPipelineService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
@@ -266,9 +257,7 @@ export function buildEnablePipelineFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

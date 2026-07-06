@@ -45,11 +45,15 @@ def _load():
     # sqsBucketSync imports create_asset/create_database submodules that the mock
     # `handlers.assets`/`handlers.databases` packages don't provide. Stub them
     # for the load only (saved/restored) so the module's top-level imports resolve.
-    stub_names = ("handlers.assets.createAsset", "handlers.databases.createDatabase")
+    stub_names = ("handlers.assets.createAsset", "handlers.assets.assetCount",
+                  "handlers.databases.createDatabase")
     saved = {name: sys.modules.get(name) for name in stub_names}
     create_asset_stub = types.ModuleType("handlers.assets.createAsset")
     create_asset_stub.create_asset = MagicMock()
     sys.modules["handlers.assets.createAsset"] = create_asset_stub
+    asset_count_stub = types.ModuleType("handlers.assets.assetCount")
+    asset_count_stub.update_asset_count = MagicMock()
+    sys.modules["handlers.assets.assetCount"] = asset_count_stub
     create_db_stub = types.ModuleType("handlers.databases.createDatabase")
     create_db_stub.create_database = MagicMock()
     sys.modules["handlers.databases.createDatabase"] = create_db_stub

@@ -6,37 +6,37 @@
 
 //@todo improve code reuse with decorators or pipe
 
-export const verifyIsBool = (value) => {
+export const verifyIsBool = (value: any) => {
     if (typeof value === "boolean" || value instanceof Boolean) return true;
     else return false;
 };
 
-export const verifyIsString = (value) => {
+export const verifyIsString = (value: any) => {
     if (typeof value === "string" || value instanceof String) return true;
     else return false;
 };
 
-export const verifyIsNumber = (value) => {
+export const verifyIsNumber = (value: any) => {
     if (typeof value === "number" && !isNaN(value)) return true;
     else return false;
 };
 
-export const verifyIsObject = (value) => {
+export const verifyIsObject = (value: any) => {
     if (typeof value === "object" || value instanceof Object) return true;
     else return false;
 };
 
-export const verifyIsNotEmpty = (value) => {
+export const verifyIsNotEmpty = (value: any) => {
     if (value !== "") return true;
     else return false;
 };
 
-export const verifyStringMaxLength = (value, maxLength) => {
+export const verifyStringMaxLength = (value: any, maxLength: number) => {
     if (value.length <= maxLength) return true;
     else return false;
 };
 
-export const verifyJsonParsable = (value) => {
+export const verifyJsonParsable = (value: any) => {
     //If JSON.parse does not throw error, return true.
     //Otherwise return false
     try {
@@ -50,7 +50,7 @@ export const verifyJsonParsable = (value) => {
 /*
 Starts with . followed by 1 to 7 lowercase letters
  */
-export const validateFileType = (value) => {
+export const validateFileType = (value: any) => {
     const regex = /^[\\.]([a-z0-9]){1,7}$/g;
     const result = String(value).match(regex);
     if (result === null) {
@@ -59,7 +59,7 @@ export const validateFileType = (value) => {
     return result[0] === String(value);
 };
 
-export const validateContainerUri = (value) => {
+export const validateContainerUri = (value: any) => {
     const regex = /^[0-9]{12}.dkr.(?:ecr|ecr-fips).+?amazonaws.com\/.+/g;
     const result = String(value).match(regex);
     if (result === null) {
@@ -68,7 +68,7 @@ export const validateContainerUri = (value) => {
     return result[0] === String(value);
 };
 
-export const fileTypePropType = function (props, propName) {
+export const fileTypePropType = function (props: any, propName: string) {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
@@ -91,7 +91,7 @@ export const fileTypePropType = function (props, propName) {
 /*
 All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64
  */
-export const validateEntityId = (value) => {
+export const validateEntityId = (value: any) => {
     // ^[-_a-zA-Z0-9]{3,63}$ means the string should end with 3~63 chars -_a-zA-Z0-9
     const regex = /^[-_a-zA-Z0-9]{3,63}$/g;
     const result = String(value).match(regex);
@@ -101,7 +101,7 @@ export const validateEntityId = (value) => {
     return result[0] === String(value);
 };
 
-export const entityIdPropType = function (props, propName) {
+export const entityIdPropType = function (props: any, propName: string) {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
@@ -125,14 +125,14 @@ export const entityIdPropType = function (props, propName) {
     return null;
 };
 
-export const formatEntityId = (s) => {
+export const formatEntityId = (s: string) => {
     return s
         .replace(/[\s+-]/g, "-")
         .replace(/[^\w-]/g, "")
         .toLowerCase();
 };
 
-export const entityIdArrayPropType = function (props, propName) {
+export const entityIdArrayPropType = function (props: any, propName: string) {
     const testValues = props[propName];
     if (!Array.isArray(testValues)) {
         return new Error(`Invalid value for ${propName}. Value must be an array.`);
@@ -157,7 +157,7 @@ export const entityIdArrayPropType = function (props, propName) {
     return null;
 };
 
-export const boolPropType = (props, propName) => {
+export const boolPropType = (props: any, propName: string) => {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
@@ -169,7 +169,7 @@ export const boolPropType = (props, propName) => {
     return null;
 };
 
-export const objectPropType = (props, propName) => {
+export const objectPropType = (props: any, propName: string) => {
     const testValue = props[propName];
 
     if (!verifyIsObject(testValue)) {
@@ -179,7 +179,7 @@ export const objectPropType = (props, propName) => {
     return null;
 };
 
-export const stringMaxLength = (maxLength, props, propName) => {
+export const stringMaxLength = (maxLength: number, props: any, propName: string) => {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
@@ -199,7 +199,7 @@ export const stringMaxLength = (maxLength, props, propName) => {
     return null;
 };
 
-export const jsonString = (props, propName) => {
+export const jsonString = (props: any, propName: string) => {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
@@ -215,14 +215,14 @@ export const jsonString = (props, propName) => {
     return null;
 };
 
-export const entityPropType = function (props, propName) {
+export const entityPropType = function (props: any, propName: string) {
     if (!props[propName].propTypes) {
         return new Error(`Invalid prop ${propName}. Not valid entity, no PropTypes.`);
     }
     return null;
 };
 
-export const typedObjectPropType = function (type, props, propName, object) {
+export const typedObjectPropType = function (type: any, props: any, propName: string, object: any) {
     let testValue;
     if (object) {
         testValue = Object.assign({}, object);
@@ -244,14 +244,14 @@ export const typedObjectPropType = function (type, props, propName, object) {
     return null;
 };
 
-export const typedObjectArrayPropType = function (type, props, propName) {
+export const typedObjectArrayPropType = function (type: any, props: any, propName: string) {
     const testValues = props[propName];
     if (!Array.isArray(testValues)) {
         return new Error(`Invalid value for ${propName}. Value must be an array.`);
     }
     for (let i = 0; i < testValues.length; i++) {
         const testValue = testValues[i];
-        const results = typedObjectPropType(type, null, null, testValue);
+        const results = typedObjectPropType(type, null, null as any, testValue);
         if (results !== null) {
             return results;
         }
@@ -260,7 +260,7 @@ export const typedObjectArrayPropType = function (type, props, propName) {
     return null;
 };
 
-export const containerUriPropType = function (props, propName) {
+export const containerUriPropType = function (props: any, propName: string) {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
@@ -276,7 +276,7 @@ export const containerUriPropType = function (props, propName) {
     return null;
 };
 
-export const validateLambdaName = function (props, propName) {
+export const validateLambdaName = function (props: any, propName: string) {
     //check if prop is supplied by option element
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;

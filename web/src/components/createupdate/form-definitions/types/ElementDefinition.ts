@@ -5,13 +5,28 @@
 
 import PropTypes from "prop-types";
 
-export default function ElementDefinition(props) {
+interface ElementDefinition {
+    FormElement: any;
+    elementProps: any;
+}
+
+interface ElementDefinitionConstructor {
+    new (props: any): ElementDefinition;
+    propTypes: any;
+}
+
+function ElementDefinitionImpl(this: ElementDefinition, props: any) {
     const { formElement, elementProps } = props;
     this.FormElement = formElement;
     this.elementProps = elementProps;
 }
 
-ElementDefinition.propTypes = {
+(ElementDefinitionImpl as any).propTypes = {
     FormElement: PropTypes.element.isRequired,
     elementProps: PropTypes.object,
 };
+
+const ElementDefinition = ElementDefinitionImpl as unknown as ElementDefinitionConstructor;
+
+export default ElementDefinition;
+export type { ElementDefinition };

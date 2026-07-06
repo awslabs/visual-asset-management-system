@@ -1,13 +1,14 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.dynamodb import get_asset_object_from_id
 from customLogging.logger import safeLogger
@@ -19,11 +20,12 @@ dynamodb = boto3.resource('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving subscriptions table name")
+    subscription_table_name = None
     main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
+        {"message": "Failed resolving subscriptions table name"})
 
 
 def check_subscriptions(body):
@@ -58,6 +60,7 @@ def check_subscriptions(body):
 
 
 def lambda_handler(event, context):
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
 
     # Parse request body

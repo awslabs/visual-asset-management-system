@@ -10,10 +10,18 @@
         "assetBuckets": {
             "createNewBucket": true,
             "defaultNewBucketSyncDatabaseId": "default",
+            "presignedUrlNetworkRestrictions": {
+                "allowedIpRanges": [],
+                "allowedVpceIds": []
+            },
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
+        "iamRoleConfig": {
+            "useCustomBootstrapRoles": false,
+            "useCustomVamsStackRoles": false
+        },
         "useFips": false,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
@@ -37,12 +45,22 @@
         },
         "openSearch": {
             "useServerless": {
-                "enabled": true
+                "enabled": true,
+                "nextGen": true,
+                "allowPublic": true,
+                "enableStandbyReplicas": true,
+                "minIndexingOcu": 2,
+                "maxIndexingOcu": 16,
+                "minSearchOcu": 2,
+                "maxSearchOcu": 16,
+                "deployDeferredIndexSchema": false
             },
             "useProvisioned": {
                 "enabled": false,
-                "dataNodeInstanceType": "r6g.large.search",
-                "masterNodeInstanceType": "r6g.large.search",
+                "availabilityZoneCount": 2,
+                "numberOfShards": 1,
+                "dataNodeInstanceType": "r7g.large.search",
+                "masterNodeInstanceType": "r7g.large.search",
                 "ebsInstanceNodeSizeGb": 120
             },
             "reindexOnCdkDeploy": false
@@ -81,6 +99,12 @@
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useConversionCoordinateTransform": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
@@ -259,8 +283,13 @@
             "allowUnsafeEvalFeatures": false
         },
         "api": {
-            "globalRateLimit": 50,
-            "globalBurstLimit": 100
+            "apiType": "APIGATEWAY_REST",
+            "apiGatewayRest": {
+                "globalRateLimit": 50,
+                "globalBurstLimit": 100,
+                "endpointType": "REGIONAL",
+                "optionalExternalPrivateApigVPCEId": ""
+            }
         },
         "metadataSchema": {
             "autoLoadDefaultAssetLinksSchema": true,

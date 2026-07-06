@@ -162,19 +162,16 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 9. CesiumViewerPlugin
 
 -   **Extensions**: `.json`
--   **Features**: 3D Tileset viewing with CesiumJS using streaming API, optimized for large-scale 3D Tiles
+-   **Features**: 3D Tileset viewing with the CesiumJS engine (`@cesium/engine`) using streaming API, optimized for large-scale 3D Tiles. VAMS custom scene controls provide home, 3D/2D/2.5D scene mode, fullscreen, and a picked-feature properties panel.
 -   **Multi-file**: Yes (can load multiple tilesets simultaneously)
--   **Dependencies**: `cesium`
+-   **Dependencies**: `@cesium/engine` (via `customInstalls/cesium`)
 -   **Priority**: 2
--   **Feature Requirements**: `ALLOWUNSAFEEVAL` - CesiumJS requires unsafe eval permissions for WebGL shader compilation and dynamic code execution
 -   **Special**: Streams 3D Tileset data directly from VAMS API with authentication, provides Level-of-Detail (LOD) streaming
 -   **Custom Parameters**:
     -   `cesiumIonToken`: Cesium Ion access token for enhanced features (terrain, high-resolution imagery, geocoding)
 -   **CSP Requirements**:
-    -   **Required**: `ALLOWUNSAFEEVAL` feature flag must be enabled in CDK config.json configuration file
     -   **Optional**: If providing a Cesium Ion access token, add `https://api.cesium.com` to the CDK CSP `connectSrc` configuration file in `infra\config\csp\cspAdditionalConfig.json` to enable Cesium ION functionality
--   **Configuration**: To enable CesiumJS viewer, ensure `allowUnsafeEvalFeatures` is turned on in the `config.json` CDK configuration
--   **Note**: Designed for 3D Tileset (.json) files that reference collections of .glb/.gltf tiles. Uses VAMS streaming API for authenticated access to tileset data. Additional functionality (terrain, enhanced imagery) can be unlocked by providing a Cesium Ion token. This viewer will not be available if `ALLOWUNSAFEEVAL` is not enabled due to CesiumJS's requirement for dynamic code execution in WebGL shaders.
+-   **Note**: Designed for 3D Tileset (.json) files that reference collections of .glb/.gltf tiles. Uses VAMS streaming API for authenticated access to tileset data. Additional functionality (terrain, enhanced imagery) can be unlocked by providing a Cesium Ion token. Tilesets using KTX2/Basis compressed textures require the `ALLOWUNSAFEEVAL` deployment configuration (Emscripten embind in the KTX2 transcoder worker).
 
 ### 10. TextViewerPlugin
 

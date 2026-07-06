@@ -32,9 +32,9 @@ tools/VamsCLI/
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
     commands/
       setup.py               # Initial CLI configuration
-      auth.py                # Login, logout, status, set-override, routes (API route listing)
+      auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
       apiKey.py              # API key management (admin) + 'user' sub-group (self-service own keys)
-      assets.py              # Asset CRUD operations
+      assets.py              # Asset CRUD operations + lifecycle history lookup (history)
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
       file.py                # File management (upload, download, move, copy)
@@ -46,6 +46,7 @@ tools/VamsCLI/
       metadata_schema.py     # Metadata schema management
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
+      sync.py                # Directory sync (sync file push/pull)
       workflow.py            # Workflow execution
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
@@ -68,23 +69,29 @@ tools/VamsCLI/
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
       upload_manager.py      # Multi-part upload orchestration
-      download_manager.py    # Parallel download orchestration
+      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation)
       file_processor.py      # File validation and processing
+      sync_engine.py         # Sync plan computation (local/remote diff)
+      vamsignore.py          # .vamsignore gitignore-style pattern matching
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
     test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
 ```
 
-### Command Groups (18 top-level)
+### Command Groups (20 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, workflow,
-industry, user, role
+tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
+industry, user, role, api-key
 ```
+
+Sync has a nested sub-command group:
+
+-   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
 
 Industry has nested sub-command groups:
 
@@ -120,6 +127,7 @@ VamsCLIError (base)
     AssetError (+ 5 subclasses)
     DatabaseError (+ 5 subclasses)
     FileError (+ 14 subclasses)
+    SyncError (+ 5 subclasses)
     TagError (+ 7 subclasses)
     AssetVersionError (+ 5 subclasses, includes AssetVersionArchiveError)
     AssetLinkError (+ 7 subclasses)
@@ -342,6 +350,14 @@ Login flow:
 4. Call `/secure-config` for feature switches
 5. Store feature switches in profile config
 
+Password changes (Cognito only):
+
+-   `authenticate()` accepts `new_password` and `interactive`. A `NEW_PASSWORD_REQUIRED` challenge is answered with `new_password` when provided; otherwise it prompts (interactive) or raises `AuthenticationError` (non-interactive, e.g. `--json-output`).
+-   `vamscli auth login --new-password` completes a forced password change; the command passes `interactive=not json_output`.
+-   `CognitoAuthenticator.change_password(access_token, previous_password, proposed_password)` wraps the Cognito `ChangePassword` API. `vamscli auth change-password` signs in with the current password (`interactive=False`) and then changes it, also satisfying a forced change in one step.
+-   `CognitoAuthenticator.forgot_password(username)` and `confirm_forgot_password(username, code, new_password)` wrap the Cognito `ForgotPassword` / `ConfirmForgotPassword` APIs (self-service reset, no current password needed). `vamscli auth forgot-password` is a single two-phase command: with no `--code` it requests an emailed code; with `--code` + `--new-password` it confirms. Interactive mode prompts through both phases; `--json-output` requests-only or confirms when both are supplied.
+-   These flows call the `cognito-idp` client directly (boto3), not a VAMS API route, so they have no `constants.py` endpoint entry.
+
 Override tokens (external auth):
 
 -   Set via `vamscli auth set-override --token <jwt>`
@@ -540,14 +556,16 @@ Follow this checklist:
 
 6. **Write tests** in `tests/test_my_resource.py` following the test class pattern above
 
-7. **Update user-facing documentation**:
+7. **Update user-facing documentation**. The official Docusaurus site (`documentation/docusaurus-site/docs/cli/`) is the **single source of truth** for CLI documentation. The legacy in-repo docs under `tools/VamsCLI/docs/` are deprecated — do not add or update content there.
 
     - Update the Docusaurus CLI reference page at `documentation/docusaurus-site/docs/cli/commands/` for the relevant command group
+    - Update the matching troubleshooting page at `documentation/docusaurus-site/docs/cli/troubleshooting/` if behavior or error scenarios changed (CLI troubleshooting lives under the CLI section, not the top-level `troubleshooting/`)
     - Update `documentation/docusaurus-site/docs/cli/command-reference.md` index if a new command group was added
-    - Update `documentation/docusaurus-site/sidebars.ts` if a new CLI command page was added
-    - Update `README.md` Quick Start examples if the command is commonly used
+    - Update `documentation/docusaurus-site/sidebars.ts` if a new CLI command or troubleshooting page was added
+    - Update `tools/VamsCLI/README.md` only for basic install/quick-start changes (it points to the official site for everything else)
     - Update `documentation/VAMS_API.yaml` with new/modified API endpoints and schemas
     - Update `documentation/docusaurus-site/docs/concepts/permissions-model.md` with new API route permissions
+    - Run `cd documentation/docusaurus-site && npm run build` to verify links and MDX
 
     **Documentation style**: Follow Docusaurus format with `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, use `bash` language tags on code blocks. See `documentation/CLAUDE.md` for full style guide.
 
@@ -977,5 +995,7 @@ class InvalidMyDomainDataError(MyDomainError):
 | `vamscli/utils/upload_manager.py`    | Multi-part upload orchestration                        |
 | `vamscli/utils/download_manager.py`  | Parallel download orchestration                        |
 | `vamscli/utils/file_processor.py`    | File validation and processing                         |
+| `vamscli/utils/sync_engine.py`       | Sync plan computation (local/remote diff)              |
+| `vamscli/utils/vamsignore.py`        | `.vamsignore` gitignore-style pattern matching         |
 | `vamscli/utils/glb_combiner.py`      | GLB binary file combination                            |
 | `tests/conftest.py`                  | Shared fixtures: mock_logging, generic_command_mocks   |

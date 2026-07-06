@@ -19,6 +19,42 @@ from ..utils.exceptions import (
 # Helper Functions
 #######################
 
+def fetch_all_metadata_pages(fetch_page, page_size: int, starting_token: str) -> Dict[str, Any]:
+    """Aggregate every page of a paged metadata GET into a single result.
+
+    The metadata GET APIs return one page plus a NextToken. When the caller does
+    not pin a specific page (no starting_token), follow NextToken to completion so
+    the command still returns the full metadata set. When a starting_token is
+    supplied, return just that single page (manual pagination).
+
+    Args:
+        fetch_page: Callable(page_size, token) -> API response dict containing a
+            'metadata' list and an optional 'NextToken'.
+        page_size: Page size to request per call.
+        starting_token: If provided, fetch only that single page.
+
+    Returns:
+        The API response dict. When auto-paginating, 'metadata' holds all
+        aggregated records and 'NextToken' is removed.
+    """
+    # Manual pagination: caller pinned a page, return it as-is.
+    if starting_token:
+        return fetch_page(page_size, starting_token)
+
+    result = fetch_page(page_size, None)
+    all_metadata = builtin_list(result.get('metadata', []))
+    next_token = result.get('NextToken')
+
+    while next_token:
+        page = fetch_page(page_size, next_token)
+        all_metadata.extend(page.get('metadata', []))
+        next_token = page.get('NextToken')
+
+    result['metadata'] = all_metadata
+    result.pop('NextToken', None)
+    return result
+
+
 def load_json_input(json_input: str) -> Dict[str, Any]:
     """
     Load JSON input from file or string.
@@ -164,8 +200,11 @@ def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: 
     try:
         output_status("Retrieving asset metadata...", json_output)
 
-        result = api_client.get_asset_metadata_v2(database_id, asset_id, page_size, starting_token, asset_version_id)
-        
+        result = fetch_all_metadata_pages(
+            lambda ps, token: api_client.get_asset_metadata_v2(database_id, asset_id, ps, token, asset_version_id),
+            page_size, starting_token
+        )
+
         def format_list_output(data):
             metadata_list = data.get('metadata', [])
             return format_metadata_list(metadata_list, 'asset')
@@ -362,7 +401,10 @@ def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, me
     try:
         output_status(f"Retrieving file {metadata_type}...", json_output)
 
-        result = api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, page_size, starting_token, asset_version_id)
+        result = fetch_all_metadata_pages(
+            lambda ps, token: api_client.get_file_metadata_v2(database_id, asset_id, file_path, metadata_type, ps, token, asset_version_id),
+            page_size, starting_token
+        )
         
         def format_list_output(data):
             metadata_list = data.get('metadata', [])
@@ -552,8 +594,11 @@ def list(ctx: click.Context, asset_link_id: str, page_size: int, starting_token:
     
     try:
         output_status("Retrieving asset link metadata...", json_output)
-        
-        result = api_client.get_asset_link_metadata_v2(asset_link_id, page_size, starting_token)
+
+        result = fetch_all_metadata_pages(
+            lambda ps, token: api_client.get_asset_link_metadata_v2(asset_link_id, ps, token),
+            page_size, starting_token
+        )
         
         def format_list_output(data):
             metadata_list = data.get('metadata', [])
@@ -731,8 +776,11 @@ def list(ctx: click.Context, database_id: str, page_size: int, starting_token: s
     
     try:
         output_status("Retrieving database metadata...", json_output)
-        
-        result = api_client.get_database_metadata_v2(database_id, page_size, starting_token)
+
+        result = fetch_all_metadata_pages(
+            lambda ps, token: api_client.get_database_metadata_v2(database_id, ps, token),
+            page_size, starting_token
+        )
         
         def format_list_output(data):
             metadata_list = data.get('metadata', [])

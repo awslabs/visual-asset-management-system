@@ -7,6 +7,8 @@ import boto3
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
+from models.common import commonHeaders
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ConfigService")
@@ -20,7 +22,10 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     try:
         logger.info("Looking up the requested resource")
-        appFeatureEnabledDynamoDBTable = os.getenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", None)
+        try:
+            appFeatureEnabledDynamoDBTable = get_table_name(ResourceKeys.APP_FEATURE_ENABLED_STORAGE_TABLE)
+        except:
+            appFeatureEnabledDynamoDBTable = None
 
         # Specify the column name you want to aggregate
         appFeatureEnableDynamoDB_feature_column_name = 'featureName'
@@ -170,10 +175,7 @@ def lambda_handler(event, context):
         return {
             "statusCode": "200",
             "body": json.dumps(response),
-            "headers": {
-                "Content-Type": "application/json",
-                'Cache-Control': 'no-cache, no-store',
-            },
+            "headers": commonHeaders(),
         }
     except Exception as e:
         response['statusCode'] = 500

@@ -3,79 +3,71 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Data Migration Script for VAMS v2.5 to v2.6.
+Data Migration Script for VAMS v2.5 to v2.6 - OpenSearch Reindex (v2 -> v3),
+Asset History Backfill, and Workflow Executions Storage Overhaul (V1 -> V2)
 
-This is the single consolidated migration for the v2.6 release. It runs two
-independent steps (select with --steps; default runs both):
-
-  1. reindex            -- OpenSearch reindex (vams-*-v2 -> vams-*-v3)
-  2. workflowExecutions -- Workflow Executions storage overhaul (V1 -> V2 data model)
-
-------------------------------------------------------------------------------
-STEP 1: OpenSearch Reindex (vams-*-v2 -> vams-*-v3)
-------------------------------------------------------------------------------
 The v2.6 release introduces:
-  - A new ``geo_MD_location`` field of OpenSearch type ``geo_shape`` on every
-    asset and file document, derived by the indexers from location metadata.
-  - New OpenSearch index names ``vams-assets-v3`` and ``vams-files-v3`` (the
-    prior v2 indexes are abandoned).
-  - (Provisioned deployments only) An OpenSearch engine upgrade from 2.7 to 3.5.
+  1. A new ``geo_MD_location`` field of OpenSearch type ``geo_shape`` on every
+     asset and file document. The asset and file indexers populate it from a
+     ``location`` metadata key (GeoJSON or {latitude, longitude, altitude})
+     or from individual latitude / longitude / altitude metadata fields.
+  2. New OpenSearch index names ``vams-assets-v3`` and ``vams-files-v3`` (the
+     prior v2 indexes are abandoned). The CDK custom resource that creates the
+     index mappings only runs on first creation, so the schema change is
+     introduced cleanly by switching index names.
+  3. (Provisioned deployments only) An OpenSearch engine upgrade from 2.7 to
+     3.5, which itself requires a reindex.
+  4. A new ``AssetHistoryStorageTable`` that records asset lifecycle
+     operations (create, edit, archive, unarchive, permanent delete). After
+     the reindex, this migration backfills the table from existing asset
+     records: a ``create`` record inferred from each asset's v0 version
+     record (when present), plus ``archive``/``unarchive`` records inferred
+     from the asset's archivedAt/archivedBy and unarchivedAt/unarchivedBy
+     fields. Backfilled records carry ``migratedRecord: true`` and a
+     deterministic record ID, so re-runs overwrite rather than duplicate.
+     Set ``skip_asset_history_backfill: true`` in the config to run the
+     reindex only.
 
-Because the v3 indexes are empty after the v2.6 CDK deploy, this step delegates
-to the deployed reindexer Lambda (``crReindexer``) to re-populate both indexes
-from the source DynamoDB and S3 records. ``--clear-indexes`` is off by default.
+Because the v3 indexes are empty after the v2.6 CDK deploy, this migration
+delegates to the existing reindexer Lambda (``crReindexer``) to re-populate
+both indexes from the source DynamoDB and S3 records. ``--clear-indexes`` is
+**off by default** -- the v3 indexes start empty and do not need to be
+cleared. Pass ``--clear-indexes`` only if you are re-running the migration
+against an already-populated v3 index and want a clean slate.
 
-------------------------------------------------------------------------------
-STEP 2: Workflow Executions Storage Overhaul (V1 -> V2 data model)
-------------------------------------------------------------------------------
-Reshapes the legacy WorkflowExecutionsStorageTable (PK databaseId:assetId,
-SK executionId; US-format dates) into the new workflow-keyed data model. The
-legacy composite-key attributes carried a spurious '$' prefix, so the new clean
-keys are rebuilt from the discrete databaseId/assetId/workflowId/workflowDatabaseId
-attributes (which were stored without the '$') rather than parsed from the old keys:
+Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack
+output ``ResourceNamesSSMParamPrefixOutput``) and the reindexer function name
+is resolved automatically from SSM Parameter Store. The explicit
+``reindexer_function_name`` field remains supported as an optional override
+and as the required path for deployments without the prefix filled in.
 
-  WorkflowExecutionsStorageTableV2:        PK workflowExecutionId, SK workflowDatabaseId:workflowId
-  WorkflowExecutionInputsStorageTable:     PK workflowExecutionId, SK databaseId:assetId:inputAssetFileKey
-  PipelineExecutionsStorageTable:          PK pipelineExecutionId, SK workflowExecutionId
-  PipelineExecutionInputFilesStorageTable: PK pipelineExecutionId, SK databaseId:assetId:inputAssetFileKey
-
-Per legacy execution row:
-  1. V2 main row (clean keys, ISO dates, triggeredByUserId='system', triggerType='Manual',
-     execution_arn -> workflow_execution_arn).
-  2. WorkflowExecutionInputs row from legacy assetId/databaseId/inputAssetFileKey.
-  3. One PipelineExecutions stub per pipeline in the workflow's specifiedPipelines
-     (chained via from_pipeline_execution_id; endStatePipeline='true' on the last).
-     File inputs are attached to the FIRST pipeline only.
-  4. If the workflow or a pipeline no longer exists, the stub uses pipelineId='DELETED'
-     so the file linkage is preserved.
-
-GUIDs are derived deterministically (uuid5) from the legacy executionId so this
-step is idempotent (re-runs overwrite the same rows).
-
-------------------------------------------------------------------------------
 Usage:
-    # Dry run, both steps (recommended first)
+    # Dry run (recommended first step)
     python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run
 
-    # Production, both steps
+    # Production migration
     python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json
 
-    # Only the OpenSearch reindex step
-    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex
+    # Re-run with index clear (only if v3 is already populated)
+    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --clear-indexes
 
-    # Only the workflow-executions step
-    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps workflowExecutions
+    # Test with limited items
+    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --limit 100 --dry-run
+
+    # Asynchronous invocation for very large datasets
+    python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --async
 
 Requirements:
     - Python 3.6+
     - boto3
-    - AWS credentials with lambda:InvokeFunction (reindex) and DynamoDB
-      Scan/BatchWriteItem (workflowExecutions) permissions
+    - AWS credentials with lambda:InvokeFunction permission (and ssm:GetParametersByPath
+      when using the SSM prefix lookup)
 """
 
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 import uuid
@@ -84,6 +76,10 @@ from typing import Dict, List, Optional, Tuple
 
 import boto3
 from botocore.exceptions import ClientError, ReadTimeoutError
+
+# Shared migration tooling (infra/deploymentDataMigration/tools)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
+from ssm_resource_lookup import ResourceParamKeys, SsmResourceLookup  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -112,10 +108,6 @@ def load_config_from_file(config_file: str) -> dict:
         logger.error(f"Error loading configuration from {config_file}: {e}")
         sys.exit(1)
 
-
-# =============================================================================
-# STEP 1: OpenSearch Reindex (vams-*-v2 -> vams-*-v3)
-# =============================================================================
 
 def invoke_reindexer_lambda(
     function_name: str,
@@ -281,43 +273,170 @@ def _log_results(results: Dict) -> None:
             logger.warning(f"  Errors: {len(f['errors'])} errors occurred")
 
 
-def run_reindex_step(config: dict, args) -> int:
-    """Run the OpenSearch reindex step. Returns a process-style exit code (0 = ok)."""
-    function_name = config.get('reindexer_function_name')
-    if not function_name:
-        logger.error("Configuration is missing required field 'reindexer_function_name' (needed for the reindex step).")
-        return 1
+#######################
+# PHASE 2: ASSET HISTORY BACKFILL
+#######################
 
-    operation = args.operation or config.get('operation', 'both')
-    dry_run = args.dry_run or bool(config.get('dry_run', False))
-    # CLI flag wins; otherwise fall back to config (default false)
-    clear_indexes = args.clear_indexes or bool(config.get('clear_indexes', False))
-    limit = args.limit if args.limit is not None else config.get('limit')
-    profile = args.profile or config.get('aws_profile')
-    region = args.region or config.get('aws_region')
-    invocation_type = 'Event' if args.async_invoke else 'RequestResponse'
+# Snapshot fields captured for backfilled history records (mirrors
+# backend common.assetHistory.build_asset_snapshot; migration scripts are
+# standalone and do not import backend code).
+def _build_asset_snapshot(asset, archived_reason=None, unarchived_reason=None):
+    snapshot = {
+        'assetName': asset.get('assetName', ''),
+        'description': asset.get('description', ''),
+        'isDistributable': asset.get('isDistributable', False),
+        'tags': asset.get('tags', []),
+        'bucketId': asset.get('bucketId', ''),
+    }
+    asset_location = asset.get('assetLocation') or {}
+    if asset_location.get('Key'):
+        snapshot['assetLocationKey'] = asset_location['Key']
+    if archived_reason:
+        snapshot['archivedReason'] = archived_reason
+    if unarchived_reason:
+        snapshot['unarchivedReason'] = unarchived_reason
+    return snapshot
 
-    result = invoke_reindexer_lambda(
-        function_name=function_name,
-        operation=operation,
-        dry_run=dry_run,
-        limit=limit,
-        clear_indexes=clear_indexes,
-        profile=profile,
-        region=region,
-        invocation_type=invocation_type,
-    )
 
-    if result.get('timeout'):
-        logger.warning("Reindex invocation timed out -- Lambda continues processing in the background.")
-        logger.warning("Verify completion via CloudWatch Logs.")
-        return 0
-    if 'error' in result:
-        logger.error("Reindex step failed.")
-        return 1
+def _history_record(database_id, asset_id, change_source, change_user_id, record_date, snapshot):
+    """Build one backfilled history record. The '#migrated' SK suffix is
+    deterministic so re-runs overwrite rather than duplicate."""
+    return {
+        'databaseId:assetId': f"{database_id}:{asset_id}",
+        'historyRecordId': f"{record_date}#migrated",
+        'databaseId': database_id,
+        'assetId': asset_id,
+        'recordDate': record_date,
+        'changeSource': change_source,
+        'changeUserId': change_user_id or 'SYSTEM_USER',
+        'assetSnapshot': snapshot,
+        'migratedRecord': True,
+    }
 
-    logger.info("Reindex step completed.")
-    return 0
+
+def backfill_asset_history(
+    asset_table_name: str,
+    versions_table_name: str,
+    history_table_name: str,
+    profile: Optional[str] = None,
+    region: Optional[str] = None,
+    dry_run: bool = False,
+    limit: Optional[int] = None,
+) -> Dict:
+    """Backfill the asset history table from existing asset records.
+
+    Per asset (live and archived partitions):
+      - 'create' record from the assetVersions v0 record when one exists
+        (recordDate = v0 dateCreated, changeUserId = v0 createdBy)
+      - 'archive' record when archivedAt/archivedBy are present
+      - 'unarchive' record when unarchivedAt/unarchivedBy are present
+    """
+    logger.info("=" * 80)
+    logger.info("ASSET HISTORY BACKFILL")
+    logger.info(f"Asset table: {asset_table_name}")
+    logger.info(f"Versions table: {versions_table_name}")
+    logger.info(f"History table: {history_table_name}")
+    logger.info(f"Dry run: {dry_run}, Limit: {limit}")
+    logger.info("=" * 80)
+
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    session = boto3.Session(**session_kwargs)
+    dynamodb = session.resource('dynamodb')
+
+    asset_table = dynamodb.Table(asset_table_name)
+    versions_table = dynamodb.Table(versions_table_name)
+    history_table = dynamodb.Table(history_table_name)
+
+    stats = {'assets_scanned': 0, 'create_records': 0, 'archive_records': 0,
+             'unarchive_records': 0, 'records_written': 0, 'errors': 0}
+
+    scan_kwargs = {}
+    while True:
+        response = asset_table.scan(**scan_kwargs)
+        for asset in response.get('Items', []):
+            if limit and stats['assets_scanned'] >= limit:
+                break
+            stats['assets_scanned'] += 1
+
+            raw_db_id = asset.get('databaseId', '')
+            asset_id = asset.get('assetId', '')
+            if not raw_db_id or not asset_id:
+                continue
+            # The scan returns live and archived partitions; history records
+            # always use the live database ID.
+            database_id = raw_db_id[:-len('#deleted')] if raw_db_id.endswith('#deleted') else raw_db_id
+
+            records = []
+
+            # 'create' from the v0 version record when available
+            try:
+                v0 = versions_table.get_item(Key={
+                    'databaseId:assetId': f"{database_id}:{asset_id}",
+                    'assetVersionId': '0',
+                }).get('Item')
+            except ClientError as e:
+                logger.warning(f"v0 lookup failed for {asset_id}: {e}")
+                v0 = None
+            if v0 and v0.get('dateCreated'):
+                records.append(_history_record(
+                    database_id, asset_id, 'create',
+                    v0.get('createdBy', 'SYSTEM_USER'), v0['dateCreated'],
+                    _build_asset_snapshot(asset)
+                ))
+
+            if asset.get('archivedAt') and asset.get('archivedBy'):
+                records.append(_history_record(
+                    database_id, asset_id, 'archive',
+                    asset['archivedBy'], asset['archivedAt'],
+                    _build_asset_snapshot(asset, archived_reason=asset.get('archivedReason'))
+                ))
+
+            if asset.get('unarchivedAt') and asset.get('unarchivedBy'):
+                records.append(_history_record(
+                    database_id, asset_id, 'unarchive',
+                    asset['unarchivedBy'], asset['unarchivedAt'],
+                    _build_asset_snapshot(asset, unarchived_reason=asset.get('unarchivedReason'))
+                ))
+
+            stats['create_records'] += sum(1 for r in records if r['changeSource'] == 'create')
+            stats['archive_records'] += sum(1 for r in records if r['changeSource'] == 'archive')
+            stats['unarchive_records'] += sum(1 for r in records if r['changeSource'] == 'unarchive')
+
+            for record in records:
+                if dry_run:
+                    stats['records_written'] += 1
+                    continue
+                try:
+                    history_table.put_item(Item=record)
+                    stats['records_written'] += 1
+                except ClientError as e:
+                    stats['errors'] += 1
+                    logger.error(f"Failed writing history record for {asset_id}: {e}")
+
+            if stats['assets_scanned'] % 100 == 0:
+                logger.info(f"  Processed {stats['assets_scanned']} assets, "
+                            f"{stats['records_written']} history records...")
+
+        if limit and stats['assets_scanned'] >= limit:
+            break
+        if 'LastEvaluatedKey' not in response:
+            break
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+    action = "Would write" if dry_run else "Wrote"
+    logger.info("=" * 80)
+    logger.info("ASSET HISTORY BACKFILL COMPLETE")
+    logger.info(f"Assets scanned: {stats['assets_scanned']}")
+    logger.info(f"{action} {stats['records_written']} records "
+                f"(create: {stats['create_records']}, archive: {stats['archive_records']}, "
+                f"unarchive: {stats['unarchive_records']}), errors: {stats['errors']}")
+    logger.info("=" * 80)
+    return stats
+
 
 
 # =============================================================================
@@ -467,7 +586,7 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
 
         # 1) V2 main row
         main_batch.append({
-            'workflowExecutionId': s(execution_id),
+            'executionId': s(execution_id),
             'workflowDatabaseId:workflowId': s(f"{workflow_database_id}:{workflow_id}"),
             'workflowId': s(workflow_id),
             'workflowDatabaseId': s(workflow_database_id),
@@ -619,61 +738,53 @@ def run_workflow_executions_step(config: dict, args) -> int:
     return 0 if counts['errors'] == 0 else 1
 
 
-# =============================================================================
-# Entry point
-# =============================================================================
-
 def main():
     parser = argparse.ArgumentParser(
-        description='VAMS v2.5 to v2.6 consolidated migration (OpenSearch reindex + workflow-executions overhaul).',
+        description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Both steps, synchronous (recommended for small/medium deployments)
+  # Reindex both assets and files synchronously (recommended for small/medium deployments)
   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json
 
-  # Dry run, both steps, small subset
+  # Dry run with a small subset
   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run --limit 100
 
-  # Only the OpenSearch reindex step (re-run after a partial failure, clearing v3 first)
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex --clear-indexes
+  # Re-run after a partial failure (clears v3 first)
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --clear-indexes
 
-  # Only the workflow-executions step
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps workflowExecutions
-
-  # Reindex very large datasets asynchronously (monitor CloudWatch Logs)
-  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex --async
+  # Asynchronous invocation for very large datasets
+  python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --async
 
 Notes:
-  - --steps selects which release migration step(s) to run (default: all).
   - The reindexer Lambda function name is exposed by the CDK stack output 'ReindexerFunctionNameOutput'.
-  - The workflow-executions step is idempotent (deterministic GUIDs) and never modifies the legacy V1 table.
-  - --operation/--clear-indexes/--async apply only to the reindex step; they are ignored by workflowExecutions.
+  - Synchronous invocation (default) waits for completion and prints a summary.
+  - For deployments with hundreds of thousands or millions of objects, use --async and monitor CloudWatch Logs.
+  - --clear-indexes defaults to FALSE because the v3 indexes are empty after the v2.6 deploy. Use it only when re-running.
         """
     )
 
     parser.add_argument('--config', required=True,
                         help='Path to the migration JSON configuration file')
-    parser.add_argument('--steps', choices=['reindex', 'workflowExecutions', 'all'], default='all',
+    parser.add_argument('--steps', choices=['reindex', 'assetHistory', 'workflowExecutions', 'all'], default='all',
                         help="Which release migration step(s) to run (default: all)")
+    parser.add_argument('--operation', choices=['assets', 'files', 'both'],
+                        help='Operation to perform (default: both, can also be set in config)')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Test without making changes (also configurable in JSON). Applies to both steps.')
+                        help='Test without making changes (also configurable in JSON)')
     parser.add_argument('--limit', type=int,
-                        help='Maximum number of items to process (testing). Applies to both steps.')
+                        help='Maximum number of items per category to reindex (testing)')
+    parser.add_argument('--clear-indexes', action='store_true',
+                        help='Clear existing v3 OpenSearch documents before reindex (default: false). '
+                             'The v3 indexes start empty after the CDK deploy, so this is only needed when re-running.')
     parser.add_argument('--profile',
                         help='AWS profile name')
     parser.add_argument('--region',
                         help='AWS region')
+    parser.add_argument('--async', dest='async_invoke', action='store_true',
+                        help='Use asynchronous invocation (recommended for large datasets)')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
                         help='Logging level (default: INFO)')
-    # --- reindex-step-only options ---
-    parser.add_argument('--operation', choices=['assets', 'files', 'both'],
-                        help='[reindex step] Reindex assets, files, or both (default: both, can also be set in config)')
-    parser.add_argument('--clear-indexes', action='store_true',
-                        help='[reindex step] Clear existing v3 OpenSearch documents before reindex (default: false). '
-                             'The v3 indexes start empty after the CDK deploy, so this is only needed when re-running.')
-    parser.add_argument('--async', dest='async_invoke', action='store_true',
-                        help='[reindex step] Use asynchronous Lambda invocation (recommended for large datasets)')
 
     args = parser.parse_args()
 
@@ -682,20 +793,121 @@ Notes:
     config = load_config_from_file(args.config)
 
     run_reindex = args.steps in ('reindex', 'all')
+    run_asset_history = args.steps in ('assetHistory', 'all')
     run_workflow_executions = args.steps in ('workflowExecutions', 'all')
 
-    exit_code = 0
+    operation = args.operation or config.get('operation', 'both')
+    dry_run = args.dry_run or bool(config.get('dry_run', False))
+    # CLI flag wins; otherwise fall back to config (default false)
+    clear_indexes = args.clear_indexes or bool(config.get('clear_indexes', False))
+    limit = args.limit if args.limit is not None else config.get('limit')
+    profile = args.profile or config.get('aws_profile')
+    region = args.region or config.get('aws_region')
 
+    base_param_prefix = config.get('resource_names_ssm_param_prefix')
+    if base_param_prefix and base_param_prefix.startswith('<'):
+        base_param_prefix = None
+
+    reindex_ok = True
     if run_reindex:
-        logger.info("")
-        logger.info("##### STEP: OpenSearch reindex #####")
-        rc = run_reindex_step(config, args)
-        if rc != 0:
-            exit_code = rc
-            if args.steps == 'all':
-                # Do not proceed to the second step if the first failed.
-                logger.error("Reindex step failed; skipping the workflow-executions step.")
-                return exit_code
+        # Resolve the reindexer function name: explicit config value wins; otherwise look it
+        # up from the deployment's SSM resource-name parameters via the base prefix (core
+        # stack output 'ResourceNamesSSMParamPrefixOutput').
+        function_name = config.get('reindexer_function_name')
+        if function_name and function_name.startswith('<'):
+            function_name = None  # unfilled template placeholder
+        if not function_name:
+            if not base_param_prefix:
+                logger.error(
+                    "Configuration must set either 'resource_names_ssm_param_prefix' (from the "
+                    "core stack output 'ResourceNamesSSMParamPrefixOutput') or an explicit "
+                    "'reindexer_function_name'."
+                )
+                sys.exit(1)
+            try:
+                lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+                function_name = lookup.resolve(ResourceParamKeys.CR_OS_REINDEXER_FUNCTION)
+                logger.info(f"Resolved reindexer function from SSM: {function_name}")
+            except Exception as e:
+                logger.error(f"Failed resolving reindexer function name from SSM: {e}")
+                sys.exit(1)
+
+        invocation_type = 'Event' if args.async_invoke else 'RequestResponse'
+
+        result = invoke_reindexer_lambda(
+            function_name=function_name,
+            operation=operation,
+            dry_run=dry_run,
+            limit=limit,
+            clear_indexes=clear_indexes,
+            profile=profile,
+            region=region,
+            invocation_type=invocation_type,
+        )
+
+        if result.get('timeout'):
+            logger.warning("Reindex invocation timed out -- Lambda continues processing in the background.")
+            logger.warning("Verify completion via CloudWatch Logs.")
+        elif 'error' in result:
+            logger.error("Reindex migration failed.")
+            reindex_ok = False
+        else:
+            logger.info("Reindex migration completed.")
+
+    # Asset history backfill step (skippable via config or --steps)
+    if run_asset_history and config.get('skip_asset_history_backfill'):
+        logger.info("Skipping asset history backfill (skip_asset_history_backfill=true).")
+        run_asset_history = False
+
+    if run_asset_history:
+        def _override(key):
+            value = config.get(key)
+            if value and str(value).startswith('<'):
+                return None  # unfilled template placeholder
+            return value
+
+        explicit_names = (
+            _override('asset_storage_table_name'),
+            _override('asset_versions_table_name'),
+            _override('asset_history_table_name'),
+        )
+        if not base_param_prefix and not all(explicit_names):
+            logger.error(
+                "Asset history backfill needs table names: set 'resource_names_ssm_param_prefix' "
+                "or all of 'asset_storage_table_name', 'asset_versions_table_name', and "
+                "'asset_history_table_name' in the config. Set 'skip_asset_history_backfill' "
+                "to true to run the reindex only."
+            )
+            return 1
+
+        try:
+            if all(explicit_names):
+                asset_table_name, versions_table_name, history_table_name = explicit_names
+            else:
+                lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+                asset_table_name = lookup.resolve_with_override(
+                    explicit_names[0], ResourceParamKeys.ASSET_STORAGE_TABLE)
+                versions_table_name = lookup.resolve_with_override(
+                    explicit_names[1], ResourceParamKeys.ASSET_VERSIONS_STORAGE_TABLE)
+                history_table_name = lookup.resolve_with_override(
+                    explicit_names[2], ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE)
+        except Exception as e:
+            logger.error(f"Failed resolving table names for asset history backfill: {e}")
+            return 1
+
+        backfill_stats = backfill_asset_history(
+            asset_table_name=asset_table_name,
+            versions_table_name=versions_table_name,
+            history_table_name=history_table_name,
+            profile=profile,
+            region=region,
+            dry_run=dry_run,
+            limit=limit,
+        )
+        if backfill_stats.get('errors'):
+            logger.warning(f"Asset history backfill finished with {backfill_stats['errors']} errors.")
+
+    exit_code = 0 if reindex_ok else 1
 
     if run_workflow_executions:
         logger.info("")
@@ -704,10 +916,6 @@ Notes:
         if rc != 0:
             exit_code = rc
 
-    if exit_code == 0:
-        logger.info("v2.5 -> v2.6 migration completed.")
-    else:
-        logger.error("v2.5 -> v2.6 migration completed with errors.")
     return exit_code
 
 

@@ -287,10 +287,10 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveAsset`
 
-Soft-deletes an asset by archiving it. Archived assets can be restored using the [Unarchive Asset](#unarchive-asset) endpoint. The asset's files in S3 are archived using delete markers on the versioned bucket.
+Soft-deletes an asset by archiving it. Archived assets can be restored using the [Unarchive Asset](#unarchive-asset) endpoint. The asset's files in S3 are archived using delete markers on the versioned bucket, and each archived file is recorded with `assetArchive` provenance in the file version history so a later unarchive can selectively restore them.
 
 :::info[Reversible Operation]
-Archiving is a soft-delete. The asset data is preserved and can be restored. For permanent deletion, use the [Delete Asset](#delete-asset) endpoint.
+Archiving is a soft-delete. The asset data is preserved and can be restored. Unarchiving restores the asset record only by default; restoring the archived files is a separate opt-in (`unarchiveFiles`). For permanent deletion, use the [Delete Asset](#delete-asset) endpoint.
 :::
 
 **Request Parameters:**
@@ -322,14 +322,17 @@ Archiving is a soft-delete. The asset data is preserved and can be restored. For
 
 `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset`
 
-Restores a previously archived asset, making it active again.
+Restores a previously archived asset record, making it active again. The asset's files remain archived by default. Setting `unarchiveFiles` to `true` also restores the files that the asset archive operation archived (matched by `assetArchive` provenance in the file version history); files archived individually before the asset archive always remain archived and can be restored with the [Unarchive File](files.md#unarchive-file) endpoint. Assets archived before provenance tracking have no restorable file set, so no files are restored for them.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description          |
-| ------------ | -------- | ------ | -------- | -------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier. |
-| `assetId`    | path     | string | Yes      | Asset identifier.    |
+| Parameter          | Location | Type    | Required | Description                                                           |
+| ------------------ | -------- | ------- | -------- | --------------------------------------------------------------------- |
+| `databaseId`       | path     | string  | Yes      | Database identifier.                                                  |
+| `assetId`          | path     | string  | Yes      | Asset identifier.                                                     |
+| `confirmUnarchive` | body     | boolean | Yes      | Must be `true`.                                                       |
+| `reason`           | body     | string  | No       | Reason for unarchiving.                                               |
+| `unarchiveFiles`   | body     | boolean | No       | Also restore files archived by the asset archive. Default is `false`. |
 
 **Response:**
 
@@ -388,7 +391,7 @@ This operation permanently removes the asset and all its data. It cannot be undo
 
 `POST /database/{databaseId}/assets/{assetId}/download`
 
-Generates a presigned S3 URL for downloading a file from an asset. The URL is time-limited and provides direct access to the file in S3.
+Generates presigned S3 URLs for downloading files from an asset. The URLs are time-limited and provide direct access to the files in S3. A request can target a single file (`key`) or multiple files of the same asset in one call (`keys`, up to 1,500 per request).
 
 **Request Parameters:**
 
@@ -397,45 +400,97 @@ Generates a presigned S3 URL for downloading a file from an asset. The URL is ti
 | `databaseId` | path     | string | Yes      | Database identifier. |
 | `assetId`    | path     | string | Yes      | Asset identifier.    |
 
-**Request Body:**
+**Request Body (single file):**
 
 ```json
 {
-    "databaseId": "my-database",
-    "assetId": "asset-001",
+    "downloadType": "assetFile",
     "key": "/models/building.ifc",
     "versionId": "abc123"
 }
 ```
 
-| Field                 | Type   | Required | Description                                                                        |
-| --------------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
-| `key`                 | string | No       | Relative file path within the asset. If omitted, the asset's primary file is used. |
-| `versionId`           | string | No       | S3 version ID to download a specific version.                                      |
-| `assetVersionId`      | string | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot.          |
-| `assetVersionIdAlias` | string | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.      |
-
-:::warning[Version Parameter Exclusivity]
-Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be specified. Providing more than one returns a `400` error. Version parameters are not allowed for asset preview downloads.
-:::
-
-**Response:**
+**Request Body (bulk, latest versions):**
 
 ```json
 {
-    "message": "https://vams-asset-bucket.s3.amazonaws.com/my-database/asset-001/models/building.ifc?X-Amz-..."
+    "downloadType": "assetFile",
+    "keys": ["/models/building.ifc", "/textures/wall.png"]
 }
 ```
 
+**Request Body (bulk, per-file versions):**
+
+```json
+{
+    "downloadType": "assetFile",
+    "keys": [{ "key": "/models/building.ifc", "versionId": "abc123" }, "/textures/wall.png"]
+}
+```
+
+| Field                 | Type               | Required | Description                                                                                                                                                              |
+| --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `key`                 | string             | No       | Relative file path within the asset. If omitted, the asset's primary file is used. Mutually exclusive with `keys`.                                                       |
+| `keys`                | (string\|object)[] | No       | Files to generate URLs for in bulk (max 1,500 per request; `assetFile` only). Each entry is a path string (latest) or `{key, versionId}`. Mutually exclusive with `key`. |
+| `versionId`           | string             | No       | S3 version ID for a single `key`. Cannot be combined with `keys` (put versions on individual keys instead).                                                              |
+| `assetVersionId`      | string             | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot for all requested file(s).                                                                      |
+| `assetVersionIdAlias` | string             | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.                                                                                            |
+
+:::warning[Version Resolution and Exclusivity]
+Version resolution is applied per file: `assetVersionId`/`assetVersionIdAlias` pins **all** files to that asset version snapshot; otherwise a per-file `versionId` (or the single `versionId` for a single `key`) selects that S3 version; with no version specified the **latest** file version is returned. Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be specified at the request level. Per-file `versionId`s in `keys` cannot be combined with `assetVersionId`/`assetVersionIdAlias`. Version parameters are not allowed for asset preview downloads, and `key`/`keys` are mutually exclusive.
+:::
+
+**Response (single file):**
+
+```json
+{
+    "downloadUrl": "https://vams-asset-bucket.s3.amazonaws.com/...?X-Amz-...",
+    "expiresIn": 86400,
+    "downloadType": "assetFile",
+    "versionId": "abc123",
+    "files": null,
+    "message": "Download URL generated successfully"
+}
+```
+
+**Response (bulk):**
+
+```json
+{
+    "downloadUrl": "https://vams-asset-bucket.s3.amazonaws.com/...?X-Amz-...",
+    "expiresIn": 86400,
+    "downloadType": "assetFile",
+    "files": [
+        {
+            "key": "/models/building.ifc",
+            "downloadUrl": "https://vams-asset-bucket.s3.amazonaws.com/...?X-Amz-...",
+            "versionId": "abc123",
+            "success": true,
+            "error": null
+        },
+        {
+            "key": "/textures/missing.png",
+            "downloadUrl": null,
+            "versionId": null,
+            "success": false,
+            "error": "File not found in S3"
+        }
+    ],
+    "message": "Generated 1 of 2 download URLs. Warning: 1 file path(s) do not exist or are not downloadable and were skipped."
+}
+```
+
+Bulk requests return one entry per requested key. File paths that do not exist or are not downloadable are skipped (reported with `success: false` and an `error` reason, plus a warning in `message`); the request fails with `400` only when no URL can be generated at all. The top-level `downloadUrl` carries the first successful URL for compatibility with single-URL consumers.
+
 **Error Responses:**
 
-| Status | Description                                                                                                   |
-| ------ | ------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, multiple version parameters specified, or version parameters used with preview downloads. |
-| `401`  | Asset is not distributable.                                                                                   |
-| `403`  | Not authorized to download this asset.                                                                        |
-| `404`  | Database, asset, version, or file not found.                                                                  |
-| `500`  | Internal server error.                                                                                        |
+| Status | Description                                                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, or version parameters used with preview downloads. |
+| `401`  | Asset is not distributable.                                                                                                                                                |
+| `403`  | Not authorized to download this asset.                                                                                                                                     |
+| `404`  | Database, asset, version, or file not found.                                                                                                                               |
+| `500`  | Internal server error.                                                                                                                                                     |
 
 ---
 
@@ -526,3 +581,82 @@ Responses exceeding 100KB are automatically gzip-compressed. The `Content-Encodi
 | `403`  | Not authorized to export this asset. |
 | `404`  | Asset not found.                     |
 | `500`  | Internal server error.               |
+
+---
+
+### Get Asset History
+
+`GET /database/{databaseId}/assets/{assetId}/assetHistory`
+
+Returns the lifecycle history records for an asset, newest first. Each record captures one lifecycle operation (create, edit, archive, unarchive, or permanent delete) with the acting user, the origin of the change, and an open-schema snapshot of the asset fields as they stood after the operation.
+
+History records persist across permanent deletion. If an asset is permanently deleted and later recreated with the same asset ID, the prior history (including the `permanentDelete` record) is returned again for that ID. When no asset record exists (live or archived) for the ID, the endpoint returns `404`.
+
+**Request Parameters:**
+
+| Parameter       | Location | Type    | Required | Description                                                |
+| --------------- | -------- | ------- | -------- | ---------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                                       |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                                          |
+| `pageSize`      | query    | integer | No       | Maximum records per page (1-1000, default 100).            |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response's `NextToken`. |
+
+**Change Sources:**
+
+| Value             | Operation                                        |
+| ----------------- | ------------------------------------------------ |
+| `create`          | Asset created through the VAMS API.              |
+| `createDirect`    | Asset auto-created by S3 bucket-sync ingestion.  |
+| `edit`            | Asset fields updated.                            |
+| `archive`         | Asset archived.                                  |
+| `unarchive`       | Asset unarchived through the VAMS API.           |
+| `unarchiveDirect` | Asset auto-restored by S3 bucket-sync ingestion. |
+| `permanentDelete` | Asset permanently deleted.                       |
+
+**Response:**
+
+```json
+{
+    "message": "Success",
+    "Items": [
+        {
+            "historyRecordId": "2026-07-05T14:23:01.123456Z#a1b2c3d4",
+            "databaseId": "my-database",
+            "assetId": "my-asset",
+            "recordDate": "2026-07-05T14:23:01.123456Z",
+            "changeSource": "edit",
+            "changeUserId": "user@example.com",
+            "assetSnapshot": {
+                "assetName": "My Asset",
+                "description": "Updated description",
+                "isDistributable": true,
+                "tags": ["tag1"],
+                "bucketId": "xbucket1",
+                "assetLocationKey": "my-asset/"
+            }
+        },
+        {
+            "historyRecordId": "2026-07-01T09:00:00Z#migrated",
+            "databaseId": "my-database",
+            "assetId": "my-asset",
+            "recordDate": "2026-07-01T09:00:00Z",
+            "changeSource": "create",
+            "changeUserId": "SYSTEM_USER",
+            "assetSnapshot": { "assetName": "My Asset" },
+            "migratedRecord": true
+        }
+    ],
+    "NextToken": "eyJkYXRhYmFzZUlkOmFzc2V0SWQiOiAi..."
+}
+```
+
+The `assetSnapshot` object is open-schema: snapshot fields may grow over time, and consumers should render whatever keys are present. Archive and unarchive records include `archivedReason`/`unarchivedReason` in the snapshot when a reason was provided. Records with `migratedRecord: true` were backfilled by the deployment data migration from inferred data.
+
+**Error Responses:**
+
+| Status | Description                                  |
+| ------ | -------------------------------------------- |
+| `400`  | Invalid parameters or pagination token.      |
+| `403`  | Not authorized to view this asset's history. |
+| `404`  | Asset not found.                             |
+| `500`  | Internal server error.                       |

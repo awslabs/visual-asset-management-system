@@ -33,11 +33,11 @@ act on them. Registration is optional and additive: it does not replace the task
 success/failure callback a pipeline already uses.
 """
 
-import os
 import json
 import boto3
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 
 logger = safeLogger(service="RegisterPipelineExecution")
@@ -45,12 +45,9 @@ logger = safeLogger(service="RegisterPipelineExecution")
 dynamodb = boto3.resource('dynamodb')
 
 try:
-    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
-    if not pipeline_executions_table:
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"

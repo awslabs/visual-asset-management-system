@@ -58,7 +58,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 
 ## API Features
 
-VAMS exposes a REST API through Amazon API Gateway V2 HttpApi, secured by a custom Lambda authorizer.
+VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda authorizer.
 
 ### Core API Capabilities
 
@@ -185,12 +185,13 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes twelve built-in processing pipelines, each deployable through configuration flags:
+VAMS includes thirteen built-in processing pipelines, each deployable through configuration flags:
 
 | Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
 | ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender                                                                                                                                                   | Enabled  |
 | CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery                                                                                                                                                  | Disabled |
+| Coordinate Transform         | `useConversionCoordinateTransform`       | Point cloud coordinate reference system reprojection using PDAL and pyproj                                                                                                                    | Disabled |
 | Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming                                                                                                                                                | Disabled |
 | Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files                                                                                                                                                 | Disabled |
 | GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock                                                                                                                                               | Disabled |
@@ -257,7 +258,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | Feature Flag                    | Description                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                                                                                                                               |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD)                                                                                                   |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor)                                                                                          |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |

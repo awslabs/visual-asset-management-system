@@ -31,9 +31,11 @@ API_SET_PRIMARY_FILE = "/database/{databaseId}/assets/{assetId}/setPrimaryFile"
 
 # Asset Management API Endpoints
 API_ARCHIVE_ASSET = "/database/{databaseId}/assets/{assetId}/archiveAsset"
+API_UNARCHIVE_ASSET = "/database/{databaseId}/assets/{assetId}/unarchiveAsset"
 API_DELETE_ASSET = "/database/{databaseId}/assets/{assetId}/deleteAsset"
 API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
 API_ASSET_EXPORT = "/database/{databaseId}/assets/{assetId}/export"
+API_GET_ASSET_HISTORY = "/database/{databaseId}/assets/{assetId}/assetHistory"
 
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"
@@ -59,7 +61,7 @@ API_TAG_TYPE_DELETE = "/tag-types/{tagTypeId}"
 API_ASSET_LINKS = "/asset-links"
 API_ASSET_LINKS_SINGLE = "/asset-links/single/{assetLinkId}"
 API_ASSET_LINKS_UPDATE = "/asset-links/{assetLinkId}"
-API_ASSET_LINKS_DELETE = "/asset-links/{relationId}"
+API_ASSET_LINKS_DELETE = "/asset-links/{assetLinkId}"
 API_ASSET_LINKS_FOR_ASSET = "/database/{databaseId}/assets/{assetId}/asset-links"
 
 # Asset Links Metadata API Endpoints (New unified API)
@@ -83,6 +85,7 @@ API_ROLE_BY_ID = "/roles/{roleId}"
 API_CONSTRAINTS = "/auth/constraints"
 API_CONSTRAINT_BY_ID = "/auth/constraints/{constraintId}"
 API_CONSTRAINTS_TEMPLATE_IMPORT = "/auth/constraintsTemplateImport"
+API_AUTH_CONSTRAINT_PERMISSION_OBJECTS = "/auth/constraints/permissionObjects"
 
 # Auth Routes API Endpoints
 API_AUTH_ROUTES_API = "/auth/routes/api"
@@ -140,6 +143,11 @@ MAX_UPLOADS_PER_USER_PER_MINUTE = 20  # Rate limit for upload initialization
 DEFAULT_PARALLEL_DOWNLOADS = 5
 DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3
 DEFAULT_DOWNLOAD_TIMEOUT = 300  # 5 minutes per file
+MAX_DOWNLOAD_KEYS_PER_REQUEST = 1500  # Backend cap per bulk presigned-URL request
+
+# Sync Configuration
+DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
+SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
 
 # File Extensions
 ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']

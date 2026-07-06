@@ -1,19 +1,20 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 from models.common import (
     APIGatewayProxyResponseV2,
+    commonHeaders,
     internal_error,
     success,
     validation_error,
@@ -32,12 +33,9 @@ dynamodb_client = boto3.client('dynamodb')
 sf_client = boto3.client('stepfunctions')
 
 try:
-    workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    if not workflow_database:
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 

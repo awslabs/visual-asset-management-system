@@ -18,17 +18,17 @@ import {
 } from "@cloudscape-design/components";
 import ExpandableSection from "@cloudscape-design/components/expandable-section";
 import { Optional } from "@cloudscape-design/components/internal/types";
-import { useEffect, useState } from "react";
-import { createConstraint, fetchApiRoutes } from "../../services/APIService";
+import { useCallback, useEffect, useState } from "react";
+import {
+    createConstraint,
+    fetchApiRoutes,
+    fetchConstraintPermissionObjects,
+} from "../../services/APIService";
 import { generateUUID } from "../../common/utils/utils";
+import { routeTable } from "../../routes";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
 // import { fetchMetadataSchema } from "../../services/APIService";
-import {
-    criteriaOperators,
-    objectTypes,
-    fieldNamesToObjectTypeMapping,
-} from "../../common/constants/permissionConstraintTypes";
 
 interface ConstraintCriteria {
     id: string;
@@ -96,6 +96,38 @@ export default function CreateConstraint({
     const [formError, setFormError] = useState("");
     const createOrUpdate = (initState && "Update") || "Create";
 
+    const [objectTypeData, setObjectTypeData] = useState<
+        { label: string; value: string; fields: { label: string; value: string }[] }[]
+    >([]);
+    const [criteriaOperators, setCriteriaOperators] = useState<{ label: string; value: string }[]>(
+        []
+    );
+    const [permissionOptions, setPermissionOptions] = useState<{ label: string; value: string }[]>(
+        []
+    );
+    const [permissionTypeOptions, setPermissionTypeOptions] = useState<
+        { label: string; value: string }[]
+    >([]);
+    const [metadataError, setMetadataError] = useState("");
+
+    // Object type dropdown options derived from the fetched metadata.
+    const objectTypes = objectTypeData.map((t) => ({ label: t.label, value: t.value }));
+
+    // Per-object-type field options, keyed by object type value.
+    const fieldNamesToObjectTypeMapping: { [key: string]: { label: string; value: string }[] } = {};
+    objectTypeData.forEach((t) => {
+        fieldNamesToObjectTypeMapping[t.value] = t.fields;
+    });
+
+    // Web route path options (the website is the sole definer of web routes).
+    // A leading ".*" regex wildcard option matches all routes.
+    const webRouteOptions = [
+        { value: ".*", label: ".* (all routes)" },
+        ...routeTable
+            .filter((r: any) => r.path)
+            .map((r: any) => ({ value: r.path, label: r.path })),
+    ];
+
     // Ensure all criteria have unique IDs when loading from API
     const ensureUniqueIds = (criteria: ConstraintCriteria[] | undefined): ConstraintCriteria[] => {
         if (!criteria) return [];
@@ -110,7 +142,7 @@ export default function CreateConstraint({
     // constraint's objectType (deprecated fields) are filtered out.
     const buildFormState = (): ConstraintFields => {
         const validFields = initState?.objectType
-            ? fieldNamesToObjectTypeMapping[initState.objectType]
+            ? fieldNamesToObjectTypeMapping[initState.objectType] ?? undefined
             : undefined;
         const prepareCriteria = (criteria: ConstraintCriteria[] | undefined) => {
             const withIds = ensureUniqueIds(criteria);
@@ -151,6 +183,31 @@ export default function CreateConstraint({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, initState]);
 
+    // Load the constraint permission objects (object types / fields / operators /
+    // permissions / permission types) from the API.
+    const loadObjectTypes = useCallback(() => {
+        fetchConstraintPermissionObjects().then((result) => {
+            if (result[0] === true && result[1]?.objectTypes) {
+                setObjectTypeData(result[1].objectTypes);
+                setCriteriaOperators(result[1].operators ?? []);
+                setPermissionOptions(result[1].permissions ?? []);
+                setPermissionTypeOptions(result[1].permissionTypes ?? []);
+                setMetadataError("");
+            } else {
+                setMetadataError("Failed to load constraint object types.");
+            }
+        });
+    }, []);
+
+    // Fetch the constraint object types when the modal opens (once loaded, reuse).
+    useEffect(() => {
+        if (!open || objectTypeData.length > 0) {
+            return;
+        }
+        loadObjectTypes();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
     // Fetch the full API route list (not cached) when authoring an 'api'
     // constraint, so the Route Path criteria value offers valid routes.
     useEffect(() => {
@@ -159,12 +216,14 @@ export default function CreateConstraint({
         }
         fetchApiRoutes().then((result) => {
             if (result[0] === true && result[1]?.routes) {
-                setApiRouteOptions(
-                    result[1].routes.map((route: { path: string; methods: string[] }) => ({
+                // A leading ".*" regex wildcard option matches all routes.
+                setApiRouteOptions([
+                    { value: ".*", label: ".* (all routes)" },
+                    ...result[1].routes.map((route: { path: string; methods: string[] }) => ({
                         value: route.path,
                         label: `${route.path} (${route.methods.join(", ")})`,
-                    }))
-                );
+                    })),
+                ]);
             }
         });
     }, [open, formState.objectType]);
@@ -189,13 +248,31 @@ export default function CreateConstraint({
     // }, []);
 
     // Renders the editing cell for criteria values. For 'api' constraints the
-    // route__path field offers the deployment's API routes (fetched live) via
+    // route__path field offers the deployment's API routes (fetched live) and
+    // for 'web' constraints it offers the frontend's own web routes, both via
     // autosuggest while still allowing free text (e.g. regex patterns).
     function renderCriteriaValueEditingCell(
         item: ConstraintCriteria,
         currentValue: string | undefined,
         setValue: (value: string) => void
     ) {
+        if (
+            formState.objectType === "web" &&
+            item.field === "route__path" &&
+            webRouteOptions.length > 0
+        ) {
+            return (
+                <Autosuggest
+                    autoFocus={true}
+                    expandToViewport={true}
+                    value={currentValue ?? item.value}
+                    onChange={(event) => setValue(event.detail.value)}
+                    options={webRouteOptions}
+                    enteredTextLabel={(value) => `Use: "${value}"`}
+                    placeholder="Select or enter a web route path"
+                />
+            );
+        }
         if (
             formState.objectType === "api" &&
             item.field === "route__path" &&
@@ -430,8 +507,16 @@ export default function CreateConstraint({
                                     })
                                     .catch((err) => {
                                         console.log("create auth criteria error", err);
-                                        const msg = `Unable to ${createOrUpdate} constraints. Error: Request failed with status code ${err.response.status}`;
-                                        setFormError(msg);
+                                        // apiClient throws an ApiError carrying the backend
+                                        // message (e.g. validation errors) and the HTTP status.
+                                        const detail =
+                                            err?.message ||
+                                            (err?.status
+                                                ? `Request failed with status code ${err.status}`
+                                                : "Unknown error");
+                                        setFormError(
+                                            `Unable to ${createOrUpdate} constraint. ${detail}`
+                                        );
                                     })
                                     .finally(() => {
                                         setInProgress(false);
@@ -465,8 +550,13 @@ export default function CreateConstraint({
                 </Box>
             }
         >
-            <Form errorText={formError}>
+            <Form errorText={metadataError || formError}>
                 <SpaceBetween direction="vertical" size="l">
+                    {metadataError && (
+                        <Button onClick={loadObjectTypes} iconName="refresh">
+                            Retry loading object types
+                        </Button>
+                    )}
                     <FormField label="Constraint Id">
                         <Input value={formState.constraintId} disabled={true} />
                     </FormField>
@@ -527,6 +617,8 @@ export default function CreateConstraint({
                                         groupPermissions,
                                     })
                                 }
+                                permissionOptions={permissionOptions}
+                                permissionTypeOptions={permissionTypeOptions}
                             />
                         </FormField>
                     </ExpandableSection>
@@ -555,6 +647,8 @@ export default function CreateConstraint({
                                         userPermissions,
                                     })
                                 }
+                                permissionOptions={permissionOptions}
+                                permissionTypeOptions={permissionTypeOptions}
                             />
                         </FormField>
                     </ExpandableSection>
@@ -655,9 +749,11 @@ export default function CreateConstraint({
                                                         expandToViewport={true}
                                                         selectedOption={
                                                             formState.objectType
-                                                                ? fieldNamesToObjectTypeMapping[
-                                                                      formState.objectType
-                                                                  ].find(
+                                                                ? (
+                                                                      fieldNamesToObjectTypeMapping[
+                                                                          formState.objectType
+                                                                      ] ?? []
+                                                                  ).find(
                                                                       (option) =>
                                                                           option.value === value
                                                                   ) ?? null
@@ -673,7 +769,7 @@ export default function CreateConstraint({
                                                             formState.objectType
                                                                 ? fieldNamesToObjectTypeMapping[
                                                                       formState.objectType
-                                                                  ]
+                                                                  ] ?? []
                                                                 : []
                                                         }
                                                     />
@@ -682,9 +778,11 @@ export default function CreateConstraint({
                                         },
                                         cell: (item) => {
                                             return formState.objectType
-                                                ? fieldNamesToObjectTypeMapping[
-                                                      formState.objectType
-                                                  ].find((option) => option.value === item.field)
+                                                ? (
+                                                      fieldNamesToObjectTypeMapping[
+                                                          formState.objectType
+                                                      ] ?? []
+                                                  ).find((option) => option.value === item.field)
                                                       ?.label
                                                 : null;
                                         },
@@ -874,9 +972,11 @@ export default function CreateConstraint({
                                                         expandToViewport={true}
                                                         selectedOption={
                                                             formState.objectType
-                                                                ? fieldNamesToObjectTypeMapping[
-                                                                      formState.objectType
-                                                                  ].find(
+                                                                ? (
+                                                                      fieldNamesToObjectTypeMapping[
+                                                                          formState.objectType
+                                                                      ] ?? []
+                                                                  ).find(
                                                                       (option) =>
                                                                           option.value === value
                                                                   ) ?? null
@@ -892,7 +992,7 @@ export default function CreateConstraint({
                                                             formState.objectType
                                                                 ? fieldNamesToObjectTypeMapping[
                                                                       formState.objectType
-                                                                  ]
+                                                                  ] ?? []
                                                                 : []
                                                         }
                                                     />
@@ -901,9 +1001,11 @@ export default function CreateConstraint({
                                         },
                                         cell: (item) => {
                                             return formState.objectType
-                                                ? fieldNamesToObjectTypeMapping[
-                                                      formState.objectType
-                                                  ].find((option) => option.value === item.field)
+                                                ? (
+                                                      fieldNamesToObjectTypeMapping[
+                                                          formState.objectType
+                                                      ] ?? []
+                                                  ).find((option) => option.value === item.field)
                                                       ?.label
                                                 : null;
                                         },

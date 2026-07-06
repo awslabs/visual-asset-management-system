@@ -1,11 +1,13 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 
+from botocore.exceptions import ClientError
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -20,11 +22,19 @@ dynamodb_client = boto3.client('dynamodb')
 sns_client = boto3.client('sns')
 
 try:
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
-    main_rest_response['body']['message'] = "Failed Loading Environment Variables"
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving subscriptions table name")
+    subscription_table_name = None
+
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset table name")
+    asset_table_name = None
+
+if not (subscription_table_name and asset_table_name):
+    main_rest_response['body'] = json.dumps({"message": "Failed resolving required table names"})
 
 
 def get_asset(asset_id):
@@ -61,10 +71,19 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
 
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
-        asset_table.update_item(
-            Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
-            UpdateExpression=f"REMOVE snsTopic"
-        )
+        # Conditional on the record still existing: a REMOVE-only update on a
+        # missing key would otherwise create a key-only phantom record
+        try:
+            asset_table.update_item(
+                Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
+                UpdateExpression="REMOVE snsTopic",
+                ConditionExpression='attribute_exists(assetId)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"Asset no longer exists; skipping snsTopic removal - {asset_id}")
+            else:
+                raise
 
 
 def get_subscription_obj(event_name, entity_name, entity_id):
@@ -111,6 +130,7 @@ def delete_subscription(body):
 
 
 def lambda_handler(event, context):
+    normalize_event(event)
     response = STANDARD_JSON_RESPONSE
     try:
         httpMethod = event['requestContext']['http']['method']

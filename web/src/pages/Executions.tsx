@@ -9,7 +9,7 @@ import { fetchDatabaseWorkflows, fetchAllWorkflows } from "../services/APIServic
 import { WorkflowListDefinition } from "../components/list/list-definitions/WorkflowListDefinition";
 import ListPage from "./ListPage";
 
-export default function Workflows(props) {
+export default function Workflows(props: any) {
     const { databaseId } = useParams();
     const navigate = useNavigate();
     const createNewWorkflow = () => {

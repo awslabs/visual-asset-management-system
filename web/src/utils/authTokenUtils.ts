@@ -171,6 +171,59 @@ export async function getDualAuthorizationHeader(): Promise<string> {
 }
 
 /**
+ * Epoch-ms expiry of the token currently used for API auth, or null if unknown.
+ * OAuth2: the stored token's expiresAt. Cognito: the idToken's exp claim (the
+ * idToken is what VAMS sends as the Bearer token).
+ */
+export async function getCurrentTokenExpiryMs(): Promise<number | null> {
+    if (window.DISABLE_COGNITO) {
+        const oauth2Token = getExternalOAuth2Token();
+        return typeof oauth2Token.expiresAt === "number" ? oauth2Token.expiresAt : null;
+    }
+    try {
+        const session = await fetchAuthSession();
+        const exp = session.tokens?.idToken?.payload?.exp;
+        return typeof exp === "number" ? exp * 1000 : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Validate the active session, refreshing when needed (or when forceRefresh is set).
+ * Returns true if a usable token exists afterward, false if the session is dead.
+ * Never throws — callers treat false as "session unrecoverable".
+ */
+export async function ensureSessionValid(forceRefresh = false): Promise<boolean> {
+    if (window.DISABLE_COGNITO) {
+        const [accessTokenValid, refreshTokenValid] = externalTokenValidation();
+        if (accessTokenValid && !forceRefresh) {
+            return true;
+        }
+        if (refreshTokenValid || (accessTokenValid && forceRefresh)) {
+            try {
+                const client = getOAuth2ClientInstance();
+                const newToken = await client.refreshToken(getExternalOAuth2Token());
+                setExternalOauth2Token(newToken);
+                return true;
+            } catch (error) {
+                console.error("Failed to refresh OAuth2 token:", error);
+                return false;
+            }
+        }
+        return accessTokenValid;
+    }
+
+    try {
+        const session = await fetchAuthSession(forceRefresh ? { forceRefresh: true } : undefined);
+        return !!session.tokens?.idToken;
+    } catch (error) {
+        console.error("Failed to validate Cognito session:", error);
+        return false;
+    }
+}
+
+/**
  * Custom TokenProvider for external OAuth2 mode.
  * Bridges @badgateway/oauth2-client tokens to Amplify v6's auth system.
  * Used in Amplify.configure() when DISABLE_COGNITO is true.

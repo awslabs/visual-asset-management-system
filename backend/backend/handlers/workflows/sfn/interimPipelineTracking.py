@@ -22,11 +22,11 @@ This lambda is reused for every interim gap; the SFN payload carries the gap-spe
 from/to pipeline indices + ids. It does NOT modify use-case pipeline containers.
 """
 
-import os
 import json
 import boto3
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 
@@ -36,16 +36,12 @@ s3c = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 
 try:
-    workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
-    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_files_table = os.environ["PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME"]
-    workflow_execution_inputs_table = os.environ["WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME"]
-    if not all([workflow_execution_database_v2, pipeline_executions_table,
-                pipeline_execution_output_files_table, workflow_execution_inputs_table]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
+    pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
+    pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 

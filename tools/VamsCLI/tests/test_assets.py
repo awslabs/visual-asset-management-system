@@ -10,6 +10,7 @@ from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, AssetAlreadyExistsError, DatabaseNotFoundError,
     InvalidAssetDataError, AuthenticationError, APIError, AssetAlreadyArchivedError,
+    AssetNotArchivedError,
     AssetDeletionError, PreviewNotFoundError, AssetNotDistributableError,
     FileDownloadError, DownloadError, AssetDownloadError, DownloadTreeError
 )
@@ -798,6 +799,160 @@ class TestAssetArchiveCommand:
             assert '--show-archived' in result.output
 
 
+class TestAssetUnarchiveCommand:
+    """Test asset unarchive command."""
+
+    def test_unarchive_help(self, cli_runner):
+        """Test unarchive command help."""
+        result = cli_runner.invoke(cli, ['assets', 'unarchive', '--help'])
+        assert result.exit_code == 0
+        assert 'Unarchive an asset (restore from soft delete)' in result.output
+        assert '--database' in result.output
+        assert '--reason' in result.output
+        assert '--json-input' in result.output
+        assert '--json-output' in result.output
+
+    def test_unarchive_success(self, cli_runner, assets_command_mocks):
+        """Test successful asset unarchiving."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.return_value = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'test-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-15T10:30:00Z'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database',
+                '--reason', 'Restoring for review'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset unarchived successfully!' in result.output
+            assert 'test-asset' in result.output
+
+            # Verify API call
+            mocks['api_client'].unarchive_asset.assert_called_once_with(
+                'test-database', 'test-asset', 'Restoring for review', False
+            )
+
+    def test_unarchive_without_reason(self, cli_runner, assets_command_mocks):
+        """Test asset unarchiving without reason."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.return_value = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'test-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset unarchived successfully!' in result.output
+            assert 'test-asset' in result.output
+            assert 'test-database' in result.output
+            assert 'active state' in result.output
+
+            # Verify API call without reason
+            mocks['api_client'].unarchive_asset.assert_called_once_with('test-database', 'test-asset', None, False)
+
+    def test_unarchive_json_input_file(self, cli_runner, assets_command_mocks):
+        """Test asset unarchive with JSON input from file."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.return_value = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'json-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+
+            json_data = {
+                'databaseId': 'json-database',
+                'assetId': 'json-asset',
+                'reason': 'JSON reason'
+            }
+
+            with patch('builtins.open', mock_open(read_data=json.dumps(json_data))):
+                result = cli_runner.invoke(cli, [
+                    'assets', 'unarchive', 'test-asset',
+                    '-d', 'test-database',
+                    '--json-input', 'test.json'
+                ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset unarchived successfully!' in result.output
+
+            # Verify API call uses JSON data
+            mocks['api_client'].unarchive_asset.assert_called_once_with('json-database', 'json-asset', 'JSON reason', False)
+
+    def test_unarchive_json_output(self, cli_runner, assets_command_mocks):
+        """Test asset unarchive with JSON output emits valid JSON."""
+        with assets_command_mocks as mocks:
+            api_response = {
+                'success': True,
+                'message': 'Asset unarchived successfully',
+                'assetId': 'test-asset',
+                'operation': 'unarchive',
+                'timestamp': '2024-01-01T00:00:00Z'
+            }
+            mocks['api_client'].unarchive_asset.return_value = api_response
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            # Output must be valid JSON with the expected fields
+            output_json = json.loads(result.output)
+            assert output_json['assetId'] == 'test-asset'
+            assert output_json['operation'] == 'unarchive'
+
+    def test_unarchive_asset_not_found(self, cli_runner, assets_command_mocks):
+        """Test unarchive command with asset not found."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.side_effect = AssetNotFoundError("Asset not found")
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'nonexistent-asset',
+                '-d', 'test-database'
+            ])
+
+            assert result.exit_code == 1
+            assert '✗ Asset Not Found' in result.output
+            assert 'vamscli assets get' in result.output
+
+    def test_unarchive_not_archived(self, cli_runner, assets_command_mocks):
+        """Test unarchive command with an asset that is not archived."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].unarchive_asset.side_effect = AssetNotArchivedError("Asset is not archived")
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset',
+                '-d', 'test-database'
+            ])
+
+            assert result.exit_code == 1
+            assert '✗ Asset Not Archived' in result.output
+
+    def test_unarchive_no_setup(self, cli_runner, no_setup_command_mocks):
+        """Test unarchive without setup returns an error."""
+        with no_setup_command_mocks('assets') as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'unarchive', 'test-asset', '-d', 'test-database'
+            ])
+            assert result.exit_code != 0
+
+
 class TestAssetDeleteCommand:
     """Test asset delete command."""
     
@@ -1112,7 +1267,7 @@ class TestAssetDownloadCommand:
             assert 'Total files: 1' in result.output
             
             # Verify API call
-            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', asset_version_id=None, asset_version_alias=None)
+            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', version_id=None, asset_version_id=None, asset_version_alias=None)
 
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_root_folder_filters_folders(self, mock_asyncio_run, cli_runner, assets_command_mocks):
@@ -1530,18 +1685,21 @@ class TestAssetDownloadCommand:
                     }
                 ]
             }
-            mocks['api_client'].download_asset_file.return_value = {
-                'downloadUrl': 'https://example.com/download/url',
-                'expiresIn': 86400
-            }
-            
+            mocks['api_client'].download_asset_files_bulk.side_effect = \
+                lambda db, asset, keys, **kw: {
+                    'downloadUrl': 'https://example.com/download/url',
+                    'expiresIn': 86400,
+                    'files': [{'key': k, 'success': True,
+                               'downloadUrl': 'https://example.com/download/url'} for k in keys]
+                }
+
             result = cli_runner.invoke(cli, [
                 'assets', 'download',
                 '-d', 'test-database',
                 '-a', 'test-asset',
                 '--shareable-links-only'
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Shareable links generated successfully!' in result.output
             assert 'Files (2):' in result.output
@@ -1629,36 +1787,35 @@ class TestAssetDownloadCommand:
                 ]
             }
             
-            # Mock download URLs
-            mocks['api_client'].download_asset_file.side_effect = [
-                {
-                    'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf?signature=...',
-                    'expiresIn': 86400,
-                    'downloadType': 'assetFile'
-                },
-                {
-                    'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg?signature=...',
-                    'expiresIn': 86400,
-                    'downloadType': 'assetFile'
-                }
-            ]
-            
+            # Mock bulk download URLs
+            mocks['api_client'].download_asset_files_bulk.return_value = {
+                'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf?signature=...',
+                'expiresIn': 86400,
+                'downloadType': 'assetFile',
+                'files': [
+                    {'key': '/model.gltf', 'success': True,
+                     'downloadUrl': 'https://s3.amazonaws.com/bucket/model.gltf?signature=...'},
+                    {'key': '/texture.jpg', 'success': True,
+                     'downloadUrl': 'https://s3.amazonaws.com/bucket/texture.jpg?signature=...'}
+                ]
+            }
+
             result = cli_runner.invoke(cli, [
                 'assets', 'download',
                 '-d', 'test-database',
                 '-a', 'test-asset',
                 '--shareable-links-only'
             ])
-            
+
             assert result.exit_code == 0
             assert '✓ Shareable links generated successfully!' in result.output
             assert '/model.gltf' in result.output
             assert '/texture.jpg' in result.output
             assert 'Total: 2 file(s)' in result.output
-            
-            # Verify API calls
+
+            # Verify API calls: one bulk request covers both files
             mocks['api_client'].list_asset_files.assert_called_once()
-            assert mocks['api_client'].download_asset_file.call_count == 2
+            assert mocks['api_client'].download_asset_files_bulk.call_count == 1
     
     @patch('vamscli.commands.assets.asyncio.run')
     def test_download_whole_asset_no_files(self, mock_asyncio_run, cli_runner, assets_command_mocks):
@@ -1691,6 +1848,50 @@ class TestAssetDownloadCommand:
             ])
             assert result.exit_code == 1
             assert '--file-previews requires --file-key to be specified' in result.output
+
+    def test_download_single_file_with_version_id(self, cli_runner, assets_command_mocks):
+        """Single-file download with a specific S3 version threads version_id."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].download_asset_file.return_value = {
+                'downloadUrl': 'https://example.com/versioned', 'expiresIn': 86400
+            }
+            summary = {
+                'overall_success': True, 'total_files': 1, 'successful_files': 1,
+                'failed_files': 0, 'total_size': 10, 'total_size_formatted': '10 B',
+                'download_duration': 0.1, 'average_speed': 100,
+                'average_speed_formatted': '100 B/s',
+                'successful_downloads': [{'relative_key': '/model.gltf',
+                                          'local_path': '/local/path/model.gltf', 'size': 10}],
+                'failed_downloads': []
+            }
+            with patch('vamscli.commands.assets.asyncio.run', return_value=summary):
+                result = cli_runner.invoke(cli, [
+                    'assets', 'download', '/local/path', '-d', 'test-database',
+                    '-a', 'test-asset', '--file-key', '/model.gltf', '--version-id', 'ver-123'
+                ])
+            assert result.exit_code == 0
+            mocks['api_client'].download_asset_file.assert_called_once_with(
+                'test-database', 'test-asset', '/model.gltf',
+                version_id='ver-123', asset_version_id=None, asset_version_alias=None)
+
+    def test_download_version_id_requires_file_key(self, cli_runner, assets_command_mocks):
+        with assets_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/local/path', '-d', 'test-database',
+                '-a', 'test-asset', '--version-id', 'ver-123'
+            ])
+            assert result.exit_code == 1
+            assert '--version-id requires a single --file-key' in result.output
+
+    def test_download_version_id_conflicts_with_asset_version(self, cli_runner, assets_command_mocks):
+        with assets_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'download', '/local/path', '-d', 'test-database',
+                '-a', 'test-asset', '--file-key', '/model.gltf',
+                '--version-id', 'ver-123', '--asset-version-id', '2'
+            ])
+            assert result.exit_code == 1
+            assert 'Cannot specify --version-id with --asset-version-id' in result.output
     
     def test_download_no_files_in_asset(self, cli_runner, assets_command_mocks):
         """Test download command with no files in asset."""
@@ -2066,7 +2267,219 @@ class TestAssetCommandsEdgeCases:
             assert result.exit_code == 1
             assert '✗ Download Error' in result.output
             assert 'Asset preview not available' in result.output
-    
+
+
+class TestAssetHistoryCommand:
+    """Test asset history command."""
+
+    def test_history_help(self, cli_runner):
+        """Test history command help."""
+        result = cli_runner.invoke(cli, ['assets', 'history', '--help'])
+        assert result.exit_code == 0
+        assert 'List the lifecycle history records for an asset' in result.output
+        assert '--database' in result.output
+        assert '--asset' in result.output
+        assert '--page-size' in result.output
+        assert '--max-items' in result.output
+        assert '--starting-token' in result.output
+        assert '--auto-paginate' in result.output
+        assert '--json-input' in result.output
+        assert '--json-output' in result.output
+
+    def test_history_success(self, cli_runner, assets_command_mocks):
+        """Test successful asset history listing."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].get_asset_history.return_value = {
+                'message': 'Success',
+                'Items': [
+                    {
+                        'historyRecordId': '2026-07-05T10:00:00Z#abc12345',
+                        'databaseId': 'test-db',
+                        'assetId': 'test-asset',
+                        'recordDate': '2026-07-05T10:00:00Z',
+                        'changeSource': 'edit',
+                        'changeUserId': 'user@example.com',
+                        'assetSnapshot': {
+                            'assetName': 'Test Asset',
+                            'description': 'Updated description',
+                            'isDistributable': True,
+                            'tags': ['tag1'],
+                            'bucketId': 'bucket-1',
+                            'assetLocationKey': 'test-asset/'
+                        }
+                    },
+                    {
+                        'historyRecordId': '2026-07-01T09:00:00Z#migrated',
+                        'databaseId': 'test-db',
+                        'assetId': 'test-asset',
+                        'recordDate': '2026-07-01T09:00:00Z',
+                        'changeSource': 'create',
+                        'changeUserId': 'SYSTEM_USER',
+                        'assetSnapshot': {'assetName': 'Test Asset'},
+                        'migratedRecord': True
+                    }
+                ]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Found 2 history record(s):' in result.output
+            assert 'Action: edit' in result.output
+            assert 'User: user@example.com' in result.output
+            assert 'Migrated Record: Yes' in result.output
+            assert 'assetName: Test Asset' in result.output
+
+            mocks['api_client'].get_asset_history.assert_called_once_with('test-db', 'test-asset', {})
+
+    def test_history_empty(self, cli_runner, assets_command_mocks):
+        """Test asset history with no records."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].get_asset_history.return_value = {'message': 'Success', 'Items': []}
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset'
+            ])
+
+            assert result.exit_code == 0
+            assert 'No history records found.' in result.output
+
+    def test_history_json_output(self, cli_runner, assets_command_mocks):
+        """Test asset history with JSON output."""
+        with assets_command_mocks as mocks:
+            api_response = {
+                'message': 'Success',
+                'Items': [
+                    {
+                        'historyRecordId': '2026-07-05T10:00:00Z#abc12345',
+                        'recordDate': '2026-07-05T10:00:00Z',
+                        'changeSource': 'create',
+                        'changeUserId': 'user@example.com',
+                        'assetSnapshot': {'assetName': 'Test Asset'}
+                    }
+                ]
+            }
+            mocks['api_client'].get_asset_history.return_value = api_response
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            output_json = json.loads(result.output.strip())
+            assert output_json == api_response
+
+    def test_history_with_page_size_and_starting_token(self, cli_runner, assets_command_mocks):
+        """Test asset history manual pagination parameters."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].get_asset_history.return_value = {
+                'Items': [{'recordDate': '2026-07-05T10:00:00Z', 'changeSource': 'edit',
+                           'changeUserId': 'u1', 'assetSnapshot': {}}],
+                'NextToken': 'next-token-123'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--page-size', '50',
+                '--starting-token', 'token-123'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Next token: next-token-123' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+
+            mocks['api_client'].get_asset_history.assert_called_once_with(
+                'test-db', 'test-asset', {'pageSize': 50, 'startingToken': 'token-123'}
+            )
+
+    def test_history_auto_paginate(self, cli_runner, assets_command_mocks):
+        """Test asset history with auto-pagination aggregating pages."""
+        with assets_command_mocks as mocks:
+            page1 = {
+                'Items': [{'recordDate': f'2026-07-0{i}T10:00:00Z', 'changeSource': 'edit',
+                           'changeUserId': 'u1', 'assetSnapshot': {}} for i in range(1, 4)],
+                'NextToken': 'token1'
+            }
+            page2 = {
+                'Items': [{'recordDate': '2026-06-30T10:00:00Z', 'changeSource': 'create',
+                           'changeUserId': 'u1', 'assetSnapshot': {}}],
+                'NextToken': None
+            }
+            mocks['api_client'].get_asset_history.side_effect = [page1, page2]
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 4 items in 2 page(s)' in result.output
+            assert 'Found 4 history record(s):' in result.output
+
+            # Verify API was called twice, second call passing the token
+            assert mocks['api_client'].get_asset_history.call_count == 2
+            second_call_params = mocks['api_client'].get_asset_history.call_args_list[1][0][2]
+            assert second_call_params['startingToken'] == 'token1'
+
+    def test_history_auto_paginate_conflict(self, cli_runner, assets_command_mocks):
+        """Test that auto-paginate conflicts with starting-token."""
+        with assets_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--auto-paginate',
+                '--starting-token', 'token123'
+            ])
+
+            assert result.exit_code == 1
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+
+    def test_history_max_items_without_auto_paginate_warning(self, cli_runner, assets_command_mocks):
+        """Test that max-items without auto-paginate shows warning."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].get_asset_history.return_value = {
+                'Items': [{'recordDate': '2026-07-05T10:00:00Z', 'changeSource': 'edit',
+                           'changeUserId': 'u1', 'assetSnapshot': {}}]
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'test-asset',
+                '--max-items', '100'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Warning: --max-items only applies with --auto-paginate' in result.output
+
+    def test_history_asset_not_found(self, cli_runner, assets_command_mocks):
+        """Test asset history when asset is not found."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].get_asset_history.side_effect = AssetNotFoundError("Asset not found")
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'history',
+                '-d', 'test-db',
+                '-a', 'missing-asset'
+            ])
+
+            assert result.exit_code == 1
+            assert 'Asset Not Found' in result.output
+
 
 if __name__ == '__main__':
     pytest.main([__file__])

@@ -42,12 +42,21 @@ s3_client = boto3.client('s3', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 logger = safeLogger(service_name="StreamAsset")
 
+# Delivery mode toggle. When True, every file is delivered by 307-redirecting to a short-lived
+# S3 presigned URL (the browser fetches bytes directly from S3, which is CORS-enabled). When
+# False, only files larger than MAX_STREAMING_SIZE redirect and smaller files are streamed
+# inline as a base64-encoded body through API Gateway. Redirecting for all sizes avoids the
+# base64 round-trip and the API-level binaryMediaTypes requirement; the inline path is kept so
+# this can be toggled back in the future.
+ALWAYS_REDIRECT_TO_PRESIGNED = True
+
 try:
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -534,15 +543,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 
                 # Set conservative limit for streaming (4.4MB raw = ~5.87MB base64 encoded, safely under 6MB Lambda limit)
                 MAX_STREAMING_SIZE = int(4.4 * 1024 * 1024)  # 4.4MB
-                
-                # If file is larger than 4.4MB, generate presigned URL and redirect
-                if content_length > MAX_STREAMING_SIZE:
-                    logger.info(f"File size ({content_length / (1024*1024):.2f}MB) exceeds streaming limit. Generating presigned URL.")
-                    
-                    # Generate presigned URL
+
+                # Redirect to a presigned URL either when the delivery mode forces it for all
+                # files, or (in inline mode) when the file exceeds the base64 streaming limit.
+                if ALWAYS_REDIRECT_TO_PRESIGNED or content_length > MAX_STREAMING_SIZE:
+                    logger.info(f"Delivering file ({content_length / (1024*1024):.2f}MB) via presigned URL redirect.")
+
+                    # Generate presigned URL WITHOUT the Range header. A Range in the presigned
+                    # params is added to SignedHeaders, forcing the client to send that exact
+                    # Range and 403ing otherwise. Signing without it (SignedHeaders=host) lets the
+                    # client (and range-based octree / 3D tile streaming viewers) send any Range
+                    # on the follow-up request to S3, which serves partial content natively.
+                    presigned_params = {k: v for k, v in s3_params.items() if k != 'Range'}
                     presigned_url = s3_client.generate_presigned_url(
                         'get_object',
-                        Params=s3_params,
+                        Params=presigned_params,
                         ExpiresIn=int(token_timeout)
                     )
                     

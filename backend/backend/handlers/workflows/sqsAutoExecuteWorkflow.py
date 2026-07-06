@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -40,19 +41,17 @@ excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
 # Load environment variables with error handling
 try:
-    workflow_storage_table_name = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    workflow_storage_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     execute_workflow_lambda_name = os.environ["EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
 workflow_storage_table = dynamodb.Table(workflow_storage_table_name)
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
-database_storage_table = dynamodb.Table(database_storage_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 

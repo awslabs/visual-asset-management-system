@@ -82,7 +82,7 @@ def test_build_archive_history_record_defaults_version_null_and_user_system():
     af = _load_asset_files()
     rec = af.build_archive_history_record("db1", "a1", "x.glb", None, None)
     assert rec["versionId"] == "null"
-    assert rec["changeUserId"] == "SYSTEM"
+    assert rec["changeUserId"] == "SYSTEM_USER"
 
 
 @pytest.mark.unit
@@ -208,3 +208,165 @@ class TestArchiveProvenanceAndVersionHistory:
         assert {"v1", "v2"} <= version_ids
         marker = next(v for v in result["versions"] if v["versionId"] == "marker-1")
         assert marker["isArchived"] is True
+
+
+@pytest.mark.unit
+class TestUnarchiveFile:
+    """Covers the unarchive_file flow.
+
+    unarchive restores an archived file by copying the most recent content
+    version (the one before the latest delete marker) forward as a new current
+    version. The version listing is fetched once and bounded, since S3 returns
+    versions newest-first so only the head of the listing is needed.
+    """
+
+    BUCKET = "asset-bucket"
+    BASE_KEY = "db1/a1/"
+    REL_PATH = "/model.glb"
+    FULL_KEY = "db1/a1/model.glb"
+
+    def _patch_common(self, af, monkeypatch, s3_client, s3_resource):
+        """Patch shared dependencies so only the S3 interaction matters."""
+        monkeypatch.setattr(af, "get_asset_with_permissions",
+                            lambda databaseId, assetId, op, claims: {"assetId": assetId})
+        monkeypatch.setattr(af, "get_asset_s3_location",
+                            lambda asset: (self.BUCKET, self.BASE_KEY))
+        monkeypatch.setattr(af, "send_subscription_email", lambda db, a: None)
+        # No associated preview files for the base file in these tests.
+        monkeypatch.setattr(af, "find_preview_files_for_base_including_archived",
+                            lambda bucket, base_key: [])
+        monkeypatch.setattr(af, "s3_client", s3_client)
+        monkeypatch.setattr(af, "s3_resource", s3_resource)
+
+    def _make_s3_with_versions(self, versions, delete_markers):
+        """Build a fake S3 client and resource that record the copy CopySource."""
+        from datetime import datetime  # noqa: F401  (used by callers building versions)
+        full_key = self.FULL_KEY
+        recorded = {}
+
+        class _CopyObject:
+            def __init__(self, bucket, key):
+                self.bucket = bucket
+                self.key = key
+
+            def copy(self, CopySource=None, ExtraArgs=None):
+                recorded["CopySource"] = CopySource
+                recorded["ExtraArgs"] = ExtraArgs
+
+        class _S3Resource:
+            def Object(self, bucket, key):
+                return _CopyObject(bucket, key)
+
+        class _S3Client:
+            def list_object_versions(self, Bucket, Prefix, MaxKeys=None, **kwargs):
+                return {"Versions": list(versions), "DeleteMarkers": list(delete_markers)}
+
+            def head_object(self, Bucket, Key, VersionId=None):
+                # First call (with VersionId): return source metadata to copy forward.
+                if VersionId is not None:
+                    return {"Metadata": {"existing": "value"}}
+                # Second call (no VersionId): return the new current version id.
+                return {"VersionId": "new-current-ver"}
+
+        return _S3Client(), _S3Resource(), recorded
+
+    def test_unarchive_copies_latest_version_before_delete_marker(self, monkeypatch):
+        from datetime import datetime
+        from common.s3MetadataKeys import (
+            VAMS_CHANGE_SOURCE_METADATA_KEY,
+            VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+        )
+        af = _load_asset_files()
+
+        # Two content versions plus a latest delete marker (file is archived).
+        versions = [
+            {"Key": self.FULL_KEY, "VersionId": "v2", "IsLatest": False,
+             "LastModified": datetime(2026, 6, 10)},
+            {"Key": self.FULL_KEY, "VersionId": "v1", "IsLatest": False,
+             "LastModified": datetime(2026, 6, 8)},
+        ]
+        delete_markers = [
+            {"Key": self.FULL_KEY, "VersionId": "marker-latest", "IsLatest": True,
+             "LastModified": datetime(2026, 6, 11)},
+        ]
+        s3_client, s3_resource, recorded = self._make_s3_with_versions(versions, delete_markers)
+        self._patch_common(af, monkeypatch, s3_client, s3_resource)
+
+        result = af.unarchive_file("db1", "a1", self.REL_PATH, {"tokens": ["alice"]})
+
+        assert result.success is True
+        # Restores the most recent content version (v2), not the older v1.
+        assert recorded["CopySource"]["VersionId"] == "v2"
+        # Overlays unarchive provenance while preserving existing metadata.
+        metadata = recorded["ExtraArgs"]["Metadata"]
+        assert metadata[VAMS_CHANGE_SOURCE_METADATA_KEY] == VAMS_CHANGE_SOURCE_FILE_UNARCHIVE
+        assert metadata["existing"] == "value"
+        assert self.REL_PATH in result.affectedFiles
+
+    def test_unarchive_rejects_file_not_archived(self, monkeypatch):
+        from datetime import datetime
+        af = _load_asset_files()
+
+        # Live file: a content version exists, no latest delete marker.
+        versions = [
+            {"Key": self.FULL_KEY, "VersionId": "v1", "IsLatest": True,
+             "LastModified": datetime(2026, 6, 8)},
+        ]
+        s3_client, s3_resource, recorded = self._make_s3_with_versions(versions, [])
+        self._patch_common(af, monkeypatch, s3_client, s3_resource)
+
+        with pytest.raises(af.VAMSGeneralErrorResponse, match="not archived"):
+            af.unarchive_file("db1", "a1", self.REL_PATH, {"tokens": ["alice"]})
+        assert "CopySource" not in recorded
+
+    def test_unarchive_rejects_missing_file(self, monkeypatch):
+        af = _load_asset_files()
+
+        s3_client, s3_resource, recorded = self._make_s3_with_versions([], [])
+        self._patch_common(af, monkeypatch, s3_client, s3_resource)
+
+        with pytest.raises(af.VAMSGeneralErrorResponse, match="not found"):
+            af.unarchive_file("db1", "a1", self.REL_PATH, {"tokens": ["alice"]})
+        assert "CopySource" not in recorded
+
+    def test_unarchive_rejects_when_no_prior_content_version(self, monkeypatch):
+        from datetime import datetime
+        af = _load_asset_files()
+
+        # Only a delete marker exists, no content version to restore.
+        delete_markers = [
+            {"Key": self.FULL_KEY, "VersionId": "marker-latest", "IsLatest": True,
+             "LastModified": datetime(2026, 6, 11)},
+        ]
+        s3_client, s3_resource, recorded = self._make_s3_with_versions([], delete_markers)
+        self._patch_common(af, monkeypatch, s3_client, s3_resource)
+
+        with pytest.raises(af.VAMSGeneralErrorResponse, match="previous version"):
+            af.unarchive_file("db1", "a1", self.REL_PATH, {"tokens": ["alice"]})
+        assert "CopySource" not in recorded
+
+    def test_unarchive_ignores_sibling_key_versions(self, monkeypatch):
+        from datetime import datetime
+        af = _load_asset_files()
+
+        # The Prefix listing also returns a sibling key (model.glb.bak) that shares
+        # the prefix. Only versions for the exact key must be considered.
+        versions = [
+            {"Key": self.FULL_KEY + ".bak", "VersionId": "sibling-newest", "IsLatest": True,
+             "LastModified": datetime(2026, 6, 20)},
+            {"Key": self.FULL_KEY, "VersionId": "v1", "IsLatest": False,
+             "LastModified": datetime(2026, 6, 8)},
+        ]
+        delete_markers = [
+            {"Key": self.FULL_KEY, "VersionId": "marker-latest", "IsLatest": True,
+             "LastModified": datetime(2026, 6, 11)},
+        ]
+        s3_client, s3_resource, recorded = self._make_s3_with_versions(versions, delete_markers)
+        self._patch_common(af, monkeypatch, s3_client, s3_resource)
+
+        result = af.unarchive_file("db1", "a1", self.REL_PATH, {"tokens": ["alice"]})
+
+        assert result.success is True
+        # Must restore the exact key's version, never the sibling's newer version.
+        assert recorded["CopySource"]["VersionId"] == "v1"
+        assert recorded["CopySource"]["Key"] == self.FULL_KEY

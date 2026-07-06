@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -25,36 +26,30 @@ from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 
-asset_Database = None
-db_Database = None
-asset_upload_table_name = None
-s3_asset_buckets_table = None
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
 
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
     file_upload_function = os.environ['FILE_UPLOAD_LAMBDA_FUNCTION_NAME']
-    asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
-    db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
-    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_files_table = os.environ["PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_metadata_table = os.environ["PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_results_table = os.environ["PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME"]
-    pipeline_execution_logs_table = os.environ["PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME"]
+    asset_Database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
+    workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
+    pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
+    pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
+    pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
     # Shared workflow SFN log group (same group for every workflow). Read from env, not
     # the ASL event, so it applies to executions of workflows that were not redeployed
     # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
-
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise
+    logger.exception("Failed loading environment variables or resolving resource names")
+    raise e
 
 s3c = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
@@ -272,7 +267,7 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         lambda_payload["requestContext"]["http"]["path"] = API_UPLOAD_COMPLETE_EXTERNAL.path.replace(
             "{uploadId}", upload_id
         )
-        lambda_payload["requestContext"]["http"]["httpMethod"] = f"POST"
+        lambda_payload["requestContext"]["http"]["method"] = "POST"
         
         # Invoke the Lambda function
         response = _lambda_file_ingestion(lambda_payload)

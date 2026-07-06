@@ -239,7 +239,7 @@ export default function CreateDatabase({
                                         } else {
                                             // Display the actual error message from the API
                                             const msg =
-                                                res[1] ||
+                                                (res as any[])[1] ||
                                                 `Unable to ${createOrUpdate} ${Synonyms.database}`;
                                             setFormError(msg);
                                         }

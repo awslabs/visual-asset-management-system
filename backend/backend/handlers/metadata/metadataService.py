@@ -90,19 +90,26 @@ claims_and_roles = {}
 # Constants
 MAX_METADATA_RECORDS_PER_ENTITY = 500
 
+# Default pagination sizes for metadata GET responses. maxItems is the per-response
+# ceiling that keeps the response payload under the Lambda (6 MB) / API Gateway
+# limits; 
+DEFAULT_METADATA_MAX_ITEMS = 30000
+DEFAULT_METADATA_PAGE_SIZE = 3000
+
 # Load environment variables
 try:
-    asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    database_metadata_table_name = os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    metadata_schema_table_v2_name = os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_links_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    database_metadata_table_name = get_table_name(ResourceKeys.DATABASE_METADATA_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    metadata_schema_table_v2_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -118,6 +125,53 @@ s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 #######################
 # Common Utility Functions
 #######################
+
+def paginate_metadata_records(records: list, query_params: dict):
+    """Offset-paginate an already-enriched, fully-ordered metadata record list.
+
+    Metadata GETs enrich the full record set with schema fields (injecting
+    schema-defined fields that have no stored value) and order it by schema
+    sequence, so paging happens after enrichment on the in-memory list rather
+    than at the DynamoDB cursor level. The page size and ceiling default to
+    named constants when not supplied, keeping the response payload bounded
+    while preserving correct ordering and schema injection.
+
+    Args:
+        records: The fully enriched, ordered list of metadata response items.
+        query_params: May contain 'startingToken' (base64 offset), 'pageSize',
+            and 'maxItems'.
+
+    Returns:
+        Tuple of (page_records, next_token). next_token is None on the last page.
+    """
+    # Resolve page size (per-response slice) with a safe default ceiling.
+    try:
+        page_size = int(query_params.get('pageSize') or query_params.get('maxItems') or DEFAULT_METADATA_PAGE_SIZE)
+    except (TypeError, ValueError):
+        page_size = DEFAULT_METADATA_PAGE_SIZE
+    if page_size < 1:
+        page_size = DEFAULT_METADATA_PAGE_SIZE
+
+    # Decode the starting offset from the token (defaults to first page).
+    start = 0
+    starting_token = query_params.get('startingToken')
+    if starting_token:
+        try:
+            start = int(base64.b64decode(starting_token).decode('utf-8'))
+        except (ValueError, base64.binascii.Error, UnicodeDecodeError):
+            logger.warning("Invalid metadata startingToken; serving from the first page")
+            start = 0
+        if start < 0:
+            start = 0
+
+    page = records[start:start + page_size]
+
+    next_token = None
+    if start + page_size < len(records):
+        next_offset = start + page_size
+        next_token = base64.b64encode(str(next_offset).encode('utf-8')).decode('utf-8')
+
+    return page, next_token
 
 def get_bucket_details(bucket_id: str) -> dict:
     """Get S3 bucket details from buckets table
@@ -480,14 +534,17 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
                 metadataValueType=item['metadataValueType']
             ) for item in metadata_list]
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetAssetLinkMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
         
     except PermissionError as p:
@@ -558,11 +615,11 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 # Get schemas from both databases + GLOBAL
@@ -756,11 +813,11 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                     check_entity_authorization(to_asset, "PUT", claims_and_roles)):
                 raise PermissionError("Not authorized to update metadata for this asset link")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 # Fetch ALL existing metadata for this asset link
@@ -1262,6 +1319,7 @@ def handle_asset_link_metadata_get(event):
         try:
             query_request_model = parse(query_parameters, model=GetAssetLinkMetadataRequestModel)
             query_params = {
+                'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken
             }
@@ -1540,14 +1598,17 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
                 metadataValueType=item['metadataValueType']
             ) for item in metadata_list]
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetAssetMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
         
     except PermissionError as p:
@@ -1650,9 +1711,13 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
             ) for item in metadata_list]
             restrict_metadata_outside_schemas = False
 
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
         return GetAssetMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
 
     except PermissionError as p:
@@ -1720,11 +1785,11 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 database_ids = [database_id, 'GLOBAL']
@@ -1912,11 +1977,11 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
             if not check_entity_authorization(asset, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this asset")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         composite_key = f"{database_id}:{asset_id}:/"
         if not skip_schema_validation:
             try:
@@ -2435,6 +2500,7 @@ def handle_asset_metadata_get(event):
         try:
             query_request_model = parse(query_parameters, model=GetAssetMetadataRequestModel)
             query_params = {
+                'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken,
                 'assetVersionId': query_request_model.assetVersionId
@@ -2723,14 +2789,17 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
                 metadataValueType=item['metadataValueType']
             ) for item in metadata_list]
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetFileMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
     except PermissionError as p:
         raise p
@@ -2836,9 +2905,13 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             ) for item in metadata_list]
             restrict_metadata_outside_schemas = False
 
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
         return GetFileMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
 
     except PermissionError as p:
@@ -2901,11 +2974,11 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 database_ids = [database_id, 'GLOBAL']
@@ -3086,11 +3159,11 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
             if not check_entity_authorization(asset, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this file")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
         if not skip_schema_validation:
             try:
@@ -3669,7 +3742,7 @@ def handle_file_metadata_get(event):
             file_path = file_path[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
         
-        query_params = {'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
@@ -3889,14 +3962,17 @@ def get_database_metadata(database_id: str, query_params: dict, claims_and_roles
                 metadataValueType=item['metadataValueType']
             ) for item in metadata_list]
             restrict_metadata_outside_schemas = False
-        
-        # Build response (NextToken always empty/None)
+
+        # Offset-paginate the enriched, ordered list to bound the response payload.
+        page, next_token = paginate_metadata_records(metadata_list, query_params)
+
+        # Build response
         result = GetDatabaseMetadataResponseModel(
-            metadata=metadata_list,
-            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas
+            metadata=page,
+            restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
+            NextToken=next_token
         )
-        # NextToken is always None (no pagination)
-        
+
         return result
     except PermissionError as p:
         raise p
@@ -3950,11 +4026,11 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
             logger.warning(f"Error checking record limit: {e}")
             # Continue without limit check if it fails
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 database_ids = [database_id, 'GLOBAL']
@@ -4105,11 +4181,11 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
             if not check_entity_authorization(database, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this database")
         
-        # Check if user is SYSTEM - bypass schema validation
-        username = claims_and_roles.get("tokens", ["SYSTEM"])[0]
+        # Check if user is SYSTEM_USER - bypass schema validation
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         skip_schema_validation = (username == "SYSTEM_USER")
         
-        # Schema validation for non-SYSTEM users
+        # Schema validation for non-SYSTEM_USER users
         if not skip_schema_validation:
             try:
                 # Fetch ALL existing metadata for this database
@@ -4574,8 +4650,8 @@ def handle_database_metadata_get(event):
         path_request_model = parse(path_parameters, model=DatabaseMetadataPathRequestModel)
         
         query_request_model = parse(query_parameters, model=GetDatabaseMetadataRequestModel)
-        query_params = {'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
-        
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
+
         response = get_database_metadata(path_request_model.databaseId, query_params, claims_and_roles)
         return success(body=response.dict())
     except PermissionError as p:

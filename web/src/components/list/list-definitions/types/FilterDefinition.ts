@@ -5,11 +5,24 @@
 
 import PropTypes from "prop-types";
 
-export default function FilterDefinition(props) {
+interface FilterDefinitionType {
+    name: any;
+    placeholder: any;
+}
+
+interface FilterDefinitionConstructor {
+    new (props: any): FilterDefinitionType;
+    (props: any): void;
+    propTypes: any;
+}
+
+const FilterDefinition = function (this: any, props: any) {
     const { name, placeholder } = props;
     this.name = name;
     this.placeholder = placeholder;
-}
+} as unknown as FilterDefinitionConstructor;
+
+export default FilterDefinition;
 
 FilterDefinition.propTypes = {
     name: PropTypes.string.isRequired,

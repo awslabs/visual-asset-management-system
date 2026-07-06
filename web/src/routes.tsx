@@ -269,7 +269,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 })
                 .catch((error) => {
                     console.error(error);
-                    setAllowedRoutes([]);
+                    // Fail open to the landing page only: if the web-routes permission
+                    // API is unavailable, still render the home page (and the catch-all)
+                    // so the app is not a blank screen. Deeper routes stay gated until
+                    // the check succeeds; per-API backend authorization still protects data.
+                    setAllowedRoutes(["/", "*"]);
                     setLoading(false);
                 });
         } catch (e) {}

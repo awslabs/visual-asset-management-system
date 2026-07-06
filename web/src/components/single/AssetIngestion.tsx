@@ -201,6 +201,7 @@ export default function AssetIngestion() {
             );
             setStatusMessage(msg);
 
+            // @ts-ignore
             console.log("Asset Upload Success", response);
             return true;
         } catch (error) {

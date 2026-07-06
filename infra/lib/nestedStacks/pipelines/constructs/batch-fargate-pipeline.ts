@@ -6,6 +6,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../../config/config";
 import { Construct } from "constructs";
@@ -28,6 +29,12 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * Fargate supports 21-200 GiB. Default is 60 GiB.
      */
     ephemeralStorageGiB?: number;
+    /**
+     * Optional ECR repository to use instead of local Docker build.
+     * When provided, imageAssetPath is ignored and the image is
+     * pulled from this ECR repository (tagged "latest").
+     */
+    ecrRepository?: ecr.IRepository;
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -58,14 +65,13 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
-        // Docker container image
-        const containerImage = ecs.AssetImage.fromAsset(
-            path.join(__dirname, props.imageAssetPath),
-            {
-                file: props.dockerfileName,
-                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
-            }
-        );
+        // Container image: use ECR repository if provided, otherwise build locally
+        const containerImage = props.ecrRepository
+            ? ecs.ContainerImage.fromEcrRepository(props.ecrRepository, "latest")
+            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+                  file: props.dockerfileName,
+                  platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+              });
 
         const batchJobName =
             props.batchJobDefinitionName +

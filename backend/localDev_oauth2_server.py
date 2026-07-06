@@ -27,7 +27,7 @@ def authorize():
   code_challenges[request.args.get('code_challenge')] = 'n/a'
   print('code_challenges', code_challenges)
 
-  return redirect(f'/login?{request.query_string.decode()}')
+  return redirect(f'/login?{request.query_string.decode()}') # nosemgrep: open-redirect
 
 @oauth2_routes.route('/login', methods=['GET'])
 def loginForm():

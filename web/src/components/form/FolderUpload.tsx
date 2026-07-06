@@ -15,14 +15,14 @@ import { showOpenFilePicker, showDirectoryPicker } from "file-system-access";
 
 import FormField from "@cloudscape-design/components/form-field";
 
-function FolderUpload(props) {
-    const handleFileListChange = (directoryHandle, fileHandles) => {
+function FolderUpload(props: any) {
+    const handleFileListChange = (directoryHandle: any, fileHandles: any) => {
         if (props.onSelect) {
             props.onSelect(directoryHandle, fileHandles);
         }
     };
 
-    async function* getFilesRecursively(entry, path) {
+    async function* getFilesRecursively(entry: any, path?: any): any {
         if (entry.kind === "file") {
             yield { path: path + "/" + entry.name, handle: entry };
         } else if (entry.kind === "directory") {
@@ -32,7 +32,7 @@ function FolderUpload(props) {
             }
         }
     }
-    const getFilesFromFileHandle = async (directoryHandle) => {
+    const getFilesFromFileHandle = async (directoryHandle: any) => {
         const fileHandles = [];
         for await (const handle of getFilesRecursively(directoryHandle)) {
             fileHandles.push(handle);
@@ -42,10 +42,13 @@ function FolderUpload(props) {
     const handleDirectorySelection = async () => {
         try {
             const directoryHandle = await showDirectoryPicker();
-            const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name);
+            const fileHandles = await (getFilesFromFileHandle as any)(
+                directoryHandle,
+                directoryHandle.name
+            );
             console.log(fileHandles);
             return { directoryHandle, fileHandles };
-        } catch (err) {
+        } catch (err: any) {
             // Check for user cancellation in multiple ways
             const isUserCancellation =
                 err.name === "AbortError" ||
@@ -71,7 +74,7 @@ function FolderUpload(props) {
                 fileHandles.push({ path: handles[i].name, handle: handles[i] });
             }
             return { handles, fileHandles };
-        } catch (err) {
+        } catch (err: any) {
             // Check for user cancellation in multiple ways
             const isUserCancellation =
                 err.name === "AbortError" ||

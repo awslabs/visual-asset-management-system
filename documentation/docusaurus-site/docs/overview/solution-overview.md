@@ -108,7 +108,7 @@ graph TB
     end
 
     subgraph "API Layer"
-        APIGW["Amazon API Gateway V2<br/>HttpApi"]
+        APIGW["Amazon API Gateway<br/>REST API (v1)"]
         AUTH["Custom Lambda Authorizer<br/>(JWT + IP Validation)"]
     end
 
@@ -149,7 +149,7 @@ graph TB
     WAF --> ALB
 ```
 
-The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud). All API requests pass through Amazon API Gateway V2, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
+The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
 
 For a detailed architecture diagram, see the [Architecture Components](../architecture/overview.md) section of the Developer Guide.
 

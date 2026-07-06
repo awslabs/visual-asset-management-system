@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import base64
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -14,9 +13,10 @@ from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
+from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
@@ -27,17 +27,14 @@ logger = safeLogger(service_name="DatabaseService")
 
 # Load environment variables
 try:
-    db_database = os.environ.get("DATABASE_STORAGE_TABLE_NAME")
-    workflow_database = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
-    pipeline_database = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
-    asset_database = os.environ.get("ASSET_STORAGE_TABLE_NAME")
-    s3_asset_buckets_table = os.environ.get("S3_ASSET_BUCKETS_STORAGE_TABLE_NAME")
-    
-    if not all([db_database, workflow_database, pipeline_database, asset_database, s3_asset_buckets_table]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    from common.resourceNames import ResourceKeys, get_table_name
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    asset_database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 
@@ -491,10 +488,7 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
-            headers={
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-cache, no-store',
-                },
+            headers=commonHeaders(),
             body=json.dumps({'message': result.message})
         )
     except VAMSGeneralErrorResponse as v:
@@ -587,17 +581,18 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
+    normalize_event(event)
     logger.info(event)
-    
+
     try:
         # Get path and query parameters
         path_parameters = event.get('pathParameters', {}) or {}
         query_parameters = event.get('queryStringParameters', {}) or {}
-        
+
         # Get HTTP method and path
         http_method = event['requestContext']['http']['method']
         path = event['requestContext']['http']['path']
-        
+
         # Get claims and roles
         claims_and_roles = request_to_claims(event)
         

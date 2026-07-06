@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router";
 import { downloadAsset, fetchAsset } from "../services/APIService";
+import { generateBulkDownloadUrlMap } from "../services/FileOperationsService";
 import { FileTree } from "../components/filemanager/types/FileManagerTypes";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { useReducer, useState, useEffect } from "react";
@@ -104,7 +105,8 @@ const downloadSingleFile = async (
     dispatch: any,
     flattenHierarchy = false,
     assetVersionId?: string,
-    maxRetries = 3
+    maxRetries = 3,
+    prefetchedUrl?: string
 ): Promise<boolean> => {
     let retries = 0;
 
@@ -140,27 +142,35 @@ const downloadSingleFile = async (
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
             const writable = await fileHandle.createWritable();
 
-            // Get download URL — use assetVersionId if provided, otherwise fall back to versionId
-            const response = await downloadAsset({
-                databaseId,
-                assetId,
-                key: file.keyPrefix,
-                versionId: file.versionId || "",
-                assetVersionId: assetVersionId,
-                downloadType: "assetFile",
-            });
+            // Use the bulk-prefetched URL on the first attempt; retries (and
+            // files without a prefetched URL) request a fresh one per file
+            let downloadUrl: string;
+            if (prefetchedUrl && retries === 0) {
+                downloadUrl = prefetchedUrl;
+            } else {
+                // Get download URL — use assetVersionId if provided, otherwise fall back to versionId
+                const response = await downloadAsset({
+                    databaseId,
+                    assetId,
+                    key: file.keyPrefix,
+                    versionId: file.versionId || "",
+                    assetVersionId: assetVersionId as any,
+                    downloadType: "assetFile",
+                });
 
-            if (response === false || !Array.isArray(response)) {
-                throw new Error("Invalid response from downloadAsset");
-            }
+                if (response === false || !Array.isArray(response)) {
+                    throw new Error("Invalid response from downloadAsset");
+                }
 
-            if (response[0] === false) {
-                throw new Error(`API Error: ${response[1]}`);
+                if (response[0] === false) {
+                    throw new Error(`API Error: ${response[1]}`);
+                }
+                downloadUrl = response[1];
             }
 
             // Download the file
             const responseFile = await axios({
-                url: response[1],
+                url: downloadUrl,
                 method: "GET",
                 responseType: "blob",
                 onDownloadProgress: (progressEvent) => {
@@ -238,6 +248,20 @@ const downloadFilesInParallel = async (
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
 
+    // Bulk-generate presigned URLs up front (one API call per 1500 files).
+    // All files resolve to their current version (or the selected asset
+    // version); any key missing from the bulk result falls back to a per-file
+    // URL request inside downloadSingleFile.
+    let urlByKey = new Map<string, string>();
+    if (files.length > 1) {
+        urlByKey = await generateBulkDownloadUrlMap(
+            databaseId,
+            assetId,
+            files.map((f) => f.keyPrefix),
+            assetVersionId
+        );
+    }
+
     // Create an array of promises for all file downloads
     const downloadPromises = files.map((file) =>
         downloadQueue.add(() =>
@@ -248,7 +272,9 @@ const downloadFilesInParallel = async (
                 directoryHandle,
                 dispatch,
                 flattenHierarchy,
-                assetVersionId
+                assetVersionId,
+                3,
+                urlByKey.get(file.keyPrefix)
             )
         )
     );

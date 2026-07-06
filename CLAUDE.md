@@ -14,15 +14,15 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 
 ### **Version Info**
 
-| Component            | Version/Runtime                                                                                             |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| VAMS version         | (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                              |
-| Python (Lambda)      | 3.12                                                                                                        |
-| Python (development) | 3.13+                                                                                                       |
-| Node (Lambda)        | 20.x                                                                                                        |
-| React                | 17.0.2 (Vite build)                                                                                         |
-| Pydantic             | **1.10.7 (v1, NOT v2)** -- uses `@root_validator`, `@validator`, `class Config`, not v2's `model_validator` |
-| CDK                  | `aws-cdk-lib`                                                                                               |
+| Component            | Version/Runtime                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| VAMS version         | (`infra/config/config.ts`, `tools/VamsCLI/vamscli/version.py`)                                               |
+| Python (Lambda)      | 3.12                                                                                                         |
+| Python (development) | 3.13+                                                                                                        |
+| Node (Lambda)        | 20.x                                                                                                         |
+| React                | 17.0.2 (Vite build)                                                                                          |
+| Pydantic             | **1.10.13 (v1, NOT v2)** -- uses `@root_validator`, `@validator`, `class Config`, not v2's `model_validator` |
+| CDK                  | `aws-cdk-lib`                                                                                                |
 
 ---
 
@@ -60,7 +60,7 @@ root/
 ### **Request Flow**
 
 ```
-User → CloudFront/ALB → API Gateway V2 HttpApi
+User → CloudFront/ALB → API Gateway REST API (v1)
   → Custom Lambda Authorizer (JWT validation + IP check)
     → Lambda Handler (Casbin two-tier enforcement)
       → DynamoDB / S3
@@ -171,21 +171,23 @@ Workflow event (assetId, databaseId, paths, ...)
 
 These are the critical patterns that span multiple directories. **Every developer must understand these.**
 
-### **Pattern 1: Adding a New API Endpoint (4-5 files)**
+### **Pattern 1: Adding a New API Endpoint (multiple files)**
 
 Adding a new API endpoint requires coordinated changes across multiple components:
 
-| Step                      | File                                                         | What to do                                                                          |
-| ------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                        | Define the `ApiRoute` constant AND add it to the appropriate category group array   |
-| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`             | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()` |
-| 3. Pydantic model         | `backend/backend/models/{domain}.py`                         | Define request/response models (Pydantic **v1**)                                    |
-| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`               | Build Lambda with env vars, permissions, VPC config                                 |
-| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Attach Lambda to API Gateway route                                                  |
-| 6. Frontend service       | `web/src/services/APIService.ts`                             | Add API call method                                                                 |
-| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                  | Add CLI command (if applicable)                                                     |
+| Step                      | File                                                          | What to do                                                                                                       |
+| ------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                         | Define the `ApiRoute` constant AND add it to the appropriate category group array                                |
+| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()`                              |
+| 3. Pydantic model         | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic **v1**)                                                                 |
+| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                              |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; `apiBuilder` is near the CFN per-stack resource limit) |
+| 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                              |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable)                                                                                  |
+| 8. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                    |
+| 9. API reference (docs)   | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                              |
 
-**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a route missing there is invisible to constraint authoring and the CLI.
+**Never** add an endpoint without updating all required files. A handler without a route is dead code. A route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a route missing there is invisible to constraint authoring and the CLI. **API documentation lives in two places — the OpenAPI `VAMS_API.yaml` AND the Docusaurus `api/{domain}.md` reference page — and both must be updated together** (a path rename or response-shape change must land in both).
 
 ### **Pattern 2: Two-Tier Authorization**
 
@@ -202,6 +204,8 @@ enforcer = CasbinEnforcer(user_id, role_constraints)
 if not enforcer.check_permission(object_type, resource_id, action):
     return {"statusCode": 403, "body": json.dumps({"error": "Forbidden"})}
 ```
+
+**System user:** The reserved user ID `SYSTEM_USER` is the official identity for all system-process actions (lambda cross-calls, pipeline workflow executions, bucket-sync ingestion, seeded `createdBy`/`modifiedBy` values, `changeUserId` provenance fallbacks). It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role so system actions pass both authorization tiers. Never introduce other variants (`SYSTEM`, `system`, etc.) — handlers compare against the exact string. See `backend/CLAUDE.md` "System User" for usage patterns.
 
 ### **Pattern 3: Configuration Flows CDK -> DynamoDB -> Frontend**
 
@@ -232,26 +236,41 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
 }
 ```
 
-### **Pattern 4: DynamoDB Table Names Are Environment Variables**
+### **Pattern 4: Resource Names Resolve via SSM Parameter Store**
 
-DynamoDB table names are **never** hardcoded. They are injected by CDK lambda builders as environment variables into every Lambda function.
+DynamoDB table names, non-asset S3 bucket names, and audit log group names are **never** hardcoded. Non-pipeline backend Lambda functions resolve these names from SSM Parameter Store at runtime, with environment variable overrides for development and testing.
 
 ```python
-# ✅ CORRECT - Read table name from environment
-import os
-ASSET_STORAGE_TABLE_NAME = os.environ["ASSET_STORAGE_TABLE_NAME"]
+# ✅ CORRECT - Resolve table name at module level
+from backend.common.resourceNames import get_table_name, ResourceKeys
 
-# ❌ INCORRECT - Never hardcode table names
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed loading resource names")
+    raise e
+
+# ❌ INCORRECT - Never hardcode resource names
 ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 ```
 
 ```typescript
-// ✅ CORRECT - CDK lambda builder injects table names
+// ✅ CORRECT - CDK publishes resource names to SSM and injects prefix
+// ResourceNamesBuilder nested stack publishes 41 SSM parameters
+import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+new ssm.StringParameter(this, "AssetStorageTableParam", {
+    parameterName: `${prefix}/${RESOURCE_PARAM_KEYS.dynamoTables.assetStorage}`,
+    stringValue: storageResources.dynamo.assetStorageTable.tableName,
+});
+
+// Lambda receives prefix + SSM grant (via globalLambdaEnvironmentsAndPermissions)
 environment: {
-    ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-    DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+    VAMS_RESOURCE_PARAM_PREFIX: config.resourceNamesSSMParamPrefix,
 }
 ```
+
+**Resolution order:** Environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → one paginated GetParametersByPath fetch of all resource names. Constants are defined in `infra/common/resourceParamKeys.ts` (TypeScript) and mirrored in `backend/backend/common/resourceNames.py` (Python `ResourceKeys` class). Pipeline Lambda functions continue to use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 
@@ -284,7 +303,7 @@ These rules apply project-wide. Violations will cause deployment failures, secur
 
 ### **Rule 1: Never Use Pydantic v2 Syntax**
 
-The backend uses Pydantic **1.10.7**. Using v2 syntax will fail at import time in Lambda.
+The backend uses Pydantic **1.10.13**. Using v2 syntax will fail at import time in Lambda.
 
 ```python
 # ✅ CORRECT - Pydantic v1
@@ -384,15 +403,16 @@ When you make structural changes to the codebase, **you must update the relevant
 
 **Which CLAUDE.md to update:**
 
-| Change area                            | Update this file                                                                                                              |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| New backend handler/model domain       | `backend/CLAUDE.md` (directory structure, handler list)                                                                       |
-| New CDK nested stack or lambda builder | `infra/CLAUDE.md` (directory structure, stack list)                                                                           |
-| New frontend component/page/service    | `web/CLAUDE.md` (directory structure, key files)                                                                              |
-| New CLI command group                  | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                 |
-| New pipeline                           | `CLAUDE.md` root (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md` (config options) |
-| Cross-component pattern change         | `CLAUDE.md` root (cross-component patterns section)                                                                           |
-| New skill                              | `CLAUDE.md` root (Available Claude Code Skills table)                                                                         |
+| Change area                                                    | Update this file                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New backend handler/model domain                               | `backend/CLAUDE.md` (directory structure, handler list)                                                                                                                                                                                                                                                                                                                                                        |
+| New CDK nested stack or lambda builder                         | `infra/CLAUDE.md` (directory structure, stack list)                                                                                                                                                                                                                                                                                                                                                            |
+| New frontend component/page/service                            | `web/CLAUDE.md` (directory structure, key files)                                                                                                                                                                                                                                                                                                                                                               |
+| New CLI command group                                          | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                                                                                                                                                                                                                                                                                                  |
+| New/changed S3 bucket, DynamoDB table, or CloudWatch log group | `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` — record the removal policy (RETAIN vs DESTROY) **and** whether the resource has a custom/explicit name. Custom-named resources can collide on redeploy; retained-but-auto-named ones do not. See `infra/CLAUDE.md` "Documentation Rule: Storage Resources and Log Groups" |
+| New pipeline                                                   | `CLAUDE.md` root (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md` (config options)                                                                                                                                                                                                                                                                                  |
+| Cross-component pattern change                                 | `CLAUDE.md` root (cross-component patterns section)                                                                                                                                                                                                                                                                                                                                                            |
+| New skill                                                      | `CLAUDE.md` root (Available Claude Code Skills table)                                                                                                                                                                                                                                                                                                                                                          |
 
 **What to update:** Update the directory structure tree, key files tables, and any affected rules or patterns. Keep descriptions concise. You can also run `/refresh-steering-docs` for a comprehensive update.
 
@@ -538,7 +558,7 @@ For user-facing documentation:
 | Technology            | Usage                                 |
 | --------------------- | ------------------------------------- |
 | Python 3.12           | Lambda runtime                        |
-| Pydantic 1.10.7       | Request/response validation (v1 only) |
+| Pydantic 1.10.13      | Request/response validation (v1 only) |
 | Casbin                | ABAC/RBAC authorization engine        |
 | boto3                 | AWS SDK                               |
 | AWS Lambda Powertools | Logging, tracing                      |
@@ -550,7 +570,7 @@ For user-facing documentation:
 | AWS CDK (TypeScript)     | Infrastructure as code        |
 | 10 nested stacks         | Modular resource organization |
 | CDK Nag                  | Security compliance checks    |
-| API Gateway V2 HttpApi   | REST API layer                |
+| REST API (v1)            | API layer                     |
 | Custom Lambda Authorizer | Unified JWT + IP auth         |
 
 ### **CLI (`tools/VamsCLI/`)**
@@ -568,20 +588,26 @@ For user-facing documentation:
 
 ### **Environment Variables (Backend)**
 
-All Lambda handlers receive these common environment variables from CDK lambda builders:
+Non-pipeline backend Lambda handlers receive one resource-resolution environment variable from CDK lambda builders:
 
 ```
-ASSET_STORAGE_TABLE_NAME          # DynamoDB: asset storage
-DATABASE_STORAGE_TABLE_NAME       # DynamoDB: database storage
-AUTH_TABLE_NAME                   # DynamoDB: auth entities
-CONSTRAINTS_TABLE_NAME            # DynamoDB: permission constraints
-USER_ROLES_TABLE_NAME             # DynamoDB: user-role mappings
-ROLES_TABLE_NAME                  # DynamoDB: role definitions
-S3_ASSET_AUXILIARY_BUCKET          # S3: auxiliary/staging bucket
+VAMS_RESOURCE_PARAM_PREFIX        # SSM parameter prefix for resource names
+                                  # (e.g., "/{config.name}-{baseStackName}/resourceNames")
+```
+
+Handlers resolve DynamoDB table names, the auxiliary and artefacts bucket names, and audit log group names from SSM Parameter Store using `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, and `get_log_group_name(ResourceKeys.*)` from `backend.common.resourceNames`. A 60-minute in-module cache minimizes SSM API calls. Environment variable overrides (the legacy table-name env vars) provide a break-glass path for testing and local utilities.
+
+**Pipeline Lambda functions** (in `backendPipelines/`) continue to receive legacy table-name environment variables and are excluded from SSM resolution.
+
+All handlers (including pipelines) receive these additional environment variables:
+
+```
+COGNITO_AUTH_ENABLED              # Enable/disable Cognito auth
+AWS_REGION                        # AWS region (set by Lambda runtime)
 PRESIGNED_URL_TIMEOUT_SECONDS     # S3 presigned URL TTL
 ```
 
-Domain-specific handlers receive additional env vars for their resources.
+Domain-specific handlers receive additional env vars for their resources (e.g., `SEND_EMAIL_FUNCTION_NAME` for notification handlers).
 
 ### **DynamoDB Access Pattern**
 
@@ -626,9 +652,14 @@ VAMS uses single-table design with composite keys. Common patterns:
 
 1. Create table in `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`
 2. Export via `storageResources` interface
-3. Pass table name as env var in lambda builder
-4. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builder
-5. Read table name from `os.environ` in backend handler
+3. Add constant to `ResourceKeys` class in `backend/backend/common/resourceNames.py`
+4. Add matching entry to `RESOURCE_PARAM_KEYS.dynamoTables` in `infra/common/resourceParamKeys.ts`
+5. Add matching constant to `ResourceParamKeys` in `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (migration scripts resolve names from these SSM parameters)
+6. Register descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`
+7. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builder
+8. Resolve table name using `get_table_name(ResourceKeys.*)` at module level in backend handler
+
+The same three-way constants update applies to new audit CloudWatch log groups. Deprecated tables retained for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 
 ### **Adding a New Viewer Plugin**
 
@@ -726,7 +757,7 @@ When implementing any VAMS change, comments and documentation must be **commensu
 2. **Importing Pydantic v2 APIs** (`model_validator`, `ConfigDict`) -- use v1
 3. **Skipping Tier 2 auth checks** in backend handlers -- both tiers required
 4. **Using BrowserRouter** in frontend -- must use HashRouter
-5. **Hardcoding DynamoDB table names** -- always use env vars
+5. **Hardcoding DynamoDB table names** -- always resolve via `common.resourceNames`
 6. **Creating Lambda without CDK Nag suppression review** -- all resources must pass checks
 7. **Adding API routes without corresponding handler** -- causes 500 errors
 8. **Deploying features without feature switches** -- breaks conditional deployment

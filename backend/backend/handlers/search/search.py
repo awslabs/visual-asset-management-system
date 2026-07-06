@@ -18,6 +18,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
@@ -47,14 +48,14 @@ claims_and_roles = {}
 
 # Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Get SSM parameter values

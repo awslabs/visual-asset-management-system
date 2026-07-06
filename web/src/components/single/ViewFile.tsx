@@ -395,10 +395,11 @@ export default function ViewFile() {
             } catch (error: any) {
                 console.error("Error loading file from direct path:", error);
 
-                // Check for specific error types
-                if (error?.response?.status === 403) {
+                // Check for specific error types. The apiClient throws an ApiError
+                // carrying the HTTP status in `.status` and the backend message in `.message`.
+                if (error?.status === 403) {
                     setDirectPathError("You don't have permission to access this file.");
-                } else if (error?.response?.status === 404) {
+                } else if (error?.status === 404) {
                     setDirectPathError(
                         "The file you're looking for doesn't exist or has been moved."
                     );

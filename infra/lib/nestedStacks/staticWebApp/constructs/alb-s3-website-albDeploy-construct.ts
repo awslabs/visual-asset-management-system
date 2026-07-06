@@ -40,6 +40,7 @@ export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     webSiteBuildPath: string;
     webAcl: string;
     apiUrl: string;
+    apiStageName: string;
     csp: string;
     vpc: ec2.IVpc;
     albSubnets: ec2.ISubnet[];
@@ -233,6 +234,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                     host: `${props.apiUrl}`,
                     port: "443",
                     protocol: "HTTPS",
+                    path: `/${props.apiStageName}/#{path}`,
                     permanent: true,
                 }),
                 conditions: [elbv2.ListenerCondition.pathPatterns(["/api*"])],
@@ -250,6 +252,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                     host: `${props.apiUrl}`,
                     port: "443",
                     protocol: "HTTPS",
+                    path: `/${props.apiStageName}/#{path}`,
                     permanent: true,
                 }),
                 conditions: [elbv2.ListenerCondition.pathPatterns(["/secure-config*"])],

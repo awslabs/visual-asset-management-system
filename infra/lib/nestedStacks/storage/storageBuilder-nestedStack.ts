@@ -19,6 +19,7 @@ import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
     requireTLSAndAdditionalPolicyAddToResourcePolicy,
+    addPresignedUrlNetworkRestrictionsToBucketPolicy,
     generateUniqueNameHash,
 } from "../../helper/security";
 import { NagSuppressions } from "cdk-nag";
@@ -31,13 +32,15 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { Service } from "../../helper/service-helper";
+import { Service, Partition } from "../../helper/service-helper";
 import {
     buildSqsBucketSyncFunction,
     buildFileIndexerSnsQueuingFunction,
     buildAssetIndexerSnsQueuingFunction,
     buildDatabaseIndexerSnsQueuingFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 
 export interface storageResources {
     encryption: {
@@ -92,6 +95,8 @@ export interface storageResources {
         databaseMetadataStorageTable: dynamodb.Table;
         assetFileMetadataStorageTable: dynamodb.Table;
         assetFileVersionHistoryStorageTable: dynamodb.Table;
+        assetHistoryStorageTable: dynamodb.Table;
+        syncTrackingOutboundStorageTable: dynamodb.Table;
         fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
@@ -127,7 +132,8 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
         config: Config.Config,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        resourceNameRegistry: ResourceNameRegistry
     ) {
         super(parent, name);
 
@@ -136,7 +142,8 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             config,
             lambdaCommonBaseLayer,
             vpc,
-            subnets
+            subnets,
+            resourceNameRegistry
         );
 
         //Nag supressions
@@ -218,7 +225,8 @@ export function storageResourcesBuilder(
     config: Config.Config,
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    resourceNameRegistry: ResourceNameRegistry
 ): storageResources {
     //Import or generate new encryption keys
     let kmsEncryptionKey: kms.IKey | undefined = undefined;
@@ -343,6 +351,10 @@ export function storageResourcesBuilder(
             serverAccessLogsPrefix: "asset-bucket-logs/",
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(assetBucket, config);
+        addPresignedUrlNetworkRestrictionsToBucketPolicy(
+            assetBucket,
+            config.app.assetBuckets.presignedUrlNetworkRestrictions
+        );
 
         // Add to global array with default prefix '/'
         s3AssetBuckets.addS3AssetBucket(
@@ -751,8 +763,11 @@ export function storageResourcesBuilder(
         eventBusName: orchestrationBusName,
     });
 
-    // KMS encryption is only settable on the underlying CfnEventBus
-    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey) {
+    // KMS encryption is only settable on the underlying CfnEventBus. Event bus CMK encryption
+    // is only supported in the commercial partition; elsewhere (GovCloud, EU Sovereign Cloud)
+    // the KmsKeyIdentifier property is rejected by CloudFormation and the bus falls back to
+    // EventBridge's default AWS-owned-key encryption at rest.
+    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey && Partition() === "aws") {
         const cfnBus = orchestrationBus.node.defaultChild as events.CfnEventBus;
         cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
     }
@@ -813,6 +828,10 @@ export function storageResourcesBuilder(
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
     });
     requireTLSAndAdditionalPolicyAddToResourcePolicy(assetAuxiliaryBucket, config);
+    addPresignedUrlNetworkRestrictionsToBucketPolicy(
+        assetAuxiliaryBucket,
+        config.app.assetBuckets.presignedUrlNetworkRestrictions
+    );
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,
@@ -1183,7 +1202,7 @@ export function storageResourcesBuilder(
     );
 
     //old
-    new dynamodb.Table(scope, "MetadataStorageTable", {
+    const metadataStorageTableLegacy = new dynamodb.Table(scope, "MetadataStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
@@ -1324,6 +1343,84 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Asset History — one record per asset lifecycle operation (create, edit,
+    // archive, unarchive, permanent delete). PK is the composite
+    // databaseId:assetId; SK is the timestamp-prefixed historyRecordId, queried
+    // with ScanIndexForward=false for newest-first. Records are permanent and
+    // survive asset permanent deletes.
+    const assetHistoryStorageTable = new dynamodb.Table(scope, "AssetHistoryStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "historyRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // Sync Tracking Outbound — one record per outbound synchronization of a
+    // VAMS object (database, asset, assetFile) to an external system (e.g.
+    // Physna, Garnet Framework). PK is the hierarchical object identifier
+    // (databaseId | databaseId:assetId | databaseId:assetId:/filePath); SK is
+    // the timestamp-prefixed syncRecordId, queried with ScanIndexForward=false
+    // for newest-first. Append-only; no stream (the Garnet indexers route
+    // stream events by table-name substring and must never see this table).
+    const syncTrackingOutboundStorageTable = new dynamodb.Table(
+        scope,
+        "SyncTrackingOutboundStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "objectId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "syncRecordId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSIs for narrowing sync records by database, database+system, and system.
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseSystemIndex",
+        partitionKey: {
+            name: "databaseId:systemType:systemUniqueId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "SystemIndex",
+        partitionKey: {
+            name: "systemType:systemUniqueId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTableV2", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1366,18 +1463,22 @@ export function storageResourcesBuilder(
     });
 
     //Old
-    new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
-        ...dynamodbDefaultProps,
+    const metadataSchemaStorageTableLegacy = new dynamodb.Table(
+        scope,
+        "MetadataSchemaStorageTable",
+        {
+            ...dynamodbDefaultProps,
 
-        partitionKey: {
-            name: "databaseId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "field",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
+            partitionKey: {
+                name: "databaseId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "field",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
 
     const metadataSchemaStorageTableV2 = new dynamodb.Table(scope, "MetadataSchemaStorageTableV2", {
         ...dynamodbDefaultProps,
@@ -1865,6 +1966,8 @@ export function storageResourcesBuilder(
             databaseMetadataStorageTable: databaseMetadataStorageTable,
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,
             assetFileVersionHistoryStorageTable: assetFileVersionHistoryStorageTable,
+            assetHistoryStorageTable: assetHistoryStorageTable,
+            syncTrackingOutboundStorageTable: syncTrackingOutboundStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             tagStorageTable: tagStorageTable,
@@ -2294,6 +2397,129 @@ export function storageResourcesBuilder(
 
         bucketSyncIndex = bucketSyncIndex + 1;
     }
+
+    /// Register fixed resource names for SSM publication by the ResourceNames builder stack
+
+    const resourceNameParamValues: { [paramKey: string]: string } = {
+        [RESOURCE_PARAM_KEYS.dynamoTables.appFeatureEnabledStorage]:
+            storageResources.dynamo.appFeatureEnabledStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetLinksStorageV2]:
+            storageResources.dynamo.assetLinksStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetLinksMetadataStorage]:
+            storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetStorage]:
+            storageResources.dynamo.assetStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetUploadsStorage]:
+            storageResources.dynamo.assetUploadsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetVersionsStorage]:
+            storageResources.dynamo.assetVersionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileVersionsStorage]:
+            storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileVersionHistoryStorage]:
+            storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetHistoryStorage]:
+            storageResources.dynamo.assetHistoryStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.syncTrackingOutboundStorage]:
+            storageResources.dynamo.syncTrackingOutboundStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataVersionsStorage]:
+            storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataStorage]:
+            storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.authEntitiesStorage]:
+            storageResources.dynamo.authEntitiesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.commentStorage]:
+            storageResources.dynamo.commentStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.constraintsStorage]:
+            storageResources.dynamo.constraintsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.databaseStorage]:
+            storageResources.dynamo.databaseStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.metadataSchemaStorageV2]:
+            storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.databaseMetadataStorage]:
+            storageResources.dynamo.databaseMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.fileAttributeStorage]:
+            storageResources.dynamo.fileAttributeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineStorage]:
+            storageResources.dynamo.pipelineStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.rolesStorage]:
+            storageResources.dynamo.rolesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.s3AssetBucketsStorage]:
+            storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.subscriptionsStorage]:
+            storageResources.dynamo.subscriptionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.tagStorage]:
+            storageResources.dynamo.tagStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.tagTypeStorage]:
+            storageResources.dynamo.tagTypeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.userRolesStorage]:
+            storageResources.dynamo.userRolesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.userStorage]:
+            storageResources.dynamo.userStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionsStorage]:
+            storageResources.dynamo.workflowExecutionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.apiKeyStorage]:
+            storageResources.dynamo.apiKeyStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowStorage]:
+            storageResources.dynamo.workflowStorageTable.tableName,
+        // Workflow-execution V2 data model tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionsStorageV2]:
+            storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionInputsStorage]:
+            storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionConfigurationStorage]:
+            storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionsStorage]:
+            storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionInputFilesStorage]:
+            storageResources.dynamo.pipelineExecutionInputFilesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionInputMetadataStorage]:
+            storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionInputConfigurationStorage]:
+            storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionOutputFilesStorage]:
+            storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionOutputMetadataStorage]:
+            storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionOutputResultsStorage]:
+            storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionLogsStorage]:
+            storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
+            storageResources.s3.assetAuxiliaryBucket.bucketName,
+        [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthentication]:
+            storageResources.cloudWatchAuditLogGroups.authentication.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthorization]:
+            storageResources.cloudWatchAuditLogGroups.authorization.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditFileUpload]:
+            storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditFileDownload]:
+            storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditFileDownloadStreamed]:
+            storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthOther]:
+            storageResources.cloudWatchAuditLogGroups.authOther.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthChanges]:
+            storageResources.cloudWatchAuditLogGroups.authChanges.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditActions]:
+            storageResources.cloudWatchAuditLogGroups.actions.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditErrors]:
+            storageResources.cloudWatchAuditLogGroups.errors.logGroupName,
+        // Deprecated tables — published for data-migration tooling only
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetVersionsStorageV1]:
+            assetVersionsStorageTableV1.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetFileVersionsStorageV1]:
+            assetFileVersionsStorageTableV1.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetLinksStorage]:
+            assetLinksStorageTableDeprecated.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.metadataStorage]:
+            metadataStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.metadataSchemaStorage]:
+            metadataSchemaStorageTableLegacy.tableName,
+    };
+    Object.entries(resourceNameParamValues).forEach(([paramKey, value]) => {
+        resourceNameRegistry.register({ paramKey, value });
+    });
 
     // Add Nag suppressions for SQS queues
     NagSuppressions.addResourceSuppressions(

@@ -1,3 +1,5 @@
+> ⚠️ **Deprecated — this documentation has moved.** The VamsCLI documentation is now maintained in the official VAMS documentation site. This file is retained temporarily for migration validation and will be removed. See the live docs: **https://awslabs.github.io/visual-asset-management-system/cli/installation**
+
 # VamsCLI Installation Guide
 
 This guide provides detailed instructions for installing and setting up VamsCLI on your system.

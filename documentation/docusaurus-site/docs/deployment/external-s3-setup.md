@@ -58,14 +58,14 @@ External buckets are defined in the VAMS CDK configuration file at `infra/config
 
 Each entry in the `externalAssetBuckets` array supports the following fields:
 
-| Field                   | Type   | Required                              | Description                                                                                                                                          |
-| ----------------------- | ------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bucketArn`             | String | Yes                                   | The full Amazon Resource Name (ARN) of the external S3 bucket.                                                                                       |
-| `baseAssetsPrefix`      | String | Yes                                   | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                  |
-| `defaultSyncDatabaseId` | String | Yes                                   | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                          |
-| `bucketAccountId`       | String | Recommended for cross-account         | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies. |
-| `bucketRegion`          | String | Recommended for cross-account         | The AWS Region of the bucket. Defaults to the VAMS deployment Region when omitted.                                                                  |
-| `bucketKmsKeyArn`       | String | Required if the bucket uses SSE-KMS   | The ARN of the AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects.   |
+| Field                   | Type   | Required                            | Description                                                                                                                                           |
+| ----------------------- | ------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucketArn`             | String | Yes                                 | The full Amazon Resource Name (ARN) of the external S3 bucket.                                                                                        |
+| `baseAssetsPrefix`      | String | Yes                                 | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                   |
+| `defaultSyncDatabaseId` | String | Yes                                 | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                           |
+| `bucketAccountId`       | String | Recommended for cross-account       | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies. |
+| `bucketRegion`          | String | Recommended for cross-account       | The AWS Region of the bucket. Defaults to the VAMS deployment Region when omitted.                                                                    |
+| `bucketKmsKeyArn`       | String | Required if the bucket uses SSE-KMS | The ARN of the AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects.    |
 
 :::note[Registering a bucket under multiple prefixes]
 The same `bucketArn` may appear more than once in the `externalAssetBuckets` array — for example to map two databases to two different prefixes within one bucket — **provided the prefixes do not overlap**. Two prefixes overlap when one is a path-prefix of the other (for example, `data/` and `data/sub/`), and the bucket root (`/`) overlaps every other prefix. Overlapping prefixes are rejected because Amazon S3 permits only one notification configuration per bucket and cannot route an object event to an ambiguous prefix.
@@ -263,6 +263,32 @@ The VAMS KMS key policy grants the `s3.amazonaws.com` service principal, but doe
 
 This is not required if VAMS is deployed without a CMK (SSE-managed SNS encryption), or if the external bucket is in the same account as VAMS.
 
+#### 3c. Restricting presigned URLs by network (optional)
+
+VAMS does not apply resource policies to externally imported buckets, so network restrictions on presigned URLs for an external bucket are configured by the bucket owner directly in the bucket policy. The following deny statement restricts presigned (query-string authenticated) requests to a set of allowed IP CIDR ranges and/or Amazon S3 VPC endpoint IDs. It is the same statement VAMS applies to its created asset and auxiliary buckets when `app.assetBuckets.presignedUrlNetworkRestrictions` is configured.
+
+```json
+{
+    "Sid": "DenyPresignedUrlOutsideAllowedNetworks",
+    "Effect": "Deny",
+    "Principal": "*",
+    "Action": "s3:*",
+    "Resource": "arn:aws:s3:::<EXTERNAL_BUCKET_NAME>/*",
+    "Condition": {
+        "StringEquals": { "s3:authType": "REST-QUERY-STRING" },
+        "BoolIfExists": { "aws:ViaAWSService": "false" },
+        "NotIpAddressIfExists": { "aws:SourceIp": ["<ALLOWED_CIDR_1>", "<ALLOWED_CIDR_2>"] },
+        "StringNotEqualsIfExists": { "aws:SourceVpce": ["<ALLOWED_VPCE_ID>"] }
+    }
+}
+```
+
+The `s3:authType` condition limits the statement to presigned requests only — SDK calls use header authentication, so VAMS backend Lambda functions, pipeline containers, and the bucket owner's own tooling are unaffected. `aws:SourceIp` accepts IPv4 and IPv6 CIDR blocks; `aws:SourceVpce` accepts both interface and gateway Amazon S3 VPC endpoint IDs. Restrict on one network dimension: include the `NotIpAddressIfExists` condition when restricting by IP range, or the `StringNotEqualsIfExists` condition when restricting by VPC endpoint, and omit the other. This matches the behavior VAMS enforces for its created buckets.
+
+:::warning[Test before relying on the restriction]
+A misconfigured CIDR list can block all presigned URL access to the bucket, including your own. After applying the statement, verify that a presigned URL generated by VAMS works from an allowed network and is denied from a disallowed one before treating the restriction as active.
+:::
+
 ### Step 4: Configure cross-account IAM (conditional)
 
 VAMS accesses external buckets using the **execution-role credentials of its own Lambda functions and pipeline tasks directly against the bucket** — it does **not** assume a role in Account B. Cross-account access therefore depends on the resource policies in Account B (the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy) and the KMS key policy from [Step 3](#step-3-configure-kms-key-policy-conditional)) granting access to the VAMS account, combined with IAM policies in Account A on the VAMS roles.
@@ -385,16 +411,16 @@ Because VAMS imports external buckets by ARN — which carries no account identi
 
 ## Troubleshooting
 
-| Issue                                                            | Possible cause                                                                                          | Resolution                                                                                                                                                                            |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CDK deployment fails with `Access Denied`                        | Bucket policy not applied before deployment, or scoped too narrowly to exclude CDK custom resource roles. | Apply the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy), grant the VAMS account root, and remove any `aws:PrincipalArn` role-prefix condition, then redeploy. |
-| CDK deployment fails configuring bucket notifications            | The notification handler role lacks `s3:PutBucketNotification`/`s3:GetBucketNotification` in Account B.   | Ensure the [Step 1](#step-1-configure-the-s3-bucket-policy) grant covers these actions (included in `s3:*`) and is not restricted by a principal condition.                          |
-| CDK deployment fails with `baseAssetsPrefix must end in a slash` | The prefix value does not end with `/`.                                                                 | Update the prefix in `config.json` to end with `/`.                                                                                                                                  |
-| CDK deployment fails with `overlapping baseAssetsPrefix`         | The same bucket is registered with prefixes where one contains the other (or the root with any prefix).  | Choose non-overlapping prefixes for each registration of the bucket, or register the bucket once at the root.                                                                        |
-| CDK deployment fails with `inconsistent bucket...` attributes    | The same bucket ARN is registered with differing `bucketAccountId` / `bucketRegion` / `bucketKmsKeyArn`. | Make the cross-account and KMS attributes identical across every entry for that bucket ARN.                                                                                          |
-| Presigned URLs return CORS errors                                | CORS configuration missing or incorrect.                                                                | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain.                                                               |
-| Files uploaded to bucket do not appear in VAMS                   | SNS event notifications not configured, source-account mismatch, or topic KMS access denied.            | Confirm notifications are configured on the bucket and the VAMS CMK admits the external bucket account ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Review AWS CloudTrail logs for access-denied errors. |
-| `KMS.AccessDeniedException` in Lambda logs                       | The external bucket CMK is not granted to the VAMS roles, or the key policy does not grant VAMS access.  | Add the external key grant to the VAMS roles ([Step 4](#step-4-configure-cross-account-iam-conditional)) and the key policy statement from [Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms). |
+| Issue                                                            | Possible cause                                                                                            | Resolution                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CDK deployment fails with `Access Denied`                        | Bucket policy not applied before deployment, or scoped too narrowly to exclude CDK custom resource roles. | Apply the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy), grant the VAMS account root, and remove any `aws:PrincipalArn` role-prefix condition, then redeploy.                                                         |
+| CDK deployment fails configuring bucket notifications            | The notification handler role lacks `s3:PutBucketNotification`/`s3:GetBucketNotification` in Account B.   | Ensure the [Step 1](#step-1-configure-the-s3-bucket-policy) grant covers these actions (included in `s3:*`) and is not restricted by a principal condition.                                                                                 |
+| CDK deployment fails with `baseAssetsPrefix must end in a slash` | The prefix value does not end with `/`.                                                                   | Update the prefix in `config.json` to end with `/`.                                                                                                                                                                                         |
+| CDK deployment fails with `overlapping baseAssetsPrefix`         | The same bucket is registered with prefixes where one contains the other (or the root with any prefix).   | Choose non-overlapping prefixes for each registration of the bucket, or register the bucket once at the root.                                                                                                                               |
+| CDK deployment fails with `inconsistent bucket...` attributes    | The same bucket ARN is registered with differing `bucketAccountId` / `bucketRegion` / `bucketKmsKeyArn`.  | Make the cross-account and KMS attributes identical across every entry for that bucket ARN.                                                                                                                                                 |
+| Presigned URLs return CORS errors                                | CORS configuration missing or incorrect.                                                                  | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain.                                                                                                                      |
+| Files uploaded to bucket do not appear in VAMS                   | SNS event notifications not configured, source-account mismatch, or topic KMS access denied.              | Confirm notifications are configured on the bucket and the VAMS CMK admits the external bucket account ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Review AWS CloudTrail logs for access-denied errors. |
+| `KMS.AccessDeniedException` in Lambda logs                       | The external bucket CMK is not granted to the VAMS roles, or the key policy does not grant VAMS access.   | Add the external key grant to the VAMS roles ([Step 4](#step-4-configure-cross-account-iam-conditional)) and the key policy statement from [Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms).                      |
 
 ## S3 bucket structure and key conventions
 
@@ -492,6 +518,10 @@ The recommended approach for bulk-importing existing assets is to use **init fil
 
 :::info[No data duplication required]
 You do not need to copy or move your 3D models into a separate VAMS bucket. By configuring your existing bucket as an external bucket, VAMS reads files directly from their original location. No data duplication occurs.
+:::
+
+:::note[Archived assets]
+When a new file is placed directly in S3 under an archived asset's prefix, the bucket sync restores the asset record to active state (a record-only unarchive attributed to `SYSTEM_USER`). The asset's previously archived files keep their S3 delete markers — the files present under the prefix define the asset's contents, and older archived files can be restored individually through the file unarchive API.
 :::
 
 ### Prerequisites

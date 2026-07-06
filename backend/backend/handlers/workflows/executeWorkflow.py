@@ -10,6 +10,7 @@ import uuid
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.validators import validate
+from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -52,22 +53,20 @@ try:
 except Exception as e:
     logger.exception("Failed Loading Error Functions")
 
-bucket_name_assetAuxiliary = None
-
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
-    workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_Database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    pipeline_Database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
-    workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
-    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
-    pipeline_execution_input_files_table = os.environ["PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME"]
-    pipeline_execution_input_metadata_table = os.environ["PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME"]
-    pipeline_execution_input_configuration_table = os.environ["PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME"]
-    workflow_execution_inputs_table = os.environ["WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME"]
-    workflow_execution_configuration_table = os.environ["WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME"]
+    workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
+    pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
+    pipeline_execution_input_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_input_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_input_configuration_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     # Real shared workflow SFN log group ARN (same group for every workflow). Recorded
     # on the execution row so per-execution logs can later be pulled (group ARN + the
     # row's workflow_execution_arn). Optional: empty string if logging is not configured.
@@ -76,8 +75,9 @@ try:
     # manifest.systemConfig for optional sub-process registration. Optional: empty if unset.
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
-except:
-    logger.exception("Failed loading environment variables")
+except Exception as e:
+    logger.exception("Failed loading environment variables or resolving resource names")
+    raise e
 
 # Upper bound on candidate input rows inspected by the concurrency guard so a
 # launch never fans out into an unbounded number of describe_execution calls.
@@ -706,9 +706,10 @@ def validate_pipelines(workflow, claims_and_roles):
         allowed = False
         if pipeline_state:
             # Add Casbin Enforcer to check if the current user has permissions to POST the pipeline (Tier 2):
-            pipeline.update({
+            pipeline_state.update({
                 "object__type": "pipeline"
             })
+
             if len(claims_and_roles["tokens"]) > 0:
                 casbin_enforcer = CasbinEnforcer(claims_and_roles)
                 if casbin_enforcer.enforce(pipeline_state, "POST"):

@@ -11,6 +11,8 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
+from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -53,37 +55,32 @@ logs_client = boto3.client('logs')
 dynamodb = boto3.resource('dynamodb')
 
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    workflow_execution_database_v2 = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"]
-    workflow_execution_inputs_table = os.environ["WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME"]
-    pipeline_executions_table = os.environ["PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     # Detail-assembly tables (read-only): per-pipeline input/output records, logs, and the
     # workflow/pipeline definition tables used to cross-fetch human-readable names/descriptions.
-    workflow_execution_configuration_table = os.environ["WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME"]
-    pipeline_execution_input_files_table = os.environ["PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME"]
-    pipeline_execution_input_metadata_table = os.environ["PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME"]
-    pipeline_execution_input_configuration_table = os.environ["PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_files_table = os.environ["PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_metadata_table = os.environ["PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME"]
-    pipeline_execution_output_results_table = os.environ["PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME"]
-    pipeline_execution_logs_table = os.environ["PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME"]
-    workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    pipeline_database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
-    # Optional: asset file version-history table, used to enrich asset-output files with the
-    # authoritative S3 version each execution produced. Absent in older deployments -> the
-    # enrichment is skipped and outputs surface the relative path only.
-    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
-    if not all([asset_storage_table_name, workflow_execution_database_v2,
-                workflow_execution_inputs_table, pipeline_executions_table,
-                workflow_execution_configuration_table, pipeline_execution_input_files_table,
-                pipeline_execution_input_metadata_table, pipeline_execution_input_configuration_table,
-                pipeline_execution_output_files_table, pipeline_execution_output_metadata_table,
-                pipeline_execution_output_results_table, pipeline_execution_logs_table,
-                workflow_database, pipeline_database]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
+    pipeline_execution_input_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_input_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_input_configuration_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
+    pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
+    pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    # Asset file version-history table, used to enrich asset-output files with the
+    # authoritative S3 version each execution produced. Best-effort: unresolvable ->
+    # the enrichment is skipped and outputs surface the relative path only.
+    try:
+        asset_file_version_history_table_name = get_table_name(
+            ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
+    except Exception:
+        asset_file_version_history_table_name = None
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 asset_table = dynamodb.Table(asset_storage_table_name)
@@ -1339,6 +1336,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     DELETE /workflows/executions/{executionId}       -> abort a running execution."""
     global claims_and_roles
     logger.info(event)
+    # Normalize the REST (v1) proxy event before the first requestContext.http /
+    # queryStringParameters access (coerces null params to {} and injects the
+    # v2-style http block the dispatch below reads).
+    normalize_event(event)
     claims_and_roles = request_to_claims(event)
 
     try:

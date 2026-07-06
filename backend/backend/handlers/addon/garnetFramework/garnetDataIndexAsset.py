@@ -20,7 +20,17 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.syncTracking import (
+    SYNC_OBJECT_TYPE_ASSET,
+    SYNC_ACTION_CREATE,
+    SYNC_ACTION_DELETE,
+    SYNC_ACTION_MODIFY,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_SUCCESS,
+    write_outbound_sync_record,
+)
 from common.validators import validate
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
@@ -44,27 +54,78 @@ dynamodb = boto3.resource('dynamodb', config=retry_config)
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetAssetIndexer")
 
-# Load environment variables with error handling
+# System type identifier for outbound sync tracking records.
+SYNC_SYSTEM_TYPE = "garnetFramework"
+
+
+def _record_sync(object_type, action, success, database_id, asset_id=None,
+                 file_path=None, s3_version_id=None, entity_id=None):
+    """Best-effort outbound sync tracking record. Success means the entity was
+    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    write_outbound_sync_record(
+        object_type,
+        database_id,
+        SYNC_SYSTEM_TYPE,
+        garnet_ingestion_queue_url,
+        action,
+        SYNC_STATUS_SUCCESS if success else SYNC_STATUS_FAILED,
+        asset_id=asset_id,
+        file_path=file_path,
+        s3_version_id=s3_version_id,
+        error_message=None if success else "Failed to send entity to Garnet ingestion queue",
+        sync_system_entity_id=entity_id,
+    )
+
+
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_storage_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_storage_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_links_storage_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_storage_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    asset_versions_storage_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset storage table name")
+    asset_storage_table_name = None
+
+try:
+    asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset file metadata table name")
+    asset_file_metadata_storage_table_name = None
+
+try:
+    s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving S3 asset buckets table name")
+    s3_asset_buckets_storage_table_name = None
+
+try:
+    asset_links_storage_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+except Exception as e:
+    logger.exception("Failed resolving asset links v2 table name")
+    asset_links_storage_table_v2_name = None
+
+try:
+    asset_links_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset links metadata table name")
+    asset_links_metadata_storage_table_name = None
+
+try:
+    asset_versions_storage_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset versions table name")
+    asset_versions_storage_table_name = None
+
+try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading Garnet environment variables")
     raise e
 
-# Initialize DynamoDB tables
-asset_storage_table = dynamodb.Table(asset_storage_table_name)
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
-asset_links_table = dynamodb.Table(asset_links_storage_table_v2_name)
-asset_links_metadata_table = dynamodb.Table(asset_links_metadata_storage_table_name)
-asset_versions_table = dynamodb.Table(asset_versions_storage_table_name)
+asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
+asset_links_table = dynamodb.Table(asset_links_storage_table_v2_name) if asset_links_storage_table_v2_name else None
+asset_links_metadata_table = dynamodb.Table(asset_links_metadata_storage_table_name) if asset_links_metadata_storage_table_name else None
+asset_versions_table = dynamodb.Table(asset_versions_storage_table_name) if asset_versions_storage_table_name else None
 
 #######################
 # Data Retrieval Functions - Asset Links
@@ -881,6 +942,8 @@ def handle_asset_stream(event_record: Dict[str, Any]) -> bool:
                 logger.info(f"Successfully sent asset deletion to Garnet: {database_id}/{asset_id}")
             else:
                 logger.error(f"Failed to send asset deletion to Garnet: {database_id}/{asset_id}")
+            _record_sync(SYNC_OBJECT_TYPE_ASSET, SYNC_ACTION_DELETE, success,
+                         database_id, asset_id=asset_id, entity_id=ngsi_ld_entity["id"])
             return success
         
         # For INSERT/MODIFY events, use NewImage
@@ -937,6 +1000,10 @@ def handle_asset_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent asset to Garnet: {database_id}/{asset_id}")
         else:
             logger.error(f"Failed to send asset to Garnet: {database_id}/{asset_id}")
+        _record_sync(SYNC_OBJECT_TYPE_ASSET,
+                     SYNC_ACTION_CREATE if event_name == 'INSERT' else SYNC_ACTION_MODIFY,
+                     success, database_id, asset_id=asset_id,
+                     entity_id=ngsi_ld_entity["id"])
         
         # Also re-index all asset links related to this asset
         # This ensures asset link entities stay in sync when asset properties change
@@ -1048,6 +1115,8 @@ def handle_asset_metadata_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent asset to Garnet after metadata change: {database_id}/{asset_id}")
         else:
             logger.error(f"Failed to send asset to Garnet after metadata change: {database_id}/{asset_id}")
+        _record_sync(SYNC_OBJECT_TYPE_ASSET, SYNC_ACTION_MODIFY, success,
+                     database_id, asset_id=asset_id, entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:

@@ -79,6 +79,7 @@ from models.common import (
     VAMSGeneralErrorResponse
 )
 from models.yourDomain import YourRequestModel
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Configure AWS clients with retry configuration
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -89,7 +90,7 @@ logger = safeLogger(service_name="YourServiceName")
 claims_and_roles = {}
 
 try:
-    your_table_name = os.environ["YOUR_STORAGE_TABLE_NAME"]
+    your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -97,8 +98,8 @@ except Exception as e:
 your_table = dynamodb.Table(your_table_name)
 ```
 
-:::note[Environment Variable Loading]
-All environment variables must be loaded at module level inside a `try/except` block. Use `os.environ["KEY"]` for required variables and `os.environ.get("KEY")` for optional ones. Never load environment variables inside handler functions.
+:::note[Resource Name Resolution]
+DynamoDB table, S3 bucket, and audit log group names are resolved at module level inside a `try/except` block through `common.resourceNames` (`get_table_name`, `get_bucket_name`, `get_log_group_name` with a `ResourceKeys` constant). The resolver checks a legacy environment-variable override first, then a cached batched AWS Systems Manager Parameter Store lookup under the deployment's `VAMS_RESOURCE_PARAM_PREFIX`. Non-resource configuration (function names, queue URLs, feature flags) still comes from `os.environ` at module level. Never resolve names inside handler functions.
 :::
 
 ### 2. Lambda Handler Entry Point
@@ -315,8 +316,10 @@ request = parse(body, model=CreateItemRequestModel)
 
 ```python
 # Module-level: resource API for high-level operations
+from common.resourceNames import ResourceKeys, get_table_name
+
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-your_table = dynamodb.Table(os.environ["YOUR_STORAGE_TABLE_NAME"])
+your_table = dynamodb.Table(get_table_name(ResourceKeys.YOUR_STORAGE_TABLE))
 
 # Module-level: client API for low-level operations
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
@@ -584,6 +587,7 @@ from models.common import (
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse
 )
+from common.resourceNames import ResourceKeys, get_table_name
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -592,7 +596,7 @@ logger = safeLogger(service_name="CHANGE_ME")
 claims_and_roles = {}
 
 try:
-    table_name = os.environ["CHANGE_ME_STORAGE_TABLE_NAME"]
+    table_name = get_table_name(ResourceKeys.CHANGE_ME_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e

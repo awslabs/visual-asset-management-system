@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import boto3
-import os
 import time
 import json
 from boto3.dynamodb.types import TypeDeserializer
@@ -14,8 +13,14 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_authorization, log_authorization_api
 from handlers.auth import request_to_claims
 from datetime import datetime, timedelta
-from common.constants import PERMISSION_CONSTRAINT_FIELDS, PERMISSION_CONSTRAINT_POLICY
+from common.constants import (
+    PERMISSION_CONSTRAINT_FIELDS,
+    PERMISSION_CONSTRAINT_POLICY,
+    ALWAYS_ALLOWED_OBJECT_KEYS,
+    get_constraint_fields_for_object_type,
+)
 from locked_dict import locked_dict
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Duration to refresh cache for next invocation - this can be tweaked for performance/consistency needs
 #
@@ -175,12 +180,12 @@ class CasbinEnforcerService:
         self._enforcer = None
 
         try:
-            self._user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-            self._roles_table_name = os.environ["ROLES_TABLE_NAME"]
-            self._constraints_table_name = os.environ.get("CONSTRAINTS_TABLE_NAME") 
-        except KeyError as ex:
-            logger.exception("Failed to find environment variables")
-            raise Exception("Failed to initialize Casbin Enforcer as required environment variables are not defined")
+            self._user_roles_table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
+            self._roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
+            self._constraints_table_name = get_table_name(ResourceKeys.CONSTRAINTS_STORAGE_TABLE)
+        except Exception as ex:
+            logger.exception("Failed to resolve resource names")
+            raise Exception("Failed to initialize Casbin Enforcer as required resource names could not be resolved")
 
         self._model_text = PERMISSION_CONSTRAINT_POLICY
         # Routines below have exception handling already covered
@@ -404,12 +409,19 @@ class CasbinEnforcerService:
         """
         return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
-    def _generate_criteria_object_rules(self, policyCriteria):
+    def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
         obj_rule = []
+        valid_fields = get_constraint_fields_for_object_type(object_type) if object_type else None
         for criterion in policyCriteria:
             # Skip deprecated or unknown fields that are not in PERMISSION_CONSTRAINT_FIELDS
             if criterion['field'] not in PERMISSION_CONSTRAINT_FIELDS:
                 logger.info(f"Skipping deprecated/unknown constraint field: {criterion['field']}")
+                continue
+
+            # Skip fields that are out of scope for this object type (defense-in-depth
+            # for constraints stored before the field matrix was enforced).
+            if valid_fields is not None and criterion['field'] not in valid_fields:
+                logger.info(f"Skipping out-of-matrix field for objectType {object_type}: {criterion['field']}")
                 continue
 
             # Escape the value so it cannot break out of its string literal and inject
@@ -540,9 +552,13 @@ class CasbinEnforcerService:
                 obj_rule_And = []
                 obj_rule_Or = []
                 if "criteriaAnd" in policy:
-                    obj_rule_And = self._generate_criteria_object_rules(policy["criteriaAnd"])
+                    obj_rule_And = self._generate_criteria_object_rules(
+                        policy["criteriaAnd"], object_type=policy.get("objectType")
+                    )
                 if "criteriaOr" in policy:
-                    obj_rule_Or = self._generate_criteria_object_rules(policy["criteriaOr"])
+                    obj_rule_Or = self._generate_criteria_object_rules(
+                        policy["criteriaOr"], object_type=policy.get("objectType")
+                    )
 
                 # Combine AND and OR criteria into a single rule expression:
                 # all AND criteria must be true AND (when present) at least one
@@ -607,6 +623,14 @@ class CasbinEnforcerService:
         _enforcer = FastEnforcer(model=new_model, adapter=new_string_adapter, enable_log=True)
         return _enforcer
 
+    def _scrub_object_fields(self, obj):
+        """Keep only the fields valid for the object's object__type (no-op for unknown types)."""
+        valid_fields = get_constraint_fields_for_object_type(obj.get("object__type"))
+        if not valid_fields:
+            return obj
+        allowed = set(valid_fields) | ALWAYS_ALLOWED_OBJECT_KEYS
+        return {k: v for k, v in obj.items() if k in allowed}
+
     def enforce(self, obj, act):
         """
         Enforce authorization (audit logging handled by wrapper).
@@ -627,6 +651,10 @@ class CasbinEnforcerService:
         if self._enforcer is None:
             logger.warning(f"Enforcer is None for user {self._user_id}, denying access")
             return False
+
+        # Ignore fields out of scope for this object's type so deprecated or foreign
+        # fields cannot influence a match. Unknown/absent types are left unchanged.
+        obj = self._scrub_object_fields(obj)
 
         enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
         # Update with obj, but convert any None values to empty strings to prevent regex errors

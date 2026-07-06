@@ -22,6 +22,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     suppressCdkNagLambda,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../../../helper/security";
 
 export interface SamlSettings {
@@ -64,20 +65,14 @@ export class CognitoWebNativeConstructStack extends Construct {
             layers: [props.lambdaCommonBaseLayer],
             timeout: Duration.minutes(2),
             memorySize: Config.LAMBDA_MEMORY_SIZE,
-            environment: {
-                AUTH_TABLE_NAME: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
-                CONSTRAINTS_TABLE_NAME:
-                    props.storageResources.dynamo.constraintsStorageTable.tableName,
-                USER_ROLES_TABLE_NAME:
-                    props.storageResources.dynamo.userRolesStorageTable.tableName,
-                ROLES_TABLE_NAME: props.storageResources.dynamo.rolesStorageTable.tableName,
-            },
+            environment: {},
         });
         props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
         props.storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
         props.storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
         props.storageResources.dynamo.rolesStorageTable.grantReadData(fun);
         kmsKeyLambdaPermissionAddToResourcePolicy(fun, props.storageResources.encryption.kmsKey);
+        setupSecurityAndLoggingEnvironmentAndPermissions(fun, props.storageResources);
         globalLambdaEnvironmentsAndPermissions(fun, props.config);
         suppressCdkNagLambda(fun);
 
@@ -193,7 +188,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             cognitoIdentityProviders: [
                 {
                     clientId: userPoolWebClient.userPoolClientId,
-                    providerName: userPool.userPoolProviderName,
+                    providerName: `${Service("COGNITO_IDP").Endpoint}/${userPool.userPoolId}`,
                 },
             ],
             allowClassicFlow: true,

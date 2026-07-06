@@ -26,10 +26,10 @@ from backend.backend.handlers.assets import uploadFile  # noqa: F401
 def test_build_workflow_change_metadata_full():
     from backend.backend.handlers.assets import uploadFile
     md = uploadFile.build_workflow_change_metadata(
-        change_user_id="SYSTEM", workflow_id="wf-1", execution_id="exec-1"
+        change_user_id="SYSTEM_USER", workflow_id="wf-1", execution_id="exec-1"
     )
     assert md[VAMS_CHANGE_SOURCE_METADATA_KEY] == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
-    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM"
+    assert md[VAMS_CHANGE_USER_ID_METADATA_KEY] == "SYSTEM_USER"
     assert md[VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY] == "wf-1"
     assert md[VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY] == "exec-1"
 

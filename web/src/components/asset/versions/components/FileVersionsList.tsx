@@ -257,7 +257,7 @@ export const FileVersionsList: React.FC = () => {
                 databaseId: databaseId!,
                 key: file.relativeKey,
                 versionId: file.versionId,
-                assetVersionId: selectedVersion?.Version || undefined,
+                assetVersionId: (selectedVersion?.Version || undefined) as any,
                 downloadType: "assetFile",
             });
 
@@ -612,7 +612,7 @@ export const FileVersionsList: React.FC = () => {
                             </div>
                             <div>
                                 <strong>Created by:</strong>{" "}
-                                {selectedVersionDetails?.createdBy || "System"}
+                                {selectedVersionDetails?.createdBy || "SYSTEM_USER"}
                             </div>
                             <div>
                                 <strong>Created on:</strong>{" "}

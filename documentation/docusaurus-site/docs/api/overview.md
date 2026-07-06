@@ -6,7 +6,7 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway V2 HTTP API. The base URL is determined by your deployment and follows this format:
+All API endpoints are served through an Amazon API Gateway REST API. The base URL is determined by your deployment and follows this format:
 
 ```
 https://{api-id}.execute-api.{region}.amazonaws.com
@@ -53,7 +53,7 @@ Content-Type: application/json
 
 ## Common Response Format
 
-All API responses follow the API Gateway V2 proxy response format:
+All API responses follow the API Gateway proxy response format:
 
 ```json
 {
@@ -141,7 +141,7 @@ The API Gateway enforces rate limits to protect the system from excessive traffi
 | `globalRateLimit`  | 50 requests/second | Steady-state request rate across all clients.    |
 | `globalBurstLimit` | 100 requests       | Maximum burst capacity for short traffic spikes. |
 
-These values are configurable at deployment time through the `app.api.globalRateLimit` and `app.api.globalBurstLimit` configuration settings.
+These values are configurable at deployment time through the `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit` configuration settings.
 
 When rate limits are exceeded, the API returns an HTTP `429 Too Many Requests` response.
 

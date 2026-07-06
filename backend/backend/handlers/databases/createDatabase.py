@@ -1,7 +1,6 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 import datetime
@@ -22,10 +21,11 @@ logger = safeLogger(service_name="CreateDatabase")
 
 # Load environment variables
 try:
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 #######################

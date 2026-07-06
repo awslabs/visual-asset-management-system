@@ -47,7 +47,11 @@
     },
     "overrides": {
         "serialize-javascript": ">=7.0.3",
-        "dompurify": "^3.4.10",
-        "uuid": "^11.1.1"
+        "dompurify": "^3.4.11",
+        "uuid": "^11.1.1",
+        "http-proxy-middleware": "^2.0.10",
+        "gray-matter": {
+            "js-yaml": "^3.15.0"
+        }
     }
 }

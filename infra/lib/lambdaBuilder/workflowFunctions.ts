@@ -59,11 +59,7 @@ export function buildWorkflowService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
@@ -111,40 +107,10 @@ export function buildExecutionServiceFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
-            WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
-            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
-            // Detail-assembly tables (read-only): per-pipeline input/output records, logs,
-            // and the workflow/pipeline definition tables for name/description cross-fetch.
-            WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableName,
-            PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionInputFilesStorageTable.tableName,
-            PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.tableName,
-            PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.tableName,
-            PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            // Asset file version-history table: joins execution output files to the authoritative
-            // S3 asset file version each produced, via the WorkflowExecutionIdIndex GSI.
-            ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
-            // Shared workflow SFN log group; used to pull error logs for executions that
-            // ended in a non-success terminal status (e.g. a direct SFN abort) and for the
-            // full-search logs API.
+            // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The shared workflow
+            // SFN log group ARN is not an SSM resource-name parameter: used to pull error
+            // logs for executions that ended in a non-success terminal status (e.g. a direct
+            // SFN abort) and for the full-search logs API.
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });
@@ -228,7 +194,6 @@ export function buildCreateWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
             // Interim pipeline-tracking + error-handler lambda names, embedded into the
@@ -299,27 +264,8 @@ export function buildExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
+            // Table/bucket names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
-            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
-            PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionInputFilesStorageTable.tableName,
-            PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.tableName,
-            PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.tableName,
-            WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
-            WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
             // Orchestration bus ARN + event source prefix written into each pipeline's
             // manifest.systemConfig so a pipeline can optionally register sub-process ARNs.
@@ -392,11 +338,6 @@ export function buildSqsAutoExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME: executeWorkflowFunction.functionName,
         },
     });
@@ -452,25 +393,9 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
+            // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
-            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.tableName,
-            PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });

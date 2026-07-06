@@ -49,6 +49,8 @@ Tier 2 determines whether the user's role is allowed to perform the specific ope
 
 A user is identified by their username from the authentication provider (Amazon Cognito or an external OAuth provider). Users are authenticated before any authorization logic runs.
 
+VAMS also defines a built-in system user with the reserved user ID `SYSTEM_USER`. This identity represents internal system processes — such as pipeline workflow executions, bucket-sync ingestion, and authorized Lambda cross-calls — that act without an interactive user context. `SYSTEM_USER` is created at deployment and assigned to the `admin` role so that system processes pass authorization checks, and it appears as the acting user (for example, in `createdBy` and `changeUserId` fields) on records created by those processes. It is not a login account; access to the internal invocation paths that assume this identity is controlled through AWS IAM permissions on direct Lambda invocation.
+
 ### Roles
 
 A role is a named permission group. Users are assigned to roles, and roles have constraints associated with them. A user can belong to multiple roles, and a role can have multiple constraints.
@@ -61,6 +63,8 @@ A role is a named permission group. Users are assigned to roles, and roles have 
 
 :::note[MFA-aware roles]
 Roles can be configured with `mfaRequired: true`. When MFA is required, the role's constraints are only active when the user's session includes a valid MFA claim. If MFA is not present, the role is treated as if it does not exist for that session.
+
+MFA enforcement requires the authorization Lambda functions to reach Amazon Cognito. VAMS creates `cognito-idp` and `cognito-identity` VPC interface endpoints when Cognito is enabled, so in-VPC Lambda functions (including in isolated subnets) can reach Amazon Cognito and MFA-aware roles are enforced in VPC deployments. The check is disabled only when Lambda functions run in the VPC in the AWS GovCloud (US) or AWS European Sovereign Cloud partition, where Amazon Cognito PrivateLink is not available, in which case `mfaRequired` has no effect. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for the exact conditions.
 :::
 
 ### Constraints
@@ -110,6 +114,8 @@ Each object type supports specific constraint fields that can be used in criteri
 | `tagType`        | `tagTypeName`                                                       | Tag type CRUD operations.                           |
 | `role`           | `roleName`                                                          | Role management.                                    |
 | `userRole`       | `roleName`, `userId`                                                | User-to-role assignment management.                 |
+
+This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
 
 ## Constraint criteria operators
 
@@ -328,7 +334,7 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | `/asset-links`                                            | POST                   | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
 | `/asset-links/single/\{assetLinkId\}`                     | GET                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
 | `/asset-links/\{assetLinkId\}`                            | PUT                    | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
-| `/asset-links/\{relationId\}`                             | DELETE                 | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
+| `/asset-links/\{assetLinkId\}`                            | DELETE                 | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
 | `/asset-links/\{assetLinkId\}/metadata`                   | GET, POST, PUT, DELETE | `asset` (both from and to assets) | `assetId`, `databaseId`, `assetName`, `assetType`, `tags` |
 | `/database/\{databaseId\}/assets/\{assetId\}/asset-links` | GET                    | `asset`                           | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
