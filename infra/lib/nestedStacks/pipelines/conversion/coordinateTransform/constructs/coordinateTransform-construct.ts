@@ -256,6 +256,9 @@ export class CoordinateTransformConstruct extends Construct {
             resultPath: "$",
         }).next(pipelineEndTask);
 
+        // No heartbeatTimeout: the container reports only terminal success/failure on the
+        // internal token (it sends no periodic heartbeats), so a heartbeat window would fail
+        // any transform outlasting it. The 4-hour taskTimeout bounds the wait instead.
         const coordTransformBatchJob = new tasks.LambdaInvoke(this, "CoordTransformBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
@@ -266,7 +269,6 @@ export class CoordinateTransformConstruct extends Construct {
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(4)),
-            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.minutes(30)),
         })
             .addCatch(handleBatchError, {
                 resultPath: "$.error",

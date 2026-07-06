@@ -24,6 +24,7 @@ import {
     grantReadWritePermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     suppressCdkNagErrorsByGrantReadWrite,
+    suppressCdkNagLambda,
 } from "../../../../../helper/security";
 import path = require("path");
 
@@ -67,6 +68,7 @@ export function buildConstructPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -125,6 +127,7 @@ export function buildOpenPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -177,6 +180,7 @@ export function buildPipelineEndFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -229,6 +233,7 @@ export function buildVamsExecuteCoordinateTransformFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -290,6 +295,7 @@ export function buildExecuteBatchJobFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }

@@ -176,6 +176,7 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 | RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2                                | EKS cluster                     |
 | ModelOps (`useModelOps`)                             | Yes                        | Yes            | 2                                | Batch compute                   |
 | Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 2                                | Batch compute                   |
+| Coordinate Transform (`useConversionCoordinateTransform`) | Yes                   | Yes            | 2                                | Batch compute                   |
 | Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
 | NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
 | NVIDIA Gr00t (`useNvidiaGr00t`)                      | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
@@ -427,6 +428,17 @@ Extracts metadata from CAD and mesh file formats. Does not require a VPC.
 | `app.pipelines.useConversionCadMeshMetadataExtraction.enabled`                             | boolean | `false` | Enables the CAD/mesh metadata extraction pipeline.                                 |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                            |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported file types. |
+
+### Coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
+
+Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems using PDAL and pyproj. **Requires VPC** (AWS Batch on Fargate).
+
+| Field                                                                                | Type    | Default | Description                                                                        |
+| ------------------------------------------------------------------------------------ | ------- | ------- | ---------------------------------------------------------------------------------- |
+| `app.pipelines.useConversionCoordinateTransform.enabled`                             | boolean | `false` | Enables the coordinate transform pipeline.                                         |
+| `app.pipelines.useConversionCoordinateTransform.useCodeBuild`                        | boolean | `false` | Builds the pipeline container with AWS CodeBuild instead of local Docker.          |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                            |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Automatically triggers the pipeline on file uploads matching supported file types. |
 
 ### Point cloud Potree viewer (`app.pipelines.usePreviewPcPotreeViewer`)
 
