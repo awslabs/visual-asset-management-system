@@ -148,10 +148,15 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         //Generate CSP
         //Generate Auth Domain and Global CSP policy
+        //Cognito hosted UI domain suffix is partition-aware (commercial-only; config
+        //validation rejects SAML in partitions without hosted UI support)
+        const cognitoHostedUiUrl = props.config.app.authProvider.useCognito.useSaml
+            ? `https://${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : "";
         let authDomain = "";
 
         if (props.config.app.authProvider.useCognito.useSaml) {
-            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+            authDomain = cognitoHostedUiUrl;
         } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
             authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
         }
@@ -177,9 +182,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
                 csp: cspPolicy,
-                cognitoDomain: props.config.app.authProvider.useCognito.useSaml
-                    ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
-                    : "",
+                cognitoDomain: cognitoHostedUiUrl,
             });
 
             // Bind API Gateway to /api route of cloudfront
@@ -217,13 +220,19 @@ export class StaticWebBuilderNestedStack extends NestedStack {
              * When using federated identities, this list of callback urls must include
              * the set of names that VAMSAuth.tsx will resolve when it calls
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
+             * With a custom domain enabled, users browse at the custom domain host, so it
+             * must be registered alongside the raw distribution name.
              */
             const callbackUrls = [
-                "http://localhost:3000",
-                "http://localhost:3000/",
+                "http://localhost:3001",
+                "http://localhost:3001/",
                 `https://${website.cloudFrontDistribution.domainName}/`,
                 `https://${website.cloudFrontDistribution.domainName}`,
             ];
+            if (props.config.app.useCloudFront.customDomain.enabled) {
+                const customDomainHost = props.config.app.useCloudFront.customDomain.domainHost;
+                callbackUrls.push(`https://${customDomainHost}`, `https://${customDomainHost}/`);
+            }
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
@@ -316,8 +325,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
              */
             const callbackUrls = [
-                "http://localhost:3000",
-                "http://localhost:3000/",
+                "http://localhost:3001",
+                "http://localhost:3001/",
                 `${website.endPointURL}`,
                 `${website.endPointURL}/`,
             ];

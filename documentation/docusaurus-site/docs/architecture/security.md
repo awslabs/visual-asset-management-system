@@ -26,6 +26,10 @@ The default authentication provider. VAMS deploys an Amazon Cognito User Pool wi
 
 SAML authentication enables federated access to VAMS through your organization's identity provider (such as Auth0, Active Directory, or Google Workspace). When enabled, Amazon Cognito acts as a SAML service provider.
 
+:::warning[Commercial partition only]
+SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS GovCloud (US) or the AWS European Sovereign Cloud. Configuration validation rejects `useSaml` in those partitions. Use the external OAuth identity provider option for federated sign-in there.
+:::
+
 **Configuration steps:**
 
 1. Set `authProvider.useCognito.useSaml` to `true` in `infra/config/config.json`.

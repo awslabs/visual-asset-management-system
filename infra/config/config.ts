@@ -1309,6 +1309,21 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //SAML federation requires the Cognito hosted UI, which is only available in the
+    //commercial partition (not GovCloud, EU Sovereign Cloud, or ISO).
+    if (config.app.authProvider.useCognito.useSaml) {
+        if (!config.app.authProvider.useCognito.enabled) {
+            throw new Error(
+                "Configuration Error: useCognito.useSaml requires useCognito.enabled to be true!"
+            );
+        }
+        if (config.env.partition !== "aws") {
+            throw new Error(
+                `Configuration Error: useCognito.useSaml is not supported in the '${config.env.partition}' partition. The Amazon Cognito hosted UI used for SAML federation is unavailable there.`
+            );
+        }
+    }
+
     if (
         config.app.authProvider.useExternalOAuthIdp.enabled &&
         (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||

@@ -350,10 +350,11 @@ Use standard Markdown or Docusaurus components instead of raw HTML.
 
 ### **Rule 12: Update Steering Files When Documentation Standards Change**
 
-When documentation standards, patterns, or structure change, update both locations:
+When documentation standards, patterns, or structure change, update all affected locations:
 
 1. `documentation/CLAUDE.md` -- documentation steering document
 2. `.kiro/steering/DOCUMENTATION_WORKFLOW.md` -- this file
+3. The documentation-related Claude Code skills `.claude/commands/update-docs.md` and `.claude/commands/verify-docs.md`, which restate the writing style and source-to-doc mappings (see root `CLAUDE.md` Rule 12)
 
 ---
 

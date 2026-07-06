@@ -948,6 +948,7 @@ When making changes that affect development standards, architecture patterns, or
 2. Update the `.kiro/steering/` version of this file
 3. If the change affects frontend patterns, also update `WEB_DEVELOPMENT_WORKFLOW.md` and `WEB_FRONTEND.md`
 4. If the change affects documentation standards, also update `DOCUMENTATION_WORKFLOW.md`
+5. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping) — a stale skill actively scaffolds outdated code
 
 ### **Rule 10: Tests MUST Follow Comprehensive Patterns**
 

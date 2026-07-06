@@ -427,6 +427,22 @@ When you make structural changes to the codebase, **you must update the relevant
 | `tools/VamsCLI/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                                    |
 | `documentation/CLAUDE.md` | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                                      |
 
+### **Rule 12: Keep Claude Code Skills in Sync with Steering Documents**
+
+The skills in `.claude/commands/` scaffold work by restating steering-document rules, patterns, checklists, and file paths. When a steering document (`CLAUDE.md` files or `.kiro/steering/` mirrors) changes a rule, pattern, workflow, or file path that a skill references, **update the affected skill(s) in the same change** — and vice versa, a workflow improvement made in a skill must be reflected back into the relevant steering document. A stale skill actively scaffolds outdated code.
+
+**Which skills depend on which steering content:**
+
+| Skill                          | Sensitive to changes in                                                                                                                                                                   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/add-api-endpoint`            | Root `CLAUDE.md` Pattern 1 (endpoint checklist), `backend/CLAUDE.md` (handler/model patterns, apiRoutes rules), `infra/CLAUDE.md` (lambda builder, route registry, security helper calls) |
+| `/add-pipeline`                | Root `CLAUDE.md` pipeline sections (output paths, assetId threading, lambda directory requirements), `infra/CLAUDE.md` (pipeline stack pattern, VPC builder blocks, config rules)         |
+| `/generate-permissions`        | Permission model docs, `documentation/permissionsTemplates/`, constraint fields in `backend/CLAUDE.md`                                                                                    |
+| `/deploy-check`                | Root `CLAUDE.md` development commands (lint/prettier from repo root), config validation rules                                                                                             |
+| `/update-docs`, `/verify-docs` | `documentation/CLAUDE.md` (writing style, source-to-doc mappings, dual API doc sources)                                                                                                   |
+| `/update-changelog`            | Root `CLAUDE.md` git workflow / changelog format                                                                                                                                          |
+| `/refresh-steering-docs`       | Root `CLAUDE.md` Rules 11–12 (what must stay in sync)                                                                                                                                     |
+
 ---
 
 ## 🧰 **Development Commands**

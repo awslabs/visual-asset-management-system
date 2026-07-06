@@ -196,6 +196,11 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     } else {
         // Cognito mode: standard Amplify v6 configuration
         // identityPoolId intentionally omitted — VAMS uses Bearer token auth only
+        // Amplify's oauth.domain expects a bare hostname (it prepends https:// itself),
+        // so strip any scheme the config may carry
+        const cognitoAuthDomain = (
+            config.cognitoFederatedConfig?.customCognitoAuthDomain || ""
+        ).replace(/^https?:\/\//, "");
         Amplify.configure({
             Auth: {
                 Cognito: {
@@ -203,7 +208,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     userPoolClientId: config.cognitoAppClientId,
                     loginWith: {
                         oauth: {
-                            domain: config.cognitoFederatedConfig?.customCognitoAuthDomain || "",
+                            domain: cognitoAuthDomain,
                             scopes: ["openid", "email", "profile"],
                             redirectSignIn: [window.location.origin],
                             redirectSignOut: [window.location.origin],

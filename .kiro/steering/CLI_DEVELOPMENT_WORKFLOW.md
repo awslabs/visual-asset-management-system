@@ -954,6 +954,7 @@ When updating this workflow document, also update the corresponding files:
 1. Update `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`
 2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
 3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, DOCUMENTATION_WORKFLOW.md)
+4. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping)
 
 #### **Workflow Maintenance Responsibility:**
 

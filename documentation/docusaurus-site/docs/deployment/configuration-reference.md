@@ -169,18 +169,19 @@ The following table shows which VPC resources are created based on enabled featu
 
 VAMS provisions every subnet type across a fixed Availability Zone count (a baseline of 2) so that toggling individual features does not add or remove subnets between deployments. Amazon OpenSearch Service (Provisioned) sets the count from `availabilityZoneCount` (2 or 3).
 
-| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs                          | Notes                           |
-| ---------------------------------------------------- | -------------------------- | -------------- | -------------------------------- | ------------------------------- |
-| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2                                | Public subnets for ALB          |
-| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2                                | Batch compute                   |
-| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2                                | EKS cluster                     |
-| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 2                                | Batch compute                   |
-| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 2                                | Batch compute                   |
-| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
-| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
-| NVIDIA Gr00t (`useNvidiaGr00t`)                      | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
-| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | `availabilityZoneCount` (2 or 3) | Zone-aware Multi-AZ domain      |
-| All other features                                   | Isolated only              | No             | 2                                | Lambda VPC endpoints            |
+| Feature / Pipeline                                        | Private Subnets            | Public Subnets | Min AZs                          | Notes                           |
+| --------------------------------------------------------- | -------------------------- | -------------- | -------------------------------- | ------------------------------- |
+| ALB (`useAlb.enabled`)                                    | Yes (if `usePublicSubnet`) | Yes            | 2                                | Public subnets for ALB          |
+| RapidPipeline ECS (`useRapidPipeline.useEcs`)             | Yes                        | Yes            | 2                                | Batch compute                   |
+| RapidPipeline EKS (`useRapidPipeline.useEks`)             | Yes                        | Yes            | 2                                | EKS cluster                     |
+| ModelOps (`useModelOps`)                                  | Yes                        | Yes            | 2                                | Batch compute                   |
+| Gaussian Splatting (`useSplatToolbox`)                    | Yes                        | Yes            | 2                                | Batch compute                   |
+| Coordinate Transform (`useConversionCoordinateTransform`) | Yes                        | Yes            | 2                                | Batch compute                   |
+| Isaac Lab Training (`useIsaacLabTraining`)                | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
+| NVIDIA Cosmos (`useNvidiaCosmos`)                         | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| NVIDIA Gr00t (`useNvidiaGr00t`)                           | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| OpenSearch Provisioned (`openSearch.useProvisioned`)      | No                         | No             | `availabilityZoneCount` (2 or 3) | Zone-aware Multi-AZ domain      |
+| All other features                                        | Isolated only              | No             | 2                                | Lambda VPC endpoints            |
 
 #### VPC Interface Endpoints
 
@@ -427,6 +428,17 @@ Extracts metadata from CAD and mesh file formats. Does not require a VPC.
 | `app.pipelines.useConversionCadMeshMetadataExtraction.enabled`                             | boolean | `false` | Enables the CAD/mesh metadata extraction pipeline.                                 |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                            |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported file types. |
+
+### Point cloud coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
+
+Reprojects E57, LAS, LAZ, and PLY point cloud files between coordinate reference systems using PDAL and pyproj. Runs on AWS Batch with AWS Fargate compute. **Requires VPC.** See the [Coordinate Transform pipeline](../pipelines/coordinate-transform.md) page for input parameters and per-asset metadata overrides.
+
+| Field                                                                                | Type    | Default | Description                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useConversionCoordinateTransform.enabled`                             | boolean | `false` | Enables the point cloud coordinate transform pipeline.                                                                                                                                 |
+| `app.pipelines.useConversionCoordinateTransform.useCodeBuild`                        | boolean | `false` | Builds the container image with AWS CodeBuild and Amazon ECR during deployment instead of a local Docker build. The CodeBuild project runs outside the VPC to pull public base images. |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                                                              |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Automatically triggers the pipeline when supported point cloud files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.                                                      |
 
 ### Point cloud Potree viewer (`app.pipelines.usePreviewPcPotreeViewer`)
 

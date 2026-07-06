@@ -16,6 +16,7 @@ For each CLAUDE.md file, update these specific sections:
 4. **Version numbers** -- Check if VAMS_VERSION, CLI version, or dependency versions have changed.
 5. **Feature switch enums** -- Check if new VAMS_APP_FEATURES values have been added.
 6. **Skills table** (root CLAUDE.md only) -- Verify all `.claude/commands/*.md` files are listed.
+7. **Skills content** -- Spot-check each `.claude/commands/*.md` skill against the current CLAUDE.md rules and patterns it scaffolds or references (e.g., the endpoint checklist in `add-api-endpoint.md`, the pipeline checklist in `add-pipeline.md`, source-to-doc mappings in `update-docs.md`/`verify-docs.md`). Flag or update skills whose steps, file paths, code templates, or checklists have drifted from the steering documents (see root `CLAUDE.md` Rule 12).
 
 ### What NOT to Change
 
@@ -36,6 +37,8 @@ For each CLAUDE.md file, update these specific sections:
 4. **`infra/CLAUDE.md`**: Scan `infra/lib/nestedStacks/` for nested stacks, `infra/lib/lambdaBuilder/` for lambda builders, and `infra/lib/nestedStacks/pipelines/` for pipeline types. Update the directory tree, nested stack table, and key files table.
 
 5. **`tools/VamsCLI/CLAUDE.md`**: Scan `tools/VamsCLI/vamscli/commands/` for command files and `tools/VamsCLI/vamscli/utils/` for utilities. Update the directory tree, command list, and key files table.
+
+6. **Kiro steering mirrors (`.kiro/steering/`)**: If any factual updates above changed a rule, pattern, or convention (not just a file list), make the equivalent change in the corresponding Kiro steering document per the mapping in root `CLAUDE.md` Rule 11.
 
 ### Verification
 

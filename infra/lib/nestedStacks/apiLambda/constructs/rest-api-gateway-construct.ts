@@ -127,12 +127,12 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         });
         authorizerFn.grantInvoke(authInvokeRole);
 
-        let authDomain = "";
-        if (config.app.authProvider.useCognito.useSaml) {
-            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${config.env.region}.amazoncognito.com`;
-        } else if (config.app.authProvider.useExternalOAuthIdp.enabled) {
-            authDomain = config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
-        }
+        // Cognito hosted UI domain for federated (SAML) sign-in. Amplify's oauth.domain
+        // expects a bare hostname (it prepends https:// itself), and the suffix is
+        // partition-specific (GovCloud uses auth-fips; EU Sovereign uses its own TLD).
+        const cognitoHostedUiDomain = config.app.authProvider.useCognito.useSaml
+            ? `${samlSettings.cognitoDomainPrefix}.${Service("COGNITO_HOSTED_UI").Endpoint}`
+            : "";
         const amplifyConfig = new AmplifyConfigLambdaConstruct(this, "AmplifyConfig", {
             config,
             authResources: props.authResources,
@@ -141,7 +141,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             ...(config.app.authProvider.useCognito.useSaml
                 ? {
                       cognitoFederatedConfig: {
-                          customCognitoAuthDomain: authDomain,
+                          customCognitoAuthDomain: cognitoHostedUiDomain,
                           customFederatedIdentityProviderName: samlSettings.name,
                       },
                   }

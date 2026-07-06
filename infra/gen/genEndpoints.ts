@@ -55,6 +55,18 @@ type ServiceLookup = { [serviceKey: string]: PartitionMap };
 // Services botocore omits from its services map but VAMS still needs in every partition.
 const INJECTED_SERVICES = ["sagemaker", "execute-api", "ecs-tasks", "ecr-dkr"];
 
+// Hand-maintained pseudo-service entries that do not exist in the botocore endpoints file at
+// all. The merge preserves them (existing wins), and they are excluded from the stale-services
+// report because their absence from the master file is expected, not a retirement.
+//
+// cognito-hosted-ui: the Cognito user pool hosted UI (managed login) domain suffix — the
+// caller prepends the user pool domain prefix (`{prefix}.{hostname}`). This is a user-facing
+// web domain, not an API endpoint, so botocore does not publish it. Defined ONLY for the
+// commercial `aws` partition: the Cognito hosted UI is not supported in AWS GovCloud (US) or
+// the EU Sovereign Cloud, so no entry may be generated for those partitions (config validation
+// rejects SAML there).
+const HAND_MAINTAINED_SERVICES = ["cognito-hosted-ui"];
+
 // Partitions whose endpoint dnsSuffix is NOT usable as the service-principal suffix. The
 // endpoint suffix (used for hostname/fipsHostname) and the service-principal suffix (used for
 // the IAM `Principal.Service` value) diverge in these partitions, so the principal must use the
@@ -182,13 +194,20 @@ function mergeLookups(
         merged[serviceKey] = { ...existing[serviceKey] };
     }
 
-    // Track stale services (present in const, no longer in master).
+    // Track stale services (present in const, no longer in master). Hand-maintained
+    // pseudo-services are expected to be absent from the master file — not stale.
     for (const serviceKey of existingKeys) {
-        if (!master[serviceKey]) report.staleServices.push(serviceKey);
+        if (!master[serviceKey] && !HAND_MAINTAINED_SERVICES.includes(serviceKey)) {
+            report.staleServices.push(serviceKey);
+        }
     }
 
     // Gap-fill existing services with partition entries they are missing from the master.
+    // Hand-maintained pseudo-services are never gap-filled: their partition coverage is
+    // deliberate (e.g. cognito-hosted-ui exists only in `aws` because the hosted UI is not
+    // supported in GovCloud or the EU Sovereign Cloud).
     for (const serviceKey of existingKeys) {
+        if (HAND_MAINTAINED_SERVICES.includes(serviceKey)) continue;
         const masterPartitions = master[serviceKey];
         if (!masterPartitions) continue; // stale service, nothing to fill
         for (const partitionName of Object.keys(masterPartitions)) {
