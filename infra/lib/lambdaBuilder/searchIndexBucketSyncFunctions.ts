@@ -273,6 +273,7 @@ export function buildSqsBucketSyncFunction(
 
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);

@@ -126,6 +126,9 @@ API_AUXILIARY_PREVIEW_ASSETS_STREAM = ApiRoute(
     "assets",
 )
 API_ASSET_EXPORT = ApiRoute("/database/{databaseId}/assets/{assetId}/export", (POST,), "assets")
+API_GET_ASSET_HISTORY = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/assetHistory", (GET,), "assetHistory"
+)
 
 ASSET_ROUTES: Tuple[ApiRoute, ...] = (
     API_ASSETS,
@@ -139,6 +142,7 @@ ASSET_ROUTES: Tuple[ApiRoute, ...] = (
     API_DOWNLOAD_ASSET_STREAM,
     API_AUXILIARY_PREVIEW_ASSETS_STREAM,
     API_ASSET_EXPORT,
+    API_GET_ASSET_HISTORY,
 )
 
 # ---------------------------------------------------------------------------

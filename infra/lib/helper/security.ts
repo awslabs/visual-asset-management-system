@@ -134,6 +134,14 @@ function mergeCSPSources(existingSources: string[], additionalSources?: string[]
  */
 const ssmLookupSuppressedStacks = new Set<string>();
 
+/**
+ * Module-level set to guard against duplicate audit log group stack suppressions.
+ * Used by setupSecurityAndLoggingEnvironmentAndPermissions() to apply the audit
+ * log group wildcard suppression only once per stack, since many Lambda functions
+ * in the same stack share the audit logging policy grant.
+ */
+const auditLogSuppressedStacks = new Set<string>();
+
 export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
     config: Config.Config
@@ -245,6 +253,28 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
             ],
         })
     );
+
+    // Apply stack-level CDK Nag suppression for the audit log group grant. Stack
+    // suppressions are evaluated at check time against every finding in the stack, so
+    // they cover synthesis-time resources (OverflowPolicy1, OverflowPolicy2, etc. created
+    // when a role's policy document is split) that do not exist when per-construct
+    // suppressions are applied. Only add once per stack (many Lambdas in the same stack
+    // share the audit logging policy grant).
+    const lambdaStack = Stack.of(lambdaFunction);
+    if (!auditLogSuppressedStacks.has(lambdaStack.node.addr)) {
+        auditLogSuppressedStacks.add(lambdaStack.node.addr);
+        NagSuppressions.addStackSuppressions(lambdaStack, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Wildcard is scoped to log streams (:*) within the nine deployment-specific VAMS audit CloudWatch log groups that every Lambda function writes audit events to.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::<.*AuditLogGroup.*\\.Arn>:\\*$/g",
+                    },
+                ],
+            },
+        ]);
+    }
 }
 
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(

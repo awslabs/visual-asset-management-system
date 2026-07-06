@@ -35,6 +35,7 @@ class ResourceKeys:
     ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE = ResourceParamKey("dynamoTables/assetFileVersionHistoryStorage", ("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME",))
     ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE = ResourceParamKey("dynamoTables/assetFileMetadataVersionsStorage", ("ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME",))
     ASSET_FILE_METADATA_STORAGE_TABLE = ResourceParamKey("dynamoTables/assetFileMetadataStorage", ("ASSET_FILE_METADATA_STORAGE_TABLE_NAME",))
+    ASSET_HISTORY_STORAGE_TABLE = ResourceParamKey("dynamoTables/assetHistoryStorage", ("ASSET_HISTORY_STORAGE_TABLE_NAME",))
     AUTH_ENTITIES_STORAGE_TABLE = ResourceParamKey("dynamoTables/authEntitiesStorage", ("AUTH_TABLE_NAME", "AUTH_ENTITIES_TABLE"))
     COMMENT_STORAGE_TABLE = ResourceParamKey("dynamoTables/commentStorage", ("COMMENT_STORAGE_TABLE_NAME",))
     CONSTRAINTS_STORAGE_TABLE = ResourceParamKey("dynamoTables/constraintsStorage", ("CONSTRAINTS_TABLE_NAME",))

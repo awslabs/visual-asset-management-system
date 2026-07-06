@@ -52,7 +52,7 @@ infra/
 
 One folder per domain. The current domains:
 
--   `assets/` — Asset handlers (`assetService.py` is the GOLD STANDARD; `assetVersions.py` covers version CRUD + archive/unarchive + update)
+-   `assets/` — Asset handlers (`assetService.py` is the GOLD STANDARD; `assetVersions.py` covers version CRUD + archive/unarchive + update; `assetHistory.py` serves the paged asset lifecycle history lookup)
 -   `auth/` — Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management

@@ -168,6 +168,13 @@ def setup_mock_imports():
     )
     sys.modules['common.resourceNames'] = resource_names_module
 
+    # assetHistory is a real module (asset lifecycle history writer); load it
+    asset_history_module = import_module_from_path(
+        'common.assetHistory',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'assetHistory.py')
+    )
+    sys.modules['common.assetHistory'] = asset_history_module
+
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(
         'common.auth',

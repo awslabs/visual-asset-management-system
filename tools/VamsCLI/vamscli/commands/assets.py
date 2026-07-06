@@ -1004,6 +1004,185 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, pa
 
 
 @assets.command()
+@click.option('-d', '--database', required=True, help='Database ID containing the asset')
+@click.option('-a', '--asset', required=True, help='Asset ID to get history for')
+@click.option('--page-size', type=int, help='Number of items per page')
+@click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
+@click.option('--json-input', help='JSON input file path or JSON string with parameters')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def history(ctx: click.Context, database: str, asset: str, page_size: int,
+            max_items: int, starting_token: str, auto_paginate: bool,
+            json_input: Optional[str], json_output: bool):
+    """
+    List the lifecycle history records for an asset.
+
+    This command retrieves an asset's history records (create, edit, archive,
+    unarchive, permanent delete) newest first, including the acting user, the
+    origin of each change, and a snapshot of the asset fields after each
+    operation.
+
+    Examples:
+        vamscli assets history -d my-database -a my-asset
+        vamscli assets history -d my-database -a my-asset --auto-paginate
+        vamscli assets history -d my-database -a my-asset --page-size 50
+        vamscli assets history -d my-database -a my-asset --starting-token "token123" --page-size 50
+        vamscli assets history -d my-database -a my-asset --json-output
+    """
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+    try:
+        # Handle JSON input
+        if json_input:
+            json_data = parse_json_input(json_input)
+            database = json_data.get('databaseId', database)
+            asset = json_data.get('assetId', asset)
+            page_size = json_data.get('pageSize', page_size)
+            starting_token = json_data.get('startingToken', starting_token)
+
+        # Validate pagination options
+        if auto_paginate and starting_token:
+            raise click.ClickException(
+                "Cannot use --auto-paginate with --starting-token. "
+                "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+            )
+
+        # Warn if max-items used without auto-paginate
+        if max_items and not auto_paginate:
+            output_status("Warning: --max-items only applies with --auto-paginate. Ignoring --max-items.", json_output)
+            max_items = None
+
+        if auto_paginate:
+            # Auto-pagination mode: fetch all items up to max_items (default 10,000)
+            max_total_items = max_items or 10000
+            output_status(f"Listing history for asset '{asset}' (auto-paginating up to {max_total_items} items)...", json_output)
+
+            all_items = []
+            next_token = None
+            total_fetched = 0
+            page_count = 0
+
+            while True:
+                page_count += 1
+
+                # Prepare query parameters for this page
+                params = {}
+                if page_size:
+                    params['pageSize'] = page_size
+                if next_token:
+                    params['startingToken'] = next_token
+
+                # Note: maxItems is NOT passed to API - it's CLI-side limit only
+                page_result = api_client.get_asset_history(database, asset, params)
+
+                # Aggregate items
+                items = page_result.get('Items', [])
+                all_items.extend(items)
+                total_fetched += len(items)
+
+                # Show progress in CLI mode
+                if not json_output:
+                    output_status(f"Fetched {total_fetched} history record(s) (page {page_count})...", False)
+
+                # Check if we should continue
+                next_token = page_result.get('NextToken')
+                if not next_token or total_fetched >= max_total_items:
+                    break
+
+            # Create final result
+            result = {
+                'Items': all_items,
+                'totalItems': len(all_items),
+                'autoPaginated': True,
+                'pageCount': page_count
+            }
+
+            if total_fetched >= max_total_items and next_token:
+                result['note'] = f"Reached maximum of {max_total_items} items. More items may be available."
+
+        else:
+            # Manual pagination mode: single API call
+            output_status(f"Listing history for asset '{asset}' in database '{database}'...", json_output)
+
+            # Prepare query parameters
+            params = {}
+            if page_size:
+                params['pageSize'] = page_size
+            if starting_token:
+                params['startingToken'] = starting_token
+
+            result = api_client.get_asset_history(database, asset, params)
+
+        def format_history_list(data):
+            """Format asset history records for CLI display."""
+            items = data.get('Items', [])
+            if not items:
+                return "No history records found."
+
+            lines = []
+
+            # Show auto-pagination info if present
+            if data.get('autoPaginated'):
+                lines.append(f"\nAuto-paginated: Retrieved {data.get('totalItems', 0)} items in {data.get('pageCount', 0)} page(s)")
+                if data.get('note'):
+                    lines.append(f"⚠️  {data['note']}")
+                lines.append("")
+
+            lines.append(f"Found {len(items)} history record(s):")
+            lines.append("-" * 80)
+
+            for record in items:
+                lines.append(f"Date: {record.get('recordDate', 'N/A')}")
+                lines.append(f"Action: {record.get('changeSource', 'N/A')}")
+                lines.append(f"User: {record.get('changeUserId', 'N/A')}")
+                if record.get('migratedRecord'):
+                    lines.append("Migrated Record: Yes")
+
+                # Snapshot is open-schema; render whatever keys exist
+                snapshot = record.get('assetSnapshot', {})
+                if snapshot:
+                    lines.append("Snapshot:")
+                    for key, value in snapshot.items():
+                        lines.append(f"  {key}: {value}")
+
+                lines.append("-" * 80)
+
+            # Show nextToken for manual pagination
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                lines.append(f"\nNext token: {data['NextToken']}")
+                lines.append("Use --starting-token to get the next page")
+
+            return '\n'.join(lines)
+
+        output_result(result, json_output, cli_formatter=format_history_list)
+
+        return result
+
+    except AssetNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Asset Not Found",
+            helpful_message=f"Use 'vamscli assets get -d {database} {asset} --show-archived' to check if the asset exists."
+        )
+        raise click.ClickException(str(e))
+    except DatabaseNotFoundError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Database Not Found",
+            helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+
+
+@assets.command()
 @click.argument('local_path', required=False)
 @click.option('-d', '--database', required=True, help='Database ID containing the asset')
 @click.option('-a', '--asset', required=True, help='Asset ID to download from')

@@ -11,7 +11,7 @@ from ..constants import (
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
     API_DELETE_AUXILIARY_PREVIEW, API_DELETE_FILE, API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE,
-    API_ARCHIVE_ASSET, API_UNARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
+    API_ARCHIVE_ASSET, API_UNARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_GET_ASSET_HISTORY, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
     API_TAGS, API_TAG_DELETE, API_TAG_TYPES, API_TAG_TYPE_DELETE,
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_VERSION_BY_ID, API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
@@ -2018,9 +2018,50 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to get asset versions: {e}")
-                
+
         except Exception as e:
             raise APIError(f"Failed to get asset versions: {e}")
+
+    def get_asset_history(self, database_id: str, asset_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Get lifecycle history records for an asset using the /database/{databaseId}/assets/{assetId}/assetHistory GET endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            params: Optional pagination parameters (pageSize, startingToken)
+
+        Returns:
+            API response data with history records list
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_GET_ASSET_HISTORY.format(databaseId=database_id, assetId=asset_id)
+            query_params = params or {}
+            response = self.get(endpoint, include_auth=True, params=query_params)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get asset history: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to get asset history: {e}")
 
     def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
         """

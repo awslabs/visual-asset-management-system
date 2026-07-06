@@ -2114,6 +2114,71 @@ paths:
                       $ref: '#/components/schemas/asset_id_regex'
             security:
                 - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/assetHistory:
+        get:
+            summary: "Get asset lifecycle history records."
+            description: "Returns the lifecycle history records for an asset (create, edit, archive, unarchive, permanent delete), newest first, with the acting user and a snapshot of the asset fields after each operation. History records persist across permanent deletion and are returned again if an asset is recreated with the same asset ID. Returns 404 when no asset record exists (live or archived) for the ID."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getAssetHistoryResponse"
+                "400":
+                    description: Invalid parameters or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view history for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+              - name: pageSize
+                in: query
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 1000
+                    default: 100
+                description: Maximum number of history records per page.
+              - name: startingToken
+                in: query
+                required: false
+                schema:
+                    type: string
+                description: Continuation token from a previous response's NextToken.
+            security:
+              - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}:
         get:
             summary: "Stream asset files with HTTP range support."
@@ -9118,7 +9183,65 @@ components:
                     description: "Token for pagination"
             required:
                 - versions
-        
+
+        assetHistoryRecord:
+            type: object
+            properties:
+                historyRecordId:
+                    type: string
+                    description: "Record sort key ({recordDate}#{suffix}); chronologically sortable"
+                databaseId:
+                    type: string
+                assetId:
+                    type: string
+                recordDate:
+                    type: string
+                    description: "ISO-8601 UTC timestamp of the operation"
+                changeSource:
+                    type: string
+                    enum:
+                        - create
+                        - createDirect
+                        - edit
+                        - archive
+                        - unarchive
+                        - unarchiveDirect
+                        - permanentDelete
+                    description: "Lifecycle operation; the *Direct variants mark changes originated from S3 bucket-sync ingestion"
+                changeUserId:
+                    type: string
+                    description: "Acting user ID or SYSTEM_USER"
+                assetSnapshot:
+                    type: object
+                    additionalProperties: true
+                    description: "Open-schema snapshot of asset fields after the operation (assetName, description, isDistributable, tags, bucketId, assetLocationKey, archivedReason/unarchivedReason when applicable; fields may grow over time)"
+                migratedRecord:
+                    type: boolean
+                    description: "Present and true on records backfilled by the deployment data migration"
+            required:
+                - historyRecordId
+                - databaseId
+                - assetId
+                - recordDate
+                - changeSource
+                - changeUserId
+
+        getAssetHistoryResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetHistoryRecord"
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Token for pagination; absent when no further pages exist"
+            required:
+                - Items
+
         assetVersionOperationResponse:
             type: object
             properties:

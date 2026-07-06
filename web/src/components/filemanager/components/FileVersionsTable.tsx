@@ -552,13 +552,13 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                             }
                         />
 
-                        {totalPages > 1 && (
+                        <Box textAlign="center">
                             <Pagination
                                 currentPageIndex={currentPage}
                                 pagesCount={totalPages}
                                 onChange={({ detail }) => setCurrentPage(detail.currentPageIndex)}
                             />
-                        )}
+                        </Box>
                     </>
                 )}
             </SpaceBetween>

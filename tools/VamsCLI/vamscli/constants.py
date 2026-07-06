@@ -35,6 +35,7 @@ API_UNARCHIVE_ASSET = "/database/{databaseId}/assets/{assetId}/unarchiveAsset"
 API_DELETE_ASSET = "/database/{databaseId}/assets/{assetId}/deleteAsset"
 API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
 API_ASSET_EXPORT = "/database/{databaseId}/assets/{assetId}/export"
+API_GET_ASSET_HISTORY = "/database/{databaseId}/assets/{assetId}/assetHistory"
 
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"

@@ -20,6 +20,7 @@ import {
     buildAuthConstraintsFunction,
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
+import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 import * as Config from "../../../config/config";
 
@@ -175,6 +176,21 @@ export class ApiBuilder2NestedStack extends NestedStack {
         attachFunctionToApi(this, authConstraintsTemplateService, {
             routePath: "/auth/constraintsTemplateImport",
             method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+
+        //Asset History Resources
+        const assetHistoryFunction = buildAssetHistoryFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, assetHistoryFunction, {
+            routePath: "/database/{databaseId}/assets/{assetId}/assetHistory",
+            method: apigateway.HttpMethod.GET,
             registry: registry,
         });
 

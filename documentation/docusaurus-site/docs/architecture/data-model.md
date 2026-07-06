@@ -92,6 +92,17 @@ Records per-version file change provenance (who created a version and how). Popu
 | ------------------------ | -------------------- | ----------- | ---------- |
 | `DatabaseIdAssetIdIndex` | `databaseId:assetId` | `versionId` | ALL        |
 
+### Asset History Storage Table
+
+Records asset lifecycle operations (create, edit, archive, unarchive, permanent delete), one record per operation, queried newest first. Records are permanent: they survive asset permanent deletion, and an asset recreated with the same asset ID continues the same history partition.
+
+| Attribute            | Type   | Key           |
+| -------------------- | ------ | ------------- |
+| `databaseId:assetId` | String | Partition Key |
+| `historyRecordId`    | String | Sort Key      |
+
+The sort key is `{recordDate}#{suffix}` (ISO-8601 UTC timestamp plus a uniqueness suffix), so records sort chronologically. Each record carries `recordDate`, `changeSource` (`create`, `createDirect`, `edit`, `archive`, `unarchive`, `unarchiveDirect`, `permanentDelete` — the `*Direct` variants mark changes originated from S3 bucket-sync ingestion), `changeUserId`, and `assetSnapshot`, an open-schema map of the asset fields as they stood after the operation (`assetName`, `description`, `isDistributable`, `tags`, `bucketId`, `assetLocationKey`, and `archivedReason`/`unarchivedReason` when applicable). Records backfilled by the deployment data migration carry `migratedRecord: true`.
+
 ### Asset Uploads Storage Table
 
 Tracks in-progress file uploads.

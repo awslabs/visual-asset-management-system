@@ -34,7 +34,7 @@ tools/VamsCLI/
       setup.py               # Initial CLI configuration
       auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
       apiKey.py              # API key management (admin) + 'user' sub-group (self-service own keys)
-      assets.py              # Asset CRUD operations
+      assets.py              # Asset CRUD operations + lifecycle history lookup (history)
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
       file.py                # File management (upload, download, move, copy)

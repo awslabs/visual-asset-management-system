@@ -2259,6 +2259,48 @@ export const fetchFileInfo = async ({
     }
 };
 
+/**
+ * Fetches the lifecycle history records for an asset (paged)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {number} params.pageSize - Records per page
+ * @param {string} params.startingToken - Continuation token from a prior page
+ * @returns {Promise<any>}
+ */
+export const fetchAssetHistory = async ({ databaseId, assetId, pageSize, startingToken }: any) => {
+    try {
+        if (!databaseId || !assetId) {
+            return [false, "Missing required parameters"];
+        }
+
+        const queryStringParameters: any = {};
+        if (pageSize) {
+            queryStringParameters.pageSize = `${pageSize}`;
+        }
+        if (startingToken) {
+            queryStringParameters.startingToken = startingToken;
+        }
+
+        const response = await apiClient.get(
+            `database/${databaseId}/assets/${assetId}/assetHistory`,
+            { queryStringParameters }
+        );
+
+        if (response.Items) {
+            return [true, response];
+        } else if (response.message) {
+            console.log("Fetch asset history error:", response.message);
+            return [false, response.message];
+        } else {
+            return [false, "Unknown error fetching asset history"];
+        }
+    } catch (error: any) {
+        console.log("Error fetching asset history:", error);
+        return [false, error?.message || "Failed to fetch asset history"];
+    }
+};
+
 //=============================================================================
 // METADATA V2 API FUNCTIONS - Bulk Operations for All Entity Types
 //=============================================================================

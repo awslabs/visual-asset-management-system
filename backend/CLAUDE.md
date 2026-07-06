@@ -47,6 +47,8 @@ backend/
 │   │   ├── validators.py                # Input validation regex patterns and validate() dispatcher
 │   │   ├── s3.py                        # S3 file validation (extension + MIME type checks)
 │   │   ├── s3MetadataKeys.py            # Canonical S3 object user-metadata keys (assetid, vams-*)
+│   │   ├── assetHistory.py              # Asset lifecycle history writer (change source constants,
+│   │   │                                #   build_asset_snapshot, write_asset_history_record; best-effort)
 │   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
 │   │   │                                #   allowed preview extensions (mirrored in
 │   │   │                                #   web/src/common/constants/fileFormats.ts)
@@ -64,6 +66,7 @@ backend/
 │   ├── handlers/                        # Lambda handlers (one folder per domain)
 │   │   ├── assets/assetService.py       # GOLD STANDARD handler -- follow this pattern
 │   │   ├── assets/assetVersions.py     # Asset version CRUD + archive/unarchive + update (versionAlias)
+│   │   ├── assets/assetHistory.py      # Asset lifecycle history lookup (paged GET, newest first)
 │   │   ├── auth/                        # Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
 │   │   │   ├── apiGatewayAuthorizerRest.py  # REST REQUEST authorizer entry point (returns IAM policy;
 │   │   │   │                                #   delegates JWT/API-key/IP validation to common/auth/authorizerCore.py)
@@ -101,6 +104,7 @@ backend/
 │       │                                #   USER_API_KEY_MAX_EXPIRATION_DAYS = 365)
 │       ├── pipelines.py                 # Pipeline models (PipelineExecutionType enum, SQS/EventBridge fields)
 │       ├── workflows.py                 # Workflow models (Step Functions ASL generation)
+│       ├── assetHistory.py              # Asset history request/record/response models (open-schema snapshot)
 │       ├── common.py                    # Response helpers, error functions, APIGatewayProxyResponseV2
 │       └── [domain].py                  # Domain-specific models
 ├── lambdaLayers/                        # Lambda layer definitions

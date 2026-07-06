@@ -14,6 +14,12 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from common.assetHistory import (
+    CHANGE_SOURCE_CREATE,
+    CHANGE_SOURCE_CREATE_DIRECT,
+    build_asset_snapshot,
+    write_asset_history_record,
+)
 from handlers.assets.assetCount import update_asset_count
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -633,10 +639,19 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     
     # Save asset to DynamoDB
     save_asset_details(asset)
-    
+
     # Update asset count
     update_asset_count(db_database, asset_storage_table_name, {}, databaseId)
-    
+
+    # Record creation in asset history (best-effort)
+    write_asset_history_record(
+        databaseId,
+        assetId,
+        CHANGE_SOURCE_CREATE_DIRECT if s3ExternalGenerated else CHANGE_SOURCE_CREATE,
+        username,
+        build_asset_snapshot(asset)
+    )
+
     # Return response
     return CreateAssetResponseModel(
         assetId=assetId,

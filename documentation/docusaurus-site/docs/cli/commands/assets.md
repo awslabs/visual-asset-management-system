@@ -260,6 +260,37 @@ vamscli assets export -d my-database -a my-asset --no-fetch-relationships
 
 ---
 
+## assets history
+
+List the lifecycle history records for an asset. Records are returned newest first and cover create, edit, archive, unarchive, and permanent delete operations, each with the acting user and a snapshot of the asset fields after the operation. Records backfilled by the deployment data migration are marked as migrated.
+
+```bash
+vamscli assets history [OPTIONS]
+```
+
+| Option             | Type    | Required | Description                                       |
+| ------------------ | ------- | -------- | ------------------------------------------------- |
+| `-d`, `--database` | TEXT    | Yes      | Database ID containing the asset                  |
+| `-a`, `--asset`    | TEXT    | Yes      | Asset ID to get history for                       |
+| `--page-size`      | INTEGER | No       | Number of items per page                          |
+| `--max-items`      | INTEGER | No       | Maximum total items (only with `--auto-paginate`) |
+| `--starting-token` | TEXT    | No       | Token for manual pagination                       |
+| `--auto-paginate`  | Flag    | No       | Automatically fetch all items                     |
+| `--json-input`     | TEXT    | No       | JSON input file path or JSON string               |
+| `--json-output`    | Flag    | No       | Output raw JSON response                          |
+
+```bash
+vamscli assets history -d my-database -a my-asset
+vamscli assets history -d my-database -a my-asset --auto-paginate --json-output
+vamscli assets history -d my-database -a my-asset --page-size 50
+```
+
+:::note
+History records persist across permanent deletion. If an asset is permanently deleted and later recreated with the same asset ID, the prior history (including the `permanentDelete` record) remains visible for that ID. History for a permanently deleted asset ID that has not been recreated returns a 404.
+:::
+
+---
+
 ## asset-version create
 
 Create a new version snapshot of an asset's current state.

@@ -257,7 +257,7 @@ ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 
 ```typescript
 // ✅ CORRECT - CDK publishes resource names to SSM and injects prefix
-// ResourceNamesBuilder nested stack publishes 39 SSM parameters
+// ResourceNamesBuilder nested stack publishes 40 SSM parameters
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
 new ssm.StringParameter(this, "AssetStorageTableParam", {
     parameterName: `${prefix}/${RESOURCE_PARAM_KEYS.dynamoTables.assetStorage}`,

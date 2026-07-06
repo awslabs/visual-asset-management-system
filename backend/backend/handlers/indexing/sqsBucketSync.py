@@ -37,6 +37,11 @@ from common.s3MetadataKeys import (
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from common.s3 import is_object_version_archived
+from common.assetHistory import (
+    CHANGE_SOURCE_UNARCHIVE_DIRECT,
+    build_asset_snapshot,
+    write_asset_history_record,
+)
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
@@ -838,6 +843,12 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
             update_asset_count(db_table_name, asset_table_name, {}, live_db_id)
         except Exception as e:
             logger.warning(f"Asset count update failed after restoring {asset_id}: {e}")
+
+        # Record the auto-restore in asset history (best-effort)
+        write_asset_history_record(
+            live_db_id, asset_id, CHANGE_SOURCE_UNARCHIVE_DIRECT, 'SYSTEM_USER',
+            build_asset_snapshot(restored, unarchived_reason=restored.get('unarchivedReason'))
+        )
 
         return live_db_id
     except Exception as e:

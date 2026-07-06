@@ -68,6 +68,7 @@ export function buildCreateAssetFunction(
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -120,6 +121,7 @@ export function buildAssetService(
     });
 
     storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetHistoryStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
@@ -589,6 +591,47 @@ export function buildAssetExportService(
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}
+
+export function buildAssetHistoryFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetHistory";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {},
+    });
+
+    storageResources.dynamo.assetHistoryStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

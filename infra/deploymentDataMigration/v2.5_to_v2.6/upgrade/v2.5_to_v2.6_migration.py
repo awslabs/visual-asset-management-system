@@ -4,6 +4,7 @@
 
 """
 Data Migration Script for VAMS v2.5 to v2.6 - OpenSearch Reindex (v2 -> v3)
+and Asset History Backfill
 
 The v2.6 release introduces:
   1. A new ``geo_MD_location`` field of OpenSearch type ``geo_shape`` on every
@@ -16,6 +17,16 @@ The v2.6 release introduces:
      introduced cleanly by switching index names.
   3. (Provisioned deployments only) An OpenSearch engine upgrade from 2.7 to
      3.5, which itself requires a reindex.
+  4. A new ``AssetHistoryStorageTable`` that records asset lifecycle
+     operations (create, edit, archive, unarchive, permanent delete). After
+     the reindex, this migration backfills the table from existing asset
+     records: a ``create`` record inferred from each asset's v0 version
+     record (when present), plus ``archive``/``unarchive`` records inferred
+     from the asset's archivedAt/archivedBy and unarchivedAt/unarchivedBy
+     fields. Backfilled records carry ``migratedRecord: true`` and a
+     deterministic record ID, so re-runs overwrite rather than duplicate.
+     Set ``skip_asset_history_backfill: true`` in the config to run the
+     reindex only.
 
 Because the v3 indexes are empty after the v2.6 CDK deploy, this migration
 delegates to the existing reindexer Lambda (``crReindexer``) to re-populate
@@ -260,6 +271,171 @@ def _log_results(results: Dict) -> None:
             logger.warning(f"  Errors: {len(f['errors'])} errors occurred")
 
 
+#######################
+# PHASE 2: ASSET HISTORY BACKFILL
+#######################
+
+# Snapshot fields captured for backfilled history records (mirrors
+# backend common.assetHistory.build_asset_snapshot; migration scripts are
+# standalone and do not import backend code).
+def _build_asset_snapshot(asset, archived_reason=None, unarchived_reason=None):
+    snapshot = {
+        'assetName': asset.get('assetName', ''),
+        'description': asset.get('description', ''),
+        'isDistributable': asset.get('isDistributable', False),
+        'tags': asset.get('tags', []),
+        'bucketId': asset.get('bucketId', ''),
+    }
+    asset_location = asset.get('assetLocation') or {}
+    if asset_location.get('Key'):
+        snapshot['assetLocationKey'] = asset_location['Key']
+    if archived_reason:
+        snapshot['archivedReason'] = archived_reason
+    if unarchived_reason:
+        snapshot['unarchivedReason'] = unarchived_reason
+    return snapshot
+
+
+def _history_record(database_id, asset_id, change_source, change_user_id, record_date, snapshot):
+    """Build one backfilled history record. The '#migrated' SK suffix is
+    deterministic so re-runs overwrite rather than duplicate."""
+    return {
+        'databaseId:assetId': f"{database_id}:{asset_id}",
+        'historyRecordId': f"{record_date}#migrated",
+        'databaseId': database_id,
+        'assetId': asset_id,
+        'recordDate': record_date,
+        'changeSource': change_source,
+        'changeUserId': change_user_id or 'SYSTEM_USER',
+        'assetSnapshot': snapshot,
+        'migratedRecord': True,
+    }
+
+
+def backfill_asset_history(
+    asset_table_name: str,
+    versions_table_name: str,
+    history_table_name: str,
+    profile: Optional[str] = None,
+    region: Optional[str] = None,
+    dry_run: bool = False,
+    limit: Optional[int] = None,
+) -> Dict:
+    """Backfill the asset history table from existing asset records.
+
+    Per asset (live and archived partitions):
+      - 'create' record from the assetVersions v0 record when one exists
+        (recordDate = v0 dateCreated, changeUserId = v0 createdBy)
+      - 'archive' record when archivedAt/archivedBy are present
+      - 'unarchive' record when unarchivedAt/unarchivedBy are present
+    """
+    logger.info("=" * 80)
+    logger.info("ASSET HISTORY BACKFILL")
+    logger.info(f"Asset table: {asset_table_name}")
+    logger.info(f"Versions table: {versions_table_name}")
+    logger.info(f"History table: {history_table_name}")
+    logger.info(f"Dry run: {dry_run}, Limit: {limit}")
+    logger.info("=" * 80)
+
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    session = boto3.Session(**session_kwargs)
+    dynamodb = session.resource('dynamodb')
+
+    asset_table = dynamodb.Table(asset_table_name)
+    versions_table = dynamodb.Table(versions_table_name)
+    history_table = dynamodb.Table(history_table_name)
+
+    stats = {'assets_scanned': 0, 'create_records': 0, 'archive_records': 0,
+             'unarchive_records': 0, 'records_written': 0, 'errors': 0}
+
+    scan_kwargs = {}
+    while True:
+        response = asset_table.scan(**scan_kwargs)
+        for asset in response.get('Items', []):
+            if limit and stats['assets_scanned'] >= limit:
+                break
+            stats['assets_scanned'] += 1
+
+            raw_db_id = asset.get('databaseId', '')
+            asset_id = asset.get('assetId', '')
+            if not raw_db_id or not asset_id:
+                continue
+            # The scan returns live and archived partitions; history records
+            # always use the live database ID.
+            database_id = raw_db_id[:-len('#deleted')] if raw_db_id.endswith('#deleted') else raw_db_id
+
+            records = []
+
+            # 'create' from the v0 version record when available
+            try:
+                v0 = versions_table.get_item(Key={
+                    'databaseId:assetId': f"{database_id}:{asset_id}",
+                    'assetVersionId': '0',
+                }).get('Item')
+            except ClientError as e:
+                logger.warning(f"v0 lookup failed for {asset_id}: {e}")
+                v0 = None
+            if v0 and v0.get('dateCreated'):
+                records.append(_history_record(
+                    database_id, asset_id, 'create',
+                    v0.get('createdBy', 'SYSTEM_USER'), v0['dateCreated'],
+                    _build_asset_snapshot(asset)
+                ))
+
+            if asset.get('archivedAt') and asset.get('archivedBy'):
+                records.append(_history_record(
+                    database_id, asset_id, 'archive',
+                    asset['archivedBy'], asset['archivedAt'],
+                    _build_asset_snapshot(asset, archived_reason=asset.get('archivedReason'))
+                ))
+
+            if asset.get('unarchivedAt') and asset.get('unarchivedBy'):
+                records.append(_history_record(
+                    database_id, asset_id, 'unarchive',
+                    asset['unarchivedBy'], asset['unarchivedAt'],
+                    _build_asset_snapshot(asset, unarchived_reason=asset.get('unarchivedReason'))
+                ))
+
+            stats['create_records'] += sum(1 for r in records if r['changeSource'] == 'create')
+            stats['archive_records'] += sum(1 for r in records if r['changeSource'] == 'archive')
+            stats['unarchive_records'] += sum(1 for r in records if r['changeSource'] == 'unarchive')
+
+            for record in records:
+                if dry_run:
+                    stats['records_written'] += 1
+                    continue
+                try:
+                    history_table.put_item(Item=record)
+                    stats['records_written'] += 1
+                except ClientError as e:
+                    stats['errors'] += 1
+                    logger.error(f"Failed writing history record for {asset_id}: {e}")
+
+            if stats['assets_scanned'] % 100 == 0:
+                logger.info(f"  Processed {stats['assets_scanned']} assets, "
+                            f"{stats['records_written']} history records...")
+
+        if limit and stats['assets_scanned'] >= limit:
+            break
+        if 'LastEvaluatedKey' not in response:
+            break
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+    action = "Would write" if dry_run else "Wrote"
+    logger.info("=" * 80)
+    logger.info("ASSET HISTORY BACKFILL COMPLETE")
+    logger.info(f"Assets scanned: {stats['assets_scanned']}")
+    logger.info(f"{action} {stats['records_written']} records "
+                f"(create: {stats['create_records']}, archive: {stats['archive_records']}, "
+                f"unarchive: {stats['unarchive_records']}), errors: {stats['errors']}")
+    logger.info("=" * 80)
+    return stats
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
@@ -358,16 +534,69 @@ Notes:
         invocation_type=invocation_type,
     )
 
+    reindex_ok = True
     if result.get('timeout'):
         logger.warning("Reindex invocation timed out -- Lambda continues processing in the background.")
         logger.warning("Verify completion via CloudWatch Logs.")
-        return 0
-    if 'error' in result:
+    elif 'error' in result:
         logger.error("Reindex migration failed.")
+        reindex_ok = False
+    else:
+        logger.info("Reindex migration completed.")
+
+    # Phase 2: asset history backfill (skippable via config)
+    if config.get('skip_asset_history_backfill'):
+        logger.info("Skipping asset history backfill (skip_asset_history_backfill=true).")
+        return 0 if reindex_ok else 1
+
+    def _override(key):
+        value = config.get(key)
+        if value and str(value).startswith('<'):
+            return None  # unfilled template placeholder
+        return value
+
+    explicit_names = (
+        _override('asset_storage_table_name'),
+        _override('asset_versions_table_name'),
+        _override('asset_history_table_name'),
+    )
+    if not base_param_prefix and not all(explicit_names):
+        logger.error(
+            "Asset history backfill needs table names: set 'resource_names_ssm_param_prefix' "
+            "or all of 'asset_storage_table_name', 'asset_versions_table_name', and "
+            "'asset_history_table_name' in the config. Set 'skip_asset_history_backfill' "
+            "to true to run the reindex only."
+        )
         return 1
 
-    logger.info("Reindex migration completed.")
-    return 0
+    try:
+        if all(explicit_names):
+            asset_table_name, versions_table_name, history_table_name = explicit_names
+        else:
+            lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+            asset_table_name = lookup.resolve_with_override(
+                explicit_names[0], ResourceParamKeys.ASSET_STORAGE_TABLE)
+            versions_table_name = lookup.resolve_with_override(
+                explicit_names[1], ResourceParamKeys.ASSET_VERSIONS_STORAGE_TABLE)
+            history_table_name = lookup.resolve_with_override(
+                explicit_names[2], ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE)
+    except Exception as e:
+        logger.error(f"Failed resolving table names for asset history backfill: {e}")
+        return 1
+
+    backfill_stats = backfill_asset_history(
+        asset_table_name=asset_table_name,
+        versions_table_name=versions_table_name,
+        history_table_name=history_table_name,
+        profile=profile,
+        region=region,
+        dry_run=dry_run,
+        limit=limit,
+    )
+    if backfill_stats.get('errors'):
+        logger.warning(f"Asset history backfill finished with {backfill_stats['errors']} errors.")
+
+    return 0 if reindex_ok else 1
 
 
 if __name__ == "__main__":

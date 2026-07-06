@@ -76,6 +76,21 @@ To modify an asset's properties:
 
 ---
 
+## Asset History
+
+VAMS keeps a permanent history of each asset's lifecycle operations: creation, edits to the asset's properties, archiving, unarchiving, and permanent deletion. Each history record shows when the operation happened, who performed it, and a snapshot of the asset's properties after the operation. Changes made through S3 bucket-sync ingestion (assets auto-created or auto-restored from direct S3 uploads) are labeled with an S3 Sync origin, and records inferred by a deployment data migration are marked as migrated.
+
+To view an asset's history:
+
+1. Open the asset detail page and select the **Files** tab.
+2. Select the asset's root node at the top of the file tree.
+3. In the details panel, select the **(History)** link next to the **Type** field.
+4. The Asset History modal lists the operations newest first. Select an entry in the **Details** column to see the asset property snapshot for that operation. Use the pagination controls to load older records.
+
+History records persist after an asset is permanently deleted. If an asset is later created with the same asset ID, its history view includes the prior asset's records, providing a continuous audit trail for that ID.
+
+---
+
 ## Asset Versioning
 
 VAMS maintains a complete version history for every asset. Versions capture the state of the asset's files and metadata at a specific point in time.

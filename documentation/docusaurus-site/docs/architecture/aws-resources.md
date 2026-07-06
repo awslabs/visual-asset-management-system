@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 29 Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 ### Core Data Tables
 
@@ -25,6 +25,7 @@ VAMS deploys 29 Amazon DynamoDB tables for persistent data storage. All tables u
 | AssetFileVersionsStorageTable (V2)    | `databaseId:assetId:assetVersionId` | `fileKey`                   | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | File version records per asset version |
 | AssetFileMetadataVersionsStorageTable | `databaseId:assetId:assetVersionId` | `type:filePath:metadataKey` | `databaseIdAssetIdIndex` (PK: databaseId:assetId)                                                     | Metadata snapshot per asset version    |
 | AssetFileVersionHistoryStorageTable   | `databaseId:assetId:filePath`       | `versionId`                 | `DatabaseIdAssetIdIndex` (PK: databaseId:assetId, SK: versionId)                                      | Per-version file change provenance     |
+| AssetHistoryStorageTable              | `databaseId:assetId`                | `historyRecordId`           | --                                                                                                    | Permanent asset lifecycle history      |
 | AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt) | In-progress upload tracking            |
 
 ### Metadata and Attribute Tables
@@ -90,28 +91,28 @@ See [Uninstall the solution](../deployment/uninstall.md) for the full cleanup pr
 
 ## AWS Lambda Functions
 
-VAMS deploys approximately 50 Lambda functions across 17 builder files. All functions use Python 3.12 runtime, 5308 MB memory, and 15-minute timeout.
+VAMS deploys Lambda functions across builder files. All functions use Python 3.12 runtime, 5308 MB memory, and 15-minute timeout.
 
 ### API Handler Functions
 
-| Builder File                 | Functions                                                                                                                                     | Domain                            |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset              | Asset CRUD, file upload/download  |
-| `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                           | Asset relationship management     |
-| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                             | Authentication and authorization  |
-| `commentFunctions.ts`        | addComment, editComment                                                                                                                       | Asset comments                    |
-| `configFunctions.ts`         | configService                                                                                                                                 | System configuration              |
-| `databaseFunctions.ts`       | createDatabase                                                                                                                                | Database CRUD                     |
-| `metadataFunctions.ts`       | metadataService                                                                                                                               | Metadata CRUD                     |
-| `metadataSchemaFunctions.ts` | metadataSchemaService                                                                                                                         | Metadata schema management        |
-| `pipelineFunctions.ts`       | createPipeline, enablePipeline                                                                                                                | Pipeline management               |
-| `roleFunctions.ts`           | createRole                                                                                                                                    | Role CRUD                         |
-| `sendEmailFunctions.ts`      | sendEmail                                                                                                                                     | Email notifications               |
-| `subscriptionFunctions.ts`   | subscriptionService, checkSubscription, unSubscribe                                                                                           | Event subscriptions               |
-| `tagFunctions.ts`            | createTag                                                                                                                                     | Tag CRUD                          |
-| `tagTypeFunctions.ts`        | createTagType                                                                                                                                 | Tag type CRUD                     |
-| `userRoleFunctions.ts`       | userRolesService                                                                                                                              | User-role assignment              |
-| `workflowFunctions.ts`       | listWorkflowExecutions, createWorkflow, executeWorkflow, sqsAutoExecuteWorkflow, processWorkflowExecutionOutput, importGlobalPipelineWorkflow | Workflow management and execution |
+| Builder File                 | Functions                                                                                                                                      | Domain                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset, assetHistory | Asset CRUD, file upload/download  |
+| `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                            | Asset relationship management     |
+| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                              | Authentication and authorization  |
+| `commentFunctions.ts`        | addComment, editComment                                                                                                                        | Asset comments                    |
+| `configFunctions.ts`         | configService                                                                                                                                  | System configuration              |
+| `databaseFunctions.ts`       | createDatabase                                                                                                                                 | Database CRUD                     |
+| `metadataFunctions.ts`       | metadataService                                                                                                                                | Metadata CRUD                     |
+| `metadataSchemaFunctions.ts` | metadataSchemaService                                                                                                                          | Metadata schema management        |
+| `pipelineFunctions.ts`       | createPipeline, enablePipeline                                                                                                                 | Pipeline management               |
+| `roleFunctions.ts`           | createRole                                                                                                                                     | Role CRUD                         |
+| `sendEmailFunctions.ts`      | sendEmail                                                                                                                                      | Email notifications               |
+| `subscriptionFunctions.ts`   | subscriptionService, checkSubscription, unSubscribe                                                                                            | Event subscriptions               |
+| `tagFunctions.ts`            | createTag                                                                                                                                      | Tag CRUD                          |
+| `tagTypeFunctions.ts`        | createTagType                                                                                                                                  | Tag type CRUD                     |
+| `userRoleFunctions.ts`       | userRolesService                                                                                                                               | User-role assignment              |
+| `workflowFunctions.ts`       | listWorkflowExecutions, createWorkflow, executeWorkflow, sqsAutoExecuteWorkflow, processWorkflowExecutionOutput, importGlobalPipelineWorkflow  | Workflow management and execution |
 
 ### Search and Indexing Functions
 

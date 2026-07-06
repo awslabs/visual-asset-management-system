@@ -27,6 +27,7 @@ import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
 import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
+import { AssetHistoryModal } from "../modals/AssetHistoryModal";
 import { SetPrimaryTypeModal } from "../modals/SetPrimaryTypeModal";
 import { ShareUrlsModal } from "../modals/ShareUrlsModal";
 import { RenameFileModal } from "../modals/RenameFileModal";
@@ -204,6 +205,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showMoveFilesModal, setShowMoveFilesModal] = useState(false);
     const [showFileVersionsModal, setShowFileVersionsModal] = useState(false);
+    const [showAssetHistoryModal, setShowAssetHistoryModal] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [showFilePreviewModal, setShowFilePreviewModal] = useState(false);
     const [preloadedAssetUrl, setPreloadedAssetUrl] = useState<string | undefined>(undefined);
@@ -951,6 +953,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     />
                 )}
 
+                {/* Asset History Modal - asset root node only */}
+                <AssetHistoryModal
+                    visible={showAssetHistoryModal}
+                    onDismiss={() => setShowAssetHistoryModal(false)}
+                    databaseId={databaseId!}
+                    assetId={assetId!}
+                    assetName={asset?.assetName}
+                />
+
                 {/* Set Primary Type Modal */}
                 <SetPrimaryTypeModal
                     visible={showSetPrimaryTypeModal}
@@ -1246,6 +1257,16 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     : isFolder
                                     ? "Folder"
                                     : "File"}
+                                {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
+                                    <span style={{ marginLeft: "8px" }}>
+                                        <Link
+                                            onFollow={() => setShowAssetHistoryModal(true)}
+                                            fontSize="body-s"
+                                        >
+                                            (history)
+                                        </Link>
+                                    </span>
+                                )}
                             </div>
                         </div>
 

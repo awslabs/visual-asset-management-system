@@ -30,6 +30,14 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
     normalize_history_file_path,
 )
+from common.assetHistory import (
+    CHANGE_SOURCE_EDIT,
+    CHANGE_SOURCE_ARCHIVE,
+    CHANGE_SOURCE_UNARCHIVE,
+    CHANGE_SOURCE_PERMANENT_DELETE,
+    build_asset_snapshot,
+    write_asset_history_record,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
@@ -1102,10 +1110,17 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # Save the updated asset
     try:
         asset_table.put_item(Item=asset)
-        
+
+        # Record edit in asset history (best-effort)
+        write_asset_history_record(
+            databaseId, assetId, CHANGE_SOURCE_EDIT,
+            claims_and_roles.get("tokens", ["SYSTEM_USER"])[0],
+            build_asset_snapshot(asset)
+        )
+
         # Create response
         timestamp = datetime.utcnow().isoformat()
-        
+
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
 
@@ -1183,10 +1198,16 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Save to archived location
         asset_table.put_item(Item=asset)
-        
+
         # Delete from original location
         asset_table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        
+
+        # Record archive in asset history (best-effort)
+        write_asset_history_record(
+            databaseId, assetId, CHANGE_SOURCE_ARCHIVE, username,
+            build_asset_snapshot(asset, archived_reason=request_model.reason)
+        )
+
         # Update asset count
         update_asset_count(db_database, asset_database, {}, databaseId)
 
@@ -1286,10 +1307,16 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Save to original location
         asset_table.put_item(Item=asset)
-        
+
         # Delete from archived location
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
-        
+
+        # Record unarchive in asset history (best-effort)
+        write_asset_history_record(
+            original_db_id, assetId, CHANGE_SOURCE_UNARCHIVE, username,
+            build_asset_snapshot(asset, unarchived_reason=request_model.reason)
+        )
+
         # Update asset count
         update_asset_count(db_database, asset_database, {}, original_db_id)
 
@@ -1346,6 +1373,10 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
     #Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
+
+    # Capture the last-known asset state for the history record before deletion
+    pre_delete_snapshot = build_asset_snapshot(asset)
+    delete_user_id = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
     # Begin deletion process
     logger.info(f"Permanently deleting asset {assetId} from database {databaseId}")
@@ -1614,7 +1645,14 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
 
         # 9. Update asset count
         update_asset_count(db_database, asset_database, {}, original_db_id)
-        
+
+        # Record permanent delete in asset history (best-effort). History
+        # records for the asset are intentionally NOT deleted.
+        write_asset_history_record(
+            original_db_id, assetId, CHANGE_SOURCE_PERMANENT_DELETE,
+            delete_user_id, pre_delete_snapshot
+        )
+
         # Return success response
         now = datetime.utcnow().isoformat()
         return AssetOperationResponseModel(

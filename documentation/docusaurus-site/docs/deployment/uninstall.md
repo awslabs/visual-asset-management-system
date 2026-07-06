@@ -12,7 +12,7 @@ Complete the following backup steps before beginning the uninstall process.
 
 ### Back up DynamoDB tables
 
-Export critical DynamoDB tables to Amazon S3 for archival purposes. VAMS creates approximately 25 DynamoDB tables. At minimum, back up the tables containing your asset, database, and metadata records.
+Export critical DynamoDB tables to Amazon S3 for archival purposes. VAMS creates DynamoDB tables. At minimum, back up the tables containing your asset, database, and metadata records.
 
 ```bash
 # List all VAMS DynamoDB tables

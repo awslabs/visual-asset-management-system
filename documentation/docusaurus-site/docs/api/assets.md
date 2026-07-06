@@ -581,3 +581,82 @@ Responses exceeding 100KB are automatically gzip-compressed. The `Content-Encodi
 | `403`  | Not authorized to export this asset. |
 | `404`  | Asset not found.                     |
 | `500`  | Internal server error.               |
+
+---
+
+### Get Asset History
+
+`GET /database/{databaseId}/assets/{assetId}/assetHistory`
+
+Returns the lifecycle history records for an asset, newest first. Each record captures one lifecycle operation (create, edit, archive, unarchive, or permanent delete) with the acting user, the origin of the change, and an open-schema snapshot of the asset fields as they stood after the operation.
+
+History records persist across permanent deletion. If an asset is permanently deleted and later recreated with the same asset ID, the prior history (including the `permanentDelete` record) is returned again for that ID. When no asset record exists (live or archived) for the ID, the endpoint returns `404`.
+
+**Request Parameters:**
+
+| Parameter       | Location | Type    | Required | Description                                                |
+| --------------- | -------- | ------- | -------- | ---------------------------------------------------------- |
+| `databaseId`    | path     | string  | Yes      | Database identifier.                                       |
+| `assetId`       | path     | string  | Yes      | Asset identifier.                                          |
+| `pageSize`      | query    | integer | No       | Maximum records per page (1-1000, default 100).            |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response's `NextToken`. |
+
+**Change Sources:**
+
+| Value             | Operation                                        |
+| ----------------- | ------------------------------------------------ |
+| `create`          | Asset created through the VAMS API.              |
+| `createDirect`    | Asset auto-created by S3 bucket-sync ingestion.  |
+| `edit`            | Asset fields updated.                            |
+| `archive`         | Asset archived.                                  |
+| `unarchive`       | Asset unarchived through the VAMS API.           |
+| `unarchiveDirect` | Asset auto-restored by S3 bucket-sync ingestion. |
+| `permanentDelete` | Asset permanently deleted.                       |
+
+**Response:**
+
+```json
+{
+    "message": "Success",
+    "Items": [
+        {
+            "historyRecordId": "2026-07-05T14:23:01.123456Z#a1b2c3d4",
+            "databaseId": "my-database",
+            "assetId": "my-asset",
+            "recordDate": "2026-07-05T14:23:01.123456Z",
+            "changeSource": "edit",
+            "changeUserId": "user@example.com",
+            "assetSnapshot": {
+                "assetName": "My Asset",
+                "description": "Updated description",
+                "isDistributable": true,
+                "tags": ["tag1"],
+                "bucketId": "xbucket1",
+                "assetLocationKey": "my-asset/"
+            }
+        },
+        {
+            "historyRecordId": "2026-07-01T09:00:00Z#migrated",
+            "databaseId": "my-database",
+            "assetId": "my-asset",
+            "recordDate": "2026-07-01T09:00:00Z",
+            "changeSource": "create",
+            "changeUserId": "SYSTEM_USER",
+            "assetSnapshot": { "assetName": "My Asset" },
+            "migratedRecord": true
+        }
+    ],
+    "NextToken": "eyJkYXRhYmFzZUlkOmFzc2V0SWQiOiAi..."
+}
+```
+
+The `assetSnapshot` object is open-schema: snapshot fields may grow over time, and consumers should render whatever keys are present. Archive and unarchive records include `archivedReason`/`unarchivedReason` in the snapshot when a reason was provided. Records with `migratedRecord: true` were backfilled by the deployment data migration from inferred data.
+
+**Error Responses:**
+
+| Status | Description                                  |
+| ------ | -------------------------------------------- |
+| `400`  | Invalid parameters or pagination token.      |
+| `403`  | Not authorized to view this asset's history. |
+| `404`  | Asset not found.                             |
+| `500`  | Internal server error.                       |

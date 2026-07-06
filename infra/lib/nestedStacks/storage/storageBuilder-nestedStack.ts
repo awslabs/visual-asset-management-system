@@ -95,6 +95,7 @@ export interface storageResources {
         databaseMetadataStorageTable: dynamodb.Table;
         assetFileMetadataStorageTable: dynamodb.Table;
         assetFileVersionHistoryStorageTable: dynamodb.Table;
+        assetHistoryStorageTable: dynamodb.Table;
         fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
@@ -1140,6 +1141,23 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Asset History — one record per asset lifecycle operation (create, edit,
+    // archive, unarchive, permanent delete). PK is the composite
+    // databaseId:assetId; SK is the timestamp-prefixed historyRecordId, queried
+    // with ScanIndexForward=false for newest-first. Records are permanent and
+    // survive asset permanent deletes.
+    const assetHistoryStorageTable = new dynamodb.Table(scope, "AssetHistoryStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "historyRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTableV2", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1672,6 +1690,7 @@ export function storageResourcesBuilder(
             databaseMetadataStorageTable: databaseMetadataStorageTable,
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,
             assetFileVersionHistoryStorageTable: assetFileVersionHistoryStorageTable,
+            assetHistoryStorageTable: assetHistoryStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             tagStorageTable: tagStorageTable,
@@ -2121,6 +2140,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.assetFileVersionsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.assetFileVersionHistoryStorage]:
             storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetHistoryStorage]:
+            storageResources.dynamo.assetHistoryStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataVersionsStorage]:
             storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataStorage]:
