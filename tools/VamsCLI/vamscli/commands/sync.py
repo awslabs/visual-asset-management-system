@@ -649,7 +649,7 @@ def pull(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                 queue: asyncio.Queue = asyncio.Queue(maxsize=parallel_downloads * 2)
                 streaming_progress = StreamingDownloadProgress()
 
-                async def _produce():
+                async def _produce():  # nosemgrep: useless-inner-function
                     # The None sentinel must reach the queue on every exit path
                     # or the consumer blocks forever
                     try:

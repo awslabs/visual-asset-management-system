@@ -30,3 +30,4 @@ daad42860810edbe467d7ede88cc8fcf12ecab2b:tools/VamsCLI/docs/commands/api-key-man
 8e9eff74bbacc46df48d5f076c3aa337b812a8a7:tools/VamsCLI/tests/test_api_key_user_commands.py:generic-api-key:63
 f923905eb64493090bfc705378a11baff3c77fb5:documentation/docusaurus-site/docs/api/addon.md:generic-api-key:63
 1f0ebf657255a808f9fd3ebe327984c9960a4d1d:documentation/VAMS_API.yaml:generic-api-key:11201
+a6c297675ed6e0bab028eb4601e8f4b3444e5070:documentation/docusaurus-site/docs/api/assets.md:generic-api-key:649
