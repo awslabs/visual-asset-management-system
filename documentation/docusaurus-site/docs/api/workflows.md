@@ -255,17 +255,20 @@ POST /database/{databaseId}/assets/{assetId}/workflows/{workflowId}
 
 ### Request body
 
-| Field                | Type   | Required | Description                                                                               |
-| -------------------- | ------ | -------- | ----------------------------------------------------------------------------------------- |
-| `workflowDatabaseId` | string | Yes      | Database ID of the workflow (use `GLOBAL` for global workflows)                           |
-| `fileKey`            | string | No       | Specific file path within the asset to process. If omitted, uses the asset's base prefix. |
+| Field                            | Type   | Required | Description                                                                                                                                                                              |
+| -------------------------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflowDatabaseId`             | string | Yes      | Database ID of the workflow (use `GLOBAL` for global workflows)                                                                                                                         |
+| `fileKey`                        | string | No       | Specific file path within the asset to process. If omitted, uses the asset's base prefix.                                                                                              |
+| `pipelineInputParameters`        | object | No       | Per-pipeline `inputParameters` override for this run, keyed by pipeline name. Each value is a JSON string. A pipeline not listed keeps its stored `inputParameters`.                     |
+| `fileBaseExecutionPathExtension` | string | No       | Asset-relative path segment (leading `/`) inserted between the output asset's location key and each output file's relative path. Defaults to `/` (no extra segment) when omitted. |
 
 ### Request body example
 
 ```json
 {
     "workflowDatabaseId": "GLOBAL",
-    "fileKey": "models/building.fbx"
+    "fileKey": "models/building.fbx",
+    "fileBaseExecutionPathExtension": "/exec-2026/"
 }
 ```
 
@@ -319,7 +322,15 @@ GET /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}
 | `assetId`    | string | Yes      | Asset identifier      |
 | `workflowId` | string | No       | Filter by workflow ID |
 
+### Query parameters
+
+| Parameter         | Type   | Required | Default            | Description                                                                                                                  |
+| ----------------- | ------ | -------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `filterStartDate` | string | No       | 90 days before now | ISO-8601 lower bound on execution start date; only executions started on or after this date are listed. Defaults to 90 days ago. |
+
 ### Response
+
+The applied lower bound is echoed back as `filterStartDate`.
 
 ```json
 {
@@ -332,7 +343,8 @@ GET /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}
                 "executionStatus": "RUNNING",
                 "startDate": "03/15/2026, 10:30:00"
             }
-        ]
+        ],
+        "filterStartDate": "2025-12-15T10:30:00Z"
     }
 }
 ```
@@ -446,10 +458,12 @@ The route is keyed on the execution identifier because an execution may span inp
         ],
         "outputs": {
             "files": [
-                { "relativeFilePath": "/models/building.gltf", "fileType": "file", "fileSize": 20480, "contentType": "model/gltf-binary" }
+                { "relativeFilePath": "/models/building.gltf", "fileType": "file", "fileSize": 20480, "contentType": "model/gltf-binary", "assetId": "building-001", "databaseId": "default", "assetFileVersionId": "PvT3.K9mZ0xq1aBcd2EfGhI" }
             ],
             "metadata": [],
-            "results": []
+            "results": [
+                { "relativeFilePath": "/models/building.report.json", "resultsContent": "{\"triangles\": 18204, \"status\": \"ok\"}", "resultsContentTruncated": false }
+            ]
         }
     }
 }
@@ -461,6 +475,10 @@ The details endpoint works for both running and completed executions. While an e
 
 :::note[Traceability, not internals]
 The response is scoped to input/output traceability. Internal details — Step Functions and resource ARNs, temporary and auxiliary S3 input/output locations, and credential-vending fields — are intentionally omitted. Output file size and content type are included when still available; a lifecycle policy may expire temporary output files, in which case only the relative path and type are returned.
+
+For executions whose output target is an asset, each output file carries the target asset identity — `assetId` and `databaseId` — derived from the execution's output target. When a matching file version-history record exists, `assetFileVersionId` is also added, identifying the specific S3 file version the execution wrote. `assetFileVersionId` is absent for outputs with no history record (for example, executions that ran before file version history was recorded).
+
+`results` lists structured result files a pipeline emits to the execution's `results/` output folder (as opposed to asset files). Each entry carries the file's path relative to that folder (`relativeFilePath`), the file content (`resultsContent`), and `resultsContentTruncated`, which is `true` when the stored content was truncated to fit the field limit.
 :::
 
 ### Error responses

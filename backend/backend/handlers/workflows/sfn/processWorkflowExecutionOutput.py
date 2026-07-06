@@ -22,7 +22,8 @@ from customLogging.logger import safeLogger
 from models.common import success, validation_error, authorization_error, internal_error
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.assetsV3 import AssetUploadTableModel
-from common import executionRecords as er
+from common.workflows import executionRecords as er
+from common.workflows import executionOutputs as eo
 
 asset_Database = None
 db_Database = None
@@ -207,8 +208,16 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None):
-    """Process an external upload using the fileIngestion Lambda"""
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/"):
+    """Process an external upload using the fileIngestion Lambda.
+
+    file_base_execution_path_extension is inserted between the output asset's location key and
+    each output file's relative path (final key = assetLocationKey + extension + relativePath).
+    It defaults to '/' (no extra path segment). It applies to asset FILE outputs, whose key is
+    path-structured; preview outputs are basename-only and are unaffected."""
+    # Normalize the extension to a clean middle segment with no leading/trailing slashes; '/'
+    # (or empty) means no extra segment.
+    extension = (file_base_execution_path_extension or "/").strip("/")
     try:
         # Prepare the request payload
         file_list = []
@@ -224,6 +233,11 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                 # Remove leading slash if present
                 if file_name.startswith('/'):
                     file_name = file_name[1:]
+
+                # Insert the output base-execution path extension between the asset location key
+                # and the file's relative path (the upload lambda prepends the asset base key).
+                if extension:
+                    file_name = f"{extension}/{file_name}"
             else:
                 # For other upload types (like assetPreview), just use the filename
                 file_name = os.path.basename(file_key)
@@ -441,8 +455,16 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
         logger.exception(f"Error processing {metadata_type} file {s3_key}: {e}")
 
 
-def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name):
-    """Build OutputFiles descriptors from an S3 listing relative to `prefix`."""
+def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
+                                file_base_execution_path_extension="/"):
+    """Build OutputFiles descriptors from an S3 listing relative to `prefix`, capturing each
+    object's S3 versionId (best-effort head_object; empty on failure).
+
+    The recorded relativeFilePath reflects where the output lands in the asset, so the output
+    base-execution path extension (inserted between the asset location key and the relative path)
+    is prepended here too, keeping the recorded provenance aligned with the actual write location
+    (and with the asset file version-history join). Defaults to '/' (no extra segment)."""
+    extension = (file_base_execution_path_extension or "/").strip("/")
     descriptors = []
     for obj in objects_found.get('Contents', []):
         key = obj['Key']
@@ -450,13 +472,21 @@ def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name):
             continue
         relative = key[len(prefix):] if key.startswith(prefix) else key
         relative = relative.lstrip('/')
+        if extension:
+            relative = f"{extension}/{relative}"
+        version_id = ""
+        try:
+            head = s3c.head_object(Bucket=bucket_name, Key=key)
+            version_id = head.get('VersionId', '') or ''
+        except Exception as e:
+            logger.info(f"Could not read S3 version for {key} (non-critical): {e}")
         descriptors.append({
             "fileType": file_type,
             "relativeFilePath": relative,
             "s3Key": key,
             "fileSize": obj.get('Size', 0),
             "contentType": "",
-            "s3VersionId": "",
+            "s3VersionId": version_id,
         })
     return descriptors
 
@@ -509,7 +539,7 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
 
 def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_execution_id,
                              workflow_database_id, workflow_id, bucket_name,
-                             output_files, output_metadata, result_log, execution_log,
+                             output_files, output_metadata, output_results, result_log, execution_log,
                              log_group_arn, log_stream_name, execution_status):
     """Write end-state pipeline output/metadata/log rows and set completion status
     on the end-state PipelineExecutions row and the V2 main execution row.
@@ -550,6 +580,17 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                 source_metadata_file_relative_path=m.get("sourceMetadataFileRelativePath", ""),
             ))
 
+    # Output results (structured pipeline result files)
+    if output_results:
+        or_table = dynamo.Table(pipeline_execution_output_results_table)
+        for r in output_results:
+            or_table.put_item(Item=er.build_output_result_record(
+                pipeline_execution_id=end_state_pipeline_execution_id,
+                relative_file_path=r.get("relativeFilePath", ""),
+                results_content=r.get("resultsContent", ""),
+                s3_key=r.get("s3Key", ""),
+            ))
+
     # Logs summary row (per-pipeline logs table)
     logs_table = dynamo.Table(pipeline_execution_logs_table)
     logs_table.put_item(Item=er.build_log_record(
@@ -571,7 +612,7 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     # every completed run (success or failure) for later debugging by limited roles.
     main_table = dynamo.Table(workflow_execution_database_v2)
     main_table.update_item(
-        Key={"executionId": workflow_execution_id,
+        Key={"workflowExecutionId": workflow_execution_id,
              "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
         UpdateExpression="SET executionStopDate = :s, executionStatus = :st, executionLog = :lg",
         ExpressionAttributeValues={":s": stop_date, ":st": execution_status, ":lg": execution_log or ""},
@@ -597,14 +638,21 @@ def lambda_handler(event, context):
         #sub in body for event
         event = event["body"]
 
+        # Resolve the OUTPUT TARGET identity: outputs are written to this asset. The output
+        # target is threaded explicitly as outputAssetId/outputDatabaseId (it equals the input
+        # asset today, but is honored here so a divergent target works without further changes).
+        # The rest of this handler keys off event['assetId']/event['databaseId'].
+        event['assetId'] = event.get('outputAssetId', '')
+        event['databaseId'] = event.get('outputDatabaseId', '')
+
         #Input validation
-        if 'databaseId' not in event:
-            message = "No databaseId in API Call"
+        if not event['databaseId']:
+            message = "No outputDatabaseId in API Call"
             logger.error(message)
             return validation_error(body={"message": message})
 
-        if 'assetId' not in event:
-            message = "No assetId in API Call"
+        if not event['assetId']:
+            message = "No outputAssetId in API Call"
             logger.error(message)
             return validation_error(body={"message": message})
 
@@ -695,6 +743,7 @@ def lambda_handler(event, context):
             # Accumulate output descriptors for execution-output recording (Stage 1).
             collected_output_files = []
             collected_output_metadata = []
+            collected_output_results = []
 
             #Handle preview outputs
             if ('previewPathKey' in event):
@@ -753,7 +802,7 @@ def lambda_handler(event, context):
                                 previewPathKey,
                                 requestContext,
                                 workflow_id=event.get('workflowId'),
-                                execution_id=event.get('executionId'),
+                                execution_id=event.get('workflowExecutionId'),
                                 change_user_id=event.get('executingUserName')
                             )
                             
@@ -785,9 +834,11 @@ def lambda_handler(event, context):
                     logger.info(files)
 
                     collected_output_files.extend(
-                        _collect_output_descriptors(objectsFound, "file", filesPathKey, bucket_name)
+                        _collect_output_descriptors(
+                            objectsFound, "file", filesPathKey, bucket_name,
+                            file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
                     )
-                    
+
                     if files:
                         try:
                             # Create external upload record
@@ -818,8 +869,9 @@ def lambda_handler(event, context):
                                 filesPathKey,
                                 requestContext,
                                 workflow_id=event.get('workflowId'),
-                                execution_id=event.get('executionId'),
-                                change_user_id=event.get('executingUserName')
+                                execution_id=event.get('workflowExecutionId'),
+                                change_user_id=event.get('executingUserName'),
+                                file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/')
                             )
                             
                             if result:
@@ -950,6 +1002,34 @@ def lambda_handler(event, context):
                         except Exception as e:
                             logger.exception(f"Error processing file attribute {file_obj['Key']}: {e}")
 
+            # Handle structured result outputs (read content into the results table)
+            if('resultsPathKey' in event):
+                resultsPathKey = event['resultsPathKey']
+                logger.info(f"Processing result outputs from: {resultsPathKey}")
+
+                objectsFound = {}
+                try:
+                    objectsFound = verify_get_path_objects(bucket_name, resultsPathKey)
+                    logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in results path")
+                except Exception as e:
+                    logger.exception(f"Error listing result objects: {e}")
+
+                if 'Contents' in objectsFound:
+                    result_files = [obj['Key'] for obj in objectsFound['Contents'] if obj['Key'][-1] != '/']
+                    for result_key in result_files:
+                        try:
+                            results_content = s3c.get_object(
+                                Bucket=bucket_name, Key=result_key)['Body'].read().decode("utf-8")
+                            # Path relative to the results folder, asset-relative with a leading slash.
+                            relative_file_path = "/" + result_key[len(resultsPathKey):].lstrip("/")
+                            collected_output_results.append({
+                                "relativeFilePath": relative_file_path,
+                                "resultsContent": results_content,
+                                "s3Key": result_key,
+                            })
+                        except Exception as e:
+                            logger.exception(f"Error reading result file {result_key}: {e}")
+
 
             # Record end-state pipeline outputs + completion status (Stage 1 data model).
             try:
@@ -958,20 +1038,35 @@ def lambda_handler(event, context):
                 # with a newer ASL. Scope the log read to THIS execution within the group.
                 log_group_arn = workflow_execution_log_group_arn
                 workflow_execution_id = event.get('workflowExecutionId', '')
+                end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
                 # Full execution log for this run, captured on completion regardless of
                 # success/failure (stored on the main row's executionLog field).
                 execution_log, stream_name = _fetch_execution_logs(
                     log_group_arn, workflow_execution_id
                 )
+                # Attribute to the end-state pipeline only the output files new or version-changed
+                # vs the prior pipelines' baseline; preview rows have no baseline, kept as-is.
+                prior_ids = [pid for pid in (event.get('priorPipelineExecutionIds') or [])
+                             if pid and pid != end_state_pipeline_execution_id]
+                baseline = eo.recorded_output_versions(
+                    dynamodb, pipeline_execution_output_files_table, prior_ids)
+                file_descriptors = [f for f in collected_output_files if f.get("fileType") == "file"]
+                preview_descriptors = [f for f in collected_output_files if f.get("fileType") != "file"]
+                attributed_files = [
+                    f for f in file_descriptors
+                    if baseline.get(f.get("s3Key", "")) is None
+                    or baseline.get(f.get("s3Key", "")) != f.get("s3VersionId", "")
+                ]
                 record_execution_outputs(
                     dynamo=dynamodb,
                     workflow_execution_id=workflow_execution_id,
-                    end_state_pipeline_execution_id=event.get('endStatePipelineExecutionId', ''),
+                    end_state_pipeline_execution_id=end_state_pipeline_execution_id,
                     workflow_database_id=event.get('workflowDatabaseId', ''),
                     workflow_id=event.get('workflowId', ''),
                     bucket_name=bucket_name,
-                    output_files=collected_output_files,
+                    output_files=attributed_files + preview_descriptors,
                     output_metadata=collected_output_metadata,
+                    output_results=collected_output_results,
                     result_log="Workflow Execution Output Processing Complete",
                     execution_log=execution_log,
                     log_group_arn=log_group_arn, log_stream_name=stream_name,

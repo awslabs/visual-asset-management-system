@@ -17,7 +17,7 @@
     "_comment_source": "Legacy execution table (PK databaseId:assetId, SK executionId) - read source",
     "workflow_executions_storage_table_name_v1": "YOUR-STACK-WorkflowExecutionsStorageTable-XXXXX",
 
-    "_comment_main_v2": "V2 main execution table (PK executionId, SK workflowDatabaseId:workflowId)",
+    "_comment_main_v2": "V2 main execution table (PK workflowExecutionId, SK workflowDatabaseId:workflowId)",
     "workflow_executions_storage_table_name_v2": "YOUR-STACK-WorkflowExecutionsStorageTableV2-XXXXX",
 
     "_comment_wf_inputs": "Workflow execution inputs table (PK workflowExecutionId)",

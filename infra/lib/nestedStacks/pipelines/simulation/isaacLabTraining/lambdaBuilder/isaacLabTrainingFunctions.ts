@@ -137,6 +137,10 @@ export class IsaacLabTrainingFunctions extends Construct {
             // STATE_MACHINE_ARN will be added by the construct after SFN creation
         });
 
+        s3AssetBuckets.getS3AssetBucketRecords().forEach((record) => {
+            record.bucket.grantRead(this.vamsExecuteFunction);
+        });
+
         // Apply standard per-Lambda CDK Nag suppressions (IAM4 execution roles, KMS wildcard)
         suppressCdkNagLambda(this.openPipelineFunction);
         suppressCdkNagLambda(this.executeBatchJobFunction);

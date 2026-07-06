@@ -468,7 +468,7 @@ from common.s3PathPatterns import (
     PIPELINE_OUTPUT_FILES_PREFIX,     # '/files/' (file-level outputs, outputS3AssetFilesPath)
     PIPELINE_OUTPUT_PREVIEWS_PREFIX,  # '/previews/' (asset-level previews, outputS3AssetPreviewPath)
     PIPELINE_OUTPUT_METADATA_PREFIX,  # '/metadata/' (metadata files, outputS3AssetMetadataPath)
-    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (reserved for a future feature)
+    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (structured pipeline result files, recorded by the end-state lambda)
 )
 ```
 

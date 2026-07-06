@@ -109,6 +109,48 @@ def transform_to_attribute_format(metadata_dict):
     }
 
 
+def _fetch_json_from_s3(s3_location):
+    """Fetch + parse a JSON object from an s3:// location. Returns {} on a missing/empty
+    location or any S3/parse failure (best-effort)."""
+    if not s3_location or not s3_location.startswith("s3://"):
+        return {}
+    bucket, _, key = s3_location[len("s3://"):].partition("/")
+    if not bucket or not key:
+        return {}
+    try:
+        resp = s3_client.get_object(Bucket=bucket, Key=key)
+        body = resp["Body"].read().decode("utf-8")
+        return json.loads(body) if body else {}
+    except Exception as e:
+        logger.warning(f"Could not read {s3_location}: {e}")
+        return {}
+
+
+def resolve_inputs_from_manifest(data):
+    """Resolve the input file path, its asset base key, and the output-metadata path from the
+    workflow manifest (inputManifestS3Location), falling back to the legacy top-level body fields
+    when no manifest is present (direct/local invocations). The asset base key comes from the
+    input file's OWN assetFilesS3Root (each input file is self-locating). Returns
+    (input_s3_asset_file_path, input_asset_base_key, output_s3_asset_metadata_path)."""
+    manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
+    input_files = (manifest or {}).get("inputFiles") or []
+    input_path = ""
+    asset_base_key = ""
+    if input_files:
+        first = input_files[0]
+        if first.get("bucket") and first.get("key"):
+            input_path = f"s3://{first['bucket']}/{first['key']}"
+        # Asset base key = the key portion of this file's own assetFilesS3Root (s3://bucket/baseKey).
+        root = first.get("assetFilesS3Root", "")
+        if root.startswith("s3://"):
+            asset_base_key = root[len("s3://"):].partition("/")[2]
+    input_path = input_path or data.get("inputS3AssetFilePath", "")
+    asset_base_key = asset_base_key or data.get("inputAssetLocationKey", "")
+    output_path = (manifest or {}).get("outputs", {}).get("metadata", "") \
+        or data.get("outputS3AssetMetadataPath", "")
+    return input_path, asset_base_key, output_path
+
+
 def extract_metadata(input_path_asset_base, input_path, output_path):
     """
     Extract metadata from a CAD or mesh file.
@@ -220,34 +262,14 @@ def lambda_handler(event, context):
     # Check external task token if passed (Synchronous Pipeline so no task token should be passed)
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
-        
-    # Get input parameters if defined
-    if 'inputParameters' in data:
-        input_parameters = data['inputParameters']
-    else:
-        input_parameters = ''
 
-    # Get input metadata if defined
-    if 'inputMetadata' in data:
-        input_metadata = data['inputMetadata']
-    else:
-        input_metadata = ''
-
-    # Get Executing username 
-    if 'executingUserName' in data:
-        executing_userName = data['executingUserName']
-    else:
-        executing_userName = ''
-
-    # Get Executing requestContext
-    if 'executingRequestContext' in data:
-        executing_requestContext = data['executingRequestContext']
-    else:
-        executing_requestContext = ''
+    # Resolve the input file path, its asset base key, and the output-metadata path from the
+    # workflow manifest (each input file is self-locating; legacy body fields are the fallback).
+    input_path, asset_base_key, output_path = resolve_inputs_from_manifest(data)
 
     # Extract metadata
-    result = extract_metadata(data['inputAssetLocationKey'], data['inputS3AssetFilePath'], data['outputS3AssetMetadataPath'], )
-    
+    result = extract_metadata(asset_base_key, input_path, output_path)
+
     return result
 
 

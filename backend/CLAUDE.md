@@ -43,13 +43,17 @@ backend/
 │   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
 │   │   │                                #   allowed preview extensions (mirrored in
 │   │   │                                #   web/src/common/constants/fileFormats.ts)
-│   │   ├── executionRecords.py          # Pure helpers for execution storage records (keys, prefixes, builders)
 │   │   ├── dynamoDbMetadataKeys.py      # Special DynamoDB metadata keys (REINDEX_METADATA_RECORD)
 │   │   │                                #   and internal field prefixes (VAMS_, _)
 │   │   ├── apiRoutes.py                 # MASTER list of all API endpoint routes (ApiRoute constants,
 │   │   │                                #   category group arrays, ALL_API_ROUTES). Handlers dispatch
 │   │   │                                #   via ApiRoute.matches(); feeds GET /auth/routes/api
-│   │   └── stepfunctions_builder.py     # ASL builder for workflows (builder pattern:
+│   │   └── workflows/                    # Execution/pipeline/workflow shared helpers (pure, no AWS at import)
+│   │       ├── executionRecords.py      # Pure helpers for execution storage records (keys, prefixes, builders)
+│   │       ├── executionOutputs.py      # Shared output attribution (S3 version snapshot/diff),
+│   │       │                            #   resolved input-manifest build, status/stop/log finalization
+│   │       │                            #   (used by interim + processOutput + error-handler lambdas)
+│   │       └── stepfunctions_builder.py # ASL builder for workflows (builder pattern:
 │   │                                    #   TaskStateBuilder, LambdaTaskBuilder,
 │   │                                    #   SqsTaskBuilder, EventBridgeTaskBuilder)
 │   ├── customLogging/
@@ -76,7 +80,17 @@ backend/
 │   │   ├── tags/                        # Tag CRUD
 │   │   ├── tagTypes/                    # Tag type management
 │   │   ├── userRoles/                   # User-role assignment
-│   │   ├── workflows/                   # Step Functions workflow management (modernized:
+│   │   ├── workflows/                   # Step Functions workflow management. API-facing handlers
+│   │   │                                #   at the top level: executionService (list/abort/details/
+│   │   │                                #   logs), createWorkflow (ASL gen with interim-tracking +
+│   │   │                                #   error-handler catch routing; aslSchemaVersion stamped),
+│   │   │                                #   executeWorkflow (writes per-pipeline manifest envelope),
+│   │   │                                #   workflowService. SFN-invoked handlers under workflows/sfn/:
+│   │   │                                #   interimPipelineTracking (per-pipeline output diff + next
+│   │   │                                #   manifest), handleExecutionError (reconcile tables to FAILED),
+│   │   │                                #   processWorkflowExecutionOutput (end-state), and
+│   │   │                                #   registerPipelineExecution (EventBridge-invoked: records
+│   │   │                                #   pipeline-reported sub-SFN/log ARNs). (modernized:
 │   │                                    #   Pydantic models, builder pattern for ASL generation)
 │   │   ├── addon/                        # Add-on integrations
 │   │   │   ├── garnetFramework/          # Garnet NGSI-LD indexer Lambdas

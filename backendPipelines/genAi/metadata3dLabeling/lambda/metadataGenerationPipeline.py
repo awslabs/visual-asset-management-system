@@ -11,6 +11,7 @@ from utils.rekognition import RekognitionImage
 from utils.rekognition import RekognitionLabel
 from utils.rekognition import RekognitionText
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="MetadataGenerationPipeline")
 
@@ -183,23 +184,29 @@ def lambda_handler(event, context):
         logger.error("No metadata generation stage found in pipeline definition.")
         raise Exception("No metadata generation stage found in pipeline definition.")
     
-    #Get and parse input parameters
-    inputParameters = event.get("inputParameters", "")
-    inputParametersObject = {}
-    if(isinstance(inputParameters,str) and inputParameters != ""):
-        try:
-            inputParametersObject = json.loads(inputParameters)
-        except:
-            logger.error("Input parameters is not valid JSON.")
+    #Read input configuration + metadata from S3 (only the locations travel in the definition)
+    inputConfigurationS3Location = pipelineDefinitions.get("inputConfigurationS3Location", "")
+    inputMetadataS3Location = pipelineDefinitions.get("inputMetadataS3Location", "")
 
-    #Get and parse input metadata
-    inputMetadata = event.get("inputMetadata", "")
-    inputMetadataObject = {}
-    if(isinstance(inputMetadata,str) and inputMetadata != ""):
-        try:
-            inputMetadataObject = json.loads(inputMetadata)
-        except:
-            logger.error("Input metadata is not valid JSON.")
+    inputParametersObject = manifestHelper.fetch_input_configuration(s3_client, inputConfigurationS3Location)
+    if not inputParametersObject:
+        #Transition fallback for legacy payloads that still forward inline content
+        inlineParameters = event.get("inputParameters", "")
+        if(isinstance(inlineParameters,str) and inlineParameters != ""):
+            try:
+                inputParametersObject = json.loads(inlineParameters)
+            except:
+                logger.error("Input parameters is not valid JSON.")
+
+    inputMetadataObject = manifestHelper.fetch_metadata(s3_client, inputMetadataS3Location)
+    if not inputMetadataObject:
+        #Transition fallback for legacy payloads that still forward inline content
+        inlineMetadata = event.get("inputMetadata", "")
+        if(isinstance(inlineMetadata,str) and inlineMetadata != ""):
+            try:
+                inputMetadataObject = json.loads(inlineMetadata)
+            except:
+                logger.error("Input metadata is not valid JSON.")
 
     #Get input/output locations
     inputBucket = pipelineStageDefinition['inputFile']['bucketName']

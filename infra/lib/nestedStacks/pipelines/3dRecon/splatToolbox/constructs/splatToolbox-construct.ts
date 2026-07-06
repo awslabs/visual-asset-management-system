@@ -10,10 +10,6 @@ import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
-import * as sqs from "aws-cdk-lib/aws-sqs";
-import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
-import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -21,7 +17,6 @@ import {
     buildConstructPipelineFunction,
     buildOpenPipelineFunction,
     buildVamsExecuteSplatToolboxPipelineFunction,
-    buildSqsExecuteSplatToolboxPipelineFunction,
     buildPipelineEndFunction,
 } from "../lambdaBuilder/splatToolboxFunctions";
 import { BatchGpuPipelineConstruct } from "../../../constructs/batch-gpu-pipeline";
@@ -34,6 +29,7 @@ import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { execSync } from "child_process";
 import * as fs from "fs";
@@ -83,8 +79,11 @@ export class SplatToolboxConstruct extends Construct {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -97,7 +96,7 @@ export class SplatToolboxConstruct extends Construct {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -174,6 +173,11 @@ export class SplatToolboxConstruct extends Construct {
             ],
         });
 
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
+
         /**
          * AWS Batch Job Definition & Compute Env for Splat Toolbox Container
          */
@@ -213,9 +217,7 @@ export class SplatToolboxConstruct extends Construct {
                 memory: 60000,
                 retryAttempts: 1,
                 timeoutSeconds: 259200, // 72 hours
-                // Environment variables that will be available in the container
-                // Note: Runtime variables (EXTERNAL_SFN_TASK_TOKEN, INPUT_PARAMETERS, INPUT_METADATA)
-                // are passed via Step Functions containerOverrides
+                // Runtime variables are passed via Step Functions containerOverrides
                 additionalEnvironmentVariables: [],
             }
         );
@@ -291,8 +293,6 @@ export class SplatToolboxConstruct extends Construct {
                 environment: {
                     EXTERNAL_SFN_TASK_TOKEN: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
                     AWS_REGION: region,
-                    INPUT_PARAMETERS: sfn.JsonPath.stringAt("$.inputParameters"),
-                    INPUT_METADATA: sfn.JsonPath.stringAt("$.inputMetadata"),
                 },
             },
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
@@ -362,6 +362,8 @@ export class SplatToolboxConstruct extends Construct {
             props.config,
             props.vpc,
             props.pipelineSubnets,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -461,17 +463,6 @@ export class SplatToolboxConstruct extends Construct {
         this.pipelineVamsLambdaFunctionName = SplatToolboxPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
 

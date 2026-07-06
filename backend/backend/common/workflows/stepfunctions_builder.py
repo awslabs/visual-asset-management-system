@@ -296,7 +296,7 @@ def format_s3_uri_with_states_format(
     Create a States.Format expression for dynamic S3 URIs.
     
     Args:
-        bucket_param: JSONPath to the bucket name (e.g., "$.bucketAsset")
+        bucket_param: JSONPath to the bucket name (e.g., "$.workflowExecutionS3InputOutputBucket")
         path_template: Path template with {} placeholder for execution name
         execution_name_placeholder: JSONPath for execution name
         
@@ -304,6 +304,57 @@ def format_s3_uri_with_states_format(
         States.Format expression string
     """
     return f"States.Format('s3://{{}}/" + path_template + f"', {bucket_param}, {execution_name_placeholder})"
+
+
+def create_interim_tracking_state(
+    state_id: str,
+    function_name: str,
+    payload: Dict[str, Any],
+    result_path: str,
+    error_handler_state: str,
+) -> Dict[str, Any]:
+    """Interim pipeline-tracking Lambda state, inserted between two pipeline steps. Its result
+    is stored at result_path; on error it routes to the shared error-handler state."""
+    return {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "ResultPath": result_path,
+        "Parameters": {
+            "FunctionName": function_name,
+            "Payload": payload,
+        },
+        "Retry": [create_retry_config(
+            error_equals=["States.ALL"], interval_seconds=5, backoff_rate=2.0, max_attempts=3)],
+        "Catch": [create_catch_config(
+            error_equals=["States.ALL"],
+            next_state=error_handler_state,
+            result_path="$.errorInfo",
+        )],
+    }
+
+
+def create_error_handler_state(
+    state_id: str,
+    function_name: str,
+    payload: Dict[str, Any],
+    fail_state: str,
+) -> Dict[str, Any]:
+    """Error-handler Lambda state that every Catch routes to, then transitions to the Fail
+    state. Its own errors are caught here too and still fall through to Fail."""
+    return {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "ResultPath": "$.errorHandlerResult",
+        "Parameters": {
+            "FunctionName": function_name,
+            "Payload": payload,
+        },
+        "Retry": [create_retry_config(
+            error_equals=["States.ALL"], interval_seconds=3, backoff_rate=2.0, max_attempts=2)],
+        # If the error handler itself fails, still proceed to the Fail state.
+        "Catch": [create_catch_config(error_equals=["States.ALL"], next_state=fail_state)],
+        "Next": fail_state,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -325,29 +376,42 @@ class TaskStateBuilder(ABC):
         pass
 
     def build_payload(self, pipeline: Dict[str, Any], path_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Shared payload construction — identical JSON body for all types."""
+        """Shared payload construction — identical JSON body for all task types.
+
+        The body carries the manifest + input-configuration S3 LOCATIONS plus the fields that are
+        only available at the workflow-execution level (the asset/aux bucket names and asset keys,
+        the workflow/execution identifiers, and the executing-user context). Everything a pipeline
+        needs about its inputs/outputs (resolved input files, output/aux/metadata locations, asset
+        identity, orchestration config) is read from the manifest at inputManifestS3Location."""
         payload = {
             "body": {
-                "inputS3AssetFilePath.$": path_context.get("inputS3AssetFilePath"),
-                "outputS3AssetFilesPath.$": path_context.get("outputS3AssetFilesPath"),
-                "outputS3AssetPreviewPath.$": path_context.get("outputS3AssetPreviewPath"),
-                "outputS3AssetMetadataPath.$": path_context.get("outputS3AssetMetadataPath"),
-                "inputOutputS3AssetAuxiliaryFilesPath.$": path_context.get("inputOutputS3AssetAuxiliaryFilesPath"),
-                "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
-                "bucketAsset.$": "$.bucketAsset",
-                "assetId.$": "$.assetId",
-                "databaseId.$": "$.databaseId",
+                # --- Workflow-execution identity ---
                 "workflowDatabaseId.$": "$.workflowDatabaseId",
                 "workflowId.$": "$.workflowId",
+                "workflowExecutionId.$": "$.workflowExecutionId",
+
+                # --- Buckets + primary input file key (the manifest carries each input file's
+                #     own location; inputAssetFileKey is the top-level triggering file key some
+                #     pipelines use to build aux output paths) ---
+                "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
+                "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
                 "inputAssetFileKey.$": "$.inputAssetFileKey",
-                "inputAssetLocationKey.$": "$.inputAssetLocationKey",
-                "outputType": pipeline.get("outputType", ""),
-                "inputMetadata.$": "$.inputMetadata",
-                "inputParameters": pipeline.get('inputParameters', ''),
+
+                # --- Executing-user context ---
                 "executingUserName.$": "$.executingUserName",
-                "executingRequestContext.$": "$.executingRequestContext"
+                "executingRequestContext.$": "$.executingRequestContext",
             }
         }
+
+        # --- Input-location references the pipeline reads from S3 (manifest + per-pipeline
+        #     config), appended only when the path context supplies them ---
+        for env_field in (
+            "inputManifestS3Location",
+            "inputConfigurationS3Location",
+        ):
+            ref = path_context.get(env_field)
+            if ref:
+                payload["body"][f"{env_field}.$"] = ref
         return payload
 
     def apply_callback(self, payload: Dict[str, Any], pipeline: Dict[str, Any]) -> Dict[str, Any]:

@@ -108,7 +108,7 @@ interface storageResources {
         assetUploadsStorageTable;
         assetVersionsStorageTable;
         assetFileVersionsStorageTable;
-        assetFileVersionHistoryStorageTable;
+        assetFileVersionHistoryStorageTable; // GSIs: DatabaseIdAssetIdIndex (PK databaseId:assetId, SK versionId), WorkflowExecutionIdIndex (PK changeWorkflowExecutionId, SK databaseId:assetId:filePath; sparse — workflow-produced versions only)
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
         commentStorageTable;
@@ -127,7 +127,7 @@ interface storageResources {
         userRolesStorageTable;
         userStorageTable;
         workflowExecutionsStorageTable;
-        workflowExecutionsStorageTableV2; // V2: PK executionId, SK workflowDatabaseId:workflowId; GSI WorkflowExecutionsByWorkflowGSI
+        workflowExecutionsStorageTableV2; // V2: PK workflowExecutionId, SK workflowDatabaseId:workflowId; GSI WorkflowExecutionsByWorkflowGSI
         pipelineExecutionsStorageTable; // PK pipelineExecutionId, SK workflowExecutionId; GSIs PipelineExecByWorkflowExecGSI / PipelineExecChainGSI / PipelineExecEndStateGSI
         pipelineExecutionInputFilesStorageTable; // PK pipelineExecutionId; GSI InputFilesByAssetGSI
         pipelineExecutionInputMetadataStorageTable;
@@ -164,7 +164,7 @@ interface authResources {
 
 Workflow executions use a workflow-keyed data model spread across 11 DynamoDB tables. The main execution row is keyed by a VAMS GUID (`executionId`), and asset/database linkage lives in the input tables rather than on the main row:
 
--   `workflowExecutionsStorageTableV2` — PK `executionId`, SK `workflowDatabaseId:workflowId`; GSI `WorkflowExecutionsByWorkflowGSI` (PK `workflowDatabaseId:workflowId`, SK `executionStartDate`).
+-   `workflowExecutionsStorageTableV2` — PK `workflowExecutionId`, SK `workflowDatabaseId:workflowId`; GSI `WorkflowExecutionsByWorkflowGSI` (PK `workflowDatabaseId:workflowId`, SK `executionStartDate`).
 -   `pipelineExecutionsStorageTable` — PK `pipelineExecutionId`, SK `workflowExecutionId`; GSIs `PipelineExecByWorkflowExecGSI`, `PipelineExecChainGSI`, `PipelineExecEndStateGSI`.
 -   `pipelineExecutionInputFilesStorageTable` — PK `pipelineExecutionId`, SK `databaseId:assetId:inputAssetFileKey`; GSI `InputFilesByAssetGSI`.
 -   `pipelineExecutionInputMetadataStorageTable` — PK `pipelineExecutionId`, SK `databaseId:assetId:filePath`.
@@ -1031,6 +1031,12 @@ grantReadPermissionsToAllAssetBuckets(lambdaFunction);
 
 // Grant read/write permissions to all asset buckets
 grantReadWritePermissionsToAllAssetBuckets(lambdaFunction);
+
+// Grant access to external asset bucket customer managed KMS keys (no-op when
+// no external bucket declares a bucketKmsKeyArn). The grant*AssetBuckets helpers
+// above already call this; call it directly for locally-built container/Batch/
+// ECS/EKS/Step Functions roles that read or write asset buckets.
+grantExternalAssetBucketKmsKeys(roleOrFunction);
 
 // Add KMS permissions for encryption/decryption
 kmsKeyLambdaPermissionAddToResourcePolicy(lambdaFunction, storageResources.encryption.kmsKey);

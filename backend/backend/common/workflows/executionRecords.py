@@ -20,6 +20,10 @@ from datetime import datetime, timezone
 MAX_TEXT_FIELD_BYTES = 380 * 1024
 MAX_LOG_FIELD_BYTES = 390 * 1024
 
+# Schema versions stamped on the VAMS-authored manifest and metadata files.
+MANIFEST_SCHEMA_VERSION = 1
+METADATA_SCHEMA_VERSION = 1
+
 
 def new_guid() -> str:
     """Generate a VAMS execution/pipeline-execution GUID (32 hex chars)."""
@@ -68,6 +72,13 @@ def input_file_composite_key(database_id: str, asset_id: str, file_key: str) -> 
     return f"{database_id}:{asset_id}:{normalize_file_key(file_key)}"
 
 
+def orchestration_event_prefix(event_source_prefix: str, execution_id: str,
+                               pipeline_execution_id: str) -> str:
+    """Per-execution+pipeline EventBridge source prefix a pipeline reports sub-process ARNs
+    under: '<eventSourcePrefix>.execution.<executionId>.pipeline.<pipelineExecutionId>'."""
+    return f"{event_source_prefix}.execution.{execution_id}.pipeline.{pipeline_execution_id}"
+
+
 # Reserved S3 prefix literals (mirror common/s3PathPatterns.py; duplicated here
 # as plain strings to keep this module dependency-free).
 _PIPELINES_PREFIX = "pipelines/"
@@ -104,6 +115,109 @@ def aux_pipeline_prefix(pipeline_name: str, pipeline_type: str, input_asset_file
     return f"{input_asset_file_key}/{subfolder}/{pipeline_name}/"
 
 
+# Per-execution input-definition folder (asset bucket): the shared input metadata file plus
+# each pipeline's config + resolved manifest. Keyed only on the execution id so executeWorkflow
+# and the ASL compute identical keys (both independently draw job-name uuids).
+_EXECUTION_INPUTS_SEGMENT = "workflowExecutionInputs"
+
+
+def execution_input_prefix(execution_id: str) -> str:
+    """Per-execution input-definition folder (asset-bucket relative). Trailing slash."""
+    return f"{_PIPELINES_PREFIX}{_EXECUTION_INPUTS_SEGMENT}/{execution_id}/"
+
+
+def execution_input_metadata_key(execution_id: str) -> str:
+    """Asset-bucket key of the shared input-metadata file for an execution."""
+    return execution_input_prefix(execution_id) + "metadata.json"
+
+
+def pipeline_input_config_key(execution_id: str, pipeline_index: int) -> str:
+    """Asset-bucket key of a pipeline's input configuration file."""
+    return f"{execution_input_prefix(execution_id)}pipeline{pipeline_index}/config.json"
+
+
+def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
+    """Asset-bucket key of a pipeline's resolved input manifest file."""
+    return f"{execution_input_prefix(execution_id)}pipeline{pipeline_index}/manifest.json"
+
+
+def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: str = "",
+                         database_id: str = "", asset_id: str = "",
+                         asset_files_s3_root: str = "") -> dict:
+    """One self-locating input-manifest entry: an asset-relative path mapped to the S3
+    location (bucket/key/versionId) and asset identity a pipeline reads for that path."""
+    return {
+        "relativePath": normalize_file_key(relative_path),
+        "databaseId": database_id or "",
+        "assetId": asset_id or "",
+        "assetFilesS3Root": asset_files_s3_root or "",
+        "bucket": bucket,
+        "key": key,
+        "versionId": version_id or "",
+    }
+
+
+def build_manifest_output_target(location_type="asset", asset_id="", database_id="",
+                                 file_base_execution_path_extension="/"):
+    """outputTarget block for the manifest envelope: where the execution's outputs are written.
+    location_type is 'asset' today (outputs go onto an asset); asset_id/database_id identify
+    that asset. The end-state process-output lambda uses this rather than assuming the output
+    target equals the input asset.
+
+    fileBaseExecutionPathExtension is inserted between the output asset's location key and each
+    output file's relative path (final key = assetLocationKey + extension + relativePath). It
+    defaults to '/' (no extra path segment); a value like '/exec-2026/' writes all outputs under
+    that sub-folder of the asset."""
+    return {
+        "locationType": location_type or "asset",
+        "assetId": asset_id or "",
+        "databaseId": database_id or "",
+        "fileBaseExecutionPathExtension": file_base_execution_path_extension or "/",
+    }
+
+
+def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
+                            aux_bucket_s3_root, aux_temp_prefix, aux_preview_prefix,
+                            system_config=None, output_target=None):
+    """The per-pipeline manifest envelope (schemaVersion-stamped): resolved input files plus
+    the metadata, output, and auxiliary-bucket locations, the output-target identity, and the
+    systemConfig block."""
+    return {
+        "schemaVersion": MANIFEST_SCHEMA_VERSION,
+        "inputFiles": input_files or [],
+        "inputMetadataS3Location": input_metadata_s3_location or "",
+        "outputs": {
+            "files": (outputs or {}).get("files", ""),
+            "previews": (outputs or {}).get("previews", ""),
+            "metadata": (outputs or {}).get("metadata", ""),
+            "results": (outputs or {}).get("results", ""),
+        },
+        "outputTarget": output_target or build_manifest_output_target(),
+        "auxBucketS3Root": aux_bucket_s3_root or "",
+        "auxTempPrefix": aux_temp_prefix or "",
+        "auxPreviewPrefix": aux_preview_prefix or "",
+        "systemConfig": system_config or {},
+    }
+
+
+def build_manifest_system_config(orchestration_bus_arn="", orchestration_event_prefix=""):
+    """systemConfig block for the manifest envelope: the orchestration bus ARN and event
+    prefix a pipeline reports sub-process ARNs/logs under. Empty when not configured."""
+    return {
+        "orchestrationBusArn": orchestration_bus_arn or "",
+        "orchestrationEventPrefix": orchestration_event_prefix or "",
+    }
+
+
+def build_metadata_envelope(metadata):
+    """The shared input-metadata file envelope (schemaVersion-stamped); the metadata payload
+    is preserved verbatim under 'metadata'."""
+    return {
+        "schemaVersion": METADATA_SCHEMA_VERSION,
+        "metadata": metadata if metadata is not None else {},
+    }
+
+
 def truncate_text(text: str, limit: int = MAX_TEXT_FIELD_BYTES):
     """Trim text to <= limit bytes (UTF-8). Returns (text, was_truncated)."""
     if text is None:
@@ -122,7 +236,7 @@ def build_workflow_execution_record(
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling)."""
     return {
-        "executionId": execution_id,  # PK
+        "workflowExecutionId": execution_id,  # PK
         "workflowDatabaseId:workflowId": workflow_composite_key(workflow_database_id, workflow_id),  # SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,
@@ -155,6 +269,7 @@ def build_pipeline_execution_record(
     input_metadata_file_prefix, input_config_file_prefix, aux_temp_prefix,
     aux_preview_prefix, pipeline_execution_type, wait_for_callback,
     pipeline_resource_arn, from_pipeline_execution_id="",
+    orchestration_bus_event_prefix="",
 ):
     """PipelineExecutionsStorageTable row (one per pipeline in the workflow)."""
     rec = {
@@ -187,8 +302,14 @@ def build_pipeline_execution_record(
         "credentialVendingState": "notVended",
         # optional chain / sub-process fields
         "from_pipeline_execution_id": from_pipeline_execution_id or "",
+        # Legacy single sub-ARN fields (the abort path reads sub_execution_arn).
         "pipeline_execution_sub_arn": "",
         "pipeline_execution_sub_execution_arn": "",
+        # EventBridge source prefix the pipeline reports sub-process ARNs/logs under, plus the
+        # typed lists it registers: [{stateMachineArn, executionArn}] / [{logGroupArn, ...}].
+        "orchestrationBusEventPrefix": orchestration_bus_event_prefix or "",
+        "registeredSubExecutions": [],
+        "registeredLogs": [],
     }
     return rec
 
@@ -212,8 +333,14 @@ def build_pipeline_input_file_record(
 def build_workflow_execution_input_record(
     workflow_execution_id, database_id, asset_id, input_asset_file_key,
     execution_start_date, workflow_id, workflow_database_id,
+    s3_bucket="", asset_files_s3_root="",
 ):
-    """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth)."""
+    """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth).
+
+    s3Bucket + assetFilesS3Root locate this input file's own asset root. Each input file may
+    belong to a different asset (different bucket and base location key), so its root is stored
+    per file rather than assumed shared; the interim lambda uses it to compute the asset-relative
+    path for the rebuilt manifest."""
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
         "databaseId:assetId:inputAssetFileKey": input_file_composite_key(
@@ -222,6 +349,8 @@ def build_workflow_execution_input_record(
         "assetId": asset_id,
         "databaseId": database_id,
         "inputAssetFileKey": normalize_file_key(input_asset_file_key),
+        "s3Bucket": s3_bucket,
+        "assetFilesS3Root": asset_files_s3_root,
         "executionStartDate": execution_start_date,  # GSI SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,
@@ -327,6 +456,10 @@ def build_log_record(
 
 def build_workflow_configuration_record(
     workflow_execution_id, workflow_configuration, input_metadata, specified_pipelines_snapshot,
+    output_location_type="asset", output_asset_id="", output_database_id="",
+    output_file_base_execution_path_extension="/",
+    input_metadata_asset_id="", input_metadata_database_id="",
+    input_metadata_file_s3_key="",
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration')."""
     config_content, config_truncated = truncate_text(workflow_configuration or "")
@@ -339,4 +472,15 @@ def build_workflow_configuration_record(
         "inputMetadata": metadata_content,
         "inputMetadataTruncated": metadata_truncated,
         "specifiedPipelinesSnapshot": specified_pipelines_snapshot or [],
+        # Output target (where the execution's outputs are written).
+        "outputLocationType": output_location_type or "asset",
+        "outputAssetId": output_asset_id or "",
+        "outputDatabaseId": output_database_id or "",
+        # Path segment inserted between the output asset location key and each output file's
+        # relative path ('/' = none).
+        "outputFileBaseExecutionPathExtension": output_file_base_execution_path_extension or "/",
+        # Input-metadata source (recording only).
+        "inputMetadataAssetId": input_metadata_asset_id or "",
+        "inputMetadataDatabaseId": input_metadata_database_id or "",
+        "inputMetadataFileS3Key": input_metadata_file_s3_key or "",
     }

@@ -14,7 +14,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from urllib.parse import unquote_plus
-from common import executionRecords as er
+from common.workflows import executionRecords as er
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -72,6 +72,10 @@ try:
     # on the execution row so per-execution logs can later be pulled (group ARN + the
     # row's workflow_execution_arn). Optional: empty string if logging is not configured.
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
+    # Orchestration bus ARN + event source prefix, written into each pipeline's
+    # manifest.systemConfig for optional sub-process registration. Optional: empty if unset.
+    orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except:
     logger.exception("Failed loading environment variables")
 
@@ -353,14 +357,78 @@ def _parse_pipeline_resource(pipeline):
     return parsed.get('resourceId', ''), parsed.get('resourceType', 'Lambda')
 
 
+def _pipeline_input_configuration(pipeline):
+    """The pipeline definition's inputParameters JSON string, or empty string when absent or
+    not valid JSON."""
+    raw = pipeline.get('inputParameters', '') or ''
+    if raw and raw != '':
+        try:
+            json.loads(raw)
+            return raw
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Pipeline inputParameters is not valid JSON; storing empty input configuration")
+            return ''
+    return ''
+
+
+def write_execution_input_files(execution_id, asset_bucket, pipelines, input_metadata,
+                                original_input_manifest):
+    """Write an execution's input-definition files to the asset bucket (per-execution input
+    folder keyed on execution id): the shared metadata file, one config.json per pipeline, and
+    pipeline 1's manifest. Returns
+    { metadataFileS3Key, configKeys: [perPipeline...], firstManifestS3Key } as asset-bucket keys."""
+    locations = {"metadataFileS3Key": "", "configKeys": [], "firstManifestS3Key": ""}
+    if not pipelines:
+        return locations
+
+    # Shared input metadata file, wrapped in the metadata envelope (parse a string payload
+    # back to JSON first so it stays a structured object).
+    metadata_key = er.execution_input_metadata_key(execution_id)
+    if isinstance(input_metadata, str):
+        try:
+            metadata_payload = json.loads(input_metadata) if input_metadata else {}
+        except (json.JSONDecodeError, ValueError):
+            metadata_payload = input_metadata
+    else:
+        metadata_payload = input_metadata or {}
+    metadata_body = json.dumps(er.build_metadata_envelope(metadata_payload))
+    s3c.put_object(Bucket=asset_bucket, Key=metadata_key,
+                   Body=metadata_body.encode('utf-8'), ContentType='application/json')
+    locations["metadataFileS3Key"] = metadata_key
+
+    # Per-pipeline input configuration files (1-indexed folders pipeline1..N).
+    for idx, pipeline in enumerate(pipelines):
+        cfg_key = er.pipeline_input_config_key(execution_id, idx + 1)
+        cfg_body = _pipeline_input_configuration(pipeline)
+        s3c.put_object(Bucket=asset_bucket, Key=cfg_key,
+                       Body=(cfg_body or "").encode('utf-8'), ContentType='application/json')
+        locations["configKeys"].append(cfg_key)
+
+    # Pipeline 1's resolved input manifest = the original asset input files.
+    manifest_key = er.pipeline_input_manifest_key(execution_id, 1)
+    s3c.put_object(Bucket=asset_bucket, Key=manifest_key,
+                   Body=json.dumps(original_input_manifest).encode('utf-8'),
+                   ContentType='application/json')
+    locations["firstManifestS3Key"] = manifest_key
+    return locations
+
+
 def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execution_arn,
                               database_id, asset_id, workflow_database_id, workflow_id,
                               input_asset_file_key, asset_bucket, aux_bucket,
                               triggered_by_user_id, trigger_type, execution_log_group_arn,
                               pipelines, first_job_name, input_metadata, input_configuration,
-                              pipeline_execution_ids=None):
+                              pipeline_execution_ids=None, input_config_keys=None,
+                              output_asset_id="", output_database_id="",
+                              output_file_base_execution_path_extension="/",
+                              input_asset_files_s3_root="",
+                              input_metadata_asset_id="", input_metadata_database_id="",
+                              input_metadata_file_s3_key=""):
     """Write the V2 main execution row plus workflow-level inputs/config and one
-    PipelineExecutions row per pipeline, with first-pipeline input rows.
+    PipelineExecutions row per pipeline, plus each pipeline's own input configuration row.
+
+    Input asset files are tracked at the workflow-execution level (WorkflowExecutionInputs),
+    not per-pipeline.
 
     Returns a dict with executionId, endStatePipelineExecutionId, and the list of
     generated pipelineExecutionIds (ordered to match `pipelines`).
@@ -381,86 +449,102 @@ def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execu
         execution_log_group_arn=execution_log_group_arn,
     ))
 
-    # 2) Workflow-level input row (asset-scoped GET source of truth)
+    # 2) Workflow-level input row (asset-scoped GET source of truth). Input asset files are
+    #    tracked here at the workflow-execution level (not per-pipeline).
     wf_inputs_table = dynamo.Table(workflow_execution_inputs_table)
     wf_inputs_table.put_item(Item=er.build_workflow_execution_input_record(
         workflow_execution_id=execution_id, database_id=database_id, asset_id=asset_id,
         input_asset_file_key=input_asset_file_key, execution_start_date=start_date,
         workflow_id=workflow_id, workflow_database_id=workflow_database_id,
+        s3_bucket=asset_bucket, asset_files_s3_root=input_asset_files_s3_root,
     ))
 
-    # 3) Workflow-level configuration row (snapshot pipelines for history)
+    # 3) Workflow execution configuration row: pipeline snapshot + input metadata + output
+    #    target and input-metadata provenance.
     wf_cfg_table = dynamo.Table(workflow_execution_configuration_table)
     wf_cfg_table.put_item(Item=er.build_workflow_configuration_record(
         workflow_execution_id=execution_id,
         workflow_configuration="",
         input_metadata=json.dumps(input_metadata) if not isinstance(input_metadata, str) else input_metadata,
         specified_pipelines_snapshot=pipelines,
+        output_location_type="asset",
+        output_asset_id=output_asset_id or asset_id,
+        output_database_id=output_database_id or database_id,
+        output_file_base_execution_path_extension=output_file_base_execution_path_extension or "/",
+        input_metadata_asset_id=input_metadata_asset_id or asset_id,
+        input_metadata_database_id=input_metadata_database_id or database_id,
+        input_metadata_file_s3_key=input_metadata_file_s3_key,
     ))
 
-    # 4) One PipelineExecutions row per pipeline (chain + end-state on last)
+    # 4) One PipelineExecutions row per pipeline (chain + end-state on last), plus each
+    #    pipeline's own input configuration row.
     pexec_table = dynamo.Table(pipeline_executions_table)
+    pin_cfg_table = dynamo.Table(pipeline_execution_input_configuration_table)
     if pipeline_execution_ids is None:
         pipeline_execution_ids = [er.new_guid() for _ in pipelines]
+    input_config_keys = input_config_keys or []
     prev_id = ""
     for idx, pipeline in enumerate(pipelines):
         pexec_id = pipeline_execution_ids[idx]
         is_end_state = (idx == len(pipelines) - 1)
         resource_arn, _rtype = _parse_pipeline_resource(pipeline)
+        # Raw file key so the stored aux prefix matches the ASL's aux path layout.
         aux_prefix = er.aux_pipeline_prefix(
             pipeline['name'], pipeline.get('pipelineType', 'standardFile'),
-            er.normalize_file_key(input_asset_file_key))
+            input_asset_file_key)
+        cfg_key = input_config_keys[idx] if idx < len(input_config_keys) else ""
+        # Orchestration event prefix (empty when the bus is not configured).
+        event_prefix = er.orchestration_event_prefix(
+            orchestration_event_source_prefix, execution_id, pexec_id) \
+            if orchestration_event_source_prefix else ""
         pexec_table.put_item(Item=er.build_pipeline_execution_record(
             pipeline_execution_id=pexec_id, workflow_execution_id=execution_id,
             pipeline_database_id=pipeline.get('databaseId', ''), pipeline_id=pipeline['name'],
             end_state_pipeline=is_end_state,
             s3_asset_bucket=asset_bucket, s3_aux_bucket=aux_bucket,
             output_prefixes=output_prefixes,
-            # Input metadata/config file staging is deferred to a later stage; store empty for now.
             input_metadata_file_prefix="",
-            input_config_file_prefix="",
+            input_config_file_prefix=cfg_key,
             aux_temp_prefix=aux_prefix, aux_preview_prefix=aux_prefix,
             pipeline_execution_type=pipeline.get('pipelineExecutionType', 'Lambda'),
             wait_for_callback=pipeline.get('waitForCallback', 'Disabled'),
             pipeline_resource_arn=resource_arn, from_pipeline_execution_id=prev_id,
+            orchestration_bus_event_prefix=event_prefix,
+        ))
+        # Per-pipeline input configuration row.
+        pin_cfg_table.put_item(Item=er.build_input_configuration_record(
+            pipeline_execution_id=pexec_id,
+            input_configuration=_pipeline_input_configuration(pipeline),
+            input_configuration_file_s3_key=cfg_key,
         ))
         prev_id = pexec_id
 
-    # 5) First-pipeline input rows (files + config now; metadata when present)
-    first_pexec_id = pipeline_execution_ids[0] if pipeline_execution_ids else None
-    if first_pexec_id:
-        pin_files_table = dynamo.Table(pipeline_execution_input_files_table)
-        pin_files_table.put_item(Item=er.build_pipeline_input_file_record(
-            pipeline_execution_id=first_pexec_id, workflow_execution_id=execution_id,
-            database_id=database_id, asset_id=asset_id, input_asset_file_key=input_asset_file_key,
-        ))
-
-        pin_cfg_table = dynamo.Table(pipeline_execution_input_configuration_table)
-        pin_cfg_table.put_item(Item=er.build_input_configuration_record(
-            pipeline_execution_id=first_pexec_id,
-            input_configuration=input_configuration or "",
-            input_configuration_file_s3_key="",
-        ))
-
-        # Input metadata: store the workflow-level inputMetadata as an asset-level ('/') row
-        if input_metadata:
-            md = input_metadata if isinstance(input_metadata, dict) else {}
+    # 5) Workflow-level input metadata row (asset-level '/'), recorded once for the execution.
+    if input_metadata:
+        md = input_metadata if isinstance(input_metadata, dict) else {}
+        first_pexec_id = pipeline_execution_ids[0] if pipeline_execution_ids else None
+        if first_pexec_id:
             pin_md_table = dynamo.Table(pipeline_execution_input_metadata_table)
             pin_md_table.put_item(Item=er.build_input_metadata_record(
                 pipeline_execution_id=first_pexec_id, database_id=database_id, asset_id=asset_id,
-                file_path="/", metadata=md, source_input_metadata_file_s3_key="",
+                file_path="/", metadata=md,
+                source_input_metadata_file_s3_key=input_metadata_file_s3_key,
             ))
 
     return {
-        "executionId": execution_id,
+        "workflowExecutionId": execution_id,
         "endStatePipelineExecutionId": pipeline_execution_ids[-1] if pipeline_execution_ids else "",
         "pipelineExecutionIds": pipeline_execution_ids,
     }
 
 
-def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, pipelines, inputMetadata = {}, triggerType = "Manual"):
+def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, pipelines, inputMetadata = {}, triggerType = "Manual", storedJobNames = None, outputFileBaseExecutionPathExtension = "/"):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
+
+    # Path segment inserted between the output asset location key and each output file's relative
+    # path. Defaults to '/' (no extra path); the execute call may override it for this run.
+    output_file_base_execution_path_extension = outputFileBaseExecutionPathExtension or "/"
 
     #Modify asset key to turn + sympbols into spaces for the final processing entry
     inputAssetFileKey = unquote_plus(inputAssetFileKey)
@@ -475,19 +559,92 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
     pipeline_execution_ids = [uuid.uuid4().hex for _ in pipelines]
     end_state_pipeline_execution_id = pipeline_execution_ids[-1] if pipeline_execution_ids else ""
 
-    # First pipeline job name must match the ASL convention (uuid1 hex[:5] + '-' + name)[:80].
-    # The ASL regenerates its own job name; for stored prefixes we derive a stable
-    # value here and record it (Stage 1 stores the prefix for reference only).
+    # First pipeline job name: prefer the ASL-stored jobNames[0] so the manifest's output
+    # locations match the ASL's paths; fall back to the ASL convention for legacy workflows.
     first_pipeline_name = pipelines[0]['name'] if pipelines else ""
-    first_job_name = (uuid.uuid1().hex[:5] + "-" + first_pipeline_name)[:80] if first_pipeline_name else ""
+    if storedJobNames:
+        first_job_name = storedJobNames[0]
+    else:
+        first_job_name = (uuid.uuid1().hex[:5] + "-" + first_pipeline_name)[:80] if first_pipeline_name else ""
 
+    # Build pipeline 1's input file manifest entry (relative path = key after the asset base).
+    base_key = inputAssetLocationKey or ""
+    relative_input = inputAssetFileKey[len(base_key):] if inputAssetFileKey.startswith(base_key) else inputAssetFileKey
+    asset_files_root = f"s3://{inputAssetBucket}/{base_key}"
+    first_input_files = [er.build_manifest_entry(
+        relative_path=relative_input, bucket=inputAssetBucket, key=inputAssetFileKey,
+        version_id="", database_id=database_id, asset_id=asset_id,
+        asset_files_s3_root=asset_files_root)]
+
+    # Build pipeline 1's full manifest envelope (output/aux locations + system config), using
+    # the ASL-stored job name so output locations match the ASL's paths.
+    out_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, executionId) \
+        if pipelines else {"files": "", "previews": "", "metadata": "", "results": ""}
+    outputs = {k: (f"s3://{inputAssetBucket}/{v}" if v else "") for k, v in out_prefixes.items()}
+    # Aux prefix uses the raw file key so it matches the ASL's aux path layout.
+    first_aux_prefix = er.aux_pipeline_prefix(
+        first_pipeline_name, pipelines[0].get('pipelineType', 'standardFile') if pipelines else 'standardFile',
+        inputAssetFileKey) if pipelines else ""
+    metadata_metadata_location = f"s3://{inputAssetBucket}/{er.execution_input_metadata_key(executionId)}"
+    first_event_prefix = er.orchestration_event_prefix(
+        orchestration_event_source_prefix, executionId, pipeline_execution_ids[0]) \
+        if (orchestration_event_source_prefix and pipeline_execution_ids) else ""
+    original_input_manifest = er.build_manifest_envelope(
+        input_files=first_input_files,
+        input_metadata_s3_location=metadata_metadata_location,
+        outputs=outputs,
+        aux_bucket_s3_root=f"s3://{bucket_name_assetAuxiliary}/",
+        aux_temp_prefix=f"s3://{bucket_name_assetAuxiliary}/{first_aux_prefix}" if first_aux_prefix else "",
+        aux_preview_prefix=f"s3://{bucket_name_assetAuxiliary}/{first_aux_prefix}" if first_aux_prefix else "",
+        system_config=er.build_manifest_system_config(
+            orchestration_bus_arn=orchestration_bus_arn,
+            orchestration_event_prefix=first_event_prefix),
+        # Output target == the input asset today (output location type 'asset').
+        output_target=er.build_manifest_output_target(
+            location_type="asset", asset_id=asset_id, database_id=database_id,
+            file_base_execution_path_extension=output_file_base_execution_path_extension),
+    )
+
+    # Write the input-definition files to the asset bucket execution input folder.
+    input_locations = write_execution_input_files(
+        execution_id=executionId, asset_bucket=inputAssetBucket,
+        pipelines=pipelines, input_metadata=inputMetadata,
+        original_input_manifest=original_input_manifest)
+
+    # The SFN execution input carries only what the ASL ($.X) references: identity, the
+    # workflow-execution + auxiliary buckets, the asset file keys (the manifest/config files are
+    # addressed by their per-pipeline computed S3 keys in the ASL, not threaded here), the output
+    # target, the per-pipeline execution ids, and the orchestration config. The input-definition
+    # files themselves were already written to S3 above (input_locations); the ASL recomputes
+    # their keys, so the top-level convenience copies are not needed.
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
         name=executionId,
-        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetLocationKey': inputAssetLocationKey, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
-                          'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata), 'workflowDatabaseId': workflow_database_id,
-                          'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext,
-                          'workflowExecutionId': executionId, 'endStatePipelineExecutionId': end_state_pipeline_execution_id})
+        input=json.dumps({
+            # Workflow-execution identity
+            'workflowExecutionId': executionId,
+            'workflowDatabaseId': workflow_database_id,
+            'workflowId': workflow_id,
+            'endStatePipelineExecutionId': end_state_pipeline_execution_id,
+            'pipelineExecutionIds': pipeline_execution_ids,
+            # Buckets + primary input file key (the manifest carries each input file's own
+            # location; inputAssetLocationKey is no longer threaded — pipelines derive the asset
+            # root from the manifest's per-file assetFilesS3Root)
+            'workflowExecutionS3InputOutputBucket': inputAssetBucket,
+            'bucketAssetAuxiliary': bucket_name_assetAuxiliary,
+            'inputAssetFileKey': inputAssetFileKey,
+            # Output target identity (where outputs are written; == the input asset today)
+            'outputLocationType': "asset",
+            'outputAssetId': asset_id,
+            'outputDatabaseId': database_id,
+            'outputFileBaseExecutionPathExtension': output_file_base_execution_path_extension,
+            # Executing-user context
+            'executingUserName': executingUserName,
+            'executingRequestContext': executingRequestContext,
+            # Orchestration bus + source prefix for the interim lambda's manifest build
+            'orchestrationBusArn': orchestration_bus_arn,
+            'orchestrationEventSourcePrefix': orchestration_event_source_prefix,
+        })
     )
     logger.info("Workflow Response: ")
     logger.info(response)
@@ -512,6 +669,12 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
         execution_log_group_arn=execution_log_group_arn,
         pipelines=pipelines, first_job_name=first_job_name,
         input_metadata=inputMetadata, input_configuration="",
+        input_config_keys=input_locations['configKeys'],
+        output_asset_id=asset_id, output_database_id=database_id,
+        output_file_base_execution_path_extension=output_file_base_execution_path_extension,
+        input_asset_files_s3_root=asset_files_root,
+        input_metadata_asset_id=asset_id, input_metadata_database_id=database_id,
+        input_metadata_file_s3_key=input_locations['metadataFileS3Key'],
     )
 
     return executionId
@@ -615,7 +778,7 @@ def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId,
 
         # Fetch the V2 main row to get the workflow composite + arn
         main_resp = main_table.query(
-            KeyConditionExpression=Key('executionId').eq(execution_id),
+            KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
             ScanIndexForward=False,
         )
         main_rows = main_resp.get('Items', [])
@@ -641,7 +804,7 @@ def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId,
                 result["Items"].append({
                     'workflowDatabaseId': main_item.get('workflowDatabaseId', ''),
                     'workflowId': main_item.get('workflowId', ''),
-                    'executionId': execution['name'],
+                    'workflowExecutionId': execution['name'],
                     'executionStatus': execution['status'],
                     'startDate': main_item.get('executionStartDate', ''),
                 })
@@ -707,7 +870,8 @@ def execute_workflow(event, databaseId, assetId, workflowId, request_model):
             event=event
         )
 
-    # Asset must exist + Tier 2 authorization (POST on the asset).
+    # Asset must exist + Tier 2 authorization (POST on the asset); this is also the
+    # output-asset write-permission gate, since the asset is today the output target.
     assetResponse = get_asset(databaseId, assetId)
     logger.info(assetResponse)
     if not bool(assetResponse):
@@ -776,14 +940,30 @@ def execute_workflow(event, databaseId, assetId, workflowId, request_model):
     # Build the pipeline input metadata payload.
     inputMetadata = build_pipeline_input_metadata(asset, databaseId, assetId, relative_file_path, event)
 
+    # Per-pipeline inputParameters override (by pipeline name) for this run only; the workflow
+    # definition is left untouched. A pipeline absent from the map keeps its stored value.
+    pipelines = workflow['specifiedPipelines']['functions']
+    overrides = request_model.pipelineInputParameters or {}
+    if overrides:
+        pipelines = [
+            {**pipeline, 'inputParameters': overrides[pipeline['name']]}
+            if overrides.get(pipeline['name']) else pipeline
+            for pipeline in pipelines
+        ]
+
+    # Optional override of the output file base-execution path extension for this run (defaults
+    # to "/"). Later this will fall back to a default stored on the workflow when not provided.
+    output_file_base_execution_path_extension = request_model.fileBaseExecutionPathExtension or "/"
+
     logger.info("Launching Workflow:")
     # Trigger type: auto-trigger callers pass triggerSource='auto-trigger-sqs'.
     trigger_type = "File-Upload" if request_model.triggerSource == 'auto-trigger-sqs' else "Manual"
     executionId = launchWorkflow(
         asset_bucket, asset_file_key, file_key, workflow['workflow_arn'], databaseId,
         assetId, workflow_database_id, workflow['workflowId'],
-        executingUserName, executingRequestContext, workflow['specifiedPipelines']['functions'],
-        inputMetadata, trigger_type)
+        executingUserName, executingRequestContext, pipelines,
+        inputMetadata, trigger_type, storedJobNames=workflow.get('jobNames'),
+        outputFileBaseExecutionPathExtension=output_file_base_execution_path_extension)
     return success(body={'message': executionId})
 
 

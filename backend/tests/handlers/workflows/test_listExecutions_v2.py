@@ -37,7 +37,7 @@ class TestBuildExecutionItems:
             "executionStartDate": "2026-06-16T00:00:00Z",
         }]
         main_row = {
-            "executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+            "workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
             "workflow_execution_arn": "arn:ex", "workflow_arn": "arn:sm",
             "executionStatus": "SUCCEEDED",
             "executionStartDate": "2026-06-16T00:00:00Z",
@@ -54,7 +54,7 @@ class TestBuildExecutionItems:
         assert len(items) == 1
         it = items[0]
         # wire field names preserved for the frontend/CLI
-        assert it["executionId"] == "E1"
+        assert it["workflowExecutionId"] == "E1"
         assert it["startDate"] == "2026-06-16T00:00:00Z"
         assert it["stopDate"] == "2026-06-16T00:05:00Z"
         assert it["inputAssetFileKey"] == "/x.glb"
@@ -70,7 +70,7 @@ class TestBuildExecutionItems:
              "assetId": "a1", "workflowId": "wf", "workflowDatabaseId": "wdb",
              "executionStartDate": "2026-06-16T00:00:00Z"},
         ]
-        main_row = {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+        main_row = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                     "workflow_execution_arn": "arn:ex", "executionStatus": "SUCCEEDED",
                     "executionStartDate": "2026-06-16T00:00:00Z",
                     "executionStopDate": "2026-06-16T00:05:00Z"}
@@ -92,7 +92,7 @@ class TestBuildExecutionItems:
             "executionStartDate": "2026-06-16T00:00:00Z",
         }]
         main_row = {
-            "executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+            "workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
             "workflow_execution_arn": "arn:ex",
             "executionStatus": "RUNNING",
             "executionStartDate": "2026-06-16T00:00:00Z",
@@ -128,11 +128,11 @@ class TestBuildExecutionItems:
              "executionStartDate": "2026-06-15T00:00:00Z"},
         ]
         main_rows = {
-            "E1": {"executionId": "E1", "workflowId": "wf1", "workflowDatabaseId": "wdb",
+            "E1": {"workflowExecutionId": "E1", "workflowId": "wf1", "workflowDatabaseId": "wdb",
                    "workflowDatabaseId:workflowId": "wdb:wf1", "workflow_execution_arn": "arn:e1",
                    "executionStatus": "SUCCEEDED", "executionStartDate": "2026-06-16T00:00:00Z",
                    "executionStopDate": "2026-06-16T00:05:00Z"},
-            "E2": {"executionId": "E2", "workflowId": "wf2", "workflowDatabaseId": "wdb",
+            "E2": {"workflowExecutionId": "E2", "workflowId": "wf2", "workflowDatabaseId": "wdb",
                    "workflowDatabaseId:workflowId": "wdb:wf2", "workflow_execution_arn": "arn:e2",
                    "executionStatus": "SUCCEEDED", "executionStartDate": "2026-06-15T00:00:00Z",
                    "executionStopDate": "2026-06-15T00:05:00Z"},
@@ -146,7 +146,7 @@ class TestBuildExecutionItems:
         )
         # Only the execution matching the workflow filter is returned (E2 dropped).
         assert len(items) == 1
-        assert items[0]["executionId"] == "E1"
+        assert items[0]["workflowExecutionId"] == "E1"
 
     def test_missing_main_row_skipped(self):
         input_items = [
@@ -158,7 +158,7 @@ class TestBuildExecutionItems:
              "executionStartDate": "2026-06-15T00:00:00Z"},
         ]
         main_rows = {
-            "E1": {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+            "E1": {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                    "workflow_execution_arn": "arn:e1", "executionStatus": "SUCCEEDED",
                    "executionStartDate": "2026-06-16T00:00:00Z",
                    "executionStopDate": "2026-06-16T00:05:00Z"},
@@ -173,7 +173,7 @@ class TestBuildExecutionItems:
         )
         # E2 is skipped (no main row); only E1 surfaces, no crash.
         assert len(items) == 1
-        assert items[0]["executionId"] == "E1"
+        assert items[0]["workflowExecutionId"] == "E1"
 
     def _running_input(self):
         return [{
@@ -185,7 +185,7 @@ class TestBuildExecutionItems:
 
     def test_terminal_row_never_polls_sfn(self):
         # A row with a stop date is terminal -> describe_execution must not be called.
-        main_row = {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+        main_row = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                     "workflow_execution_arn": "arn:e1", "executionStatus": "SUCCEEDED",
                     "executionStartDate": "2026-06-16T00:00:00Z",
                     "executionStopDate": "2026-06-16T00:05:00Z"}
@@ -205,7 +205,7 @@ class TestBuildExecutionItems:
     def test_recent_sync_skips_poll(self):
         # No stop date, but lastSfnSyncCheckDate is "now" -> within the 30s window, so
         # do NOT poll SFN; serve the table's current status.
-        main_row = {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+        main_row = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                     "workflow_execution_arn": "arn:e1", "executionStatus": "RUNNING",
                     "executionStartDate": "2026-06-16T00:00:00Z", "executionStopDate": "",
                     "lastSfnSyncCheckDate": le.er.iso_now()}
@@ -225,7 +225,7 @@ class TestBuildExecutionItems:
     def test_stale_sync_polls_and_stamps_sync_time(self):
         # No stop date and an old sync time -> poll SFN; still running, so only the
         # sync-check time is stamped + persisted (no stop date yet).
-        main_row = {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+        main_row = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                     "workflow_execution_arn": "arn:e1", "executionStatus": "RUNNING",
                     "executionStartDate": "2026-06-16T00:00:00Z", "executionStopDate": "",
                     "lastSfnSyncCheckDate": "2000-01-01T00:00:00Z"}
@@ -246,7 +246,7 @@ class TestBuildExecutionItems:
     def test_non_success_terminal_pulls_error_and_log(self):
         # A poll observing ABORTED captures both the error message and the full log,
         # persists them onto the row, and surfaces them in the wire item.
-        main_row = {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+        main_row = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                     "workflow_execution_arn": "arn:e1", "executionStatus": "RUNNING",
                     "executionStartDate": "2026-06-16T00:00:00Z", "executionStopDate": "",
                     "lastSfnSyncCheckDate": ""}
@@ -277,7 +277,7 @@ class TestBuildExecutionItems:
     def test_success_terminal_pulls_log_but_not_error(self):
         # A SUCCEEDED poll captures the full execution log (always) but stores NO error
         # message (executionError stays empty for a successful run).
-        main_row = {"executionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
+        main_row = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "wdb",
                     "workflow_execution_arn": "arn:e1", "executionStatus": "RUNNING",
                     "executionStartDate": "2026-06-16T00:00:00Z", "executionStopDate": "",
                     "lastSfnSyncCheckDate": ""}
@@ -303,3 +303,95 @@ class TestBuildExecutionItems:
         assert main_row.get("executionError", "") == ""
         # ...but it does persist the captured log.
         assert main_row["executionLog"] == "ok log line"
+
+
+@pytest.mark.unit
+class TestOutputFileVersionEnrichment:
+    """Joining execution output files to the authoritative asset file version recorded in the
+    version-history table (sparse WorkflowExecutionIdIndex GSI)."""
+
+    def _config_row(self, output_type="asset"):
+        return {"outputLocationType": output_type, "outputDatabaseId": "db",
+                "outputAssetId": "a1"}
+
+    def test_enriches_matching_asset_output_file(self, monkeypatch):
+        # History returns one produced version for /folder/out.glb under (db, a1).
+        history = [{"databaseId": "db", "assetId": "a1", "filePath": "/folder/out.glb",
+                    "versionId": "ver-123", "changeWorkflowExecutionId": "E1"}]
+        fake_table = MagicMock()
+        fake_table.query.return_value = {"Items": history}
+        monkeypatch.setattr(le, "asset_file_version_history_table", fake_table)
+
+        # Output record's relativeFilePath has NO leading slash (matches process-output).
+        output_files = [{"relativeFilePath": "folder/out.glb", "fileType": "file"}]
+        result = le._enrich_output_files_with_asset_versions(
+            output_files, "E1", self._config_row())
+        # assetFileVersionId is the only value sourced from the history table.
+        assert result[0]["assetFileVersionId"] == "ver-123"
+        # asset/database identity is derived from the asset output target.
+        assert result[0]["assetId"] == "a1"
+        assert result[0]["databaseId"] == "db"
+
+    def test_no_history_record_still_sets_asset_identity(self, monkeypatch):
+        # Legacy: no version-history record. asset/database identity is still derived from the
+        # output target; only assetFileVersionId is omitted.
+        fake_table = MagicMock()
+        fake_table.query.return_value = {"Items": []}
+        monkeypatch.setattr(le, "asset_file_version_history_table", fake_table)
+
+        output_files = [{"relativeFilePath": "folder/out.glb", "fileType": "file"}]
+        result = le._enrich_output_files_with_asset_versions(
+            output_files, "E1", self._config_row())
+        assert "assetFileVersionId" not in result[0]
+        assert result[0]["assetId"] == "a1"
+        assert result[0]["databaseId"] == "db"
+
+    def test_non_asset_output_type_skips_lookup(self, monkeypatch):
+        fake_table = MagicMock()
+        monkeypatch.setattr(le, "asset_file_version_history_table", fake_table)
+        output_files = [{"relativeFilePath": "folder/out.glb", "fileType": "file"}]
+        result = le._enrich_output_files_with_asset_versions(
+            output_files, "E1", self._config_row(output_type="external"))
+        # No asset identity or file version for non-asset outputs.
+        assert "assetFileVersionId" not in result[0]
+        assert "assetId" not in result[0]
+        fake_table.query.assert_not_called()  # never queries for non-asset outputs
+
+    def test_table_unconfigured_sets_identity_no_version(self, monkeypatch):
+        # Older deployment with no version-history table handle -> asset identity still set
+        # from the output target, assetFileVersionId omitted, no crash.
+        monkeypatch.setattr(le, "asset_file_version_history_table", None)
+        assert le.get_produced_file_versions("E1") == {}
+        output_files = [{"relativeFilePath": "folder/out.glb", "fileType": "file"}]
+        result = le._enrich_output_files_with_asset_versions(
+            output_files, "E1", self._config_row())
+        assert "assetFileVersionId" not in result[0]
+        assert result[0]["assetId"] == "a1"
+        assert result[0]["databaseId"] == "db"
+
+
+@pytest.mark.unit
+class TestResolveFilterStartDate:
+    """The listing is lower-bounded by executionStartDate: the caller's filterStartDate query
+    parameter, or 90 days before now by default. The resolver always returns a non-empty value."""
+
+    def test_default_is_90_days_before_now(self):
+        cutoff = le._resolve_filter_start_date({})
+        assert cutoff  # non-empty ISO string
+        parsed = datetime.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
+        delta_days = (datetime.utcnow() - parsed).days
+        assert 89 <= delta_days <= 90  # ~90 days back (allow for second-boundary rounding)
+
+    def test_none_query_params_defaults_to_90(self):
+        cutoff = le._resolve_filter_start_date(None)
+        parsed = datetime.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
+        assert 89 <= (datetime.utcnow() - parsed).days <= 90
+
+    def test_explicit_filter_start_date_is_used_verbatim(self):
+        assert le._resolve_filter_start_date(
+            {"filterStartDate": "2026-01-01T00:00:00Z"}) == "2026-01-01T00:00:00Z"
+
+    def test_blank_filter_start_date_falls_back_to_default(self):
+        cutoff = le._resolve_filter_start_date({"filterStartDate": "  "})
+        parsed = datetime.strptime(cutoff, "%Y-%m-%dT%H:%M:%SZ")
+        assert 89 <= (datetime.utcnow() - parsed).days <= 90

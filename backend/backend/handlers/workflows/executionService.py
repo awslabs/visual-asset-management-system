@@ -6,6 +6,7 @@ import json
 import os
 import boto3
 import botocore
+from datetime import datetime, timedelta, timezone
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
@@ -14,7 +15,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
-from common import executionRecords as er
+from common.workflows import executionRecords as er
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_LOGS,
@@ -68,6 +69,10 @@ try:
     pipeline_execution_logs_table = os.environ["PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME"]
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     pipeline_database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
+    # Optional: asset file version-history table, used to enrich asset-output files with the
+    # authoritative S3 version each execution produced. Absent in older deployments -> the
+    # enrichment is skipped and outputs surface the relative path only.
+    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
     if not all([asset_storage_table_name, workflow_execution_database_v2,
                 workflow_execution_inputs_table, pipeline_executions_table,
                 workflow_execution_configuration_table, pipeline_execution_input_files_table,
@@ -82,11 +87,30 @@ except Exception as e:
     raise e
 
 asset_table = dynamodb.Table(asset_storage_table_name)
+asset_file_version_history_table = (
+    dynamodb.Table(asset_file_version_history_table_name)
+    if asset_file_version_history_table_name else None
+)
 
 # Upper bound on the number of distinct executions inspected per asset listing.
 # Caps the DynamoDB main-row fetches + Step Functions describe_execution fan-out;
 # older executions beyond this are surfaced via the NextToken continuation.
 MAX_EXECUTIONS_INSPECTED = 200
+
+# Default listing window: executions whose START date is on or after this many days before now.
+# The caller can override the lower bound with an explicit `filterStartDate` query parameter.
+DEFAULT_EXECUTION_LOOKBACK_DAYS = 90
+
+
+def _resolve_filter_start_date(query_params):
+    """ISO-8601 lower bound on executionStartDate for the listing. Uses the caller's
+    `filterStartDate` query parameter when provided; otherwise defaults to 90 days before now.
+    Always returns a non-empty ISO-8601 string (the effective filter applied)."""
+    raw = (query_params or {}).get('filterStartDate')
+    if raw is not None and str(raw).strip() != "":
+        return str(raw).strip()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_EXECUTION_LOOKBACK_DAYS)
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # Minimum seconds between Step Functions describe_execution polls for the same
 # execution. A still-running execution is only re-polled if its stored
@@ -251,7 +275,7 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
         result_items.append({
             'workflowDatabaseId': main_item.get('workflowDatabaseId', ''),
             'workflowId': main_item.get('workflowId', ''),
-            'executionId': execution_id,
+            'workflowExecutionId': execution_id,
             'executionStatus': status,
             'startDate': start_date,
             'stopDate': stop_date,
@@ -269,7 +293,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
     Enforces Tier 2 (asset GET) then per-execution (workflow GET), resolves
     executions via the inputs GSI + V2 main rows, reconciles status, and returns
-    `success(body={'message': {Items, [NextToken]}})` preserving the prior wire shape.
+    `success(body={'message': {Items, filterStartDate, [NextToken]}})`. The listing is
+    lower-bounded by executionStartDate: the caller's `filterStartDate` query parameter, or 90
+    days before now by default; the applied value is echoed back as `filterStartDate`.
     """
     asset_of_workflow = get_asset_details(database_id, asset_id)
 
@@ -294,9 +320,15 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         main_table = dynamodb.Table(workflow_execution_database_v2)
 
         partition_key = f"{database_id}:{asset_id}"
+        # Lower-bound the listing by executionStartDate: the caller's filterStartDate, or 90 days
+        # before now by default. The inputs GSI is sorted by executionStartDate, so this is a
+        # key-range bound that stops the query at the cutoff instead of paging through older rows.
+        filter_start_date = _resolve_filter_start_date(query_params)
+        key_condition = (Key('databaseId:assetId').eq(partition_key)
+                         & Key('executionStartDate').gte(filter_start_date))
         query_kwargs = {
             'IndexName': 'WorkflowExecInputsByAssetGSI',
-            'KeyConditionExpression': Key('databaseId:assetId').eq(partition_key),
+            'KeyConditionExpression': key_condition,
             'ScanIndexForward': False,
         }
 
@@ -340,7 +372,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
         def _fetch_main_row(execution_id):
             r = main_table.query(
-                KeyConditionExpression=Key('executionId').eq(execution_id),
+                KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
                 ScanIndexForward=False,
             )
             rows = r.get('Items', [])
@@ -405,7 +437,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
         )
 
-        result = {"Items": items}
+        # Surface the effective start-date filter that was applied (the caller's filterStartDate
+        # or the default 90-days-before-now), so the response is self-describing.
+        result = {"Items": items, "filterStartDate": filter_start_date}
 
         # Surface a continuation token when the candidate set was capped with more
         # rows available, so large assets are not silently cut off at the newest 200.
@@ -419,10 +453,10 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
 
 def get_execution_main_row(execution_id):
-    """Fetch the single V2 main execution row by executionId (PK), or None."""
+    """Fetch the single V2 main execution row by workflowExecutionId (PK), or None."""
     main_table = dynamodb.Table(workflow_execution_database_v2)
     resp = main_table.query(
-        KeyConditionExpression=Key('executionId').eq(execution_id),
+        KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
         ScanIndexForward=False,
     )
     rows = resp.get('Items', [])
@@ -486,6 +520,29 @@ def _stop_sfn_execution(execution_arn):
         # ExecutionAlreadyStopped-style errors are benign for abort; log and move on.
         logger.info(f"Could not stop execution {execution_arn} (continuing): {e}")
         return False
+
+
+def _stop_sfn_execution_reporting(execution_arn):
+    """Best-effort Step Functions StopExecution for a registered sub-execution. Returns
+    (ok, reason); a missing/already-stopped execution is ok, a real failure (e.g. AccessDenied)
+    returns its error code as reason for the caller to surface as a warning."""
+    if not execution_arn:
+        return True, ""
+    try:
+        sfn.stop_execution(executionArn=execution_arn)
+        return True, ""
+    except sfn.exceptions.ExecutionDoesNotExist:
+        return True, ""
+    except botocore.exceptions.ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        # Already-stopped is benign; anything else is a real warning.
+        if code in ('ExecutionAlreadyStopped', 'ExecutionLimitExceeded'):
+            return True, ""
+        logger.warning(f"Could not stop registered sub-execution {execution_arn}: {e}")
+        return False, code or str(e)
+    except Exception as e:
+        logger.warning(f"Could not stop registered sub-execution {execution_arn}: {e}")
+        return False, str(e)
 
 
 def authorize_execution_access(execution_id, main_item, asset_action):
@@ -552,6 +609,8 @@ def abort_execution(event, execution_id):
     now = er.iso_now()
     pexec_table = dynamodb.Table(pipeline_executions_table)
     main_table = dynamodb.Table(workflow_execution_database_v2)
+    # Non-fatal warnings surfaced to the caller alongside the success response.
+    warnings = []
 
     # 1) Abort still-running inner pipeline executions first, then mark their rows ABORTED.
     pipeline_rows = get_pipeline_execution_rows(execution_id)
@@ -560,11 +619,21 @@ def abort_execution(event, execution_id):
         if status in TERMINAL_STATUSES:
             continue  # already finished; leave as-is
 
-        # Stop the inner sub-execution if one is registered (populated by a later stage;
-        # absent today -> nothing to stop here, the main-SFN stop cascades to the step).
+        # Stop the legacy single inner sub-execution if registered (back-compat).
         inner_arn = prow.get('pipeline_execution_sub_execution_arn', '')
         if inner_arn:
-            _stop_sfn_execution(inner_arn)
+            ok, err = _stop_sfn_execution_reporting(inner_arn)
+            if not ok:
+                warnings.append(f"Sub-process abort failed for {inner_arn}: {err}")
+
+        # Stop each registered sub-execution (best-effort; a failure is surfaced as a warning).
+        for sub in prow.get('registeredSubExecutions', []) or []:
+            exec_arn = (sub or {}).get('executionArn', '')
+            if not exec_arn:
+                continue
+            ok, err = _stop_sfn_execution_reporting(exec_arn)
+            if not ok:
+                warnings.append(f"Sub-process abort failed for {exec_arn}: {err}")
 
         prow['executionStatus'] = ABORTED_STATUS
         if not prow.get('executionStopDate'):
@@ -583,7 +652,11 @@ def abort_execution(event, execution_id):
         main_table.put_item(Item=main_item)
 
     logger.info(f"Aborted execution {execution_id}")
-    return success(body={'message': "Execution aborted"})
+    # Include a "warnings" list only when a best-effort sub-process abort failed.
+    body = {'message': "Execution aborted"}
+    if warnings:
+        body['warnings'] = warnings
+    return success(body=body)
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +783,81 @@ def _scrub_output_result(row):
     }
 
 
+def get_workflow_execution_configuration_row(execution_id):
+    """Fetch the workflow-execution configuration row (PK workflowExecutionId,
+    SK 'configuration'), which records the output target. Returns the item or {}."""
+    try:
+        cfg_table = dynamodb.Table(workflow_execution_configuration_table)
+        resp = cfg_table.get_item(Key={'workflowExecutionId': execution_id,
+                                        'recordType': 'configuration'})
+        return resp.get('Item') or {}
+    except Exception as e:
+        logger.exception(f"Failed reading workflow execution configuration row: {e}")
+        return {}
+
+
+def get_produced_file_versions(execution_id):
+    """Map an execution's produced asset file versions, keyed by (databaseId, assetId,
+    normalizedFilePath) -> versionId, from the asset file version-history table.
+
+    Reads the sparse WorkflowExecutionIdIndex GSI (only workflow-produced versions carry
+    changeWorkflowExecutionId). Best-effort: returns {} when the table is not configured
+    (older deployments) or on any read failure, so output enrichment degrades to path-only."""
+    if not asset_file_version_history_table or not execution_id:
+        return {}
+    versions = {}
+    try:
+        kwargs = {
+            'IndexName': 'WorkflowExecutionIdIndex',
+            'KeyConditionExpression': Key('changeWorkflowExecutionId').eq(execution_id),
+        }
+        resp = asset_file_version_history_table.query(**kwargs)
+        while True:
+            for row in resp.get('Items', []):
+                key = (row.get('databaseId', ''), row.get('assetId', ''),
+                       row.get('filePath', ''))
+                version_id = row.get('versionId', '')
+                if version_id and version_id != 'null':
+                    versions[key] = version_id
+            if 'LastEvaluatedKey' not in resp:
+                break
+            kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+            resp = asset_file_version_history_table.query(**kwargs)
+    except Exception as e:
+        logger.exception(f"Failed reading produced file versions for {execution_id}: {e}")
+        return {}
+    return versions
+
+
+def _enrich_output_files_with_asset_versions(output_files, execution_id, config_row):
+    """Annotate each asset output file with its target asset identity and, when available, the
+    authoritative S3 file version it produced. Only applies when the execution's output target
+    is an asset.
+
+    assetId / databaseId are derived from the execution's asset output target (the configuration
+    row), so they are set on every output file for an asset-output execution. assetFileVersionId
+    is the only field sourced from the version-history table and is added only when a matching
+    record exists (e.g. it is absent for legacy executions written before version history). Mutates
+    and returns output_files."""
+    if (config_row.get('outputLocationType') or 'asset') != 'asset':
+        return output_files
+    output_database_id = config_row.get('outputDatabaseId', '')
+    output_asset_id = config_row.get('outputAssetId', '')
+    produced = get_produced_file_versions(execution_id)
+    for f in output_files:
+        if output_asset_id:
+            f['assetId'] = output_asset_id
+        if output_database_id:
+            f['databaseId'] = output_database_id
+        # History filePath is asset-relative with one leading slash; the output record's
+        # relativeFilePath has no leading slash, so normalize before matching.
+        normalized = er.normalize_file_key(f.get('relativeFilePath', ''))
+        file_version_id = produced.get((output_database_id, output_asset_id, normalized))
+        if file_version_id:
+            f['assetFileVersionId'] = file_version_id
+    return output_files
+
+
 def assemble_execution_details(execution_id, main_item):
     """Assemble the full, traceability-focused detail view for an execution.
 
@@ -741,13 +889,7 @@ def assemble_execution_details(execution_id, main_item):
         if not pexec_id:
             continue
 
-        # Inputs per pipeline execution (files / metadata / configuration).
-        for row in _query_all(pipeline_execution_input_files_table,
-                               Key('pipelineExecutionId').eq(pexec_id)):
-            input_files.append(_scrub_input_file(row))
-        for row in _query_all(pipeline_execution_input_metadata_table,
-                              Key('pipelineExecutionId').eq(pexec_id)):
-            input_metadata.append(_scrub_input_metadata(row))
+        # Input configuration is per-pipeline.
         for row in _query_all(pipeline_execution_input_configuration_table,
                               Key('pipelineExecutionId').eq(pexec_id)):
             input_configurations.append({
@@ -755,6 +897,11 @@ def assemble_execution_details(execution_id, main_item):
                 "inputConfiguration": row.get('inputConfiguration', ''),
                 "inputConfigurationTruncated": row.get('inputConfigurationTruncated', False),
             })
+
+        # Input metadata is recorded once per execution; gather then dedupe below.
+        for row in _query_all(pipeline_execution_input_metadata_table,
+                              Key('pipelineExecutionId').eq(pexec_id)):
+            input_metadata.append(_scrub_input_metadata(row))
 
         # Outputs per pipeline execution (files / metadata / results).
         for row in _query_all(pipeline_execution_output_files_table,
@@ -767,8 +914,25 @@ def assemble_execution_details(execution_id, main_item):
                               Key('pipelineExecutionId').eq(pexec_id)):
             output_results.append(_scrub_output_result(row))
 
+    # Input files are tracked at the workflow-execution level (not per-pipeline).
+    for row in _query_all(workflow_execution_inputs_table,
+                          Key('workflowExecutionId').eq(execution_id)):
+        input_files.append(_scrub_input_file(row))
+
+    # Dedupe input metadata by (assetId, filePath).
+    deduped_md = {}
+    for md in input_metadata:
+        deduped_md[(md.get("assetId", ""), md.get("filePath", ""))] = md
+    input_metadata = list(deduped_md.values())
+
+    # For asset-output executions, join each output file to the authoritative S3 asset file
+    # version it produced (via the version-history table). Best-effort: leaves entries
+    # path-only when no history record exists (e.g. legacy runs).
+    output_files = _enrich_output_files_with_asset_versions(
+        output_files, execution_id, get_workflow_execution_configuration_row(execution_id))
+
     return {
-        "executionId": execution_id,
+        "workflowExecutionId": execution_id,
         "workflowId": main_item.get('workflowId', ''),
         "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
         "workflowDescription": workflow_def.get('description', ''),
@@ -860,6 +1024,43 @@ def _full_log_search(log_group_arn, filter_terms, query_params):
     return {"events": events, "nextToken": resp.get('nextToken')}
 
 
+def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params):
+    """Best-effort fetch of events from a registered sub-process log location. Returns
+    (ok, events) on success or (False, reason) on a real failure (e.g. AccessDenied), never
+    raising; the caller surfaces a failure as a warning."""
+    parts = (log_group_arn or "").split(":log-group:")
+    if len(parts) < 2:
+        return False, "unparseable log group ARN"
+    log_group_name = parts[1]
+    if log_group_name.endswith(":*"):
+        log_group_name = log_group_name[:-2]
+    kwargs = {
+        'logGroupName': log_group_name,
+        'limit': min(int(query_params.get('limit', 100) or 100), MAX_LOG_EVENTS_PER_CALL),
+    }
+    # If the pipeline reported a specific stream, scope to it; otherwise read the group.
+    if log_stream_name:
+        kwargs['logStreamNames'] = [log_stream_name]
+    if query_params.get('startTime'):
+        kwargs['startTime'] = int(query_params['startTime'])
+    if query_params.get('endTime'):
+        kwargs['endTime'] = int(query_params['endTime'])
+    try:
+        resp = logs_client.filter_log_events(**kwargs)
+    except botocore.exceptions.ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        logger.warning(f"Could not read registered log {log_group_arn}: {e}")
+        return False, code or str(e)
+    except Exception as e:
+        logger.warning(f"Could not read registered log {log_group_arn}: {e}")
+        return False, str(e)
+    return True, [
+        {"timestamp": e.get('timestamp'), "message": e.get('message', ''),
+         "logGroupArn": log_group_arn}
+        for e in resp.get('events', [])
+    ]
+
+
 def get_execution_logs(event, execution_id, query_params):
     """Return execution logs in one of two modes (404 if the execution is unknown):
 
@@ -927,12 +1128,34 @@ def get_execution_logs(event, execution_id, query_params):
     if pipeline_execution_id:
         scope_terms.append(pipeline_execution_id)
     search = _full_log_search(log_group_arn, scope_terms, query_params)
-    return success(body={'message': {
+
+    # When scoped to a pipeline, also pull from any sub-process logs that pipeline registered
+    # (best-effort; a failure on any registered log is surfaced as a non-fatal warning).
+    sub_process_events = []
+    warnings = []
+    if pipeline_row is not None:
+        for log in pipeline_row.get('registeredLogs', []) or []:
+            log_arn = (log or {}).get('logGroupArn', '')
+            stream = (log or {}).get('logStreamName', '')
+            if not log_arn:
+                continue
+            ok, events_or_err = _fetch_registered_log_events(log_arn, stream, query_params)
+            if ok:
+                sub_process_events.extend(events_or_err)
+            else:
+                warnings.append(f"Sub-process log retrieval failed for {log_arn}: {events_or_err}")
+
+    message = {
         "mode": LOG_MODE_FULL,
         "pipelineExecutionId": pipeline_execution_id,
         "events": search["events"],
         "nextToken": search["nextToken"],
-    }})
+    }
+    if sub_process_events:
+        message["subProcessEvents"] = sub_process_events
+    if warnings:
+        message["warnings"] = warnings
+    return success(body={'message': message})
 
 
 def handle_details_request(event):

@@ -39,23 +39,25 @@ for k, v in {
     # createWorkflow additionally reads these at import time.
     "VAMS_STACK_NAME": "t-stack",
     "PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME": "t-po",
+    "INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME": "t-interim",
+    "HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME": "t-err",
     "AWS_REGION": "us-east-1",
     "LAMBDA_ROLE_ARN": "arn:aws:iam::123456789012:role/t-role",
     "LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:t",
 }.items():
     os.environ.setdefault(k, v)
 
-# handlers.workflows package __init__ + createWorkflow import common.stepfunctions_builder
+# handlers.workflows package __init__ + createWorkflow import common.workflows.stepfunctions_builder
 # at import time; provide a lightweight stub (these tests do not exercise ASL generation).
-if "common.stepfunctions_builder" not in sys.modules:
-    _sf = types.ModuleType("common.stepfunctions_builder")
+if "common.workflows.stepfunctions_builder" not in sys.modules:
+    _sf = types.ModuleType("common.workflows.stepfunctions_builder")
     for _name in (
         "create_lambda_task_state", "create_fail_state", "create_retry_config",
         "create_catch_config", "create_workflow_definition", "create_state_machine",
         "update_state_machine", "get_task_builder",
     ):
         setattr(_sf, _name, MagicMock())
-    sys.modules["common.stepfunctions_builder"] = _sf
+    sys.modules["common.workflows.stepfunctions_builder"] = _sf
 
 from backend.backend.handlers.workflows import executeWorkflow as ew
 from backend.backend.handlers.workflows import executionService as le
@@ -163,7 +165,7 @@ class TestExecuteWorkflowHandler:
                           "workflow_arn": "arn:sm", "specifiedPipelines": {"functions": [{"name": "p1"}]}}]), \
              patch.object(ew, "validate_pipelines", return_value=(True, "")), \
              patch.object(ew, "get_default_bucket_details", return_value={"bucketName": "bkt", "baseAssetsPrefix": "", "bucketId": "b1"}), \
-             patch.object(ew, "get_workflow_executions", return_value={"Items": [{"executionId": "running"}]}):
+             patch.object(ew, "get_workflow_executions", return_value={"Items": [{"workflowExecutionId": "running"}]}):
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = True
             resp = ew.lambda_handler(
@@ -189,7 +191,7 @@ class TestListExecutionsHandler:
     def test_happy_path_wire_shape(self):
         # Authorize, stub the listing to return one execution; assert {"message": {"Items":[...]}}.
         items = [{
-            "workflowDatabaseId": "wdb", "workflowId": "wfx", "executionId": "E1",
+            "workflowDatabaseId": "wdb", "workflowId": "wfx", "workflowExecutionId": "E1",
             "executionStatus": "SUCCEEDED", "startDate": "2026-06-16T00:00:00Z",
             "stopDate": "2026-06-16T00:05:00Z", "inputAssetFileKey": "/x.glb",
             "databaseId": "dbx", "assetId": "a1", "executionError": "", "executionLog": "",
@@ -239,7 +241,7 @@ class TestAbortExecutionHandler:
 
     def _main_row(self, status="RUNNING"):
         return {
-            "executionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
+            "workflowExecutionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
             "workflow_execution_arn": "arn:ex:main", "executionStatus": status,
             "executionStopDate": "",
         }
@@ -355,13 +357,14 @@ class TestExecutionDetailsHandler:
 
     def _main_row(self):
         return {
-            "executionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
+            "workflowExecutionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
             "workflow_execution_arn": "arn:ex:main", "executionStatus": "SUCCEEDED",
             "executionStartDate": "2026-06-16T00:00:00Z", "executionStopDate": "2026-06-16T00:05:00Z",
             "triggerType": "Manual", "triggeredByUserId": "user@x", "executionError": "",
         }
 
     def _event_details(self):
+        # {executionId} is the API route path parameter (unchanged client contract).
         ev = _event("GET", {"executionId": "EabcId"})
         ev["requestContext"]["http"]["path"] = "/workflows/executions/EabcId/details"
         return ev
@@ -401,7 +404,7 @@ class TestExecutionDetailsHandler:
 
         assert resp["statusCode"] == 200
         msg = _body(resp)["message"]
-        assert msg["executionId"] == "EabcId"
+        assert msg["workflowExecutionId"] == "EabcId"
         assert msg["workflowDescription"] == "wf desc"
         assert msg["pipelines"][0]["name"] == "convert"
         assert msg["pipelines"][0]["description"] == "Converts"

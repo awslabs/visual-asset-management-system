@@ -34,7 +34,7 @@ legacy composite-key attributes carried a spurious '$' prefix, so the new clean
 keys are rebuilt from the discrete databaseId/assetId/workflowId/workflowDatabaseId
 attributes (which were stored without the '$') rather than parsed from the old keys:
 
-  WorkflowExecutionsStorageTableV2:        PK executionId, SK workflowDatabaseId:workflowId
+  WorkflowExecutionsStorageTableV2:        PK workflowExecutionId, SK workflowDatabaseId:workflowId
   WorkflowExecutionInputsStorageTable:     PK workflowExecutionId, SK databaseId:assetId:inputAssetFileKey
   PipelineExecutionsStorageTable:          PK pipelineExecutionId, SK workflowExecutionId
   PipelineExecutionInputFilesStorageTable: PK pipelineExecutionId, SK databaseId:assetId:inputAssetFileKey
@@ -467,7 +467,7 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
 
         # 1) V2 main row
         main_batch.append({
-            'executionId': s(execution_id),
+            'workflowExecutionId': s(execution_id),
             'workflowDatabaseId:workflowId': s(f"{workflow_database_id}:{workflow_id}"),
             'workflowId': s(workflow_id),
             'workflowDatabaseId': s(workflow_database_id),

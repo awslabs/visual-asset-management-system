@@ -18,6 +18,8 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -29,6 +31,7 @@ import {
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
+    grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
 
@@ -135,6 +138,10 @@ export function buildExecutionServiceFunction(
                 storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
+            // Asset file version-history table: joins execution output files to the authoritative
+            // S3 asset file version each produced, via the WorkflowExecutionIdIndex GSI.
+            ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
             // Shared workflow SFN log group; used to pull error logs for executions that
             // ended in a non-success terminal status (e.g. a direct SFN abort) and for the
             // full-search logs API.
@@ -156,6 +163,7 @@ export function buildExecutionServiceFunction(
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -187,6 +195,8 @@ export function buildCreateWorkflowFunction(
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     processWorkflowExecutionOutputFunction: lambda.Function,
+    interimPipelineTrackingFunction: lambda.Function,
+    handleExecutionErrorFunction: lambda.Function,
     workflowsLogGroup: logs.LogGroup,
     stackName: string,
     config: Config.Config,
@@ -221,6 +231,11 @@ export function buildCreateWorkflowFunction(
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
+            // Interim pipeline-tracking + error-handler lambda names, embedded into the
+            // generated ASL (interim states between pipelines; error-handler catch state).
+            INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME:
+                interimPipelineTrackingFunction.functionName,
+            HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME: handleExecutionErrorFunction.functionName,
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
             LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
@@ -302,6 +317,10 @@ export function buildExecuteWorkflowFunction(
             WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionConfigurationStorageTable.tableName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // Orchestration bus ARN + event source prefix written into each pipeline's
+            // manifest.systemConfig so a pipeline can optionally register sub-process ARNs.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
 
@@ -414,7 +433,8 @@ export function buildProcessWorkflowExecutionOutputFunction(
     const name = "processWorkflowExecutionOutput";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.workflows.${name}.lambda_handler`,
+        // SFN-invoked execution handlers live under handlers/workflows/sfn/.
+        handler: `handlers.workflows.sfn.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
@@ -482,6 +502,163 @@ export function buildProcessWorkflowExecutionOutputFunction(
     return fun;
 }
 
+export function buildInterimPipelineTrackingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    workflowsLogGroup: logs.LogGroup,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "interimPipelineTracking";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        // SFN-invoked execution handlers live under handlers/workflows/sfn/.
+        handler: `handlers.workflows.sfn.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
+            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+            PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
+            WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
+            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+        },
+    });
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    // Reads original input files + output-files folder, and writes the next pipeline's
+    // resolved input manifest into the asset bucket execution input folder.
+    grantReadWritePermissionsToAllAssetBuckets(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return fun;
+}
+
+export function buildHandleExecutionErrorFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    workflowsLogGroup: logs.LogGroup,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "handleExecutionError";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        // SFN-invoked execution handlers live under handlers/workflows/sfn/.
+        handler: `handlers.workflows.sfn.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
+            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+            PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
+            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+        },
+    });
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
+            resources: [IAMArn("*" + config.name + "*").loggroup],
+        })
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    return fun;
+}
+
+export function buildRegisterPipelineExecutionFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "registerPipelineExecution";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        // SFN-adjacent execution handler (EventBridge-invoked) under handlers/workflows/sfn/.
+        handler: `handlers.workflows.sfn.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
+        },
+    });
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
+
+    // Standing EventBridge rule: route this deployment's pipeline.execution.register events to
+    // the registration lambda. One rule matches every execution/pipeline by the source prefix;
+    // the lambda routes to the exact pipeline row by detail.pipelineExecutionId.
+    const registerRule = new events.Rule(scope, "PipelineExecutionRegisterRule", {
+        eventBus: storageResources.eventBridge.orchestrationBus,
+        eventPattern: {
+            source: events.Match.prefix(storageResources.eventBridge.eventSourcePrefix),
+            detailType: ["pipeline.execution.register"],
+        },
+    });
+    registerRule.addTarget(new eventsTargets.LambdaFunction(fun));
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    return fun;
+}
+
 export function buildWorkflowRole(
     scope: Construct,
     processWorkflowExecutionOutputFunction: lambda.Function,
@@ -543,15 +720,18 @@ export function buildWorkflowRole(
             // Add permissions for all asset buckets from the global array
             ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                 const prefix = record.prefix || "/";
-                // Ensure the prefix ends with a slash for proper path construction
+                // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                // leading slash from the prefix so the '/' separator after the bucket
+                // ARN is always present (root prefix yields {bucketArn}/*).
                 const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                 return new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["s3:ListBucket", "s3:PutObject", "s3:GetObject"],
                     resources: [
                         record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                        `${record.bucket.bucketArn}/${objectPrefix}*`,
                     ],
                 });
             }),
@@ -612,6 +792,11 @@ export function buildWorkflowRole(
             ),
         ],
     });
+
+    // Grant access to any external asset bucket customer managed KMS keys so the
+    // workflow role can read/write objects in cross-account encrypted buckets
+    // (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(role);
 
     return role;
 }

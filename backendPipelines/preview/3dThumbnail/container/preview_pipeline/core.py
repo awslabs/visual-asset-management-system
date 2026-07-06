@@ -23,6 +23,7 @@ from .utils.pipeline.objects import (
 from .utils.pipeline import sfn
 from .utils.logging import get_logger
 from .utils import s3_utils as s3
+from .utils import manifest_io
 from .utils import image_utils
 from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler
 from . import renderer
@@ -45,6 +46,11 @@ def run(params: dict) -> PipelineExecutionParams:
     definition = PipelineDefinition(**params)
     logger.info(f"Pipeline Definition: {definition}")
 
+    # Read the metadata + input configuration from S3
+    input_metadata = manifest_io.fetch_metadata(definition.inputMetadataS3Location)
+    input_configuration = manifest_io.fetch_input_configuration(definition.inputConfigurationS3Location)
+    logger.info(f"Resolved input configuration keys: {list(input_configuration.keys())}")
+
     # Set pipeline current stage
     if definition.currentStage is None:
         current_stage = PipelineStage(**definition.stages.pop(0))
@@ -60,8 +66,8 @@ def run(params: dict) -> PipelineExecutionParams:
             definition.jobName,
             current_stage.type,
             [definition.to_json()],
-            definition.inputMetadata,
-            definition.inputParameters,
+            definition.inputMetadataS3Location,
+            definition.inputConfigurationS3Location,
             definition.externalSfnTaskToken,
             PipelineStatus.FAILED,
         )
@@ -76,8 +82,8 @@ def run(params: dict) -> PipelineExecutionParams:
     try:
         resultStageCompleted = _run_preview_pipeline(
             current_stage,
-            definition.inputMetadata,
-            definition.inputParameters,
+            input_metadata,
+            input_configuration,
             definition.localTest == "True",
             definition.assetId,
         )
@@ -104,8 +110,8 @@ def run(params: dict) -> PipelineExecutionParams:
         definition.jobName,
         next_stage_type,
         [definition.to_json()],
-        definition.inputMetadata,
-        definition.inputParameters,
+        definition.inputMetadataS3Location,
+        definition.inputConfigurationS3Location,
         definition.externalSfnTaskToken,
         resultStageCompleted.status,
     )
@@ -125,8 +131,8 @@ def run(params: dict) -> PipelineExecutionParams:
 
 def _run_preview_pipeline(
     stage: PipelineStage,
-    inputMetadata: str = "",
-    inputParameters: str = "",
+    inputMetadata: dict = None,
+    inputParameters: dict = None,
     localTest: bool = False,
     assetId: str = "",
 ) -> PipelineStage:
@@ -138,14 +144,11 @@ def _run_preview_pipeline(
     3. Render rotating preview frames
     4. Save as GIF (with size optimization / JPEG fallback)
     5. Upload to S3 output directory
+
+    inputMetadata / inputParameters are already-parsed objects read from S3 by the caller.
     """
-    # Parse input parameters
-    inputParametersObject = {}
-    if isinstance(inputParameters, str) and inputParameters != "":
-        try:
-            inputParametersObject = json.loads(inputParameters)
-        except Exception:
-            logger.error("Input parameters is not valid JSON.")
+    # Input parameters are already a parsed object
+    inputParametersObject = inputParameters if isinstance(inputParameters, dict) else {}
 
     # Create local working directories
     local_input_dir = _create_dir(["tmp", "input"])

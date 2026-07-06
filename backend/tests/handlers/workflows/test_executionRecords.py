@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from backend.backend.common import executionRecords as er
+from backend.backend.common.workflows import executionRecords as er
 
 
 @pytest.mark.unit
@@ -87,7 +87,7 @@ class TestTruncateAndBuilders:
             triggered_by_user_id="user@x", trigger_type="Manual",
             execution_log_group_arn="arn:lg",
         )
-        assert rec["executionId"] == "E1"
+        assert rec["workflowExecutionId"] == "E1"
         assert rec["workflowDatabaseId:workflowId"] == "db:wf"
         assert rec["workflow_execution_arn"] == "arn:ex"
         assert rec["executionStartDate"] == "2026-06-16T00:00:00Z"
@@ -218,3 +218,33 @@ class TestOutputBuilders:
         assert rec["workflowExecutionId"] == "E1"
         assert rec["recordType"] == "configuration"
         assert rec["specifiedPipelinesSnapshot"] == [{"name": "p"}]
+        # Output base-execution path extension defaults to '/' (no extra path segment).
+        assert rec["outputFileBaseExecutionPathExtension"] == "/"
+
+    def test_workflow_configuration_record_carries_path_extension(self):
+        rec = er.build_workflow_configuration_record(
+            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            specified_pipelines_snapshot=[],
+            output_file_base_execution_path_extension="/exec-2026/",
+        )
+        assert rec["outputFileBaseExecutionPathExtension"] == "/exec-2026/"
+
+    def test_manifest_output_target_defaults_and_extension(self):
+        # Default: location 'asset', empty ids, '/' extension (no extra path).
+        default = er.build_manifest_output_target()
+        assert default == {"locationType": "asset", "assetId": "", "databaseId": "",
+                           "fileBaseExecutionPathExtension": "/"}
+        # Populated: identity + a sub-folder extension.
+        populated = er.build_manifest_output_target(
+            location_type="asset", asset_id="a1", database_id="db",
+            file_base_execution_path_extension="/exec-2026/")
+        assert populated["assetId"] == "a1" and populated["databaseId"] == "db"
+        assert populated["fileBaseExecutionPathExtension"] == "/exec-2026/"
+
+    def test_manifest_envelope_includes_output_target(self):
+        env = er.build_manifest_envelope(
+            input_files=[], input_metadata_s3_location="", outputs={},
+            aux_bucket_s3_root="", aux_temp_prefix="", aux_preview_prefix="",
+            output_target=er.build_manifest_output_target(asset_id="a1", database_id="db"))
+        assert env["outputTarget"]["assetId"] == "a1"
+        assert env["outputTarget"]["fileBaseExecutionPathExtension"] == "/"

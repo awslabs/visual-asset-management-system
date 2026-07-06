@@ -11,7 +11,7 @@ from unittest.mock import Mock, MagicMock
 
 # NOTE: Import commented out due to test infrastructure limitations with MockModule
 # Uncomment when test infrastructure is updated to support backend.common imports
-# from backend.common.stepfunctions_builder import (
+# from backend.common.workflows.stepfunctions_builder import (
 #     create_lambda_task_state,
 #     create_fail_state,
 #     create_retry_config,

@@ -88,9 +88,12 @@ Records per-version file change provenance (who created a version and how). Popu
 
 **Global Secondary Indexes:**
 
-| GSI Name                 | Partition Key        | Sort Key    | Projection |
-| ------------------------ | -------------------- | ----------- | ---------- |
-| `DatabaseIdAssetIdIndex` | `databaseId:assetId` | `versionId` | ALL        |
+| GSI Name                   | Partition Key               | Sort Key                      | Projection |
+| -------------------------- | --------------------------- | ----------------------------- | ---------- |
+| `DatabaseIdAssetIdIndex`   | `databaseId:assetId`        | `versionId`                   | ALL        |
+| `WorkflowExecutionIdIndex` | `changeWorkflowExecutionId` | `databaseId:assetId:filePath` | ALL        |
+
+The `WorkflowExecutionIdIndex` is sparse: only versions produced by a workflow execution carry `changeWorkflowExecutionId`, so direct uploads and other change sources are absent from the index. It resolves which asset file versions a given workflow execution produced.
 
 ### Asset Uploads Storage Table
 

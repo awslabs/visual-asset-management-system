@@ -112,7 +112,7 @@ export class ConversionMeshCadMetadataExtractionConstruct extends NestedStack {
                         pipelineConversionMeshCadMetadataExtractionLambdaFunction.functionName,
                     taskTimeout: "900", // 15 minutes (lambda limit)
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".all" }),
                     workflowId: "metadata-extraction-cad-mesh",
                     workflowDescription:
                         "Basic Metadata Attribute Extraction (File-level metadata) - using Trimesh and CADQuery library. Supported files are STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ, STP, DXF.",

@@ -30,15 +30,15 @@ os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME", "t
 os.environ.setdefault("PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME", "t-logs")
 
 # The handlers.workflows package __init__ imports get_task_builder from
-# common.stepfunctions_builder at import time. The shared test mock package does
+# common.workflows.stepfunctions_builder at import time. The shared test mock package does
 # not provide this submodule, so register a lightweight stub before importing the
 # handler. These tests do not exercise ASL generation.
-if "common.stepfunctions_builder" not in sys.modules:
-    _sf_builder_stub = types.ModuleType("common.stepfunctions_builder")
+if "common.workflows.stepfunctions_builder" not in sys.modules:
+    _sf_builder_stub = types.ModuleType("common.workflows.stepfunctions_builder")
     _sf_builder_stub.get_task_builder = lambda *a, **k: None
-    sys.modules["common.stepfunctions_builder"] = _sf_builder_stub
+    sys.modules["common.workflows.stepfunctions_builder"] = _sf_builder_stub
 
-from backend.backend.handlers.workflows import processWorkflowExecutionOutput as po
+from backend.backend.handlers.workflows.sfn import processWorkflowExecutionOutput as po
 
 
 @pytest.mark.unit
@@ -71,12 +71,16 @@ class TestRecordExecutionOutputs:
                            "s3VersionId": "v1"}],
             output_metadata=[{"targetFilePath": "/x.glb", "metadataKey": "c", "metadataValue": "red",
                               "sourceMetadataFileRelativePath": "x.glb.metadata.json"}],
+            output_results=[{"relativeFilePath": "/x.glb.result.json",
+                             "resultsContent": '{"score": 0.9}', "s3Key": "k/results/x.glb.result.json"}],
             result_log="done", execution_log="full execution log text",
             log_group_arn="arn:lg", log_stream_name="s",
             execution_status="SUCCEEDED",
         )
         assert len(puts["t-of"]) == 1 and puts["t-of"][0]["fileType:relativeFilePath"] == "file:x.glb"
         assert len(puts["t-om"]) == 1
+        assert len(puts["t-or"]) == 1 and puts["t-or"][0]["relativeFilePath"] == "/x.glb.result.json"
+        assert puts["t-or"][0]["resultsContent"] == '{"score": 0.9}'
         assert len(puts["t-logs"]) == 1 and puts["t-logs"][0]["resultLog"] == "done"
         # completion status updates on both the end-state pipeline-exec row and the main row
         assert len(updates["t-pexec"]) == 1
@@ -93,7 +97,7 @@ class TestRecordExecutionOutputs:
         po.record_execution_outputs(
             dynamo=dynamo, workflow_execution_id="", end_state_pipeline_execution_id="",
             workflow_database_id="", workflow_id="", bucket_name="b",
-            output_files=[], output_metadata=[], result_log="", execution_log="",
+            output_files=[], output_metadata=[], output_results=[], result_log="", execution_log="",
             log_group_arn="", log_stream_name="", execution_status="SUCCEEDED",
         )
         # Nothing written when there is no execution context (non-workflow/direct invoke)

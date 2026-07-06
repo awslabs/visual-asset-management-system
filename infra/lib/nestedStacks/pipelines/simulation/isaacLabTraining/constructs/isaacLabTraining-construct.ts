@@ -22,6 +22,7 @@ import { IsaacLabTrainingFunctions } from "../lambdaBuilder/isaacLabTrainingFunc
 import * as Config from "../../../../../../config/config";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { NagSuppressions } from "cdk-nag";
 import * as path from "path";
 
@@ -68,13 +69,13 @@ export class IsaacLabTrainingConstruct extends Construct {
             // role ECR pull + ecr:GetAuthorizationToken permissions (fromRegistry does not).
             containerImageRef = ecs.ContainerImage.fromEcrRepository(
                 props.codeBuildRepository,
-                "latest"
+                "latest",
             );
         } else {
             const containerImage = new DockerImageAsset(this, "IsaacLabTrainingImage", {
                 directory: path.join(
                     __dirname,
-                    "../../../../../../../backendPipelines/simulation/isaacLabTraining/container"
+                    "../../../../../../../backendPipelines/simulation/isaacLabTraining/container",
                 ),
                 platform: Platform.LINUX_AMD64,
                 buildArgs: {
@@ -103,7 +104,7 @@ export class IsaacLabTrainingConstruct extends Construct {
         props.pipelineSecurityGroups[0].addIngressRule(
             props.pipelineSecurityGroups[0],
             ec2.Port.tcp(2049),
-            "Allow NFS for EFS access"
+            "Allow NFS for EFS access",
         );
 
         // Launch template with larger EBS volume for Isaac Lab container (10GB+)
@@ -148,7 +149,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                 minvCpus: props.config.app.pipelines.useIsaacLabTraining.keepWarmInstance ? 8 : 0,
                 allocationStrategy: batch.AllocationStrategy.BEST_FIT_PROGRESSIVE,
                 launchTemplate: launchTemplate,
-            }
+            },
         );
 
         // Enable Container Insights on the ECS cluster created by Batch
@@ -181,7 +182,7 @@ export class IsaacLabTrainingConstruct extends Construct {
         getEcsClusterArn.node.addDependency(computeEnvironment);
 
         const ecsClusterArn = getEcsClusterArn.getResponseField(
-            "computeEnvironments.0.ecsClusterArn"
+            "computeEnvironments.0.ecsClusterArn",
         );
 
         // Now enable Container Insights on the ECS cluster
@@ -245,6 +246,11 @@ export class IsaacLabTrainingConstruct extends Construct {
             record.bucket.grantReadWrite(jobRole);
         });
 
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(jobRole);
+
         // Grant VAMS auxiliary bucket read/write access (for intermediate storage if needed)
         props.storageResources.s3.assetAuxiliaryBucket.grantReadWrite(jobRole);
 
@@ -258,7 +264,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                     "states:SendTaskHeartbeat",
                 ],
                 resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
-            })
+            }),
         );
 
         // Batch job definition using CDK-managed container image
@@ -308,8 +314,9 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "jobName.$": "$.openResult.Payload.jobName",
                 "definition.$": "$.openResult.Payload.definition",
                 "numNodes.$": "$.openResult.Payload.numNodes",
-                "inputMetadata.$": "$.openResult.Payload.inputMetadata",
-                "inputParameters.$": "$.openResult.Payload.inputParameters",
+                "inputMetadataS3Location.$": "$.openResult.Payload.inputMetadataS3Location",
+                "inputConfigurationS3Location.$":
+                    "$.openResult.Payload.inputConfigurationS3Location",
                 "externalSfnTaskToken.$": "$.openResult.Payload.externalSfnTaskToken",
                 "outputS3AssetFilesPath.$": "$.openResult.Payload.outputS3AssetFilesPath",
                 "inputS3AssetFilePath.$": "$.openResult.Payload.inputS3AssetFilePath",
@@ -326,8 +333,8 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "jobName.$": "$.jobName",
                 "definition.$": "$.definition",
                 "numNodes.$": "$.numNodes",
-                "inputMetadata.$": "$.inputMetadata",
-                "inputParameters.$": "$.inputParameters",
+                "inputMetadataS3Location.$": "$.inputMetadataS3Location",
+                "inputConfigurationS3Location.$": "$.inputConfigurationS3Location",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 "outputS3AssetFilesPath.$": "$.outputS3AssetFilesPath",
                 "inputS3AssetFilePath.$": "$.inputS3AssetFilePath",
@@ -386,7 +393,15 @@ export class IsaacLabTrainingConstruct extends Construct {
         // Add STATE_MACHINE_ARN to vamsExecuteFunction (must be done after state machine creation)
         lambdaFunctions.vamsExecuteFunction.addEnvironment(
             "STATE_MACHINE_ARN",
-            stateMachine.stateMachineArn
+            stateMachine.stateMachineArn,
+        );
+
+        lambdaFunctions.vamsExecuteFunction.addEnvironment(
+            "ORCHESTRATION_BUS_NAME",
+            props.storageResources.eventBridge.orchestrationBus.eventBusName,
+        );
+        props.storageResources.eventBridge.orchestrationBus.grantPutEventsTo(
+            lambdaFunctions.vamsExecuteFunction,
         );
 
         // Set output
@@ -402,7 +417,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "ImportFunction",
                 `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
                     props.importGlobalPipelineWorkflowFunctionName
-                }`
+                }`,
             );
 
             const importProvider = new cr.Provider(this, "ImportProvider", {
@@ -485,7 +500,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                         reason: "Wildcard permissions needed for pipeline/workflow import custom resource",
                     },
                 ],
-                true
+                true,
             );
         }
 
@@ -513,7 +528,7 @@ export class IsaacLabTrainingConstruct extends Construct {
                     reason: "X-Ray tracing will be added in future iteration",
                 },
             ],
-            true
+            true,
         );
     }
 }

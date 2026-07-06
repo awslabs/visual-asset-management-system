@@ -12,17 +12,20 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecuteCosmosTransferPipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path,
-                      output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path, input_metadata,
-                      input_parameters, external_task_token, executing_userName, executing_requestContext,
+                      output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path,
+                      input_metadata_s3_location, input_configuration_s3_location, orchestration_event_prefix,
+                      external_task_token, executing_userName, executing_requestContext,
                       asset_id, database_id, cosmos_prompt, control_type, control_path):
     """
     Execute the Cosmos Transfer pipeline by invoking the openPipeline Lambda.
@@ -37,8 +40,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": "",  # Don't forward full metadata - prompt already extracted above
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
+        "orchestrationEventPrefix": orchestration_event_prefix,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -89,13 +93,16 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        # Get input parameters if defined
-        input_parameters = data.get('inputParameters', '')
-        logger.info(f"Input parameters received: {input_parameters}")
+        # Resolve inputs from the manifest (preferred) or legacy payload fields (fallback)
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
 
-        # Get input metadata if defined
-        input_metadata = data.get('inputMetadata', '')
-        logger.info(f"Input metadata received: {input_metadata}")
+        # Read metadata + input configuration content from S3 (locations travel, content does not)
+        input_metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location'])
+        if not input_metadata:
+            input_metadata = data.get('inputMetadata', '')
+        input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location'])
+        if not input_parameters:
+            input_parameters = data.get('inputParameters', '')
 
         # Extract transfer-specific metadata from file metadata
         # VAMS metadata format: {"VAMS": {"assetMetadata": {...}, "fileMetadata": {"key": "value", ...}}}
@@ -140,10 +147,6 @@ def lambda_handler(event, context):
             cosmos_prompt = "Transform the video"
             logger.info(f"No COSMOS_TRANSFER_PROMPT found - using default: {cosmos_prompt}")
 
-        # Get asset and database IDs
-        asset_id = data.get('assetId', '')
-        database_id = data.get('databaseId', '')
-
         # Get Executing username
         executing_userName = data.get('executingUserName', '')
 
@@ -152,18 +155,19 @@ def lambda_handler(event, context):
 
         # Starts execution of pipeline
         execute_pipeline(
-            data['inputS3AssetFilePath'],
-            data.get('outputS3AssetFilesPath', ''),
-            data.get('outputS3AssetPreviewPath', ''),
-            data.get('outputS3AssetMetadataPath', ''),
-            data['inputOutputS3AssetAuxiliaryFilesPath'],
-            input_metadata,
-            input_parameters,
+            resolved['inputS3AssetFilePath'],
+            resolved['outputS3AssetFilesPath'],
+            resolved['outputS3AssetPreviewPath'],
+            resolved['outputS3AssetMetadataPath'],
+            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            resolved['inputMetadataS3Location'],
+            resolved['inputConfigurationS3Location'],
+            resolved['orchestrationEventPrefix'],
             external_task_token,
             executing_userName,
             executing_requestContext,
-            asset_id,
-            database_id,
+            resolved['assetId'],
+            resolved['databaseId'],
             cosmos_prompt,
             control_type,
             control_path

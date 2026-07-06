@@ -15,19 +15,19 @@ from backend.backend.models.executions import (
 class TestExecutionModels:
     def test_workflow_execution_record_minimal(self):
         m = WorkflowExecutionRecord(
-            executionId="E1",
+            workflowExecutionId="E1",
             workflowId="wf",
             workflowDatabaseId="db",
             triggerType="Manual",
         )
-        assert m.executionId == "E1"
+        assert m.workflowExecutionId == "E1"
         assert m.triggeredByUserId == "system"  # default
         assert m.executionStopDate == ""  # default
 
     def test_workflow_execution_record_rejects_bad_trigger_type(self):
         with pytest.raises(Exception):
             WorkflowExecutionRecord(
-                executionId="E1", workflowId="wf", workflowDatabaseId="db",
+                workflowExecutionId="E1", workflowId="wf", workflowDatabaseId="db",
                 triggerType="Nope",
             )
 

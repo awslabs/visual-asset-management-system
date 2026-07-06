@@ -9,16 +9,18 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecutePreview3dThumbnailPipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
-                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata, input_parameters, external_task_token
-                                        , executing_userName, executing_requestContext, asset_id):
+                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
+                                        , executing_userName, executing_requestContext, asset_id, orchestration_event_prefix=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -27,12 +29,13 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
-        "assetId": asset_id
+        "assetId": asset_id,
+        "orchestrationEventPrefix": orchestration_event_prefix
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -80,24 +83,6 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        #Get input parameters if defined
-        if 'inputParameters' in data:
-            input_parameters = data['inputParameters']
-        else:
-            input_parameters = ''
-
-        #Get input metadata if defined
-        if 'inputMetadata' in data:
-            input_metadata = data['inputMetadata']
-        else:
-            input_metadata = ''
-
-        #Get outputType if defined
-        if 'outputType' in data:
-            output_filetype = data['outputType']
-        else:
-            output_filetype = ''
-
         #Get Executing username
         if 'executingUserName' in data:
             executing_userName = data['executingUserName']
@@ -112,9 +97,13 @@ def lambda_handler(event, context):
 
         logger.info(data)
 
+        # Resolve input/output/aux locations from the workflow manifest, falling back to payload path fields
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
+
         # Validate input is a specific file path, not a folder/whole asset
-        input_path = data['inputS3AssetFilePath']
-        if input_path.endswith('/'):
+        input_path = resolved['inputS3AssetFilePath']
+        if not input_path or input_path.endswith('/'):
             message = 'Input must be a specific file path, not a folder or asset'
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
@@ -122,14 +111,15 @@ def lambda_handler(event, context):
             return response
 
         # Starts excution of pipeline
-        execute_pipeline(data['inputS3AssetFilePath'],
-                                            data.get('outputS3AssetFilesPath', ''),
-                                            data.get('outputS3AssetPreviewPath', ''),
-                                            data.get('outputS3AssetMetadataPath', ''),
-                                            data.get('inputOutputS3AssetAuxiliaryFilesPath', ''),
-                                            input_metadata, input_parameters, external_task_token,
+        execute_pipeline(resolved['inputS3AssetFilePath'],
+                                            resolved['outputS3AssetFilesPath'],
+                                            resolved['outputS3AssetPreviewPath'],
+                                            resolved['outputS3AssetMetadataPath'],
+                                            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+                                            resolved['inputMetadataS3Location'],
+                                            resolved['inputConfigurationS3Location'], external_task_token,
                                             executing_userName, executing_requestContext,
-                                            data.get('assetId', ''))
+                                            resolved['assetId'], resolved['orchestrationEventPrefix'])
 
         return {
             'statusCode': 200,

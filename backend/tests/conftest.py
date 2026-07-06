@@ -126,33 +126,51 @@ _apir_spec = _s3mk_importlib_util.spec_from_file_location(
 _apir_module = _s3mk_importlib_util.module_from_spec(_apir_spec)
 _apir_spec.loader.exec_module(_apir_module)
 sys.modules['common.apiRoutes'] = _apir_module
+# The execution/pipeline/workflow helpers live in the common.workflows subpackage.
+# `common` is a MagicMock, so register a REAL package object for `common.workflows`
+# (and bind it as an attribute on the mock `common`) before loading its submodules,
+# so `from common.workflows import X` / `from common.workflows.X import Y` resolve the
+# real code rather than MagicMock attributes.
+_cw_pkg = __import__('types').ModuleType('common.workflows')
+_cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
+sys.modules['common.workflows'] = _cw_pkg
+sys.modules['common'].workflows = _cw_pkg
 # executionRecords is pure helpers (no AWS deps), so load the REAL module by path
 # rather than a MagicMock (same approach as s3MetadataKeys above).
 _execrec_spec = _s3mk_importlib_util.spec_from_file_location(
-    'common.executionRecords',
-    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'executionRecords.py')
+    'common.workflows.executionRecords',
+    os.path.join(_cw_pkg.__path__[0], 'executionRecords.py')
 )
 _execrec_module = _s3mk_importlib_util.module_from_spec(_execrec_spec)
 _execrec_spec.loader.exec_module(_execrec_module)
-sys.modules['common.executionRecords'] = _execrec_module
-# `common` is a MagicMock package, so a bare `from common import executionRecords`
-# would resolve the attribute on the MagicMock instead of the submodule. Bind the
-# real module as an attribute so handlers importing it that way get the real code.
-sys.modules['common'].executionRecords = _execrec_module
+sys.modules['common.workflows.executionRecords'] = _execrec_module
+# Bind the real module as an attribute on the package so `from common.workflows import
+# executionRecords` resolves the real submodule.
+_cw_pkg.executionRecords = _execrec_module
+# executionOutputs is pure helpers too (imports only common.workflows.executionRecords;
+# boto3 clients are injected by callers, none constructed at import). Load the REAL module.
+_execout_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.workflows.executionOutputs',
+    os.path.join(_cw_pkg.__path__[0], 'executionOutputs.py')
+)
+_execout_module = _s3mk_importlib_util.module_from_spec(_execout_spec)
+_execout_spec.loader.exec_module(_execout_module)
+sys.modules['common.workflows.executionOutputs'] = _execout_module
+_cw_pkg.executionOutputs = _execout_module
 # stepfunctions_builder is a pure ASL builder (imports only json + typing, no AWS
 # side effects at import), so load the REAL module by path rather than a MagicMock.
 # This makes the per-test stubs in the workflow tests harmless no-ops and removes a
 # test-collection-order dependency.
 _sfb_spec = _s3mk_importlib_util.spec_from_file_location(
-    'common.stepfunctions_builder',
-    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'stepfunctions_builder.py')
+    'common.workflows.stepfunctions_builder',
+    os.path.join(_cw_pkg.__path__[0], 'stepfunctions_builder.py')
 )
 _sfb_module = _s3mk_importlib_util.module_from_spec(_sfb_spec)
 _sfb_spec.loader.exec_module(_sfb_module)
-sys.modules['common.stepfunctions_builder'] = _sfb_module
-# `common` is a MagicMock package, so bind the real submodule as an attribute too so
-# `from common import stepfunctions_builder` / `from common.stepfunctions_builder import X` resolve the real code.
-sys.modules['common'].stepfunctions_builder = _sfb_module
+sys.modules['common.workflows.stepfunctions_builder'] = _sfb_module
+# Bind the real submodule as an attribute too so `from common.workflows import
+# stepfunctions_builder` / `from common.workflows.stepfunctions_builder import X` resolve real code.
+_cw_pkg.stepfunctions_builder = _sfb_module
 # s3 is a simple validation module with no AWS side effects at import, but it is not
 # in the root conftest mock layer. Load the mock s3 module by path so tests that import
 # handlers which depend on common.s3 can collect cleanly.

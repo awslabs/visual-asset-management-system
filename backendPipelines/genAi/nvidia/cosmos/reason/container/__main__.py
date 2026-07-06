@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
+import manifest_io
 from inference import run_inference
 from model_manager import ensure_models_cached
 
@@ -211,15 +212,13 @@ def main():
         if hf_token:
             os.environ["HF_TOKEN"] = hf_token
 
-        # Check for optional flags from inputParameters
+        # Check for optional flags from the input configuration (read from S3)
         invalidate_models = False
         try:
-            input_params = definition.get("inputParameters", "")
-            if input_params:
-                params = json.loads(input_params) if isinstance(input_params, str) else input_params
-                invalidate_models = str(params.get("INVALIDATE_COSMOS_MODELS", "")).lower() == "true"
-                if invalidate_models:
-                    logger.info("INVALIDATE_COSMOS_MODELS=true: will clear EFS/S3 cache")
+            params = manifest_io.fetch_input_configuration(definition.get("inputConfigurationS3Location", ""))
+            invalidate_models = str(params.get("INVALIDATE_COSMOS_MODELS", "")).lower() == "true"
+            if invalidate_models:
+                logger.info("INVALIDATE_COSMOS_MODELS=true: will clear EFS/S3 cache")
         except Exception:
             pass
 

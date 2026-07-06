@@ -13,16 +13,19 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecuteGr00tFinetunePipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path,
-                      inputOutput_s3_assetAuxiliary_files_path, input_metadata, input_parameters, external_task_token,
+                      inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location,
+                      orchestration_event_prefix, external_task_token,
                       executing_userName, executing_requestContext, asset_id, database_id, groot_config):
     """
     Execute the Gr00t Fine-Tuning pipeline by invoking the openPipeline Lambda.
@@ -35,8 +38,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": "",
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
+        "orchestrationEventPrefix": orchestration_event_prefix,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -82,13 +86,14 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        # Get input parameters (3rd priority)
-        input_parameters = data.get('inputParameters', '')
-        logger.info(f"Input parameters received: {input_parameters}")
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
 
-        # Get input metadata (2nd priority source for config)
-        input_metadata = data.get('inputMetadata', '')
-        logger.info(f"Input metadata received: {input_metadata}")
+        # Source input configuration (3rd priority) and asset metadata (2nd priority) from S3,
+        # falling back to inline payload fields for the legacy/transition path.
+        input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location']) \
+            or data.get('inputParameters', '')
+        input_metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']) \
+            or data.get('inputMetadata', '')
 
         # Build merged config from asset metadata (2nd priority) and inputParameters (3rd priority)
         # gr00t_config.json in the asset (1st priority) is handled by the container after download
@@ -161,24 +166,23 @@ def lambda_handler(event, context):
             except Exception as e:
                 logger.warning(f"Failed to extract config from asset metadata: {e}")
 
-        asset_id = data.get('assetId', '')
-        database_id = data.get('databaseId', '')
         executing_userName = data.get('executingUserName', '')
         executing_requestContext = data.get('executingRequestContext', '')
 
         execute_pipeline(
-            data.get('inputS3AssetFilePath', ''),
-            data.get('outputS3AssetFilesPath', ''),
-            data.get('outputS3AssetPreviewPath', ''),
-            data.get('outputS3AssetMetadataPath', ''),
-            data['inputOutputS3AssetAuxiliaryFilesPath'],
-            input_metadata,
-            input_parameters,
+            resolved['inputS3AssetFilePath'],
+            resolved['outputS3AssetFilesPath'],
+            resolved['outputS3AssetPreviewPath'],
+            resolved['outputS3AssetMetadataPath'],
+            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            resolved['inputMetadataS3Location'],
+            resolved['inputConfigurationS3Location'],
+            resolved['orchestrationEventPrefix'],
             external_task_token,
             executing_userName,
             executing_requestContext,
-            asset_id,
-            database_id,
+            resolved['assetId'],
+            resolved['databaseId'],
             groot_config
         )
 

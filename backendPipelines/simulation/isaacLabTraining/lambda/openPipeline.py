@@ -55,8 +55,8 @@ def lambda_handler(event, context):
         "jobName": event.get("jobName"),
         "definition": json.dumps(job_config),
         "numNodes": job_config.get("computeConfig", {}).get("numNodes", 1),
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "outputS3AssetFilesPath": job_config.get("outputS3AssetFilesPath", ""),
@@ -226,8 +226,8 @@ def build_training_config(event, training_config, compute_config, task, rl_libra
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "customEnvironmentS3Uri": custom_env_s3_uri,
         "outputS3AssetFilesPath": output_path,
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 
@@ -304,7 +304,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "customEnvironmentS3Uri": custom_env_s3_uri,
         "outputS3AssetFilesPath": output_path,
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }

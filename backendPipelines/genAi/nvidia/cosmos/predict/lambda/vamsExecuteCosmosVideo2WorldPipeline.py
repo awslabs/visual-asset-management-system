@@ -11,18 +11,21 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecuteCosmosVideo2WorldPipeline")
 lambda_client = boto3.client('lambda')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+s3_client = boto3.client('s3')
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path,
-                      output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path, input_metadata,
-                      input_parameters, external_task_token, executing_userName, executing_requestContext,
-                      asset_id, database_id, cosmos_prompt):
+                      output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path,
+                      input_metadata_s3_location, input_configuration_s3_location, orchestration_event_prefix,
+                      external_task_token, executing_userName, executing_requestContext, asset_id, database_id,
+                      cosmos_prompt):
     """
     Execute the Cosmos Video2World pipeline by invoking the openPipeline Lambda.
     Video2World requires an input file path (video or image file).
@@ -36,8 +39,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": "",  # Don't forward full metadata - prompt already extracted above
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
+        "orchestrationEventPrefix": orchestration_event_prefix,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -63,6 +67,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
 def lambda_handler(event, context):
     logger.info(event)
 
+    external_task_token = None
+
     try:
         # Parse request body
         if not event.get('body'):
@@ -84,47 +90,42 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        # Get input parameters if defined
-        input_parameters = data.get('inputParameters', '')
-        logger.info(f"Input parameters received: {input_parameters}")
+        # Resolve manifest-preferred inputs (locations + paths), legacy-fallback
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
 
-        # Get input metadata if defined
-        input_metadata = data.get('inputMetadata', '')
-        logger.info(f"Input metadata received: {input_metadata}")
+        # Read metadata + input configuration content from S3 (inline fallback for transition)
+        metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location'])
+        if not metadata and data.get('inputMetadata'):
+            inline = data.get('inputMetadata')
+            metadata = json.loads(inline) if isinstance(inline, str) else inline
+        input_configuration = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location'])
+        if not input_configuration and data.get('inputParameters'):
+            inline = data.get('inputParameters')
+            input_configuration = json.loads(inline) if isinstance(inline, str) else inline
 
         # Extract COSMOS_PREDICT_PROMPT from file metadata
         # VAMS metadata format: {"VAMS": {"assetMetadata": {...}, "fileMetadata": {"key": "value", ...}}}
         cosmos_prompt = ""
-        if input_metadata:
-            try:
-                metadata_obj = json.loads(input_metadata) if isinstance(input_metadata, str) else input_metadata
-                vams_metadata = metadata_obj.get("VAMS", {})
-                file_metadata = vams_metadata.get("fileMetadata", {})
+        try:
+            file_metadata = (metadata or {}).get("VAMS", {}).get("fileMetadata", {})
+            cosmos_prompt = file_metadata.get("COSMOS_PREDICT_PROMPT", "")
+            if cosmos_prompt:
+                logger.info(f"Extracted COSMOS_PREDICT_PROMPT from file metadata: {cosmos_prompt}")
+        except Exception as e:
+            logger.warning(f"Failed to extract COSMOS_PREDICT_PROMPT from file metadata: {e}")
 
-                # fileMetadata is a flat dict of {key: value} pairs
-                cosmos_prompt = file_metadata.get("COSMOS_PREDICT_PROMPT", "")
-                if cosmos_prompt:
-                    logger.info(f"Extracted COSMOS_PREDICT_PROMPT from file metadata: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract COSMOS_PREDICT_PROMPT from file metadata: {e}")
-
-        # If not found in metadata, try inputParameters as fallback
-        if not cosmos_prompt and input_parameters:
+        # If not found in metadata, try input configuration as fallback
+        if not cosmos_prompt and input_configuration:
             try:
-                params_obj = json.loads(input_parameters) if isinstance(input_parameters, str) else input_parameters
-                cosmos_prompt = params_obj.get("PROMPT") or params_obj.get("prompt") or ""
+                cosmos_prompt = input_configuration.get("PROMPT") or input_configuration.get("prompt") or ""
                 if cosmos_prompt:
-                    logger.info(f"Using COSMOS_PREDICT_PROMPT from input parameters: {cosmos_prompt}")
+                    logger.info(f"Using COSMOS_PREDICT_PROMPT from input configuration: {cosmos_prompt}")
             except Exception as e:
-                logger.warning(f"Failed to extract prompt from input parameters: {e}")
+                logger.warning(f"Failed to extract prompt from input configuration: {e}")
 
         # Prompt is OPTIONAL for Video2World - the model can generate from input alone
         if not cosmos_prompt:
             logger.info("No COSMOS_PREDICT_PROMPT found - Video2World will generate from input file alone")
-
-        # Get asset and database IDs
-        asset_id = data.get('assetId', '')
-        database_id = data.get('databaseId', '')
 
         # Get Executing username
         executing_userName = data.get('executingUserName', '')
@@ -134,18 +135,19 @@ def lambda_handler(event, context):
 
         # Starts execution of pipeline
         execute_pipeline(
-            data['inputS3AssetFilePath'],
-            data.get('outputS3AssetFilesPath', ''),
-            data.get('outputS3AssetPreviewPath', ''),
-            data.get('outputS3AssetMetadataPath', ''),
-            data['inputOutputS3AssetAuxiliaryFilesPath'],
-            input_metadata,
-            input_parameters,
+            resolved['inputS3AssetFilePath'],
+            resolved['outputS3AssetFilesPath'],
+            resolved['outputS3AssetPreviewPath'],
+            resolved['outputS3AssetMetadataPath'],
+            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            resolved['inputMetadataS3Location'],
+            resolved['inputConfigurationS3Location'],
+            resolved['orchestrationEventPrefix'],
             external_task_token,
             executing_userName,
             executing_requestContext,
-            asset_id,
-            database_id,
+            resolved['assetId'],
+            resolved['databaseId'],
             cosmos_prompt
         )
 

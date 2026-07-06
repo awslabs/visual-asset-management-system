@@ -26,6 +26,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import generate_preview_gif, run_inference
+from manifest_io import fetch_input_configuration
 from model_manager import ensure_models_cached
 
 logger = logging.getLogger(__name__)
@@ -237,7 +238,7 @@ def main():
         if hf_token:
             os.environ["HF_TOKEN"] = hf_token
 
-        # Check for optional flags from inputParameters
+        # Check for optional flags from input configuration (read from S3 location)
         invalidate_models = False
         disable_guardrails = True
         generate_preview_gif_flag = False
@@ -245,9 +246,8 @@ def main():
         offload_tokenizer = True
         offload_diffusion_model = True
         try:
-            input_params = definition.get("inputParameters", "")
-            if input_params:
-                params = json.loads(input_params) if isinstance(input_params, str) else input_params
+            params = fetch_input_configuration(definition.get("inputConfigurationS3Location", ""))
+            if params:
                 invalidate_models = str(params.get("INVALIDATE_COSMOS_MODELS", "")).lower() == "true"
                 disable_guardrails = str(params.get("DISABLE_GUARDRAILS", "true")).lower() != "false"
                 generate_preview_gif_flag = str(params.get("GENERATE_PREVIEW_GIF", "")).lower() == "true"

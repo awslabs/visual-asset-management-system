@@ -110,6 +110,7 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     autoTriggerOnFileExtensionsUpload: Optional[str] = ""
     dateCreated: Optional[str] = None
     dateModified: Optional[str] = None
+    aslSchemaVersion: Optional[int] = None  # deployed state machine definition version
 
 ######################## Get Workflows API Models ##########################
 class GetWorkflowsRequestModel(BaseModel, extra='ignore'):
@@ -139,6 +140,15 @@ class ExecuteWorkflowRequestModel(BaseModel, extra='ignore'):
     workflowDatabaseId: Optional[str] = None
     fileKey: Optional[str] = None
     triggerSource: Optional[str] = None
+    # Per-pipeline inputParameters override for this execution only. Maps a pipeline name
+    # (specifiedPipelines.functions[].name) to a JSON string; when present and non-empty it
+    # overrides that pipeline's stored inputParameters for this run. The workflow definition
+    # is left untouched.
+    pipelineInputParameters: Optional[Dict[str, str]] = None
+    # Optional override of the output file base-execution path extension for this run: a path
+    # segment inserted between the output asset location key and each output file's relative path.
+    # Defaults to "/" (no extra segment) when omitted. Must be an asset-relative path (leading "/").
+    fileBaseExecutionPathExtension: Optional[str] = None
 
     @root_validator
     def validate_fields(cls, values):
@@ -157,9 +167,25 @@ class ExecuteWorkflowRequestModel(BaseModel, extra='ignore'):
                 'isFolder': False,
                 'optional': True
             },
+            'fileBaseExecutionPathExtension': {
+                'value': values.get('fileBaseExecutionPathExtension', '') or '',
+                'validator': 'RELATIVE_FILE_PATH',
+                'optional': True
+            },
         })
         if not valid:
             raise ValueError(message)
+        # Each per-pipeline override value, when provided, must be a JSON string.
+        for override_value in (values.get('pipelineInputParameters') or {}).values():
+            (valid, message) = validate({
+                'pipelineInputParameters': {
+                    'value': override_value or '',
+                    'validator': 'STRING_JSON',
+                    'optional': True
+                },
+            })
+            if not valid:
+                raise ValueError(message)
         return values
 
 
@@ -199,12 +225,13 @@ class ListExecutionsRequestModel(BaseModel, extra='ignore'):
 class WorkflowExecutionResponseModel(BaseModel, extra='ignore'):
     """Response model for a single workflow execution item in the executions list.
 
-    Mirrors the exact wire fields the frontend (`WorkflowTab.tsx`,
-    `WorkflowExecutionListDefinition.tsx`) and CLI (`format_execution_output`) read.
+    The wire fields the frontend (`WorkflowTab.tsx`,
+    `WorkflowExecutionListDefinition.tsx`) and CLI (`format_execution_output`) read; those
+    consumers move to `workflowExecutionId` with the workflow/execution overhaul.
     """
     workflowDatabaseId: Optional[str] = None
     workflowId: Optional[str] = None
-    executionId: Optional[str] = None
+    workflowExecutionId: Optional[str] = None
     executionStatus: Optional[str] = None
     startDate: Optional[str] = None
     stopDate: Optional[str] = None
@@ -251,12 +278,19 @@ class ExecutionInputFileDetailModel(BaseModel, extra='ignore'):
 
 class ExecutionOutputFileDetailModel(BaseModel, extra='ignore'):
     """Output-file traceability record. fileSize / contentType / s3VersionId are present
-    only when still available (a lifecycle policy may have expired temporary outputs)."""
+    only when still available (a lifecycle policy may have expired temporary outputs).
+    assetId / databaseId are present for asset-output files (derived from the execution's
+    asset output target). assetFileVersionId is the authoritative S3 file version the execution
+    wrote, sourced from the version-history table; it is absent when no history record exists
+    (e.g. legacy executions)."""
     relativeFilePath: Optional[str] = None
     fileType: Optional[str] = None
     fileSize: Optional[int] = None
     contentType: Optional[str] = None
     s3VersionId: Optional[str] = None
+    assetId: Optional[str] = None
+    databaseId: Optional[str] = None
+    assetFileVersionId: Optional[str] = None
 
 
 class ExecutionDetailsResponseModel(BaseModel, extra='ignore'):
@@ -264,7 +298,7 @@ class ExecutionDetailsResponseModel(BaseModel, extra='ignore'):
     (`GET /workflows/executions/{executionId}/details`). Documents the traceability
     payload returned under `message`; the handler assembles dicts directly. All internal
     fields (ARNs, S3 bucket/key/prefix locations, STS/vended-role fields) are excluded."""
-    executionId: str
+    workflowExecutionId: str
     workflowId: Optional[str] = None
     workflowDatabaseId: Optional[str] = None
     workflowDescription: Optional[str] = None

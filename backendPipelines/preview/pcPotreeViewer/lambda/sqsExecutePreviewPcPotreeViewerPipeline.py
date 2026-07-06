@@ -47,7 +47,7 @@ def normalize_s3_path(asset_base_key, file_path):
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
-                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata, input_parameters, external_task_token
+                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
                                         , executing_userName, executing_requestContext):
 
     # Create the object message to be sent
@@ -57,8 +57,8 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext
@@ -116,13 +116,9 @@ def lambda_handler(event, context):
                 # Initialize s3_records to prevent UnboundLocalError in the loop below
                 s3_records = []
 
-            # Get any given additional inputMetadata
-            input_Metadata = ''
-
-            # Get any given additional inputParameters
-            input_Parameters = ''
-
-            # Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
+            # No workflow context on auto-trigger: empty metadata/config locations and no token
+            input_metadata_s3_location = ''
+            input_configuration_s3_location = ''
             external_sfn_task_token = ''
 
             # Loop through S3 Records
@@ -152,10 +148,10 @@ def lambda_handler(event, context):
                     logger.info("Ignoring pipeline and preview files from assets for this use-case pipeline run")
                     continue
 
-                # Starts excution of pipeline 
+                # Starts excution of pipeline
                 execute_pipeline(inputS3AssetFilePath, '', ''
                                                     , '', inputOutputS3AssetAuxiliaryFilesPath
-                                                    , input_Metadata, input_Parameters, external_sfn_task_token
+                                                    , input_metadata_s3_location, input_configuration_s3_location, external_sfn_task_token
                                                     ,"", "")
 
         return {

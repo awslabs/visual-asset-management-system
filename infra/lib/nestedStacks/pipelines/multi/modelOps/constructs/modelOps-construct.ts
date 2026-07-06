@@ -30,6 +30,7 @@ import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
 
 export interface ModelOpsConstructProps extends cdk.StackProps {
@@ -77,8 +78,11 @@ export class ModelOpsConstruct extends NestedStack {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -91,7 +95,7 @@ export class ModelOpsConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -175,6 +179,11 @@ export class ModelOpsConstruct extends NestedStack {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         /**
          * SFN States
@@ -380,6 +389,8 @@ export class ModelOpsConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnetsIsolated,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -426,7 +437,7 @@ export class ModelOpsConstruct extends NestedStack {
                     lambdaName: modelOpsExecuteFunction.functionName,
                     taskTimeout: "14400", // 4 hour
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".usdz" }),
                     // inputParameters: JSON.stringify({
                     //     template: {
                     //         modules: [
@@ -470,7 +481,7 @@ export class ModelOpsConstruct extends NestedStack {
                     lambdaName: modelOpsExecuteFunction.functionName,
                     taskTimeout: "14400", // 4 hour
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".glb" }),
                     // inputParameters: JSON.stringify({
                     //     template: {
                     //         modules: [
@@ -515,7 +526,7 @@ export class ModelOpsConstruct extends NestedStack {
                     lambdaName: modelOpsExecuteFunction.functionName,
                     taskTimeout: "14400", // 4 hour
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".gltf" }),
                     // inputParameters: JSON.stringify({
                     //     template: {
                     //         modules: [
@@ -560,7 +571,7 @@ export class ModelOpsConstruct extends NestedStack {
                     lambdaName: modelOpsExecuteFunction.functionName,
                     taskTimeout: "14400", // 4 hour
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".glb" }),
                     // inputParameters: JSON.stringify({
                     //     template: {
                     //         modules: [

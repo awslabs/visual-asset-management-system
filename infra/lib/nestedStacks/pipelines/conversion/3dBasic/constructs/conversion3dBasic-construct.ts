@@ -102,7 +102,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
                     taskTimeout: "900", // 15 minutes (lambda limit)
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".obj" }),
                     workflowId: "conversion-3d-basic-to-obj",
                     workflowDescription:
                         "Automated workflow for X to OBJ conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
@@ -126,7 +126,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
                     taskTimeout: "900", // 15 minutes (lambda limit)
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".stl" }),
                     workflowId: "conversion-3d-basic-to-stl",
                     workflowDescription:
                         "Automated workflow for  X to STL conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
@@ -150,7 +150,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
                     taskTimeout: "900", // 15 minutes (lambda limit)
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".gltf" }),
                     workflowId: "conversion-3d-basic-to-gltf",
                     workflowDescription:
                         "Automated workflow for X to GLTF conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
@@ -174,7 +174,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
                     taskTimeout: "900", // 15 minutes (lambda limit)
                     taskHeartbeatTimeout: "",
-                    inputParameters: "",
+                    inputParameters: JSON.stringify({ outputType: ".glb" }),
                     workflowId: "conversion-3d-basic-to-glb",
                     workflowDescription:
                         "Automated workflow for X to GLB conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",

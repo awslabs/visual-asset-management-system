@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
+import manifest_io
 from inference import run_inference
 from model_manager import ensure_models_cached
 
@@ -238,13 +239,13 @@ def main():
         if hf_token:
             os.environ["HF_TOKEN"] = hf_token
 
-        # Check for optional flags from inputParameters
+        # Check for optional flags from the input configuration read from S3
         disable_guardrails = True
         control_weight = 1.0
         try:
-            input_params = definition.get("inputParameters", "")
-            if input_params:
-                params = json.loads(input_params) if isinstance(input_params, str) else input_params
+            params = manifest_io.fetch_input_configuration(
+                definition.get("inputConfigurationS3Location", ""))
+            if params:
                 disable_guardrails = str(params.get("DISABLE_GUARDRAILS", "true")).lower() != "false"
                 control_weight = float(params.get("CONTROL_WEIGHT", "1.0"))
                 if not disable_guardrails:

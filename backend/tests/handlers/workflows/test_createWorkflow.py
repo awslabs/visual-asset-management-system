@@ -24,23 +24,25 @@ from botocore.exceptions import ClientError
 os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
 os.environ.setdefault("VAMS_STACK_NAME", "test-stack")
 os.environ.setdefault("PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME", "test-process-output")
+os.environ.setdefault("INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME", "test-interim")
+os.environ.setdefault("HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME", "test-error-handler")
 os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("LAMBDA_ROLE_ARN", "arn:aws:iam::123456789012:role/test-role")
 os.environ.setdefault("LOG_GROUP_ARN", "arn:aws:logs:us-east-1:123456789012:log-group:test")
 
 # The workflows handler package imports get_task_builder from
-# common.stepfunctions_builder at import time. The shared test mock package does
+# common.workflows.stepfunctions_builder at import time. The shared test mock package does
 # not provide this submodule, so register a lightweight stub before importing the
 # handler. The uniqueness tests below do not exercise ASL generation.
-if "common.stepfunctions_builder" not in sys.modules:
-    _sf_builder_stub = types.ModuleType("common.stepfunctions_builder")
+if "common.workflows.stepfunctions_builder" not in sys.modules:
+    _sf_builder_stub = types.ModuleType("common.workflows.stepfunctions_builder")
     for _name in (
         "create_lambda_task_state", "create_fail_state", "create_retry_config",
         "create_catch_config", "create_workflow_definition", "create_state_machine",
         "update_state_machine", "get_task_builder",
     ):
         setattr(_sf_builder_stub, _name, MagicMock())
-    sys.modules["common.stepfunctions_builder"] = _sf_builder_stub
+    sys.modules["common.workflows.stepfunctions_builder"] = _sf_builder_stub
 
 from backend.backend.handlers.workflows.createWorkflow import find_conflicting_database
 

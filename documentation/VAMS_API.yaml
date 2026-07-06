@@ -3892,9 +3892,21 @@ paths:
                         schema:
                             type: object
                             properties:
+                                workflowDatabaseId:
+                                    $ref: "#/components/schemas/id_regex"
+                                    description: "Database ID of the workflow (use GLOBAL for global workflows)"
                                 fileKey:
                                     $ref: "#/components/schemas/asset_path_pattern_regex"
                                     description: "Optional file key to specify which file to use for workflow execution"
+                                pipelineInputParameters:
+                                    type: object
+                                    additionalProperties:
+                                        type: string
+                                    description: "Optional per-pipeline inputParameters override for this run, keyed by pipeline name. Each value is a JSON string."
+                                fileBaseExecutionPathExtension:
+                                    type: string
+                                    pattern: "^\\/.*$"
+                                    description: "Optional asset-relative path segment (leading /) inserted between the output asset location key and each output file's relative path. Defaults to / (no extra segment)."
             responses:
                 "200":
                     description: Workflow execution started.

@@ -54,6 +54,45 @@ def uploadV2(bucket_name, object_key, file_path):
         raise Exception("Could not upload output file to S3 bucket")
     return object_key
     
+def _fetch_json_from_s3(s3_location):
+    """Fetch + parse a JSON object from an s3:// location. Best-effort: returns {} for a
+    missing/empty location or any S3/parse failure."""
+    if not s3_location or not s3_location.startswith("s3://"):
+        return {}
+    bucket, _, key = s3_location[len("s3://"):].partition("/")
+    if not bucket or not key:
+        return {}
+    try:
+        resp = s3_client.get_object(Bucket=bucket, Key=key)
+        body = resp["Body"].read().decode("utf-8")
+        return json.loads(body) if body else {}
+    except Exception as e:
+        logger.warning(f"Could not read {s3_location}: {e}")
+        return {}
+
+
+def fetch_input_configuration(input_configuration_s3_location):
+    """Fetch + parse the per-pipeline input configuration (inputParameters) from its S3 location."""
+    return _fetch_json_from_s3(input_configuration_s3_location)
+
+
+def resolve_inputs_from_manifest(data):
+    """Resolve the input file path and output-files path from the workflow manifest
+    (inputManifestS3Location), falling back to the legacy top-level body fields for direct/local
+    invocations. Returns (input_s3_asset_file_path, output_s3_asset_files_path)."""
+    manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
+    input_files = (manifest or {}).get("inputFiles") or []
+    input_path = ""
+    if input_files:
+        first = input_files[0]
+        if first.get("bucket") and first.get("key"):
+            input_path = f"s3://{first['bucket']}/{first['key']}"
+    input_path = input_path or data.get("inputS3AssetFilePath", "")
+    output_path = (manifest or {}).get("outputs", {}).get("files", "") \
+        or data.get("outputS3AssetFilesPath", "")
+    return input_path, output_path
+
+
 def convert_input_output(input_path, output_path, output_filetype):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
@@ -119,25 +158,17 @@ def lambda_handler(event, context):
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
         
-    #Get input parameters if defined
-    if 'inputParameters' in data:
-        input_parameters = data['inputParameters']
-    else:
-        input_parameters = ''
+    # Read the input configuration from its S3 location (inline fallback for transition).
+    input_configuration = fetch_input_configuration(data.get('inputConfigurationS3Location', ''))
+    if not input_configuration and data.get('inputParameters'):
+        inline = data['inputParameters']
+        input_configuration = json.loads(inline) if isinstance(inline, str) else inline
 
-    #Get input metadata if defined
-    if 'inputMetadata' in data:
-        input_metadata = data['inputMetadata']
-    else:
-        input_metadata = ''
+    # The target output format comes from the input configuration (outputType). Fall back to the
+    # legacy inline body field for executions whose ASL predates this change.
+    output_filetype = (input_configuration or {}).get('outputType') or data.get('outputType', '')
 
-    #Get outputType if defined
-    if 'outputType' in data:
-        output_filetype = data['outputType']
-    else:
-        output_filetype = ''
-
-    #Get Executing username 
+    #Get Executing username
     if 'executingUserName' in data:
         executing_userName = data['executingUserName']
     else:
@@ -149,7 +180,11 @@ def lambda_handler(event, context):
     else:
         executing_requestContext = ''
 
-    convert_input_output(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'], output_filetype)
+    # Resolve the input file + output-files paths from the workflow manifest (legacy body fields
+    # are the fallback for direct/local invocations).
+    input_path, output_path = resolve_inputs_from_manifest(data)
+
+    convert_input_output(input_path, output_path, output_filetype)
 
     return {
         'statusCode': 200, 

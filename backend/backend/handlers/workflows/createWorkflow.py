@@ -14,7 +14,7 @@ import random
 import string
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from common.stepfunctions_builder import (
+from common.workflows.stepfunctions_builder import (
     create_lambda_task_state,
     create_fail_state,
     create_retry_config,
@@ -22,6 +22,8 @@ from common.stepfunctions_builder import (
     create_workflow_definition,
     create_state_machine,
     update_state_machine,
+    create_interim_tracking_state,
+    create_error_handler_state,
     get_task_builder
 )
 from common.s3PathPatterns import (
@@ -31,6 +33,7 @@ from common.s3PathPatterns import (
     PIPELINE_OUTPUT_FILES_PREFIX,
     PIPELINE_OUTPUT_PREVIEWS_PREFIX,
     PIPELINE_OUTPUT_METADATA_PREFIX,
+    PIPELINE_OUTPUT_RESULTS_PREFIX,
 )
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -51,6 +54,10 @@ os.environ["AWS_STS_REGIONAL_ENDPOINTS"] = 'regional'
 
 logger = safeLogger(service="CreateWorkflow")
 
+# Version of the generated ASL definition shape, stamped on the workflow record and the
+# state machine Comment so a stale state machine can be detected later.
+ASL_SCHEMA_VERSION = 1
+
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
 
@@ -70,6 +77,9 @@ try:
     workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     stack_name = os.environ["VAMS_STACK_NAME"]
     process_workflow_output_function = os.environ['PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME']
+    # Interim pipeline-tracking lambda and the error-handler lambda.
+    interim_tracking_function = os.environ['INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME']
+    error_handler_function = os.environ['HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME']
     region = os.environ['AWS_REGION']
     role = os.environ['LAMBDA_ROLE_ARN']
     logGroupArn = os.environ['LOG_GROUP_ARN']
@@ -212,45 +222,64 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         error="States.TaskFailed"
     )
 
+    # Error-handler state: every Catch routes here (error at $.errorInfo) to reconcile the
+    # tables to FAILED, then transitions to the Fail state.
+    error_handler_state_id = "HandleExecutionError"
+    error_handler_payload = {
+        "body": {
+            "workflowExecutionId.$": "$.workflowExecutionId",
+            "workflowDatabaseId.$": "$.workflowDatabaseId",
+            "workflowId.$": "$.workflowId",
+        },
+        "errorInfo.$": "$.errorInfo",
+    }
+    error_handler_state = create_error_handler_state(
+        state_id=error_handler_state_id,
+        function_name=error_handler_function,
+        payload=error_handler_payload,
+        fail_state=failed_state_id,
+    )
+
     # Generate GLOBAL output paths (shared by ALL pipelines)
     # Use the FIRST pipeline's name for the global output location
     first_pipeline_name = pipelines[0]['name']
     first_job_name = job_names[0]
 
-    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
+    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
+    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
+    global_output_s3_asset_results_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_RESULTS_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
 
-    # Build list of pipeline states
+    # Asset-bucket-relative output FILES prefix (no s3:// scheme) for the interim output diff.
+    output_files_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}"
+    output_files_prefix_uri = f"States.Format('{output_files_prefix_template}', $$.Execution.Name)"
+
+    # Per-execution input-definition folder (asset bucket), keyed only on the execution id so
+    # it matches er.execution_input_prefix(executionId) and the keys executeWorkflow writes.
+    input_folder_template = f"{PIPELINES_PREFIX}workflowExecutionInputs/{{}}/"
+
+    def _pipeline_input_uri(pipeline_index, filename):
+        return (f"States.Format('s3://{{}}/{input_folder_template}pipeline{pipeline_index}/{filename}', "
+                f"$.workflowExecutionS3InputOutputBucket, $$.Execution.Name)")
+
+    input_metadata_uri = (f"States.Format('s3://{{}}/{input_folder_template}metadata.json', "
+                          f"$.workflowExecutionS3InputOutputBucket, $$.Execution.Name)")
+
+    # Build list of pipeline states, inserting an interim-tracking state between each pair
     states = []
 
     for i, pipeline in enumerate(pipelines):
-        # Auxiliary-bucket subfolder: previewFile pipelines write to the singular
-        # 'preview/' subfolder; standard pipelines write to 'pipelines/'.
-        assetAuxiliaryAssetSubFolderName = PIPELINES_PREFIX.rstrip('/')
-        if pipeline.get('pipelineType', 'standardFile') == 'previewFile':
-            assetAuxiliaryAssetSubFolderName = AUXILIARY_PREVIEW_PREFIX.rstrip('/')
-
-        inputOutput_s3_assetAuxiliary_files_uri = f"States.Format('s3://{{}}/{{}}/{assetAuxiliaryAssetSubFolderName}/{pipeline['name']}/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
-
-        # First pipeline uses original input, subsequent pipelines use global output paths
-        if i == 0:
-            input_s3_asset_uri = "States.Format('s3://{}/{}', $.bucketAsset, $.inputAssetFileKey)"
-        else:
-            input_s3_asset_uri = global_output_s3_asset_files_uri
-
         logger.info(f"Processing pipeline {i}: {pipeline['name']}")
 
         # Determine execution type (default to Lambda for backwards compat)
         exec_type = pipeline.get('pipelineExecutionType', 'Lambda')
 
-        # Build path context for the builder
+        # Build path context for the builder. The pipeline reads its resolved inputs/outputs from
+        # the manifest; only the manifest + per-pipeline config S3 locations travel in the body
+        # (asset bucket execution input folder; 1-indexed pipeline folders).
         path_context = {
-            "inputS3AssetFilePath": input_s3_asset_uri,
-            "outputS3AssetFilesPath": global_output_s3_asset_files_uri,
-            "outputS3AssetPreviewPath": global_output_s3_asset_preview_uri,
-            "outputS3AssetMetadataPath": global_output_s3_asset_metadata_uri,
-            "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
+            "inputManifestS3Location": _pipeline_input_uri(i + 1, "manifest.json"),
+            "inputConfigurationS3Location": _pipeline_input_uri(i + 1, "config.json"),
         }
 
         # Get the appropriate builder
@@ -258,16 +287,6 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
 
         # Build payload using the builder (shared payload construction)
         payload = builder.build_payload(pipeline, path_context)
-
-        # Check for input parameters and override if valid JSON
-        inputParameters = ''
-        if pipeline.get('inputParameters') and pipeline['inputParameters'] != '':
-            try:
-                json.loads(pipeline['inputParameters'])
-                inputParameters = pipeline['inputParameters']
-            except json.decoder.JSONDecodeError:
-                logger.warn("Input parameters provided is not a JSON object.... skipping inclusion")
-        payload['body']['inputParameters'] = inputParameters
 
         # Apply callback (adds TaskToken if enabled)
         payload = builder.apply_callback(payload, pipeline)
@@ -280,7 +299,72 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         # Step Functions serializes it automatically. No Pass state needed.
         task_state = builder.build_task_state(pipeline, state_name, payload)
 
+        # Re-point the Catch to the error-handler state (caught error at $.errorInfo).
+        task_state["Catch"] = [create_catch_config(
+            error_equals=["States.ALL"], next_state=error_handler_state_id,
+            result_path="$.errorInfo")]
+
         states.append((state_name, task_state))
+
+        # Insert an interim-tracking state between this pipeline and the next.
+        if i < len(pipelines) - 1:
+            interim_state_id = f"interim-{i + 1}-{uuid.uuid1().hex[:8]}"
+            # Aux working prefix for the NEXT pipeline.
+            next_pipeline = pipelines[i + 1]
+            next_aux_subfolder = PIPELINES_PREFIX.rstrip('/')
+            if next_pipeline.get('pipelineType', 'standardFile') == 'previewFile':
+                next_aux_subfolder = AUXILIARY_PREVIEW_PREFIX.rstrip('/')
+            next_aux_prefix_uri = (
+                f"States.Format('{{}}/{next_aux_subfolder}/{next_pipeline['name']}/', "
+                f"$.inputAssetFileKey)")
+            interim_payload = {
+                "body": {
+                    # --- Workflow-execution identity + buckets ---
+                    "workflowExecutionId.$": "$.workflowExecutionId",
+                    "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
+                    "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
+
+                    # --- Just-finished pipeline: output diff (list its output files, attribute,
+                    #     and record them). outputFilesPrefix is the asset-bucket-RELATIVE listing
+                    #     prefix (vs. outputFilesUri below, the full s3:// URI for the next manifest).
+                    "fromPipelineExecutionId.$": f"$.pipelineExecutionIds[{i}]",
+                    "priorPipelineExecutionIds.$": "$.pipelineExecutionIds",
+                    "outputFilesPrefix.$": output_files_prefix_uri,
+
+                    # --- Next pipeline: where to write its manifest + config, its id and aux prefix ---
+                    "nextPipelineExecutionId.$": f"$.pipelineExecutionIds[{i + 1}]",
+                    "nextPipelineManifestS3Key.$": (
+                        f"States.Format('{input_folder_template}pipeline{i + 2}/manifest.json', "
+                        f"$$.Execution.Name)"),
+                    "nextPipelineConfigS3Key.$": (
+                        f"States.Format('{input_folder_template}pipeline{i + 2}/config.json', "
+                        f"$$.Execution.Name)"),
+                    "nextPipelineAuxPrefix.$": next_aux_prefix_uri,
+
+                    # --- Envelope context written into the NEXT pipeline's manifest ---
+                    "outputFilesUri.$": global_output_s3_asset_files_uri,
+                    "outputPreviewsUri.$": global_output_s3_asset_preview_uri,
+                    "outputMetadataUri.$": global_output_s3_asset_metadata_uri,
+                    "outputResultsUri.$": global_output_s3_asset_results_uri,
+                    "inputMetadataS3Location.$": input_metadata_uri,
+                    "outputLocationType.$": "$.outputLocationType",
+                    "outputAssetId.$": "$.outputAssetId",
+                    "outputDatabaseId.$": "$.outputDatabaseId",
+                    "outputFileBaseExecutionPathExtension.$": "$.outputFileBaseExecutionPathExtension",
+
+                    # --- Orchestration (next pipeline's event prefix is built from these) ---
+                    "orchestrationBusArn.$": "$.orchestrationBusArn",
+                    "orchestrationEventSourcePrefix.$": "$.orchestrationEventSourcePrefix",
+                },
+            }
+            interim_state = create_interim_tracking_state(
+                state_id=interim_state_id,
+                function_name=interim_tracking_function,
+                payload=interim_payload,
+                result_path=f"$.{interim_state_id}.output",
+                error_handler_state=error_handler_state_id,
+            )
+            states.append((interim_state_id, interim_state))
 
     # Create SINGLE process output state (runs ONCE after ALL pipelines complete)
     # Use the LAST pipeline's information for the process output
@@ -290,26 +374,37 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     process_output_state_id = f"process-outputs-{uuid.uuid1().hex}"
     process_output_payload = {
         "body": {
-            "databaseId.$": "$.databaseId",
-            "assetId.$": "$.assetId",
+            # --- Workflow-execution identity ---
+            "workflowExecutionId.$": "$.workflowExecutionId",
             "workflowDatabaseId.$": "$.workflowDatabaseId",
             "workflowId.$": "$.workflowId",
-            "assetLocationKey.$": "$.inputAssetLocationKey",
+            "endStatePipelineExecutionId.$": "$.endStatePipelineExecutionId",
+            # All pipeline-execution ids for the end-state output diff baseline.
+            "priorPipelineExecutionIds.$": "$.pipelineExecutionIds",
+            "pipeline": last_pipeline['name'],
+            "description": f'Output from {last_job_name}',
+
+            # --- Shared output-folder prefixes the end-state lambda lists for produced files ---
             "filesPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $$.Execution.Name)",
             "metadataPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $$.Execution.Name)",
             "previewPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $$.Execution.Name)",
-            "description": f'Output from {last_job_name}',
-            "executionId.$": "$$.Execution.Name",
-            "workflowExecutionId.$": "$.workflowExecutionId",
-            "endStatePipelineExecutionId.$": "$.endStatePipelineExecutionId",
-            "pipeline": last_pipeline['name'],
-            "outputType": last_pipeline["outputType"],
+            "resultsPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_RESULTS_PREFIX}', $$.Execution.Name)",
+
+            # --- Output target identity (where outputs are written; == the input asset today). The
+            #     end-state lambda writes outputs to this asset; it does not receive the input asset.
+            "outputLocationType.$": "$.outputLocationType",
+            "outputAssetId.$": "$.outputAssetId",
+            "outputDatabaseId.$": "$.outputDatabaseId",
+            "outputFileBaseExecutionPathExtension.$": "$.outputFileBaseExecutionPathExtension",
+
+            # --- Executing-user context ---
             "executingUserName.$": "$.executingUserName",
             "executingRequestContext.$": "$.executingRequestContext",
         }
     }
 
-    # Create retry and catch configs for process output
+    # Create retry and catch configs for process output (Catch routes through the
+    # error-handler state, capturing the error at $.errorInfo).
     po_retry_config = create_retry_config(
         error_equals=["States.ALL"],
         interval_seconds=5,
@@ -317,8 +412,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         max_attempts=3
     )
     po_catch_config = [create_catch_config(
-        error_equals=["States.TaskFailed"],
-        next_state=failed_state_id
+        error_equals=["States.ALL"],
+        next_state=error_handler_state_id,
+        result_path="$.errorInfo",
     )]
 
     process_output_state = create_lambda_task_state(
@@ -336,10 +432,11 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     # Create the complete workflow definition (without fail state in sequential flow)
     workflow_definition = create_workflow_definition(
         states=states,
-        comment=f"VAMS Pipeline Workflow for {workflowId}"
+        comment=f"VAMS Pipeline Workflow for {workflowId} | aslSchemaVersion={ASL_SCHEMA_VERSION}"
     )
 
-    # Add the failure state to States dict (reachable only via Catch handlers)
+    # Add the error-handler + failure states to the States dict (reachable only via Catch handlers)
+    workflow_definition["States"][error_handler_state_id] = error_handler_state
     workflow_definition["States"][failed_state_id] = failed_state
 
     return workflow_definition, job_names
@@ -355,7 +452,7 @@ def create_step_function_new(pipelines, databaseId, workflowId):
         workflowId: Workflow ID
 
     Returns:
-        ARN of the created state machine
+        Tuple of (ARN of the created state machine, job_names baked into the ASL)
 
     Raises:
         VAMSGeneralErrorResponse: On errors
@@ -390,7 +487,7 @@ def create_step_function_new(pipelines, databaseId, workflowId):
         )
 
         logger.info(f"State machine created successfully: {workflow_arn}")
-        return workflow_arn
+        return workflow_arn, job_names
 
     except Exception as e:
         logger.exception(f"Error creating state machine for workflow {workflowId}: {e}")
@@ -408,7 +505,7 @@ def update_step_function_existing(existing_arn, pipelines, databaseId, workflowI
         workflowId: Workflow ID
 
     Returns:
-        ARN of the updated state machine (same as input)
+        Tuple of (ARN of the updated state machine (same as input), job_names baked into the ASL)
 
     Raises:
         VAMSGeneralErrorResponse: On errors
@@ -429,7 +526,7 @@ def update_step_function_existing(existing_arn, pipelines, databaseId, workflowI
         )
 
         logger.info(f"State machine updated successfully: {existing_arn}")
-        return existing_arn
+        return existing_arn, job_names
 
     except Exception as e:
         logger.exception(f"Error updating state machine {existing_arn}: {e}")
@@ -464,6 +561,7 @@ def create_workflow(payload, claims_and_roles):
 
     workflow_arn = None
     is_update = False
+    job_names = []
 
     if existing_workflow and 'workflow_arn' in existing_workflow:
         # Workflow exists - check if state machine still exists
@@ -473,7 +571,7 @@ def create_workflow(payload, claims_and_roles):
         if verify_state_machine_exists(existing_arn):
             # UPDATE existing state machine (preserves execution history)
             logger.info(f"Updating existing workflow: {workflow_id}")
-            workflow_arn = update_step_function_existing(
+            workflow_arn, job_names = update_step_function_existing(
                 existing_arn,
                 pipelines,
                 database_id,
@@ -483,11 +581,11 @@ def create_workflow(payload, claims_and_roles):
         else:
             # State machine was deleted - CREATE new one
             logger.info(f"State machine {existing_arn} not found, creating new one")
-            workflow_arn = create_step_function_new(pipelines, database_id, workflow_id)
+            workflow_arn, job_names = create_step_function_new(pipelines, database_id, workflow_id)
     else:
         # New workflow - CREATE
         logger.info(f"Creating new workflow: {workflow_id}")
-        workflow_arn = create_step_function_new(pipelines, database_id, workflow_id)
+        workflow_arn, job_names = create_step_function_new(pipelines, database_id, workflow_id)
 
     # Update DynamoDB record
     try:
@@ -504,7 +602,12 @@ def create_workflow(payload, claims_and_roles):
             'specifiedPipelines': payload['specifiedPipelines'],
             'workflow_arn': workflow_arn,
             'dateModified': json.dumps(dtNow),
-            'modifiedBy': username
+            'modifiedBy': username,
+            # Schema version of the deployed state machine definition (also in the ASL Comment).
+            'aslSchemaVersion': ASL_SCHEMA_VERSION,
+            # Per-pipeline job names baked into the ASL output S3 paths; executeWorkflow reads
+            # jobNames[0] at launch so the manifest's output locations match the ASL's.
+            'jobNames': job_names,
         }
 
         # Add autoTriggerOnFileExtensionsUpload if provided

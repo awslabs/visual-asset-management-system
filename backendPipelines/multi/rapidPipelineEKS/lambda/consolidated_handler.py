@@ -22,6 +22,8 @@ sfn = boto3.client('stepfunctions')
 from customLogging.logger import safeLogger
 logger = safeLogger(service="ConsolidatedEksHandler")
 
+import manifestHelper
+
 # Import Kubernetes utilities
 from kubernetes_utils import (
     get_k8s_client,
@@ -429,8 +431,20 @@ def handle_construct_pipeline(event):
             inputOutput_s3_assetAuxiliary_files_bucket = input_s3_asset_file_bucket
             inputOutput_s3_assetAuxiliary_files_key = "auxiliary"
 
-        # Get output type
-        output_s3_asset_extension = event.get('outputFileType', input_s3_asset_extension)
+        # Read the input configuration (rp_config) from its S3 location, with inline fallback for
+        # executions whose ASL predates the S3 input-configuration delivery.
+        input_configuration = manifestHelper.fetch_input_configuration(
+            s3, event.get('inputConfigurationS3Location', '')) or {}
+        if not input_configuration:
+            inline_parameters = event.get('inputParameters', '')
+            if inline_parameters:
+                input_configuration = json.loads(inline_parameters) if isinstance(inline_parameters, str) else inline_parameters
+
+        # outputType is a VAMS-reserved key in the input configuration: it selects the output file
+        # extension and is removed before the remainder is written as the rpdx rp_config.json. Fall
+        # back to the legacy threaded outputFileType for executions whose ASL predates this change.
+        output_s3_asset_extension = input_configuration.pop('outputType', None) \
+            or event.get('outputFileType', input_s3_asset_extension)
 
         # Handle .all format to generate all supported output formats
         is_all_formats = (output_s3_asset_extension == '.all')
@@ -461,14 +475,12 @@ def handle_construct_pipeline(event):
             standard_command_with_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx --read_config rp_config.json -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c -e {output_s3_asset_file_filename} && aws s3 cp {output_s3_asset_file_filename} s3://{output_s3_asset_files_bucket}/{output_path}"
             standard_command_no_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c -e {output_s3_asset_file_filename} && aws s3 cp {output_s3_asset_file_filename} s3://{output_s3_asset_files_bucket}/{output_path}"
 
-        # Handle custom configurations using config.json file
+        # Handle custom configurations using config.json file (outputType already removed above).
         processing_command = standard_command_no_config
-        input_parameters = event.get('inputParameters', '')
-
-        if input_parameters:
+        if input_configuration:
             # Write config json file to S3
             s3.put_object(
-                Body=input_parameters,
+                Body=json.dumps(input_configuration),
                 Bucket=inputOutput_s3_assetAuxiliary_files_bucket,
                 Key=f"{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json"
             )
@@ -586,8 +598,8 @@ def handle_construct_pipeline(event):
         return {
             "jobName": job_name,
             "jobManifest": job_manifest,
-            "inputMetadata": event.get("inputMetadata", ""),
-            "inputParameters": event.get("inputParameters", ""),
+            "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+            "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
             "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
             "status": "STARTING"
         }

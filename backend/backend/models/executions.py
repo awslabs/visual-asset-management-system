@@ -4,7 +4,7 @@
 """Pydantic v1 models for the workflow-execution storage data model (Stage 1).
 
 These document the canonical record shapes for the 11 execution storage tables.
-Handlers persist dicts via common.executionRecords builders; these models are
+Handlers persist dicts via common.workflows.executionRecords builders; these models are
 used for validation and parsing where helpful. All use the v1 idiom
 (BaseModel from aws_lambda_powertools, extra='ignore').
 """
@@ -20,7 +20,7 @@ TRIGGER_TYPES = ("Manual", "File-Upload")
 
 class WorkflowExecutionRecord(BaseModel, extra='ignore'):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed)."""
-    executionId: str
+    workflowExecutionId: str
     workflowId: str
     workflowDatabaseId: str
     workflow_arn: Optional[str] = ""
@@ -78,6 +78,11 @@ class PipelineExecutionRecord(BaseModel, extra='ignore'):
     from_pipeline_execution_id: Optional[str] = ""
     pipeline_execution_sub_arn: Optional[str] = ""
     pipeline_execution_sub_execution_arn: Optional[str] = ""
+    # EventBridge source prefix the pipeline reports under, plus the typed lists of reported
+    # sub-execution ARNs and CloudWatch log locations.
+    orchestrationBusEventPrefix: Optional[str] = ""
+    registeredSubExecutions: Optional[List[Dict[str, Any]]] = []
+    registeredLogs: Optional[List[Dict[str, Any]]] = []
 
 
 class PipelineExecutionInputFileRecord(BaseModel, extra='ignore'):
@@ -171,3 +176,11 @@ class WorkflowExecutionConfigurationRecord(BaseModel, extra='ignore'):
     inputMetadata: Optional[str] = ""
     inputMetadataTruncated: Optional[bool] = False
     specifiedPipelinesSnapshot: Optional[List[Dict[str, Any]]] = []
+    # Output target (where outputs are written).
+    outputLocationType: Optional[str] = "asset"
+    outputAssetId: Optional[str] = ""
+    outputDatabaseId: Optional[str] = ""
+    # Input-metadata source (recording only).
+    inputMetadataAssetId: Optional[str] = ""
+    inputMetadataDatabaseId: Optional[str] = ""
+    inputMetadataFileS3Key: Optional[str] = ""

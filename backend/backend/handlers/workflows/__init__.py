@@ -6,7 +6,7 @@ import boto3
 import botocore
 import json
 
-from common.stepfunctions_builder import get_task_builder
+from common.workflows.stepfunctions_builder import get_task_builder
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -149,21 +149,10 @@ def update_pipeline_workflows(self, pipelineData, event):
                             else:
                                 current_payload = {}
 
-                            if current_payload.get("body"):
-                                current_payload["body"]["outputType"] = updated_pipeline['outputType']
-                                current_payload["body"]["inputParameters"] = updated_pipeline.get('inputParameters', '')
-
                             new_state = builder.build_task_state(updated_pipeline, step_name, current_payload)
                             new_state.update(transition)
                             original_workflow["States"][step_name] = new_state
 
-                    except KeyError:
-                        continue
-                if "process-outputs" in step_name:
-                    try:
-                        process_pipeline = original_workflow["States"][step_name]["Parameters"]["Payload"]["body"]["pipeline"]
-                        if updated_pipeline_id == process_pipeline:
-                            original_workflow["States"][step_name]["Parameters"]["Payload"]["body"]["outputType"] = updated_pipeline['outputType']
                     except KeyError:
                         continue
 

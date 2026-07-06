@@ -10,6 +10,7 @@ import boto3
 import json
 import time
 from customLogging.logger import safeLogger
+import manifestHelper
 
 # Get the open pipeline function name from environment variable
 # This will be set during deployment to point to the appropriate function
@@ -18,14 +19,16 @@ OPEN_PIPELINE_FUNCTION_NAME_EKS = os.environ.get("OPEN_PIPELINE_FUNCTION_NAME_EK
 # Initialize logger and AWS clients
 logger = safeLogger(service="VamsExecuteRapidPipelineEKS")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 region = os.environ.get("AWS_REGION", "us-west-2")
 
-def validate_event_parameters(event):
+def validate_event_parameters(event, data=None):
     """
     Comprehensive validation of event parameters for EKS pipeline execution.
 
     Args:
         event: The Lambda event object
+        data: Optional pre-resolved payload dict (manifest-merged); parsed from event when None
 
     Returns:
         tuple: (is_valid, error_message, validated_data)
@@ -43,8 +46,10 @@ def validate_event_parameters(event):
 
     # Optional parameters with defaults
     optional_params = {
-        'inputMetadata': '',
-        'inputParameters': '',
+        'inputMetadataS3Location': '',
+        'inputConfigurationS3Location': '',
+        'orchestrationEventPrefix': '',
+        'assetId': '',
         'outputType': '',
         'executingUserName': '',
         'executingRequestContext': ''
@@ -55,17 +60,18 @@ def validate_event_parameters(event):
         if event is None:
             return False, "Event is None", None
 
-        # Parse the request body if it exists
-        if 'body' in event:
-            if isinstance(event.get('body'), str):
-                try:
-                    data = json.loads(event['body'])
-                except json.JSONDecodeError as e:
-                    return False, f"Invalid JSON in event body: {str(e)}", None
+        # Parse the request body if it exists (unless a resolved payload was provided)
+        if data is None:
+            if 'body' in event:
+                if isinstance(event.get('body'), str):
+                    try:
+                        data = json.loads(event['body'])
+                    except json.JSONDecodeError as e:
+                        return False, f"Invalid JSON in event body: {str(e)}", None
+                else:
+                    data = event['body']
             else:
-                data = event['body']
-        else:
-            data = event
+                data = event
 
         if data is None:
             return False, "Event data is None", None
@@ -118,15 +124,6 @@ def validate_event_parameters(event):
             if file_extension and file_extension not in allowed_extensions:
                 return False, f"Unsupported file extension '{file_extension}'. Supported extensions: {', '.join(allowed_extensions)}", None
 
-        # Validate JSON format for inputMetadata and inputParameters if provided
-        for json_param in ['inputMetadata', 'inputParameters']:
-            if json_param in data and data[json_param]:
-                try:
-                    if isinstance(data[json_param], str):
-                        json.loads(data[json_param])
-                except json.JSONDecodeError:
-                    return False, f"Invalid JSON format for {json_param}", None
-
         # Create validated data with defaults for optional parameters
         validated_data = {}
         for param in required_params:
@@ -146,8 +143,8 @@ def validate_event_parameters(event):
         return False, f"Parameter validation error: {str(e)}", None
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path,
-                    inputOutput_s3_assetAuxiliary_files_path, input_metadata, input_parameters, external_task_token,
-                    executing_userName, executing_requestContext, output_file_type):
+                    inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token,
+                    executing_userName, executing_requestContext, output_file_type, asset_id="", orchestration_event_prefix=""):
     """
     Executes the EKS pipeline by invoking the open pipeline Lambda function with comprehensive error handling
     """
@@ -171,12 +168,14 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
             "outputS3AssetPreviewPath": output_s3_asset_preview_path,
             "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
             "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-            "inputMetadata": input_metadata,
-            "inputParameters": input_parameters,
+            "inputMetadataS3Location": input_metadata_s3_location,
+            "inputConfigurationS3Location": input_configuration_s3_location,
             "sfnExternalTaskToken": external_task_token,
             "executingUserName": executing_userName,
             "executingRequestContext": executing_requestContext,
-            "outputFileType": output_file_type
+            "outputFileType": output_file_type,
+            "assetId": asset_id,
+            "orchestrationEventPrefix": orchestration_event_prefix
         }
 
         # Log payload size for debugging
@@ -373,9 +372,26 @@ def lambda_handler(event, context):
             if remaining_time < 30000:  # Less than 30 seconds
                 logger.warning(f"Low remaining execution time: {remaining_time}ms")
 
+        # Parse the request body, then resolve input/output locations from the workflow manifest
+        # (falling back to legacy payload path fields). Resolved values are validated below.
+        if isinstance(event, dict) and 'body' in event:
+            body = event['body']
+            data = json.loads(body) if isinstance(body, str) else body
+        else:
+            data = event
+        if isinstance(data, dict):
+            resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+            logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']})")
+            for field in ('inputS3AssetFilePath', 'outputS3AssetFilesPath', 'outputS3AssetPreviewPath',
+                          'outputS3AssetMetadataPath', 'inputOutputS3AssetAuxiliaryFilesPath',
+                          'inputMetadataS3Location', 'inputConfigurationS3Location',
+                          'orchestrationEventPrefix', 'assetId'):
+                if resolved.get(field):
+                    data[field] = resolved[field]
+
         # Validate event parameters with enhanced error context
         logger.info("Starting event parameter validation")
-        is_valid, error_message, validated_data = validate_event_parameters(event)
+        is_valid, error_message, validated_data = validate_event_parameters(event, data if isinstance(data, dict) else None)
 
         if not is_valid:
             logger.error(f"Event validation failed: {error_message}")
@@ -401,8 +417,10 @@ def lambda_handler(event, context):
         # Extract validated parameters with additional validation
         try:
             external_task_token = validated_data['TaskToken']
-            input_parameters = validated_data['inputParameters']
-            input_metadata = validated_data['inputMetadata']
+            input_metadata_s3_location = validated_data['inputMetadataS3Location']
+            input_configuration_s3_location = validated_data['inputConfigurationS3Location']
+            orchestration_event_prefix = validated_data['orchestrationEventPrefix']
+            asset_id = validated_data['assetId']
             executing_userName = validated_data['executingUserName']
             executing_requestContext = validated_data['executingRequestContext']
             output_file_type = validated_data['outputType']
@@ -410,8 +428,8 @@ def lambda_handler(event, context):
             # Log parameter extraction success
             logger.info("Successfully extracted all validated parameters")
             logger.info(f"External task token present: {bool(external_task_token)}")
-            logger.info(f"Input parameters present: {bool(input_parameters)}")
-            logger.info(f"Input metadata present: {bool(input_metadata)}")
+            logger.info(f"Input configuration location present: {bool(input_configuration_s3_location)}")
+            logger.info(f"Input metadata location present: {bool(input_metadata_s3_location)}")
             logger.info(f"Output file type: {output_file_type}")
 
         except KeyError as e:
@@ -441,12 +459,14 @@ def lambda_handler(event, context):
                 validated_data['outputS3AssetPreviewPath'],
                 validated_data['outputS3AssetMetadataPath'],
                 validated_data['inputOutputS3AssetAuxiliaryFilesPath'],
-                input_metadata,
-                input_parameters,
+                input_metadata_s3_location,
+                input_configuration_s3_location,
                 external_task_token,
                 executing_userName,
                 executing_requestContext,
-                output_file_type
+                output_file_type,
+                asset_id,
+                orchestration_event_prefix
             )
 
             # Calculate execution time

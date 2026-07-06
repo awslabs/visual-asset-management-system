@@ -27,6 +27,9 @@ import {
     buildCreateWorkflowFunction,
     buildExecuteWorkflowFunction,
     buildProcessWorkflowExecutionOutputFunction,
+    buildInterimPipelineTrackingFunction,
+    buildHandleExecutionErrorFunction,
+    buildRegisterPipelineExecutionFunction,
     buildImportGlobalPipelineWorkflowFunction,
     buildSqsAutoExecuteWorkflowFunction,
 } from "../../lambdaBuilder/workflowFunctions";
@@ -1034,11 +1037,47 @@ export class ApiBuilderNestedStack extends NestedStack {
             subnets
         );
 
+        // Interim pipeline-tracking + error-handler lambdas, inserted into the workflow ASL
+        // (interim states between pipelines; error-handler catch state). Built before
+        // createWorkflow so their function names can be embedded in the generated ASL.
+        const interimPipelineTrackingFunction = buildInterimPipelineTrackingFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+
+        const handleExecutionErrorFunction = buildHandleExecutionErrorFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+
+        // Pipeline sub-process registration lambda + its standing EventBridge rule on the
+        // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).
+        buildRegisterPipelineExecutionFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+
         const createWorkflowFunction = buildCreateWorkflowFunction(
             this,
             lambdaCommonBaseLayer,
             storageResources,
             processWorkflowExecutionOutputFunction,
+            interimPipelineTrackingFunction,
+            handleExecutionErrorFunction,
             workflowsLogGroup,
             config.env.coreStackName,
             config,

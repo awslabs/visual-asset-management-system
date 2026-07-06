@@ -6,8 +6,9 @@ import os
 import sys
 import subprocess
 import boto3
+from utils import manifest_io
 
-def set_config_parameters(input_parameters: str, input_metadata: str):
+def set_config_parameters(params: dict, metadata: dict):
     """
     Set environment variables for valid config parameters.
     Metadata takes priority over parameters if both exist.
@@ -19,48 +20,12 @@ def set_config_parameters(input_parameters: str, input_metadata: str):
     except:
         print("Warning: Could not load config.json")
         return
-    
-    # Parse parameters
-    params = {}
-    if input_parameters:
-        try:
-            # Handle double-encoded JSON strings
-            if isinstance(input_parameters, str):
-                params = json.loads(input_parameters)
-            else:
-                params = input_parameters
-            print(f"Parsed input parameters: {params}")
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse input parameters: {e}")
-            print(f"Raw input_parameters: {repr(input_parameters)}")
-    
-    # Parse metadata (takes priority)
-    # VAMS wraps metadata in {"VAMS": {"assetMetadata": {...}}}
-    metadata = {}
-    if input_metadata:
-        try:
-            # Handle double-encoded JSON strings
-            if isinstance(input_metadata, str):
-                metadata_obj = json.loads(input_metadata)
-            else:
-                metadata_obj = input_metadata
-            print(f"Parsed metadata object type: {type(metadata_obj)}")
-            print(f"Parsed metadata object: {metadata_obj}")
-            
-            # Extract from VAMS wrapper if present
-            if isinstance(metadata_obj, dict) and 'VAMS' in metadata_obj:
-                metadata = metadata_obj.get('VAMS', {}).get('assetMetadata', {})
-                print(f"Extracted VAMS.assetMetadata: {metadata}")
-            else:
-                metadata = metadata_obj
-                print(f"Using metadata as-is (no VAMS wrapper): {metadata}")
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse input metadata: {e}")
-            print(f"Raw input_metadata: {repr(input_metadata)}")
-        except Exception as e:
-            print(f"Unexpected error parsing metadata: {e}")
-            print(f"Raw input_metadata: {repr(input_metadata)}")
-    
+
+    params = params if isinstance(params, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    print(f"Input parameters: {params}")
+    print(f"Input metadata: {metadata}")
+
     # Combine with metadata priority
     combined = {**params, **metadata}
     print(f"Combined parameters and metadata: {combined}")
@@ -116,23 +81,30 @@ def main():
         print(f"Raw content (first 200 chars): '{pipeline_json[:200]}'")
         sys.exit(1)
     
-    # Extract metadata and parameters from pipeline definition
-    input_metadata = pipeline_def.get('inputMetadata', '')
-    input_parameters = pipeline_def.get('inputParameters', '')
-    
-    print(f"Raw input metadata type: {type(input_metadata)}")
-    print(f"Raw input metadata: {input_metadata}")
-    print(f"Raw input parameters type: {type(input_parameters)}")
-    print(f"Raw input parameters: {input_parameters}")
-    
+    # The pipeline definition carries the metadata + input-configuration S3 locations; read each from S3
+    input_metadata_s3_location = pipeline_def.get('inputMetadataS3Location', '')
+    input_configuration_s3_location = pipeline_def.get('inputConfigurationS3Location', '')
+    print(f"Input metadata S3 location: {input_metadata_s3_location}")
+    print(f"Input configuration S3 location: {input_configuration_s3_location}")
+
+    metadata_obj = manifest_io.fetch_metadata(input_metadata_s3_location)
+    input_parameters_obj = manifest_io.fetch_input_configuration(input_configuration_s3_location)
+
+    # VAMS wraps asset metadata in {"VAMS": {"assetMetadata": {...}}}; unwrap to the inner config.
+    if isinstance(metadata_obj, dict) and 'VAMS' in metadata_obj:
+        metadata_config = metadata_obj.get('VAMS', {}).get('assetMetadata', {})
+        print(f"Extracted VAMS.assetMetadata: {metadata_config}")
+    else:
+        metadata_config = metadata_obj if isinstance(metadata_obj, dict) else {}
+
     # Store for main.py access
-    if input_metadata:
-        os.environ['VAMS_INPUT_METADATA'] = input_metadata
-    if input_parameters:
-        os.environ['VAMS_INPUT_PARAMETERS'] = input_parameters
-    
-    # Set config parameters from metadata and parameters
-    set_config_parameters(input_parameters, input_metadata)
+    if metadata_obj:
+        os.environ['VAMS_INPUT_METADATA'] = json.dumps(metadata_obj)
+    if input_parameters_obj:
+        os.environ['VAMS_INPUT_PARAMETERS'] = json.dumps(input_parameters_obj)
+
+    # Set config parameters from metadata and parameters (metadata takes priority)
+    set_config_parameters(input_parameters_obj, metadata_config)
     
     # Extract the input file information from the first stage
     if not pipeline_def.get('stages') or len(pipeline_def['stages']) == 0:
