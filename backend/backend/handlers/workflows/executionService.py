@@ -545,6 +545,34 @@ def _stop_sfn_execution_reporting(execution_arn):
         return False, str(e)
 
 
+# Sub-process resource type the abort path can stop today (mirrors registerPipelineExecution).
+# Other registered types are tracked but not yet abortable.
+RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
+
+
+def _abort_registered_sub_process(sub):
+    """Best-effort abort of one registered sub-process. Dispatches on the entry's resourceType.
+
+    Returns a non-fatal warning string when the sub-process could not be stopped (a real
+    StopExecution failure, or a resource type not yet abortable), or "" when nothing needs to be
+    surfaced (stopped cleanly, or no actionable locator). Never raises."""
+    resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
+    if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
+        execution_arn = sub.get("executionArn", "")
+        if not execution_arn:
+            return ""
+        ok, err = _stop_sfn_execution_reporting(execution_arn)
+        if not ok:
+            return f"Sub-process abort failed for {execution_arn}: {err}"
+        return ""
+    # Not yet abortable (e.g. batchJob, ecsTask). Surface what was left running.
+    locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
+               or sub.get("taskArn") or sub.get("arn") or resource_type)
+    logger.info(f"Registered sub-process of type '{resource_type}' is not yet abortable: {locator}")
+    return (f"Sub-process of type '{resource_type}' ({locator}) could not be aborted: "
+            f"abort for this resource type is not yet supported; it may still be running.")
+
+
 def authorize_execution_access(execution_id, main_item, asset_action):
     """Tier-2 authorization for an execution operation: workflow GET + `asset_action`
     on every distinct input-file asset tied to the execution.
@@ -593,8 +621,8 @@ def abort_execution(event, execution_id):
     Order of operations:
       1. Resolve the V2 main row (404 if unknown).
       2. Authorize: workflow GET + POST on every input-file asset (403 if denied).
-      3. Stop each still-running pipeline's inner Step Functions execution first
-         (when an inner sub-execution ARN is registered), then the main execution.
+      3. Stop each still-running pipeline's registered sub-processes first (Step Functions
+         executions are stopped; other resource types warn), then the main execution.
       4. Mark every non-terminal pipeline row ABORTED (with a stop date) and the main
          row ABORTED (with a stop date)."""
     main_item = get_execution_main_row(execution_id)
@@ -619,21 +647,14 @@ def abort_execution(event, execution_id):
         if status in TERMINAL_STATUSES:
             continue  # already finished; leave as-is
 
-        # Stop the legacy single inner sub-execution if registered (back-compat).
-        inner_arn = prow.get('pipeline_execution_sub_execution_arn', '')
-        if inner_arn:
-            ok, err = _stop_sfn_execution_reporting(inner_arn)
-            if not ok:
-                warnings.append(f"Sub-process abort failed for {inner_arn}: {err}")
-
-        # Stop each registered sub-execution (best-effort; a failure is surfaced as a warning).
+        # Stop each registered sub-process (best-effort; a failure is surfaced as a warning).
+        # Only Step Functions executions can be stopped today; other resource types (Batch jobs,
+        # ECS tasks, ...) are registered but not yet abortable, so they surface a warning so the
+        # caller knows the sub-process was left running.
         for sub in prow.get('registeredSubExecutions', []) or []:
-            exec_arn = (sub or {}).get('executionArn', '')
-            if not exec_arn:
-                continue
-            ok, err = _stop_sfn_execution_reporting(exec_arn)
-            if not ok:
-                warnings.append(f"Sub-process abort failed for {exec_arn}: {err}")
+            warning = _abort_registered_sub_process(sub or {})
+            if warning:
+                warnings.append(warning)
 
         prow['executionStatus'] = ABORTED_STATUS
         if not prow.get('executionStopDate'):
@@ -1024,10 +1045,14 @@ def _full_log_search(log_group_arn, filter_terms, query_params):
     return {"events": events, "nextToken": resp.get('nextToken')}
 
 
-def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params):
+def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix=""):
     """Best-effort fetch of events from a registered sub-process log location. Returns
     (ok, events) on success or (False, reason) on a real failure (e.g. AccessDenied), never
-    raising; the caller surfaces a failure as a warning."""
+    raising; the caller surfaces a failure as a warning.
+
+    Scoping precedence within the log group: an exact logStreamName (one stream) takes priority;
+    otherwise a logStreamPrefix narrows to streams under that prefix (e.g. an AWS Batch/ECS task
+    family); with neither, the whole group is read."""
     parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return False, "unparseable log group ARN"
@@ -1038,9 +1063,11 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params):
         'logGroupName': log_group_name,
         'limit': min(int(query_params.get('limit', 100) or 100), MAX_LOG_EVENTS_PER_CALL),
     }
-    # If the pipeline reported a specific stream, scope to it; otherwise read the group.
+    # Scope to an exact stream when reported; else to a stream prefix; else read the whole group.
     if log_stream_name:
         kwargs['logStreamNames'] = [log_stream_name]
+    elif log_stream_prefix:
+        kwargs['logStreamNamePrefix'] = log_stream_prefix
     if query_params.get('startTime'):
         kwargs['startTime'] = int(query_params['startTime'])
     if query_params.get('endTime'):
@@ -1137,9 +1164,11 @@ def get_execution_logs(event, execution_id, query_params):
         for log in pipeline_row.get('registeredLogs', []) or []:
             log_arn = (log or {}).get('logGroupArn', '')
             stream = (log or {}).get('logStreamName', '')
+            stream_prefix = (log or {}).get('logStreamPrefix', '')
             if not log_arn:
                 continue
-            ok, events_or_err = _fetch_registered_log_events(log_arn, stream, query_params)
+            ok, events_or_err = _fetch_registered_log_events(
+                log_arn, stream, query_params, log_stream_prefix=stream_prefix)
             if ok:
                 sub_process_events.extend(events_or_err)
             else:

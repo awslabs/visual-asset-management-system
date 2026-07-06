@@ -420,6 +420,12 @@ if not valid:
 | `STRING_256`       | Max 256 chars                | Medium strings         |
 | `ID_ARRAY`         | Array of IDs                 | Multiple IDs           |
 | `STRING_256_ARRAY` | Array of max-256 strings     | Tags, lists            |
+| `ARN`                      | Partition-aware AWS ARN        | Any AWS resource ARN (sub-process registration)        |
+| `CLOUDWATCH_LOG_GROUP_ARN` | Partition-aware log-group ARN  | Registered CloudWatch log-group locations              |
+| `CLOUDWATCH_LOG_GROUP_NAME`| 1-512 chars (`-_./#` + alnum)  | Registered CloudWatch log-group names                  |
+| `LOG_STREAM_NAME`          | 1-512 chars, no `:` or `*`     | Registered log-stream names / prefixes                 |
+
+All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
 
 ### Regex Patterns for Pydantic Fields
 

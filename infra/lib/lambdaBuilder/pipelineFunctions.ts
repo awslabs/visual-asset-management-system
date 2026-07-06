@@ -75,6 +75,11 @@ export function buildCreatePipelineFunction(
                 ? newPipelineLambdaSecurityGroup.securityGroupId
                 : "", //used if subnet IDs are passed in,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            // createPipeline rebuilds workflow ASL states on pipeline update (via
+            // update_pipeline_workflows); the partition feeds the Step Functions
+            // service-integration ARNs (arn:{partition}:states:::...) so they stay valid
+            // outside the commercial "aws" partition.
+            AWS_PARTITION: config.env.partition,
         },
     });
     enablePipelineFunction.grantInvoke(fun);

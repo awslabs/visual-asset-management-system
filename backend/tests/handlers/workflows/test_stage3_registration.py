@@ -86,8 +86,9 @@ class TestManifestEnvelopeAndHelpers:
         assert rec["orchestrationBusEventPrefix"] == "vams.prod.execution.E1.pipeline.P1"
         assert rec["registeredSubExecutions"] == []
         assert rec["registeredLogs"] == []
-        # Back-compat single fields retained.
-        assert "pipeline_execution_sub_execution_arn" in rec
+        # The removed legacy single-ARN fields are gone (brand-new table, no real legacy).
+        assert "pipeline_execution_sub_execution_arn" not in rec
+        assert "pipeline_execution_sub_arn" not in rec
 
 
 # ============================ registration lambda ============================
@@ -98,6 +99,12 @@ class TestRegisterPipelineExecution:
         return {"detail": detail, "detail-type": "pipeline.execution.register",
                 "source": "vams.prod.execution.E1.pipeline.P1"}
 
+    # Valid, partition-correct ARNs so these assertions hold whether validation is stubbed
+    # (conftest) or real (full-suite ordering) — the lambda validates ARN formats before storing.
+    _SM_ARN = "arn:aws:states:us-east-1:123456789012:stateMachine:sm"
+    _EX_ARN = "arn:aws:states:us-east-1:123456789012:execution:sm:ex"
+    _LG_ARN = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lg:*"
+
     def test_appends_sub_execution_and_logs(self):
         row = {"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
                "registeredSubExecutions": [], "registeredLogs": []}
@@ -105,33 +112,41 @@ class TestRegisterPipelineExecution:
         with patch.object(reg.dynamodb, "Table", return_value=table):
             reg.lambda_handler(self._event({
                 "pipelineExecutionId": "P1",
-                "subExecution": {"stateMachineArn": "arn:sm", "executionArn": "arn:ex"},
-                "logs": [{"logGroupArn": "arn:lg", "logGroupName": "lg", "logStreamName": "s1"}],
+                "subExecution": {"stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN},
+                "logs": [{"logGroupArn": self._LG_ARN, "logGroupName": "lg", "logStreamName": "s1"}],
             }), MagicMock())
         kw = table.update_item.call_args.kwargs
         # Atomic append: the expression carries only the NEW entries; DynamoDB list_appends them.
         assert "list_append" in kw["UpdateExpression"]
         subs = kw["ExpressionAttributeValues"][":s"]
         logs = kw["ExpressionAttributeValues"][":l"]
-        assert subs == [{"stateMachineArn": "arn:sm", "executionArn": "arn:ex"}]
-        assert logs == [{"logGroupArn": "arn:lg", "logGroupName": "lg", "logStreamName": "s1"}]
+        # A bare {stateMachineArn, executionArn} report normalizes to a typed entry defaulting
+        # to a Step Functions execution.
+        assert subs == [{"resourceType": "stepFunctionsExecution",
+                         "stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}]
+        assert logs == [{"logGroupArn": self._LG_ARN, "logGroupName": "lg",
+                         "logStreamName": "s1", "logStreamPrefix": ""}]
 
     def test_append_is_atomic_carrying_only_new_entries(self):
         # An existing list is NOT read into the expression: the update is an atomic
         # list_append so concurrent reports cannot clobber each other.
         row = {"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
-               "registeredSubExecutions": [{"stateMachineArn": "old", "executionArn": "oldex"}],
+               "registeredSubExecutions": [{"resourceType": "stepFunctionsExecution",
+                                            "stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}],
                "registeredLogs": []}
+        new_sm = "arn:aws:states:us-east-1:123456789012:stateMachine:newsm"
+        new_ex = "arn:aws:states:us-east-1:123456789012:execution:newsm:newex"
         table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
         with patch.object(reg.dynamodb, "Table", return_value=table):
             reg.lambda_handler(self._event({
                 "pipelineExecutionId": "P1",
-                "subExecution": {"stateMachineArn": "new", "executionArn": "newex"},
+                "subExecution": {"stateMachineArn": new_sm, "executionArn": new_ex},
             }), MagicMock())
         kw = table.update_item.call_args.kwargs
         assert "list_append(if_not_exists(registeredSubExecutions" in kw["UpdateExpression"]
         subs = kw["ExpressionAttributeValues"][":s"]
-        assert subs == [{"stateMachineArn": "new", "executionArn": "newex"}]
+        assert subs == [{"resourceType": "stepFunctionsExecution",
+                         "stateMachineArn": new_sm, "executionArn": new_ex}]
         assert kw["ExpressionAttributeValues"][":empty"] == []
 
     def test_missing_pipeline_execution_id_no_write(self):
@@ -159,6 +174,87 @@ class TestRegisterPipelineExecution:
         assert resp == {"handled": True}
 
 
+# ============================ registration input validation ============================
+
+# The root conftest stubs common.validators.validate to always-pass; bind the REAL dispatcher
+# (loaded by path in conftest) so these tests exercise the actual ARN/field-format checks.
+import importlib.util as _ilu
+import os as _os
+_real_validators_path = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))),
+    "backend", "common", "validators.py")
+_rv_spec = _ilu.spec_from_file_location("_real_validators_for_reg_tests", _real_validators_path)
+_real_validators = _ilu.module_from_spec(_rv_spec)
+_rv_spec.loader.exec_module(_real_validators)
+_REAL_VALIDATE = _real_validators.validate
+
+
+@pytest.mark.unit
+class TestRegistrationInputValidation:
+    """The registration lambda validates ARN/field formats and drops malformed values
+    (best-effort: never raises). These run against the REAL validate() dispatcher."""
+
+    def _event(self, detail):
+        return {"detail": detail, "detail-type": "pipeline.execution.register",
+                "source": "vams.prod.execution.E1.pipeline.P1"}
+
+    def test_invalid_arns_are_dropped_valid_kept(self):
+        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "E1",
+               "registeredSubExecutions": [], "registeredLogs": []}
+        table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123",
+                "subExecution": {
+                    "resourceType": "stepFunctionsExecution",
+                    "stateMachineArn": "arn:aws:states:us-east-1:123456789012:stateMachine:sm",
+                    "executionArn": "not-an-arn",  # invalid -> dropped
+                },
+                "logs": [{
+                    "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/g:*",
+                    "logStreamName": "bad:stream",  # invalid (':' not allowed) -> dropped
+                    "logStreamPrefix": "ok/prefix",
+                }],
+            }), MagicMock())
+        kw = table.update_item.call_args.kwargs
+        sub = kw["ExpressionAttributeValues"][":s"][0]
+        # Valid ARN kept; invalid executionArn omitted entirely (not stored as junk).
+        assert sub["stateMachineArn"].endswith(":stateMachine:sm")
+        assert "executionArn" not in sub
+        log = kw["ExpressionAttributeValues"][":l"][0]
+        assert log["logGroupArn"].endswith(":/aws/g:*")
+        assert log["logStreamName"] == ""        # dropped
+        assert log["logStreamPrefix"] == "ok/prefix"
+
+    def test_sub_execution_with_only_invalid_locators_is_dropped(self):
+        # resourceType valid but every locator malformed -> the whole sub entry is dropped, and
+        # with no logs either there is nothing to write.
+        table = MagicMock(query=MagicMock(return_value={"Items": [
+            {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "E1"}]}),
+            update_item=MagicMock())
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "Pvalid123",
+                "subExecution": {"resourceType": "stepFunctionsExecution",
+                                 "executionArn": "junk", "stateMachineArn": "also-junk"},
+            }), MagicMock())
+        table.update_item.assert_not_called()
+
+    def test_invalid_pipeline_execution_id_ignored(self):
+        # A malformed pipelineExecutionId (DynamoDB key) is rejected before any query/write.
+        table = MagicMock()
+        with patch.object(reg, "validate", _REAL_VALIDATE), \
+             patch.object(reg.dynamodb, "Table", return_value=table):
+            reg.lambda_handler(self._event({
+                "pipelineExecutionId": "bad id with spaces/and*chars",
+                "subExecution": {"executionArn": "arn:aws:states:us-east-1:123456789012:execution:sm:e"},
+            }), MagicMock())
+        table.query.assert_not_called()
+        table.update_item.assert_not_called()
+
+
 # ============================ abort uses registered sub-execs ============================
 
 @pytest.mark.unit
@@ -179,10 +275,11 @@ class TestAbortRegisteredSubExecutions:
     def test_abort_stops_registered_sub_executions_and_warns_on_failure(self):
         prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
                 "executionStatus": "RUNNING", "executionStopDate": "",
-                "pipeline_execution_sub_execution_arn": "",
                 "registeredSubExecutions": [
-                    {"stateMachineArn": "arn:sm:ok", "executionArn": "arn:ex:ok"},
-                    {"stateMachineArn": "arn:sm:denied", "executionArn": "arn:ex:denied"}]}
+                    {"resourceType": "stepFunctionsExecution",
+                     "stateMachineArn": "arn:sm:ok", "executionArn": "arn:ex:ok"},
+                    {"resourceType": "stepFunctionsExecution",
+                     "stateMachineArn": "arn:sm:denied", "executionArn": "arn:ex:denied"}]}
         pexec_table = MagicMock()
         main_table = MagicMock()
 
@@ -216,3 +313,40 @@ class TestAbortRegisteredSubExecutions:
         # The denied sub-execution surfaces a non-fatal warning; the abort still succeeds.
         assert "warnings" in body
         assert any("arn:ex:denied" in w for w in body["warnings"])
+
+    def test_abort_warns_for_not_yet_abortable_resource_type(self):
+        # A registered Batch job is tracked but not abortable today: it must NOT be sent to
+        # StopExecution, the abort still succeeds, and a non-fatal warning names what was left
+        # running.
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
+                "executionStatus": "RUNNING", "executionStopDate": "",
+                "registeredSubExecutions": [
+                    {"resourceType": "batchJob", "jobArn": "arn:batch:job:777"}]}
+        pexec_table = MagicMock()
+        main_table = MagicMock()
+
+        def _table(name):
+            return pexec_table if name == le.pipeline_executions_table else main_table
+
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()), \
+             patch.object(le, "get_execution_input_assets", return_value=[("dbx", "a1")]), \
+             patch.object(le, "get_asset_details", return_value={"assetId": "a1", "databaseId": "dbx"}), \
+             patch.object(le, "get_pipeline_execution_rows", return_value=[prow]), \
+             patch.object(le.dynamodb, "Table", side_effect=_table), \
+             patch.object(le.sfn, "stop_execution", side_effect=lambda executionArn: {}) as mock_stop:
+            MockEnf.return_value.enforceAPI.return_value = True
+            MockEnf.return_value.enforce.return_value = True
+            resp = le.lambda_handler(self._event(), MagicMock())
+
+        assert resp["statusCode"] == 200
+        body = json.loads(resp["body"])
+        assert body["message"] == "Execution aborted"
+        # The Batch job was NOT sent to StopExecution (only the main SFN execution was).
+        stopped = {c.kwargs.get("executionArn") for c in mock_stop.call_args_list}
+        assert "arn:batch:job:777" not in stopped
+        assert "arn:ex:main" in stopped
+        # A non-fatal warning names the un-abortable resource type + locator.
+        assert "warnings" in body
+        assert any("batchJob" in w and "arn:batch:job:777" in w for w in body["warnings"])

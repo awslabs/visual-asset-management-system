@@ -585,6 +585,10 @@ if not valid:
 | `STRING_256`          | Max 256 chars                       | Medium strings               |
 | `STRING_JSON`         | Valid JSON                          | JSON strings                 |
 | `FILE_EXTENSION`      | `^[\\.]([a-zA-Z0-9]){1,7}$`         | File extensions              |
+| `ARN`                 | Partition-aware AWS ARN             | Any AWS resource ARN         |
+| `CLOUDWATCH_LOG_GROUP_ARN` | Partition-aware log-group ARN  | Registered log-group ARNs    |
+| `CLOUDWATCH_LOG_GROUP_NAME`| 1-512 chars (`-_./#`+alnum)    | Registered log-group names   |
+| `LOG_STREAM_NAME`     | 1-512 chars, no `:`/`*`             | Registered log-stream names  |
 | `ID_ARRAY`            | Array of IDs                        | Multiple IDs                 |
 | `UUID_ARRAY`          | Array of UUIDs                      | Multiple UUIDs               |
 | `STRING_256_ARRAY`    | Array of max-256 strings            | Tags, lists                  |

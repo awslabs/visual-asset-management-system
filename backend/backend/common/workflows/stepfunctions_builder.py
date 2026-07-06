@@ -12,6 +12,22 @@ SPDX-License-Identifier: Apache-2.0
 import json
 from typing import Dict, List, Optional, Any, Tuple
 
+# Default AWS partition. Step Functions service-integration ARNs embed the partition
+# (arn:{partition}:states:::...); in GovCloud/China/ISO it is NOT "aws" (e.g. "aws-us-gov"),
+# so callers thread the deployment partition through. "aws" keeps commercial behavior unchanged.
+DEFAULT_PARTITION = "aws"
+
+
+def states_integration_arn(integration: str, partition: str = DEFAULT_PARTITION) -> str:
+    """Partition-aware Step Functions service-integration ARN.
+
+    Step Functions optimized integrations are referenced as
+    ``arn:{partition}:states:::{integration}`` (e.g. ``lambda:invoke``,
+    ``lambda:invoke.waitForTaskToken``, ``sqs:sendMessage``, ``events:putEvents``). The partition
+    must match the deployment (``aws`` commercial, ``aws-us-gov`` GovCloud, ``aws-cn`` China,
+    ``aws-iso``); an ``arn:aws:`` ARN is rejected by Step Functions in other partitions."""
+    return f"arn:{partition or DEFAULT_PARTITION}:states:::{integration}"
+
 
 def create_lambda_task_state(
     state_id: str,
@@ -22,11 +38,12 @@ def create_lambda_task_state(
     timeout_seconds: Optional[int] = None,
     heartbeat_seconds: Optional[int] = None,
     retry_config: Optional[Dict[str, Any]] = None,
-    catch_config: Optional[List[Dict[str, Any]]] = None
+    catch_config: Optional[List[Dict[str, Any]]] = None,
+    partition: str = DEFAULT_PARTITION
 ) -> Dict[str, Any]:
     """
     Create a Lambda task state in ASL format.
-    
+
     Args:
         state_id: Unique identifier for this state
         function_name: Name of the Lambda function to invoke
@@ -37,16 +54,17 @@ def create_lambda_task_state(
         heartbeat_seconds: Heartbeat timeout for callback tasks
         retry_config: Retry configuration dictionary
         catch_config: List of catch configurations
-        
+        partition: AWS partition for the service-integration ARN (default "aws")
+
     Returns:
         Dictionary representing the Lambda task state in ASL format
     """
     # Choose the appropriate resource ARN based on callback requirement
     if wait_for_callback:
-        resource = "arn:aws:states:::lambda:invoke.waitForTaskToken"
+        resource = states_integration_arn("lambda:invoke.waitForTaskToken", partition)
     else:
-        resource = "arn:aws:states:::lambda:invoke"
-    
+        resource = states_integration_arn("lambda:invoke", partition)
+
     state = {
         "Type": "Task",
         "Resource": resource,
@@ -312,12 +330,13 @@ def create_interim_tracking_state(
     payload: Dict[str, Any],
     result_path: str,
     error_handler_state: str,
+    partition: str = DEFAULT_PARTITION,
 ) -> Dict[str, Any]:
     """Interim pipeline-tracking Lambda state, inserted between two pipeline steps. Its result
     is stored at result_path; on error it routes to the shared error-handler state."""
     return {
         "Type": "Task",
-        "Resource": "arn:aws:states:::lambda:invoke",
+        "Resource": states_integration_arn("lambda:invoke", partition),
         "ResultPath": result_path,
         "Parameters": {
             "FunctionName": function_name,
@@ -338,12 +357,13 @@ def create_error_handler_state(
     function_name: str,
     payload: Dict[str, Any],
     fail_state: str,
+    partition: str = DEFAULT_PARTITION,
 ) -> Dict[str, Any]:
     """Error-handler Lambda state that every Catch routes to, then transitions to the Fail
     state. Its own errors are caught here too and still fall through to Fail."""
     return {
         "Type": "Task",
-        "Resource": "arn:aws:states:::lambda:invoke",
+        "Resource": states_integration_arn("lambda:invoke", partition),
         "ResultPath": "$.errorHandlerResult",
         "Parameters": {
             "FunctionName": function_name,
@@ -369,7 +389,13 @@ class TaskStateBuilder(ABC):
     Builders produce Task state dicts with Type, Resource, Parameters,
     Retry, and Catch. They do NOT add Next/End — that is handled by
     create_workflow_definition().
+
+    partition is the AWS partition embedded in the service-integration ARN
+    (arn:{partition}:states:::...); it defaults to "aws" and is set per deployment.
     """
+
+    def __init__(self, partition: str = DEFAULT_PARTITION):
+        self.partition = partition or DEFAULT_PARTITION
 
     @abstractmethod
     def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -455,9 +481,9 @@ class LambdaTaskBuilder(TaskStateBuilder):
         wait_for_callback = pipeline.get('waitForCallback') == 'Enabled'
 
         if wait_for_callback:
-            resource = "arn:aws:states:::lambda:invoke.waitForTaskToken"
+            resource = states_integration_arn("lambda:invoke.waitForTaskToken", self.partition)
         else:
-            resource = "arn:aws:states:::lambda:invoke"
+            resource = states_integration_arn("lambda:invoke", self.partition)
 
         state = {
             "Type": "Task",
@@ -490,9 +516,9 @@ class SqsTaskBuilder(TaskStateBuilder):
         wait_for_callback = pipeline.get('waitForCallback') == 'Enabled'
 
         if wait_for_callback:
-            resource = "arn:aws:states:::sqs:sendMessage.waitForTaskToken"
+            resource = states_integration_arn("sqs:sendMessage.waitForTaskToken", self.partition)
         else:
-            resource = "arn:aws:states:::sqs:sendMessage"
+            resource = states_integration_arn("sqs:sendMessage", self.partition)
 
         state = {
             "Type": "Task",
@@ -530,9 +556,9 @@ class EventBridgeTaskBuilder(TaskStateBuilder):
         wait_for_callback = pipeline.get('waitForCallback') == 'Enabled'
 
         if wait_for_callback:
-            resource = "arn:aws:states:::events:putEvents.waitForTaskToken"
+            resource = states_integration_arn("events:putEvents.waitForTaskToken", self.partition)
         else:
-            resource = "arn:aws:states:::events:putEvents"
+            resource = states_integration_arn("events:putEvents", self.partition)
 
         event_bus_name = user_resource.get('resourceId', 'default') or 'default'
         event_source = user_resource.get('eventSource', 'vams.pipeline') or 'vams.pipeline'
@@ -567,26 +593,31 @@ class EventBridgeTaskBuilder(TaskStateBuilder):
 # Builder registry
 # ---------------------------------------------------------------------------
 
-TASK_BUILDERS: Dict[str, TaskStateBuilder] = {
-    "Lambda": LambdaTaskBuilder(),
-    "SQS": SqsTaskBuilder(),
-    "EventBridge": EventBridgeTaskBuilder(),
+# Builder class per execution type. A fresh instance is created per get_task_builder() call so
+# each carries the deployment partition for its service-integration ARNs.
+TASK_BUILDER_CLASSES: Dict[str, type] = {
+    "Lambda": LambdaTaskBuilder,
+    "SQS": SqsTaskBuilder,
+    "EventBridge": EventBridgeTaskBuilder,
 }
 
 
-def get_task_builder(pipeline_execution_type: str) -> TaskStateBuilder:
+def get_task_builder(pipeline_execution_type: str,
+                     partition: str = DEFAULT_PARTITION) -> TaskStateBuilder:
     """Return the appropriate TaskStateBuilder for the given execution type.
 
     Args:
         pipeline_execution_type: One of "Lambda", "SQS", or "EventBridge".
+        partition: AWS partition for the service-integration ARNs (default "aws"). Pass the
+            deployment partition (e.g. "aws-us-gov") so generated ASL is valid in that partition.
 
     Returns:
-        A TaskStateBuilder instance.
+        A TaskStateBuilder instance bound to the given partition.
 
     Raises:
         ValueError: If the execution type is not supported.
     """
-    builder = TASK_BUILDERS.get(pipeline_execution_type)
-    if not builder:
+    builder_cls = TASK_BUILDER_CLASSES.get(pipeline_execution_type)
+    if not builder_cls:
         raise ValueError(f"Unsupported pipeline execution type: {pipeline_execution_type}")
-    return builder
+    return builder_cls(partition=partition or DEFAULT_PARTITION)

@@ -37,6 +37,20 @@ eventbridge_bus_arn_pattern = r'^arn:(' + aws_partition_group + r'):events:[a-z0
 eventbridge_source_pattern = r'^(?!aws\.)[a-zA-Z0-9\-\.\_]{1,256}$'
 # EventBridge detail type: free-form string, 1-256 chars
 eventbridge_detail_type_pattern = r'^.{1,256}$'
+# Generic AWS ARN (partition-aware): arn:{partition}:{service}:{region}:{account}:{resource}.
+# region and account may be empty (e.g. IAM/S3 ARNs); resource is required and may contain
+# ':' or '/' separators. Bounded to keep a malformed value from being stored. ~1-2048 chars.
+arn_pattern = (r'^arn:(' + aws_partition_group +
+               r'):[a-z0-9\-]{1,63}:[a-z0-9\-]*:[0-9]{0,12}:[a-zA-Z0-9\-\._:/]{1,1700}$')
+# CloudWatch Logs log-group ARN: arn:{partition}:logs:{region}:{account}:log-group:{name}
+# optionally followed by ':*' or a ':log-stream:{stream}' suffix.
+cloudwatch_log_group_arn_pattern = (r'^arn:(' + aws_partition_group +
+                                     r'):logs:[a-z0-9\-]+:[0-9]{12}:log-group:[a-zA-Z0-9\-\._/#]{1,512}'
+                                     r'(:\*)?(:log-stream:[^:*]{1,512})?$')
+# CloudWatch log group name: 1-512 chars of [.-_/#A-Za-z0-9].
+cloudwatch_log_group_name_pattern = r'^[a-zA-Z0-9\-\._/#]{1,512}$'
+# CloudWatch log stream name / prefix: 1-512 chars; ':' and '*' are not allowed by CloudWatch.
+log_stream_name_pattern = r'^[^:*]{1,512}$'
 
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
@@ -62,6 +76,10 @@ sqs_queue_url_regex = re.compile(sqs_queue_url_pattern)
 eventbridge_bus_arn_regex = re.compile(eventbridge_bus_arn_pattern)
 eventbridge_source_regex = re.compile(eventbridge_source_pattern)
 eventbridge_detail_type_regex = re.compile(eventbridge_detail_type_pattern, re.DOTALL)
+arn_regex = re.compile(arn_pattern)
+cloudwatch_log_group_arn_regex = re.compile(cloudwatch_log_group_arn_pattern)
+cloudwatch_log_group_name_regex = re.compile(cloudwatch_log_group_name_pattern)
+log_stream_name_regex = re.compile(log_stream_name_pattern)
 
 
 def validate_id(name, value):
@@ -301,6 +319,26 @@ def validate_eventbridge_detail_type(name, value):
         return (False, name + " is invalid. Must be 1-256 characters.")
     return (True, '')
 
+def validate_arn(name, value):
+    if not arn_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid AWS ARN (e.g., arn:aws:states:us-east-1:123456789012:execution:sm:exec). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), and ISO partitions.")
+    return (True, '')
+
+def validate_cloudwatch_log_group_arn(name, value):
+    if not cloudwatch_log_group_arn_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid CloudWatch Logs log-group ARN (e.g., arn:aws:logs:us-east-1:123456789012:log-group:/aws/my-group). Supports all AWS partitions.")
+    return (True, '')
+
+def validate_cloudwatch_log_group_name(name, value):
+    if not cloudwatch_log_group_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid CloudWatch log group name (1-512 characters: letters, digits, and -_./#).")
+    return (True, '')
+
+def validate_log_stream_name(name, value):
+    if not log_stream_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be 1-512 characters and may not contain ':' or '*'.")
+    return (True, '')
+
 
 def validate(values):
     for k, v in values.items():
@@ -476,6 +514,22 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'EVENTBRIDGE_DETAIL_TYPE':
             (valid, message) = validate_eventbridge_detail_type(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'ARN':
+            (valid, message) = validate_arn(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'CLOUDWATCH_LOG_GROUP_ARN':
+            (valid, message) = validate_cloudwatch_log_group_arn(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'CLOUDWATCH_LOG_GROUP_NAME':
+            (valid, message) = validate_cloudwatch_log_group_name(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'LOG_STREAM_NAME':
+            (valid, message) = validate_log_stream_name(k, v['value'])
             if not valid:
                 return (valid, message)
 

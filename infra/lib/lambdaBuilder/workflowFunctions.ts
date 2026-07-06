@@ -239,6 +239,10 @@ export function buildCreateWorkflowFunction(
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
             LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
+            // Deployment partition for the Step Functions service-integration ARNs embedded in
+            // the generated ASL (arn:{partition}:states:::...), so workflows are valid in
+            // GovCloud/China/ISO partitions and not just commercial "aws".
+            AWS_PARTITION: config.env.partition,
         },
     });
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);

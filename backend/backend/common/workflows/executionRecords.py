@@ -302,11 +302,11 @@ def build_pipeline_execution_record(
         "credentialVendingState": "notVended",
         # optional chain / sub-process fields
         "from_pipeline_execution_id": from_pipeline_execution_id or "",
-        # Legacy single sub-ARN fields (the abort path reads sub_execution_arn).
-        "pipeline_execution_sub_arn": "",
-        "pipeline_execution_sub_execution_arn": "",
         # EventBridge source prefix the pipeline reports sub-process ARNs/logs under, plus the
-        # typed lists it registers: [{stateMachineArn, executionArn}] / [{logGroupArn, ...}].
+        # typed lists it registers. Each registeredSubExecutions entry is typed by resourceType
+        # ('stepFunctionsExecution' today; 'batchJob'/'ecsTask'/... later) so the abort path knows
+        # how to stop it; each registeredLogs entry is {logGroupArn, logGroupName, logStreamName,
+        # logStreamPrefix} so full-mode logs can pull from the right CloudWatch location.
         "orchestrationBusEventPrefix": orchestration_bus_event_prefix or "",
         "registeredSubExecutions": [],
         "registeredLogs": [],

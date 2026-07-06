@@ -301,16 +301,18 @@ class TestAbortExecutionHandler:
         assert resp["statusCode"] == 403
 
     def test_abort_happy_path_stops_inner_then_outer_and_marks_aborted(self):
-        # Two pipeline rows: one running with an inner sub-execution ARN, one already
-        # SUCCEEDED (must be left untouched). Assert inner+outer StopExecution and that
+        # Two pipeline rows: one running with a registered Step Functions sub-execution, one
+        # already SUCCEEDED (must be left untouched). Assert inner+outer StopExecution and that
         # the running pipeline row + main row are written ABORTED.
         running_pipe = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
                         "executionStatus": "RUNNING",
-                        "pipeline_execution_sub_execution_arn": "arn:ex:inner1",
+                        "registeredSubExecutions": [
+                            {"resourceType": "stepFunctionsExecution",
+                             "stateMachineArn": "arn:sm:inner1", "executionArn": "arn:ex:inner1"}],
                         "executionStopDate": ""}
         done_pipe = {"pipelineExecutionId": "P2", "workflowExecutionId": "EabcId",
                      "executionStatus": "SUCCEEDED",
-                     "pipeline_execution_sub_execution_arn": "", "executionStopDate": "d"}
+                     "registeredSubExecutions": [], "executionStopDate": "d"}
         pexec_table = MagicMock()
         main_table = MagicMock()
 
@@ -376,7 +378,10 @@ class TestExecutionDetailsHandler:
             "executionStatus": "SUCCEEDED", "executionStartDate": "s", "executionStopDate": "e",
             "endStatePipeline": "true", "pipelineExecutionType": "Lambda",
             "pipelineResourceArn": "arn:should:not:leak",
-            "pipeline_execution_sub_execution_arn": "arn:inner:leak",
+            "registeredSubExecutions": [
+                {"resourceType": "stepFunctionsExecution",
+                 "stateMachineArn": "arn:sm:leak", "executionArn": "arn:inner:leak"}],
+            "registeredLogs": [{"logGroupArn": "arn:lg:leak"}],
             "S3AssetPipelineBucket": "secret-bucket",
             "S3AssetAuxPipelineBucketPrefixTemp": "tmp/secret/",
         }
@@ -414,8 +419,8 @@ class TestExecutionDetailsHandler:
         assert of["relativeFilePath"] == "/out/model.gltf" and of["fileSize"] == 2048
         # No internal fields anywhere in the serialized response.
         blob = json.dumps(msg)
-        for leaked in ("arn:should:not:leak", "arn:inner:leak", "secret-bucket",
-                       "secret/key", "tmp/secret/", "arn:ex:main"):
+        for leaked in ("arn:should:not:leak", "arn:inner:leak", "arn:sm:leak", "arn:lg:leak",
+                       "secret-bucket", "secret/key", "tmp/secret/", "arn:ex:main"):
             assert leaked not in blob
 
     def test_details_execution_not_found_404(self):

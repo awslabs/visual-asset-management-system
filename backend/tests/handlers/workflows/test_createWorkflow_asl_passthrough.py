@@ -35,7 +35,7 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
             return payload
         def build_task_state(self, pipeline, state_name, payload):
             return {"Type": "Task", "_payload": payload}
-    stub.get_task_builder = lambda exec_type: _Builder()
+    stub.get_task_builder = lambda exec_type, partition="aws": _Builder()
     sys.modules["common.workflows.stepfunctions_builder"] = stub
 
 from backend.backend.handlers.workflows.createWorkflow import generate_workflow_asl

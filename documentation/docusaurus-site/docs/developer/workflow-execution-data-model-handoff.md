@@ -64,8 +64,7 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 | Workflow inputs / configuration                                | At launch                                            | Per-stage updates                             |
 | PipelineExecutions                                             | One row per pipeline (paths, type, chain, end-state) | Per-stage dates/status, STS vending, sub-ARNs |
 | First-pipeline InputFiles / InputMetadata / InputConfiguration | Yes                                                  | All-stage inputs, input-port mappings         |
-| End-state OutputFiles / OutputMetadata / Logs                  | Via process-output                                   | Per-stage outputs                             |
-| OutputResults                                                  | Schema only                                          | Population when a pipeline emits results      |
+| End-state OutputFiles / OutputMetadata / OutputResults / Logs  | Via process-output                                   | Per-stage outputs                             |
 
 ## STS data-model fields (schema only in Stage 1)
 
@@ -80,7 +79,7 @@ the STS vending lambda + container credential channel that populates them.
 -   Per-stage start/stop registration so intermediate PipelineExecutions rows and their
     I/O populate as each step runs (requires modifying createWorkflow + pipeline steps).
 -   STS credential vending + container delivery channel.
--   Pipeline input-port mappings and output-results population.
+-   Pipeline input-port mappings.
 -   Deep aborts.
 
 ## Implementation notes for the next stage

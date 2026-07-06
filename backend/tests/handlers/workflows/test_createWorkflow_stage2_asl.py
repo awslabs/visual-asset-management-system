@@ -14,6 +14,7 @@ exercised end to end.
 import os
 import json
 import pytest
+from unittest import mock
 
 # createWorkflow reads these at import time. The real stepfunctions_builder is registered by
 # the root conftest, so this module deliberately does NOT stub it.
@@ -42,6 +43,53 @@ def _pipeline_states(states):
     return [s for k, s in states.items()
             if not k.startswith("interim-") and not k.startswith("process-outputs-")
             and k not in ("HandleExecutionError", "WorkflowProcessingJobFailed")]
+
+
+def _all_state_resources(definition):
+    """Every Task state's service-integration Resource ARN in the definition."""
+    return [s["Resource"] for s in definition["States"].values()
+            if s.get("Type") == "Task" and "Resource" in s]
+
+
+@pytest.mark.unit
+class TestStepFunctionsIntegrationArnPartition:
+    """The Step Functions service-integration ARNs embedded in the generated ASL must use the
+    deployment partition, not a hardcoded 'aws', so workflows are valid in GovCloud/China/ISO."""
+
+    def test_default_partition_is_commercial_aws(self):
+        # With no AWS_PARTITION override, ARNs stay commercial (unchanged behavior).
+        definition, _jobs = cw.generate_workflow_asl(_pipelines(2), "db", "wf")
+        resources = _all_state_resources(definition)
+        assert resources, "expected at least one Task state with a Resource ARN"
+        assert all(r.startswith("arn:aws:states:::") for r in resources)
+
+    def test_govcloud_partition_threaded_into_all_integration_arns(self):
+        # createWorkflow reads the partition from its module-level env-bound value; emulate a
+        # GovCloud deployment and assert EVERY integration ARN (pipeline lambda/sqs/eventbridge,
+        # interim, error-handler, process-output) uses the aws-us-gov partition.
+        import json as _json
+        pipelines = [
+            {"name": "p1", "outputType": "assetFile", "pipelineExecutionType": "Lambda",
+             "pipelineType": "standardFile", "databaseId": "db", "waitForCallback": "Disabled",
+             "userProvidedResource": _json.dumps({"resourceId": "arn:fn", "resourceType": "Lambda"})},
+            {"name": "p2", "outputType": "assetFile", "pipelineExecutionType": "SQS",
+             "pipelineType": "standardFile", "databaseId": "db", "waitForCallback": "Enabled",
+             "userProvidedResource": _json.dumps({"resourceId": "https://sqs/q", "resourceType": "SQS"})},
+            {"name": "p3", "outputType": "assetFile", "pipelineExecutionType": "EventBridge",
+             "pipelineType": "standardFile", "databaseId": "db", "waitForCallback": "Enabled",
+             "userProvidedResource": _json.dumps({"resourceId": "bus", "resourceType": "EventBridge"})},
+        ]
+        with mock.patch.object(cw, "aws_partition", "aws-us-gov"):
+            definition, _jobs = cw.generate_workflow_asl(pipelines, "db", "wf")
+        resources = _all_state_resources(definition)
+        assert all(r.startswith("arn:aws-us-gov:states:::") for r in resources)
+        # No commercial-partition ARN leaked through any builder path.
+        assert not any(r.startswith("arn:aws:states:::") for r in resources)
+        # The three task-type integrations are all present and partition-correct.
+        joined = " ".join(resources)
+        assert "arn:aws-us-gov:states:::lambda:invoke" in joined
+        assert "arn:aws-us-gov:states:::sqs:sendMessage" in joined
+        assert "arn:aws-us-gov:states:::events:putEvents" in joined
 
 
 @pytest.mark.unit

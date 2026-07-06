@@ -83,6 +83,10 @@ try:
     region = os.environ['AWS_REGION']
     role = os.environ['LAMBDA_ROLE_ARN']
     logGroupArn = os.environ['LOG_GROUP_ARN']
+    # Deployment AWS partition for Step Functions service-integration ARNs embedded in the
+    # generated ASL (arn:{partition}:states:::...). Defaults to "aws" (commercial); GovCloud/
+    # China/ISO deployments inject the matching partition so the ASL is valid there.
+    aws_partition = os.environ.get('AWS_PARTITION', 'aws') or 'aws'
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -238,6 +242,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         function_name=error_handler_function,
         payload=error_handler_payload,
         fail_state=failed_state_id,
+        partition=aws_partition,
     )
 
     # Generate GLOBAL output paths (shared by ALL pipelines)
@@ -282,8 +287,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "inputConfigurationS3Location": _pipeline_input_uri(i + 1, "config.json"),
         }
 
-        # Get the appropriate builder
-        builder = get_task_builder(exec_type)
+        # Get the appropriate builder (partition-aware service-integration ARNs)
+        builder = get_task_builder(exec_type, partition=aws_partition)
 
         # Build payload using the builder (shared payload construction)
         payload = builder.build_payload(pipeline, path_context)
@@ -363,6 +368,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
                 payload=interim_payload,
                 result_path=f"$.{interim_state_id}.output",
                 error_handler_state=error_handler_state_id,
+                partition=aws_partition,
             )
             states.append((interim_state_id, interim_state))
 
@@ -423,7 +429,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         payload=process_output_payload,
         result_path=f"$.{process_output_state_id}.output",
         retry_config=po_retry_config,
-        catch_config=po_catch_config
+        catch_config=po_catch_config,
+        partition=aws_partition
     )
 
     # Add the single process_output state to the states list

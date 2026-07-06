@@ -76,10 +76,10 @@ class PipelineExecutionRecord(BaseModel, extra='ignore'):
     s3ReadWriteScopes: Optional[List[str]] = []
     credentialVendingState: Optional[str] = "notVended"
     from_pipeline_execution_id: Optional[str] = ""
-    pipeline_execution_sub_arn: Optional[str] = ""
-    pipeline_execution_sub_execution_arn: Optional[str] = ""
     # EventBridge source prefix the pipeline reports under, plus the typed lists of reported
-    # sub-execution ARNs and CloudWatch log locations.
+    # sub-process resources and CloudWatch log locations. Each registeredSubExecutions entry is
+    # typed by resourceType (stepFunctionsExecution today; batchJob/ecsTask/... later); each
+    # registeredLogs entry is {logGroupArn, logGroupName, logStreamName, logStreamPrefix}.
     orchestrationBusEventPrefix: Optional[str] = ""
     registeredSubExecutions: Optional[List[Dict[str, Any]]] = []
     registeredLogs: Optional[List[Dict[str, Any]]] = []
