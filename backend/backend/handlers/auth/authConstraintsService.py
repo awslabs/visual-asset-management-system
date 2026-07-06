@@ -3,7 +3,6 @@
 
 """Auth Constraints service handler for VAMS API."""
 
-import os
 import boto3
 import json
 import uuid
@@ -24,6 +23,7 @@ from common.constants import (
     CONSTRAINT_PERMISSION_TYPE_LABELS,
 )
 from common.apiRoutes import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -55,16 +55,19 @@ logger = safeLogger(service_name="AuthConstraintsService")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
 try:
-    constraints_table_name = os.environ["CONSTRAINTS_TABLE_NAME"]  # New optimized table
-    roles_table_name = os.environ.get("ROLES_TABLE_NAME")  # Optional for validation
+    constraints_table_name = get_table_name(ResourceKeys.CONSTRAINTS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving constraints table name")
+    constraints_table_name = None
 
-# Initialize DynamoDB tables
-constraints_table = dynamodb.Table(constraints_table_name)
+try:
+    roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving roles table name")
+    roles_table_name = None
+
+constraints_table = dynamodb.Table(constraints_table_name) if constraints_table_name else None
 roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
 
 #######################

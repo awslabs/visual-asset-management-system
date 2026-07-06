@@ -161,6 +161,13 @@ def setup_mock_imports():
     )
     sys.modules['common.apiRoutes'] = api_routes_module
 
+    # resourceNames is a real module with boto3 and logger dependencies, load it
+    resource_names_module = import_module_from_path(
+        'common.resourceNames',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
+    )
+    sys.modules['common.resourceNames'] = resource_names_module
+
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(
         'common.auth',

@@ -835,7 +835,7 @@ class TestAssetUnarchiveCommand:
 
             # Verify API call
             mocks['api_client'].unarchive_asset.assert_called_once_with(
-                'test-database', 'test-asset', 'Restoring for review'
+                'test-database', 'test-asset', 'Restoring for review', False
             )
 
     def test_unarchive_without_reason(self, cli_runner, assets_command_mocks):
@@ -861,7 +861,7 @@ class TestAssetUnarchiveCommand:
             assert 'active state' in result.output
 
             # Verify API call without reason
-            mocks['api_client'].unarchive_asset.assert_called_once_with('test-database', 'test-asset', None)
+            mocks['api_client'].unarchive_asset.assert_called_once_with('test-database', 'test-asset', None, False)
 
     def test_unarchive_json_input_file(self, cli_runner, assets_command_mocks):
         """Test asset unarchive with JSON input from file."""
@@ -891,7 +891,7 @@ class TestAssetUnarchiveCommand:
             assert '✓ Asset unarchived successfully!' in result.output
 
             # Verify API call uses JSON data
-            mocks['api_client'].unarchive_asset.assert_called_once_with('json-database', 'json-asset', 'JSON reason')
+            mocks['api_client'].unarchive_asset.assert_called_once_with('json-database', 'json-asset', 'JSON reason', False)
 
     def test_unarchive_json_output(self, cli_runner, assets_command_mocks):
         """Test asset unarchive with JSON output emits valid JSON."""

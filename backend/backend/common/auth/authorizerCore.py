@@ -36,6 +36,7 @@ from cryptography.hazmat.backends import default_backend
 import base64
 
 from common.auth.clientIp import resolve_client_ip, is_ip_authorized
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Configure AWS Lambda Powertools logger
 logger = Logger()
@@ -74,9 +75,7 @@ except json.JSONDecodeError:
     IGNORED_PATHS = []
 
 # API Key Configuration
-API_KEY_STORAGE_TABLE_NAME = os.environ.get('API_KEY_STORAGE_TABLE_NAME')
 API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'
-USER_ROLES_STORAGE_TABLE_NAME = os.environ.get('USER_ROLES_STORAGE_TABLE_NAME')
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
 
 # DynamoDB client for API key lookups (only initialized if table configured)
@@ -93,17 +92,27 @@ _api_key_cache = {}
 
 def _get_api_key_table():
     global _dynamodb_resource, _api_key_table
-    if _api_key_table is None and API_KEY_STORAGE_TABLE_NAME:
-        _dynamodb_resource = boto3.resource('dynamodb', config=BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'}))
-        _api_key_table = _dynamodb_resource.Table(API_KEY_STORAGE_TABLE_NAME)
+    if _api_key_table is None:
+        try:
+            table_name = get_table_name(ResourceKeys.API_KEY_STORAGE_TABLE)
+            _dynamodb_resource = boto3.resource('dynamodb', config=BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'}))
+            _api_key_table = _dynamodb_resource.Table(table_name)
+        except Exception as e:
+            logger.error(f"Failed to resolve API_KEY_STORAGE_TABLE name: {e}")
+            return None
     return _api_key_table
 
 def _get_user_roles_table():
     global _dynamodb_resource, _user_roles_table
-    if _user_roles_table is None and USER_ROLES_STORAGE_TABLE_NAME:
-        if _dynamodb_resource is None:
-            _dynamodb_resource = boto3.resource('dynamodb', config=BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'}))
-        _user_roles_table = _dynamodb_resource.Table(USER_ROLES_STORAGE_TABLE_NAME)
+    if _user_roles_table is None:
+        try:
+            table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
+            if _dynamodb_resource is None:
+                _dynamodb_resource = boto3.resource('dynamodb', config=BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'}))
+            _user_roles_table = _dynamodb_resource.Table(table_name)
+        except Exception as e:
+            logger.error(f"Failed to resolve USER_ROLES_STORAGE_TABLE name: {e}")
+            return None
     return _user_roles_table
 
 def _lookup_api_key_by_hash(key_hash: str):
@@ -223,12 +232,9 @@ def verify_api_key(raw_key: str) -> Optional[Dict[str, Any]]:
     Returns a synthetic claims dict if valid, None otherwise.
     """
     try:
-        if not API_KEY_STORAGE_TABLE_NAME or not USER_ROLES_STORAGE_TABLE_NAME:
-            logger.warning("API key tables not configured, skipping API key auth")
-            return None
-
         user_roles_table = _get_user_roles_table()
         if not user_roles_table:
+            logger.warning("API key user roles table not available, skipping API key auth")
             return None
 
         # Hash the incoming key

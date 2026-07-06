@@ -12,6 +12,8 @@ import { ApiBuilder2NestedStack } from "./nestedStacks/apiLambda/apiBuilder2-nes
 import { StorageResourcesBuilderNestedStack } from "./nestedStacks/storage/storageBuilder-nestedStack";
 import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedStack";
 import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
+import { ResourceNameRegistry } from "./nestedStacks/resourceNames/resourceNameRegistry";
+import { ResourceNamesBuilderNestedStack } from "./nestedStacks/resourceNames/resourceNamesBuilder-nestedStack";
 import { ApiNestedStack } from "./nestedStacks/apiLambda/api-nestedStack";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
@@ -125,6 +127,10 @@ export class CoreVAMSStack extends cdk.Stack {
         //Deploy Lambda Layers (nested stack)
         const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});
 
+        // Cross-stack resource-name registry — storage builder registers resource names,
+        // the ResourceNames builder materializes them as SSM parameters.
+        const resourceNameRegistry = new ResourceNameRegistry();
+
         //Deploy Storage Resources (nested stack)
         const storageResourcesNestedStack = new StorageResourcesBuilderNestedStack(
             this,
@@ -132,8 +138,23 @@ export class CoreVAMSStack extends cdk.Stack {
             props.config,
             lambdaLayers.lambdaCommonBaseLayer,
             this.vpc,
-            this.subnetsIsolated
+            this.subnetsIsolated,
+            resourceNameRegistry
         );
+
+        //Deploy Resource Names SSM Parameters (nested stack). Deploys directly after storage
+        //and before every Lambda-bearing stack so the parameters exist before any function
+        //that resolves them cold-starts, and so the parameter-creation burst does not race
+        //other stacks' SSM writes (shared PutParameter rate limit).
+        const resourceNamesNestedStack = new ResourceNamesBuilderNestedStack(
+            this,
+            "ResourceNamesBuilder",
+            {
+                config: props.config,
+                resourceNameRegistry: resourceNameRegistry,
+            }
+        );
+        resourceNamesNestedStack.addDependency(storageResourcesNestedStack);
 
         //Setup cloud trail and log groups (if enabled)
         if (props.config.app.addStackCloudTrailLogs) {
@@ -182,6 +203,7 @@ export class CoreVAMSStack extends cdk.Stack {
             subnets: this.subnetsIsolated,
         });
         authBuilderNestedStack.addDependency(storageResourcesNestedStack);
+        authBuilderNestedStack.addDependency(resourceNamesNestedStack);
 
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
         if (!props.config.env.loadContextIgnoreVPCStacks) {
@@ -202,6 +224,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.subnetsIsolated
             );
             apiBuilderNestedStack.addDependency(storageResourcesNestedStack);
+            apiBuilderNestedStack.addDependency(resourceNamesNestedStack);
 
             //Deploy Backend API framework - secondary stack (nested stack).
             //Holds API domains) moved out of ApiBuilder to keep
@@ -229,6 +252,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.subnetsIsolated
             );
             searchBuilderNestedStack.addDependency(storageResourcesNestedStack);
+            searchBuilderNestedStack.addDependency(resourceNamesNestedStack);
 
             //Set feature for no opensearch in neither provisioned or serverless selected
             if (
@@ -269,6 +293,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 registry: apiRouteRegistry,
             });
             addonBuilderNestedStack.addDependency(storageResourcesNestedStack);
+            addonBuilderNestedStack.addDependency(resourceNamesNestedStack);
 
             // The Physna add-on frontend features (viewer today, more planned)
             // are gated by a single feature flag so the web UI only surfaces
@@ -443,6 +468,16 @@ export class CoreVAMSStack extends cdk.Stack {
                         .appFeatureEnabledStorageTable,
                 featuresEnabled: this.enabledFeatures,
                 kmsKey: storageResourcesNestedStack.storageResources.encryption.kmsKey,
+            }
+        );
+
+        const resourceNamesSSMParamPrefixOutput = new cdk.CfnOutput(
+            this,
+            "ResourceNamesSSMParamPrefixOutput",
+            {
+                value: props.config.resourceNamesSSMParamPrefix,
+                description:
+                    "SSM Parameter Store prefix for deployment resource names (tables, buckets, log groups, migration tooling)",
             }
         );
 

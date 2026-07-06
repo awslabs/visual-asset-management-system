@@ -21,6 +21,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
 from common.validators import validate
 from common.s3MetadataKeys import (
@@ -57,23 +58,41 @@ logger = safeLogger(service_name="GarnetFileIndexer")
 excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
-# Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_storage_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_storage_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_storage_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset storage table name")
+    asset_storage_table_name = None
+
+try:
+    asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset file metadata table name")
+    asset_file_metadata_storage_table_name = None
+
+try:
+    file_attribute_storage_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving file attribute table name")
+    file_attribute_storage_table_name = None
+
+try:
+    s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving S3 asset buckets table name")
+    s3_asset_buckets_storage_table_name = None
+
+try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading Garnet environment variables")
     raise e
 
-# Initialize DynamoDB tables
-asset_storage_table = dynamodb.Table(asset_storage_table_name)
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
-file_attribute_table = dynamodb.Table(file_attribute_storage_table_name)
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
+asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_storage_table_name) if file_attribute_storage_table_name else None
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
 
 #######################
 # Utility Functions

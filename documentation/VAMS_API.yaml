@@ -3778,7 +3778,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/unarchiveAsset:
         put:
             summary: "Unarchive an asset (restore from soft delete)."
-            description: "Restore a previously archived asset by removing S3 delete markers and moving the asset record back to the active database partition. The databaseId can be provided with or without the #deleted suffix, which will be normalized automatically."
+            description: "Restore a previously archived asset by moving the asset record back to the active database partition. By default the asset's files remain archived. Set unarchiveFiles to true to also restore the files that the asset archive operation archived (tracked via assetArchive provenance in the file version history); files archived individually beforehand always remain archived and can be restored with the file unarchive endpoint. Assets archived before provenance tracking have no restorable file set, so no files are restored for them. The databaseId can be provided with or without the #deleted suffix, which will be normalized automatically."
             requestBody:
                 required: true
                 content:
@@ -3794,11 +3794,16 @@ paths:
                                     type: string
                                     maxLength: 256
                                     description: "Optional reason for unarchiving the asset"
+                                unarchiveFiles:
+                                    type: boolean
+                                    description: "Also restore the files archived by the asset archive operation. Files archived individually beforehand remain archived."
+                                    default: false
                             required:
                                 - confirmUnarchive
                             example:
                                 confirmUnarchive: true
                                 reason: "Restoring asset for active use"
+                                unarchiveFiles: true
             responses:
                 "200":
                     description: Asset unarchived successfully.

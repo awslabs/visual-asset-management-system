@@ -27,6 +27,7 @@ infra/
     infra.ts                    # CDK app entry point
   common/
     vamsAppFeatures.ts          # VAMS_APP_FEATURES enum (feature flags)
+    resourceParamKeys.ts        # SSM parameter key constants (mirrored in backend/common/resourceNames.py)
   config/
     config.ts                   # Config interfaces, getConfig(), constants
     config.json                 # Active deployment configuration
@@ -79,6 +80,9 @@ infra/
         storageBuilder-nestedStack.ts      # ~1800 lines: DynamoDB tables, S3, SNS, SQS, KMS, CloudWatch
         customResources/
           populateS3AssetBucketsTable.ts   # Custom resource for S3 bucket table population
+      resourceNames/
+        resourceNamesBuilder-nestedStack.ts  # Publishes 39 SSM String parameters (28 DynamoDB tables, 2 S3 buckets, 9 audit log groups)
+        resourceNameRegistry.ts            # Cross-stack resource name descriptor registry (ResourceNameDescriptor interface)
       auth/
         authBuilder-nestedStack.ts         # Cognito user pool, identity pool, SAML, external OAuth
         constructs/
@@ -161,6 +165,8 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
+  |     |
+  |     +-- ResourceNamesBuilder (publishes 39 SSM parameters; depends on Storage)
   |     |
   |     +-- AuthBuilder (depends on Storage)
   |     |     |
@@ -402,8 +408,8 @@ every nested stack and bloated the synthesized CloudFormation templates. Scope t
 ### What the Security Helpers Do
 
 -   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
--   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Adds env vars for AUTH_TABLE_NAME, CONSTRAINTS_TABLE_NAME, USER_ROLES_TABLE_NAME, ROLES_TABLE_NAME + 9 audit log group env vars. Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all audit log groups.
--   **`globalLambdaEnvironmentsAndPermissions`**: Sets `COGNITO_AUTH_ENABLED` — `TRUE` whenever Cognito is the auth provider, and `FALSE` only when Lambda functions run in the VPC **and** the partition is AWS GovCloud (US) (`aws-us-gov`) or AWS European Sovereign Cloud (`aws-eusc`), where Cognito PrivateLink is unavailable so an in-VPC Lambda cannot reach Cognito for the MFA check. `addVpcEndpoints = false` does **not** disable it: in that mode the VPC builder skips endpoint creation because the operator hand-creates the same endpoints (including `cognito-idp`/`cognito-identity`), so Cognito remains reachable and the check stays enabled. In every supported (non-GovCloud/EU-Sovereign) partition the VPC builder creates the `cognito-idp`/`cognito-identity` interface endpoints so in-VPC Lambda functions can reach Cognito.
+-   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all 9 audit log groups. **No longer injects table or log group environment variables** (non-pipeline handlers resolve these from SSM).
+-   **`globalLambdaEnvironmentsAndPermissions`**: Adds `VAMS_RESOURCE_PARAM_PREFIX` env var (SSM parameter prefix for resource name resolution) and grants ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath on the deployment's resource-name parameter prefix. Also sets `COGNITO_AUTH_ENABLED` — `TRUE` whenever Cognito is the auth provider, and `FALSE` only when Lambda functions run in the VPC **and** the partition is AWS GovCloud (US) (`aws-us-gov`) or AWS European Sovereign Cloud (`aws-eusc`), where Cognito PrivateLink is unavailable so an in-VPC Lambda cannot reach Cognito for the MFA check. `addVpcEndpoints = false` does **not** disable it: in that mode the VPC builder skips endpoint creation because the operator hand-creates the same endpoints (including `cognito-idp`/`cognito-identity`), so Cognito remains reachable and the check stays enabled. In every supported (non-GovCloud/EU-Sovereign) partition the VPC builder creates the `cognito-idp`/`cognito-identity` interface endpoints so in-VPC Lambda functions can reach Cognito.
 -   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
@@ -636,10 +642,16 @@ The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the Op
 2. Create the table in `storageResourcesBuilder()` function
 3. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`
 4. Add `RemovalPolicy.DESTROY` (current pattern -- all tables use DESTROY)
-5. Update lambda builders to reference the new table name env var and grant permissions
-6. Update the documentation (see Rule below): add the table to `architecture/aws-resources.md` and `architecture/data-model.md`
+5. Add constant to `RESOURCE_PARAM_KEYS.dynamoTables` in `infra/common/resourceParamKeys.ts`
+6. Add matching `ResourceParamKey` entry to `ResourceKeys` class in `backend/backend/common/resourceNames.py`
+7. Add matching constant to `ResourceParamKeys` in `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve table names from these SSM parameters)
+8. Register descriptor in `resourceNameRegistry` (imported in `storageBuilder-nestedStack.ts`)
+9. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builders (the `globalLambdaEnvironmentsAndPermissions` helper already grants SSM read access)
+10. Update the documentation (see Rule below): add the table to `architecture/aws-resources.md` and `architecture/data-model.md`
 
-### Documentation Rule: Storage Resources and Log Groups
+The same three-way constants update (audit log groups included) applies to new CloudWatch audit log groups: `RESOURCE_PARAM_KEYS.cloudwatchLogGroups`, `ResourceKeys` in `resourceNames.py`, and `ResourceParamKeys` in `ssm_resource_lookup.py`. Tables that become deprecated but are retained for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`) so migration scripts can still resolve them.
+
+### Documentation Rule: Storage Resources, Log Groups, and SSM Parameters
 
 Whenever you **add or change** an Amazon S3 bucket, an Amazon DynamoDB table, or an Amazon CloudWatch log group, update `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` (and the matching Kiro steering — see Rule 11 and the bidirectional-sync rule in the root `CLAUDE.md`). Document **two independent properties** for each such resource:
 
@@ -647,6 +659,8 @@ Whenever you **add or change** an Amazon S3 bucket, an Amazon DynamoDB table, or
 2. **Custom name (redeploy-collision flag)** -- whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can collide by name on a redeploy into the same account with the same configuration name.
 
 These axes are independent. **Retained + auto-named** resources (the asset, auxiliary, artefacts, and access logs buckets; all DynamoDB tables) survive teardown but do **not** block a redeploy, so they do not need to be deleted unless you intend to remove the data. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
+
+**SSM String parameters** (39 resource-name parameters published by ResourceNamesBuilder): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). Parameters are String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-encryption-everywhere rule.
 
 ### 5. Service Helper Usage
 
@@ -725,7 +739,8 @@ export function buildMyNewFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            MY_TABLE_NAME: storageResources.dynamo.myTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            // OPTIONAL_HANDLER_SPECIFIC_VAR: "value",
         },
     });
 
@@ -735,7 +750,7 @@ export function buildMyNewFunction(
     // Required security calls
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config); // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 

@@ -390,6 +390,8 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
             lines.append("")
             lines.append("The asset has been moved to archived state and will not appear in normal listings.")
             lines.append("Use 'vamscli assets get --show-archived' to view archived assets.")
+            lines.append("Unarchiving restores the asset record only by default; use --unarchive-files")
+            lines.append("with 'vamscli assets unarchive' to also restore the files archived by this operation.")
             return '\n'.join(lines)
         
         output_result(
@@ -431,20 +433,25 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
 @click.argument('asset_id')
 @click.option('-d', '--database', required=True, help='Database ID containing the asset')
 @click.option('--reason', help='Reason for unarchiving the asset')
+@click.option('--unarchive-files', is_flag=True,
+              help='Also restore the files that were archived by the asset archive operation')
 @click.option('--json-input', type=click.File('r'), help='JSON file with parameters')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def unarchive(ctx: click.Context, asset_id: str, database: str, reason: Optional[str], json_input: Optional[click.File], json_output: bool):
+def unarchive(ctx: click.Context, asset_id: str, database: str, reason: Optional[str], unarchive_files: bool, json_input: Optional[click.File], json_output: bool):
     """
     Unarchive an asset (restore from soft delete).
 
-    This command restores a previously archived asset to active state, including
-    removing the S3 delete markers on its files and its preview so it appears in
-    normal listings again.
+    This command restores a previously archived asset record to active state so
+    it appears in normal listings again. By default the asset's files remain
+    archived. Pass --unarchive-files to also restore the files that the asset
+    archive operation archived; files archived individually beforehand always
+    stay archived and can be restored with 'vamscli file unarchive'.
 
     Examples:
         vamscli assets unarchive my-asset -d my-database
+        vamscli assets unarchive my-asset -d my-database --unarchive-files
         vamscli assets unarchive my-asset -d my-database --reason "Restoring for review"
         vamscli assets unarchive my-asset -d my-database --json-input unarchive-params.json
         vamscli assets unarchive my-asset -d my-database --json-output
@@ -463,13 +470,14 @@ def unarchive(ctx: click.Context, asset_id: str, database: str, reason: Optional
                 database = json_data.get('databaseId', database)
                 asset_id = json_data.get('assetId', asset_id)
                 reason = json_data.get('reason', reason)
+                unarchive_files = json_data.get('unarchiveFiles', unarchive_files)
             except json.JSONDecodeError as e:
                 raise click.BadParameter(f"Invalid JSON in input file: {e}")
 
         output_status(f"Unarchiving asset '{asset_id}' in database '{database}'...", json_output)
 
         # Unarchive the asset
-        result = api_client.unarchive_asset(database, asset_id, reason)
+        result = api_client.unarchive_asset(database, asset_id, reason, unarchive_files)
 
         def format_unarchive_result(data):
             """Format unarchive result for CLI display."""
@@ -480,7 +488,11 @@ def unarchive(ctx: click.Context, asset_id: str, database: str, reason: Optional
             lines.append(f"  Timestamp: {data.get('timestamp', 'N/A')}")
             lines.append(f"  Message: {data.get('message', 'Asset unarchived')}")
             lines.append("")
-            lines.append("The asset has been restored to active state and will appear in normal listings.")
+            lines.append("The asset record has been restored to active state and will appear in normal listings.")
+            if not unarchive_files:
+                lines.append("Files previously archived remain archived. Use 'vamscli file unarchive' to restore")
+                lines.append("individual files, or rerun with --unarchive-files to restore the files archived")
+                lines.append("by the asset archive operation.")
             return '\n'.join(lines)
 
         output_result(

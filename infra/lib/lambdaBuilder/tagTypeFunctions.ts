@@ -45,10 +45,7 @@ export function buildTagTypeService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
-            TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
-        },
+        environment: {},
     });
 
     storageResources.dynamo.tagStorageTable.grantReadWriteData(fun);
@@ -84,9 +81,7 @@ export function buildCreateTagTypeFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
-        },
+        environment: {},
     });
 
     storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(fun);

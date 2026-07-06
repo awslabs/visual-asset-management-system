@@ -251,6 +251,25 @@ A CDK aspect (`LogRetentionAspect`) forces one-year retention on all CloudWatch 
 All VAMS log groups use the `DESTROY` removal policy and are deleted when the stack is destroyed cleanly. However, if a stack deletion fails partway, or a log group is recreated by an AWS service (such as a Lambda function writing logs) after the stack is gone, the orphaned, deterministically named group will conflict with the same-named group on a subsequent redeploy. Delete any remaining `/aws/vendedlogs/...` groups for the deployment before redeploying with the same configuration name and account. This is most common with the conditional AWS CloudTrail and VPC flow log groups.
 :::
 
+## AWS Systems Manager Parameter Store
+
+VAMS publishes deployment configuration values as explicitly named SSM `String` parameters. All parameters use the `DESTROY` removal policy and are deleted with the stack.
+
+| Parameter Group                                               | Count | Purpose                                                                |
+| ------------------------------------------------------------- | ----- | ---------------------------------------------------------------------- |
+| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 28    | DynamoDB table names resolved by Lambda functions at cold start        |
+| `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2     | Asset auxiliary and artefacts bucket names                             |
+| `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9     | Audit log group names                                                  |
+| `/<name>-<baseStackName>/aos/*`                               | 3     | OpenSearch endpoint and index names (when search is enabled)           |
+| `/<name>-<baseStackName>/web/deployedUrl`                     | 1     | Deployed web application URL                                           |
+| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1     | Amazon Location Service API key ARN (when Location Service is enabled) |
+
+The `resourceNames` parameters are materialized by a dedicated nested stack (`ResourceNamesBuilder`) from descriptors registered by the storage builder. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
+
+:::warning[Named parameters block redeploys]
+Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete any remaining parameters under the deployment's prefix before redeploying with the same configuration name and account.
+:::
+
 ## AWS KMS
 
 Deployed when `useKmsCmkEncryption.enabled = true`:

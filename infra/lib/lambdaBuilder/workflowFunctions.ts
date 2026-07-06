@@ -59,11 +59,7 @@ export function buildWorkflowService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
@@ -109,11 +105,7 @@ export function buildListWorkflowExecutionsFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun); //Needs write permission to update execution status after a SFN fetch
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -181,7 +173,6 @@ export function buildCreateWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
             VAMS_STACK_NAME: stackName,
@@ -243,14 +234,6 @@ export function buildExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
         },
     });
@@ -313,11 +296,6 @@ export function buildSqsAutoExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME: executeWorkflowFunction.functionName,
         },
     });
@@ -371,13 +349,6 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
         },

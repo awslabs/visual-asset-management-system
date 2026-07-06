@@ -227,6 +227,10 @@ When importing a VPC, you may need to run an initial `cdk synth` with `loadConte
 
 When `useGlobalVpc.addVpcEndpoints = true`, VAMS creates VPC endpoints to enable AWS service access from isolated subnets without internet connectivity.
 
+:::warning[SSM endpoint required for operator-managed endpoints]
+When `useGlobalVpc.addVpcEndpoints = false` (operator-created endpoints) with `useForAllLambdas = true`, the AWS Systems Manager (SSM) interface endpoint must exist in the VPC. Every VAMS Lambda function resolves its DynamoDB table, S3 bucket, and audit log group names from SSM Parameter Store at cold start and fails to initialize without a path to SSM.
+:::
+
 ### Gateway Endpoints (No Cost)
 
 These gateway endpoints are always created when VPC endpoints are enabled:
@@ -243,7 +247,7 @@ These interface endpoints are always created when VPC endpoints are enabled:
 | Endpoint                  | Service           | Purpose                                                                                                                                                                                        |
 | ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Execute-API               | `EXECUTE_API`     | REST API invoke access for a `PRIVATE` endpoint. Created only when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `REGIONAL` endpoint is public and does not use it. |
-| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access                                                                                                                                                                         |
+| AWS Systems Manager (SSM) | `SSM`             | Parameter Store access. Required by every VAMS Lambda function, which resolves DynamoDB table, S3 bucket, and audit log group names from Parameter Store at cold start.                        |
 | AWS Lambda                | `LAMBDA`          | Lambda-to-Lambda invocations                                                                                                                                                                   |
 | AWS STS                   | `STS`             | Credential federation                                                                                                                                                                          |
 | Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                                                                                                                                                                                   |

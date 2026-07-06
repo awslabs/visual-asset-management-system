@@ -14,6 +14,7 @@ import random
 import string
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from common.stepfunctions_builder import (
     create_lambda_task_state,
     create_fail_state,
@@ -64,7 +65,7 @@ sf_client = boto3.client('stepfunctions', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 try:
-    workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
+    workflow_Database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
     stack_name = os.environ["VAMS_STACK_NAME"]
     process_workflow_output_function = os.environ['PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME']
     region = os.environ['AWS_REGION']
@@ -75,7 +76,7 @@ try:
     # China/ISO inject the matching partition so the ASL is valid there.
     aws_partition = os.environ.get('AWS_PARTITION', 'aws') or 'aws'
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 

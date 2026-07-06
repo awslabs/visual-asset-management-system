@@ -72,9 +72,6 @@ export function buildSearchFunction(
                 !config.app.openSearch.useServerless.enabled
                     ? "true"
                     : "false",
-            AUTH_ENTITIES_TABLE: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
     });
 
@@ -128,13 +125,6 @@ export function buildFileIndexingFunction(
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
             OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
@@ -202,15 +192,6 @@ export function buildAssetIndexingFunction(
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetVersionsStorageTable.tableName,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
             OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
@@ -282,20 +263,6 @@ export function buildSqsBucketSyncFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetVersionsStorageTable.tableName,
-            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName, //Not directly used but needed to execute create_asset functions
-            TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName, //Not directly used but needed to execute create_asset functions
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             FILE_INDEXER_SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
             WORKFLOW_AUTO_EXECUTE_SQS_URL: workflowAutoExecuteQueue.queueUrl,
             ASSET_BUCKET_NAME: bucketName,
@@ -368,11 +335,6 @@ export function buildReindexerFunction(
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,

@@ -42,6 +42,8 @@ backend/
 │   │   │   └── clientIp.py               # True client-IP resolution (CloudFront/ALB-aware, anti-spoof)
 │   │   ├── constants.py                 # ABAC policy, allowed values, file blocklists
 │   │   ├── dynamodb.py                  # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
+│   │   ├── resourceNames.py             # SSM Parameter Store resource name resolver (get_table_name,
+│   │   │                                #   get_bucket_name, get_log_group_name; ResourceKeys class)
 │   │   ├── validators.py                # Input validation regex patterns and validate() dispatcher
 │   │   ├── s3.py                        # S3 file validation (extension + MIME type checks)
 │   │   ├── s3MetadataKeys.py            # Canonical S3 object user-metadata keys (assetid, vams-*)
@@ -150,8 +152,7 @@ backend/
     `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
     Do not circumvent this.
 
-10. **NEVER use `os.environ["KEY"]` outside of the module-level try/except block.**
-    All environment variable loading happens once at cold start.
+10. **ALWAYS resolve resource names at module level in the try/except block using `get_table_name()`, `get_bucket_name()`, or `get_log_group_name()` from `common.resourceNames`.** Never use `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers — SSM resolution provides centralized name management with environment variable overrides for testing.
 
 11. **NEVER echo request input into error messages returned to the client.** Keep
     error response messages generic and free of user-supplied values (IDs, names,
@@ -304,6 +305,7 @@ import json
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -327,13 +329,17 @@ logger = safeLogger(service_name="YourServiceName")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables
+# Load resource names and environment variables
 try:
-    your_table_name = os.environ["YOUR_STORAGE_TABLE_NAME"]
-    # Required: os.environ["KEY"] -- raises KeyError on missing
-    # Optional: os.environ.get("KEY") -- returns None on missing
+    # Resolve DynamoDB table names from SSM Parameter Store
+    your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
+    # Required: get_table_name(ResourceKeys.X) -- raises KeyError if not found in SSM
+    # Optional: wrap in try/except KeyError for optional resources
+
+    # Handler-specific env vars (direct from os.environ)
+    optional_env_var = os.environ.get("OPTIONAL_ENV_VAR")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names and environment variables")
     raise e
 
 # Initialize DynamoDB tables
@@ -700,9 +706,12 @@ from common.validators import (
 ### Table Initialization
 
 ```python
+from backend.common.resourceNames import get_table_name, ResourceKeys
+
 # Module-level: resource API for high-level operations
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-your_table = dynamodb.Table(os.environ["YOUR_STORAGE_TABLE_NAME"])
+your_table_name = get_table_name(ResourceKeys.YOUR_STORAGE_TABLE)
+your_table = dynamodb.Table(your_table_name)
 
 # Module-level: client API for low-level operations (scans, pagination)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
@@ -899,36 +908,47 @@ All responses follow `APIGatewayProxyResponseV2`:
 
 ```python
 # At module level, inside try/except:
-try:
-    # Required -- raises KeyError if missing
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 
-    # Optional -- returns None if missing
-    asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
+try:
+    # Resource names from SSM Parameter Store (with env var overrides)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    auxiliary_bucket = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+
+    # Optional resource names -- catch KeyError if not registered
+    try:
+        optional_table_name = get_table_name(ResourceKeys.OPTIONAL_TABLE)
+    except KeyError:
+        optional_table_name = None
+
+    # Handler-specific env vars (direct from os.environ)
+    send_email_function = os.environ.get("SEND_EMAIL_FUNCTION_NAME")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-# Conditional table init for optional vars
-asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
+# Initialize DynamoDB tables
+asset_table = dynamodb.Table(asset_table_name)
+database_table = dynamodb.Table(database_table_name)
+optional_table = dynamodb.Table(optional_table_name) if optional_table_name else None
 ```
+
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `ASSET_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
+
+**Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
 
 ### Common Environment Variables
 
-| Variable                            | Required | Description                        |
-| ----------------------------------- | -------- | ---------------------------------- |
-| `ASSET_STORAGE_TABLE_NAME`          | Yes      | Assets DynamoDB table              |
-| `DATABASE_STORAGE_TABLE_NAME`       | Yes      | Databases DynamoDB table           |
-| `S3_ASSET_*_BUCKET`                 | Yes      | S3 buckets for asset storage       |
-| `S3_ASSET_AUXILIARY_BUCKET`         | Yes      | S3 bucket for auxiliary/temp files |
-| `ASSET_VERSIONS_STORAGE_TABLE_NAME` | Yes      | Asset versions DynamoDB table      |
-| `*_STORAGE_TABLE_NAME`              | Varies   | Per-domain DynamoDB tables         |
-| `AUDIT_LOG_*`                       | Yes      | CloudWatch log group names         |
-| `COGNITO_AUTH_ENABLED`              | Yes      | Enable/disable Cognito auth        |
-| `AWS_REGION`                        | Auto     | AWS region (set by Lambda runtime) |
-| `SUBSCRIPTIONS_STORAGE_TABLE_NAME`  | Yes      | Subscriptions table                |
-| `SEND_EMAIL_FUNCTION_NAME`          | Yes      | Email notification Lambda name     |
+| Variable                        | Required | Description                                                                    |
+| ------------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `VAMS_RESOURCE_PARAM_PREFIX`    | Yes      | SSM parameter prefix for resource name resolution (non-pipeline handlers only) |
+| `COGNITO_AUTH_ENABLED`          | Yes      | Enable/disable Cognito auth                                                    |
+| `AWS_REGION`                    | Auto     | AWS region (set by Lambda runtime)                                             |
+| `PRESIGNED_URL_TIMEOUT_SECONDS` | Yes      | S3 presigned URL TTL                                                           |
+| `SEND_EMAIL_FUNCTION_NAME`      | Varies   | Email notification Lambda name (handler-specific)                              |
+
+**Legacy environment variables** (for overrides and pipeline handlers): `ASSET_STORAGE_TABLE_NAME`, `DATABASE_STORAGE_TABLE_NAME`, `S3_ASSET_AUXILIARY_BUCKET`, `AUDIT_LOG_*`, etc. Non-pipeline handlers resolve these via SSM unless the legacy env var is explicitly set.
 
 ---
 
@@ -1212,18 +1232,19 @@ class MyModel(BaseModel, extra='ignore'):
     pass
 ```
 
-### 8. Environment variables loaded inside handler functions
+### 8. Resource names loaded inside handler functions
 
 ```python
 # WRONG
 def lambda_handler(event, context):
-    table_name = os.environ["MY_TABLE"]  # Cold start penalty on every invocation
+    table_name = get_table_name(ResourceKeys.MY_TABLE)  # SSM fetch on every invocation
 
 # CORRECT -- at module level
+from backend.common.resourceNames import get_table_name, ResourceKeys
 try:
-    table_name = os.environ["MY_TABLE"]
+    table_name = get_table_name(ResourceKeys.MY_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 ```
 
@@ -1281,6 +1302,7 @@ import json
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -1299,9 +1321,9 @@ logger = safeLogger(service_name="CHANGE_ME")
 claims_and_roles = {}
 
 try:
-    table_name = os.environ["CHANGE_ME_STORAGE_TABLE_NAME"]
+    table_name = get_table_name(ResourceKeys.CHANGE_ME_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names")
     raise e
 
 table = dynamodb.Table(table_name)
@@ -1446,8 +1468,8 @@ When creating or modifying a handler:
 -   [ ] Imports follow the standard order (stdlib, boto3, powertools, common, handlers, models)
 -   [ ] AWS clients created at module level with `retry_config`
 -   [ ] `safeLogger` used with descriptive `service_name`
--   [ ] Environment variables loaded in module-level `try/except`
--   [ ] DynamoDB tables initialized at module level
+-   [ ] Resource names resolved via `get_table_name(ResourceKeys.*)` in module-level `try/except`
+-   [ ] DynamoDB tables initialized at module level using resolved names
 -   [ ] `lambda_handler` extracts claims via `request_to_claims(event)`
 -   [ ] API-level auth checked via `casbin_enforcer.enforceAPI(event)`
 -   [ ] Routes dispatch to dedicated method handlers

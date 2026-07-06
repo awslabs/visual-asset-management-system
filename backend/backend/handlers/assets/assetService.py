@@ -25,6 +25,11 @@ from handlers.assets.assetFiles import delete_s3_prefix_all_versions
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 from common.s3 import is_object_version_archived, list_all_object_versions
+from common.s3MetadataKeys import (
+    VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
+    VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
+    normalize_history_file_path,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
@@ -60,24 +65,56 @@ claims_and_roles = {}
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    s3_assetAuxiliary_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
-    asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
-    asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
-    asset_links_metadata_table_name = os.environ.get("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
-    asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
-    asset_file_metadata_versions_table_name = os.environ.get("ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME")
-    comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    s3_assetAuxiliary_bucket = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    try:
+        asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
+    except Exception:
+        asset_upload_table_name = None
+    try:
+        asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    except Exception:
+        asset_links_table_name = None
+    try:
+        asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_links_metadata_table_name = None
+    try:
+        asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_table_name = None
+    try:
+        file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    except Exception:
+        file_attribute_table_name = None
+    try:
+        asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_versions_table_name = None
+    try:
+        asset_versions_files_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_versions_files_table_name = None
+    try:
+        asset_file_metadata_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_versions_table_name = None
+    try:
+        comment_table_name = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+    except Exception:
+        comment_table_name = None
+    try:
+        asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
+    except Exception:
+        asset_file_version_history_table_name = None
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -94,6 +131,7 @@ comment_table = dynamodb.Table(comment_table_name) if comment_table_name else No
 asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if asset_versions_files_table_name else None
 asset_file_metadata_versions_table = dynamodb.Table(asset_file_metadata_versions_table_name) if asset_file_metadata_versions_table_name else None
 subscription_table = dynamodb.Table(subscription_table_name) if subscription_table_name else None
+asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name) if asset_file_version_history_table_name else None
 
 #######################
 # Version Functions
@@ -290,11 +328,79 @@ def delete_assetAuxiliary_files(assetLocation):
 
     return
 
-def archive_multi_assetFiles(location, bucket):
+def build_asset_archive_history_record(database_id, asset_id, relative_file_path,
+                                       marker_version_id, user_id):
+    """Build an assetArchive change-history record.
+
+    Asset archive soft-deletes each file via an S3 delete marker, which carries
+    no metadata, so sqsBucketSync cannot derive this provenance. The record's
+    versionId is the created delete marker's VersionId, letting a selective
+    unarchive distinguish markers created by the asset archive from markers a
+    user created earlier by archiving individual files.
+    """
+    relative_file_path = normalize_history_file_path(relative_file_path)
+    return {
+        "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{relative_file_path}",
+        "versionId": marker_version_id or "null",
+        "databaseId:assetId": f"{database_id}:{asset_id}",
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "filePath": relative_file_path,
+        "changeSource": VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
+        "changeUserId": user_id or "SYSTEM_USER",
+        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "s3LastModified": "",
+    }
+
+
+def get_asset_archive_marker_versions(database_id, asset_id):
+    """Return the delete-marker version IDs recorded by this asset's archive.
+
+    Queries the file version history for assetArchive-provenance records and
+    maps relative filePath -> set of marker VersionIds. Empty when the asset
+    was archived before provenance tracking existed (or the table is not
+    configured) — callers must treat that as "restore nothing".
+    """
+    markers = {}
+    if not asset_file_version_history_table:
+        return markers
+    try:
+        query_kwargs = {
+            'IndexName': 'DatabaseIdAssetIdIndex',
+            'KeyConditionExpression': Key('databaseId:assetId').eq(f"{database_id}:{asset_id}"),
+        }
+        while True:
+            response = asset_file_version_history_table.query(**query_kwargs)
+            for item in response.get('Items', []):
+                if item.get('changeSource') != VAMS_CHANGE_SOURCE_ASSET_ARCHIVE:
+                    continue
+                file_path = item.get('filePath', '')
+                version_id = item.get('versionId', '')
+                if file_path and version_id and version_id != 'null':
+                    markers.setdefault(file_path, set()).add(version_id)
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.exception(f"Error reading assetArchive history for {asset_id}: {e}")
+        return {}
+    return markers
+
+
+def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
     """Archive all files in a multi-file asset
-    
+
+    Each created delete marker is recorded in the file version history with
+    assetArchive provenance so a later unarchive can selectively restore only
+    the files this operation archived (files a user archived individually
+    beforehand keep their own markers and stay archived).
+
     Args:
         location: The asset location object with Key and optional Bucket (dict or AssetLocationModel)
+        bucket: The S3 bucket name
+        database_id: The database ID (for provenance records)
+        asset_id: The asset ID (for provenance records)
+        user_id: The acting user (for provenance records)
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(location, dict):
@@ -312,7 +418,7 @@ def archive_multi_assetFiles(location, bucket):
     prefix = location_model.Key
     if not prefix:
         return
-    
+
     # Get bucket from location or use default
     logger.info(f'Archiving folder with multiple files from bucket: {bucket}')
 
@@ -327,6 +433,22 @@ def archive_multi_assetFiles(location, bucket):
         try:
             response = mark_file_as_archived(key, bucket)
             logger.info(f"S3 archive response for {key}: {response}")
+
+            # Record provenance for the created delete marker (best-effort).
+            # Folder markers get no history record.
+            if (asset_file_version_history_table and database_id and asset_id
+                    and not key.endswith('/')):
+                marker_version_id = response.get('VersionId')
+                relative_path = key[len(prefix):] if key.startswith(prefix) else key
+                try:
+                    asset_file_version_history_table.put_item(
+                        Item=build_asset_archive_history_record(
+                            database_id, asset_id, relative_path,
+                            marker_version_id, user_id
+                        )
+                    )
+                except Exception as he:
+                    logger.exception(f"Failed writing assetArchive history for {key}: {he}")
 
         except s3.exceptions.InvalidObjectState as ios:
             logger.exception(f"S3 object already archived: {key}")
@@ -380,11 +502,27 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
-def unarchive_multi_assetFiles(location, bucket):
-    """Unarchive all files in a multi-file asset by removing delete markers
-    
+def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
+    """Selectively unarchive an asset's files by removing the delete markers
+    that the asset archive created.
+
+    Only markers whose VersionId appears in the asset's assetArchive-provenance
+    history records are removed — files a user archived individually before the
+    asset archive keep their markers and stay archived. When no assetArchive
+    provenance exists (asset archived before provenance tracking, or history
+    table not configured), no files are restored; users unarchive individual
+    files via the file unarchive API. Each restored file gets an assetUnarchive
+    history record.
+
     Args:
         location: The asset location object with Key and optional Bucket (dict or AssetLocationModel)
+        bucket: The S3 bucket name
+        database_id: The database ID (for provenance lookup/records)
+        asset_id: The asset ID (for provenance lookup/records)
+        user_id: The acting user (for provenance records)
+
+    Returns:
+        Number of files restored.
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(location, dict):
@@ -392,44 +530,72 @@ def unarchive_multi_assetFiles(location, bucket):
             location_model = AssetLocationModel(**location)
         except ValidationError as e:
             logger.warning(f"Invalid asset location format: {e}")
-            return
+            return 0
     elif isinstance(location, AssetLocationModel):
         location_model = location
     else:
         logger.warning("Invalid asset location type")
-        return
+        return 0
 
     prefix = location_model.Key
     if not prefix:
-        return
-    
-    logger.info(f'Unarchiving folder with multiple files from bucket: {bucket}')
+        return 0
 
+    archive_markers = get_asset_archive_marker_versions(database_id, asset_id) if (database_id and asset_id) else {}
+    if not archive_markers:
+        logger.info(
+            f"No assetArchive provenance records for {asset_id}; not restoring any files. "
+            "Files can be unarchived individually via the file unarchive API."
+        )
+        return 0
+
+    logger.info(f'Selectively unarchiving {len(archive_markers)} file(s) archived by asset archive from bucket: {bucket}')
+
+    restored_count = 0
     try:
-        # List all versions to find delete markers
+        # List current delete markers and remove only those the asset archive created
         paginator = s3.get_paginator('list_object_versions')
         markers_to_remove = []
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for delete_marker in page.get('DeleteMarkers', []):
-                if delete_marker.get('IsLatest'):
-                    markers_to_remove.append((delete_marker['Key'], delete_marker['VersionId']))
+                if not delete_marker.get('IsLatest'):
+                    continue
+                key = delete_marker['Key']
+                relative_path = normalize_history_file_path(
+                    key[len(prefix):] if key.startswith(prefix) else key
+                )
+                if delete_marker['VersionId'] in archive_markers.get(relative_path, set()):
+                    markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
 
         def _remove_marker(marker):
-            key, version_id = marker
+            key, version_id, relative_path = marker
             try:
-                logger.info(f"Removing delete marker for {key}")
+                logger.info(f"Removing assetArchive delete marker for {key}")
                 s3.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+                if asset_file_version_history_table:
+                    try:
+                        record = build_asset_archive_history_record(
+                            database_id, asset_id, relative_path, version_id, user_id
+                        )
+                        record['changeSource'] = VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE
+                        # New SK so the assetArchive record is preserved as history
+                        record['versionId'] = f"unarchive:{version_id}"
+                        asset_file_version_history_table.put_item(Item=record)
+                    except Exception as he:
+                        logger.exception(f"Failed writing assetUnarchive history for {key}: {he}")
+                return True
             except Exception as e:
                 logger.exception(f"Error removing delete marker for {key}: {e}")
+                return False
 
         if markers_to_remove:
             max_workers = min(MAX_PARALLEL_S3_WORKERS, len(markers_to_remove))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                list(executor.map(_remove_marker, markers_to_remove))
+                restored_count = sum(1 for ok in executor.map(_remove_marker, markers_to_remove) if ok)
     except Exception as e:
         logger.exception(f"Error unarchiving files: {e}")
 
-    return
+    return restored_count
 
 def unarchive_file_preview(location, bucket):
     """Unarchive a single file by removing delete marker
@@ -990,17 +1156,19 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     logger.info(f"Archiving asset {assetId} in database {databaseId}")
     
     try:
-        # Archive asset files in S3
+        # Update asset record with archived status
+        now = datetime.utcnow().isoformat()
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+
+        # Archive asset files in S3, recording assetArchive provenance per file
+        # so unarchive can selectively restore exactly these files
         if "assetLocation" in asset:
-            archive_multi_assetFiles(asset['assetLocation'], bucket_name)
+            archive_multi_assetFiles(asset['assetLocation'], bucket_name,
+                                     databaseId, assetId, username)
 
         # Archive preview if exists
         if "previewLocation" in asset:
             archive_file_preview(asset['previewLocation'], bucket_name)
-        
-        # Update asset record with archived status
-        now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         
         # Add archive metadata
         asset['status'] = 'archived'
@@ -1079,21 +1247,27 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
 
-    # Unarchive S3 files
+    # Unarchive the asset record; file restoration is opt-in
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
-    
-    try:
-        # Unarchive asset files in S3
-        if "assetLocation" in asset:
-            unarchive_multi_assetFiles(asset['assetLocation'], bucket_name)
 
-        # Unarchive preview if exists
-        if "previewLocation" in asset:
-            unarchive_file_preview(asset['previewLocation'], bucket_name)
-        
-        # Update asset record
+    try:
         now = datetime.utcnow().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+        files_restored = 0
+
+        # Optionally restore the files this asset's archive operation archived
+        # (assetArchive provenance only — individually archived files stay
+        # archived). Default restores the asset record only.
+        if request_model.unarchiveFiles:
+            if "assetLocation" in asset:
+                files_restored = unarchive_multi_assetFiles(
+                    asset['assetLocation'], bucket_name,
+                    original_db_id, assetId, username
+                )
+
+            # Unarchive preview if exists
+            if "previewLocation" in asset:
+                unarchive_file_preview(asset['previewLocation'], bucket_name)
         
         # Remove archive metadata - INCLUDING status field
         asset.pop('status', None)  # Remove status entirely
@@ -1121,11 +1295,18 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
 
         # Send email notification
         send_subscription_email(original_db_id, assetId)
-        
+
         # Return success response
+        if request_model.unarchiveFiles:
+            message = (f"Asset {assetId} unarchived successfully; "
+                       f"{files_restored} file(s) archived by the asset archive were restored")
+        else:
+            message = (f"Asset {assetId} unarchived successfully. "
+                       "Files previously archived remain archived; unarchive files "
+                       "individually or use the restore-files option.")
         return AssetOperationResponseModel(
             success=True,
-            message=f"Asset {assetId} unarchived successfully",
+            message=message,
             assetId=assetId,
             operation="unarchive",
             timestamp=now

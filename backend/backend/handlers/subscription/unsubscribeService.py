@@ -1,11 +1,11 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 
 from botocore.exceptions import ClientError
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
@@ -22,11 +22,19 @@ dynamodb_client = boto3.client('dynamodb')
 sns_client = boto3.client('sns')
 
 try:
-    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
-    main_rest_response['body']['message'] = "Failed Loading Environment Variables"
+    subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving subscriptions table name")
+    subscription_table_name = None
+
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset table name")
+    asset_table_name = None
+
+if not (subscription_table_name and asset_table_name):
+    main_rest_response['body'] = json.dumps({"message": "Failed resolving required table names"})
 
 
 def get_asset(asset_id):

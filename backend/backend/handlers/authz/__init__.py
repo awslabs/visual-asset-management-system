@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import boto3
-import os
 import time
 import json
 from boto3.dynamodb.types import TypeDeserializer
@@ -21,6 +20,7 @@ from common.constants import (
     get_constraint_fields_for_object_type,
 )
 from locked_dict import locked_dict
+from common.resourceNames import ResourceKeys, get_table_name
 
 # Duration to refresh cache for next invocation - this can be tweaked for performance/consistency needs
 #
@@ -180,12 +180,12 @@ class CasbinEnforcerService:
         self._enforcer = None
 
         try:
-            self._user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
-            self._roles_table_name = os.environ["ROLES_TABLE_NAME"]
-            self._constraints_table_name = os.environ.get("CONSTRAINTS_TABLE_NAME") 
-        except KeyError as ex:
-            logger.exception("Failed to find environment variables")
-            raise Exception("Failed to initialize Casbin Enforcer as required environment variables are not defined")
+            self._user_roles_table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
+            self._roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
+            self._constraints_table_name = get_table_name(ResourceKeys.CONSTRAINTS_STORAGE_TABLE)
+        except Exception as ex:
+            logger.exception("Failed to resolve resource names")
+            raise Exception("Failed to initialize Casbin Enforcer as required resource names could not be resolved")
 
         self._model_text = PERMISSION_CONSTRAINT_POLICY
         # Routines below have exception handling already covered

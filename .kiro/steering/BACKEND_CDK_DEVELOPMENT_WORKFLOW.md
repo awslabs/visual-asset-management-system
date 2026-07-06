@@ -104,7 +104,7 @@ One folder per domain. The current domains:
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
 -   [ ] **Add Logging**: Use `safeLogger` for structured logging
--   [ ] **Add Environment Variables**: Load required environment variables with error handling
+-   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
 -   [ ] **Add Response Enhancement**: Include version info and bucket details where applicable
@@ -112,8 +112,9 @@ One folder per domain. The current domains:
 #### **Step 3: CDK Infrastructure**
 
 -   [ ] **Update Storage Resources**: Add new DynamoDB tables/S3 buckets in `storageBuilder-nestedStack.ts`
+-   [ ] **Register Resource Names**: Add constants to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve table/log-group names from these SSM parameters); register descriptor in `resourceNameRegistry`
 -   [ ] **Create Lambda Builder**: Add lambda function builder in `lambdaBuilder/[domain]Functions.ts`
--   [ ] **Configure Environment Variables**: Pass storage resources to lambda environment
+-   [ ] **Configure Environment Variables**: Add handler-specific env vars only (resource names resolved from SSM via `globalLambdaEnvironmentsAndPermissions`)
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
 -   [ ] **Configure VPC**: Add VPC/subnet configuration based on config flags
 -   [ ] **Add KMS Permissions**: Include KMS key permissions for encryption
@@ -386,6 +387,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -409,12 +411,13 @@ logger = safeLogger(service_name="[ServiceName]")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
+# Load resource names and environment variables
 try:
-    required_table = os.environ["REQUIRED_TABLE_NAME"]
-    required_bucket = os.environ["REQUIRED_BUCKET_NAME"]
+    # Resolve DynamoDB table names from SSM Parameter Store
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    required_bucket = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -544,12 +547,8 @@ export function build[Domain]Service(
         vpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas ? vpc : undefined,
         vpcSubnets: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas ? { subnets: subnets } : undefined,
         environment: {
-            REQUIRED_TABLE_NAME: storageResources.dynamo.requiredTable.tableName,
-            REQUIRED_BUCKET_NAME: storageResources.s3.requiredBucket.bucketName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            REQUIRED_SETTING: config.app.requiredSetting,
         },
     });
 
@@ -563,7 +562,7 @@ export function build[Domain]Service(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -965,12 +964,9 @@ from models.[domain] import [RequestModel], [ResponseModel]
 def mock_environment():
     """Mock environment variables"""
     with patch.dict('os.environ', {
-        'REQUIRED_TABLE_NAME': 'test-table',
+        'VAMS_RESOURCE_PARAM_PREFIX': '/test/resourceNames',
+        'REQUIRED_STORAGE_TABLE_NAME': 'test-table',  # Env var override for testing
         'REQUIRED_BUCKET_NAME': 'test-bucket',
-        'AUTH_TABLE_NAME': 'test-auth-table',
-        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
-        'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
-        'ROLES_TABLE_NAME': 'test-roles-table',
     }):
         yield
 
@@ -1137,12 +1133,13 @@ logger = safeLogger(service_name="[ServiceName]")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
+# Load resource names and environment variables
 try:
-    required_table_name = os.environ["REQUIRED_TABLE_NAME"]
-    required_bucket_name = os.environ["REQUIRED_BUCKET_NAME"]
+    # Resolve DynamoDB table names from SSM Parameter Store
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    required_bucket_name = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
 # Initialize resources
@@ -1581,24 +1578,18 @@ export function build[Domain]Service(
                 : undefined,
 
         environment: {
-            [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -1630,24 +1621,18 @@ export function buildCreate[Domain]Function(
                 : undefined,
 
         environment: {
-            [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -1672,11 +1657,8 @@ from models.[domain] import [RequestModel], [ResponseModel]
 def mock_environment():
     """Mock environment variables"""
     with patch.dict('os.environ', {
-        '[DOMAIN]_STORAGE_TABLE_NAME': 'test-[domain]-table',
-        'AUTH_TABLE_NAME': 'test-auth-table',
-        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
-        'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
-        'ROLES_TABLE_NAME': 'test-roles-table',
+        'VAMS_RESOURCE_PARAM_PREFIX': '/test/resourceNames',
+        '[DOMAIN]_STORAGE_TABLE_NAME': 'test-[domain]-table',  # Env var override for testing
     }):
         yield
 
@@ -2030,17 +2012,37 @@ def handle_get_request(event):
 "Missing required field: {field_name}"
 ```
 
-### **Environment Variable Loading Pattern**
+### **Resource Name and Environment Variable Loading Pattern**
 
 ```python
-# Standard environment variable loading with error handling
+# Standard resource name resolution with environment variable loading
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
+
 try:
-    required_table_name = os.environ["REQUIRED_TABLE_NAME"]
+    # Resolve DynamoDB table names from SSM Parameter Store (with env var overrides)
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    auxiliary_bucket = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+
+    # Optional resource names -- catch KeyError if not registered
+    try:
+        optional_table_name = get_table_name(ResourceKeys.OPTIONAL_TABLE)
+    except KeyError:
+        optional_table_name = None
+
+    # Handler-specific env vars (direct from os.environ)
     optional_setting = os.environ.get("OPTIONAL_SETTING", "default_value")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
+
+# Initialize resources using resolved names
+required_table = dynamodb.Table(required_table_name)
+optional_table = dynamodb.Table(optional_table_name) if optional_table_name else None
 ```
+
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `REQUIRED_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
+
+**Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
 
 ### **AWS Client Configuration Pattern**
 
@@ -2259,7 +2261,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 -   [ ] Implements Casbin authorization enforcement
 -   [ ] Uses Pydantic models for request/response validation
 -   [ ] Configures AWS clients with retry configuration
--   [ ] Loads environment variables with error handling
+-   [ ] Resolves resource names via `get_table_name(ResourceKeys.*)` in module-level `try/except`
 -   [ ] Separates business logic from request handling
 -   [ ] Includes proper logging with structured messages
 
@@ -2381,7 +2383,54 @@ logger = safeLogger(service_name="[Domain]Models")
 # handlers/[domain]/[handler].py
 """[Domain] service handler for VAMS API."""
 
-# Follow complete assetService.py template above
+import os
+import boto3
+import json
+from datetime import datetime
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.[domain] import [RequestModel], [ResponseModel]
+
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+s3 = boto3.client('s3', config=retry_config)
+logger = safeLogger(service_name="[ServiceName]")
+
+# Global variables for claims and roles
+claims_and_roles = {}
+
+# Load resource names and environment variables
+try:
+    # Resolve DynamoDB table names from SSM Parameter Store
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    required_bucket = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
+    # Handler-specific env vars (direct from os.environ)
+    presigned_url_timeout = os.environ.get("PRESIGNED_URL_TIMEOUT_SECONDS", "3600")
+except Exception as e:
+    logger.exception("Failed loading environment variables and resource names")
+    raise e
+
+# Initialize resources
+required_table = dynamodb.Table(required_table_name)
+
+# Follow complete assetService.py patterns
 ```
 
 #### **Step 3: Add Storage Resources**

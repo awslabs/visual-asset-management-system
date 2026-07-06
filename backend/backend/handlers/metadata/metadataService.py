@@ -98,17 +98,18 @@ DEFAULT_METADATA_PAGE_SIZE = 3000
 
 # Load environment variables
 try:
-    asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    database_metadata_table_name = os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    metadata_schema_table_v2_name = os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_links_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    database_metadata_table_name = get_table_name(ResourceKeys.DATABASE_METADATA_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    metadata_schema_table_v2_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

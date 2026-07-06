@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
 from common.validators import validate
 from models.common import VAMSGeneralErrorResponse
@@ -43,21 +44,34 @@ dynamodb = boto3.resource('dynamodb', config=retry_config)
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetDatabaseIndexer")
 
-# Load environment variables with error handling
 try:
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    database_metadata_storage_table_name = os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_storage_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving database storage table name")
+    database_storage_table_name = None
+
+try:
+    database_metadata_storage_table_name = get_table_name(ResourceKeys.DATABASE_METADATA_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving database metadata table name")
+    database_metadata_storage_table_name = None
+
+try:
+    s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving S3 asset buckets table name")
+    s3_asset_buckets_storage_table_name = None
+
+try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading Garnet environment variables")
     raise e
 
-# Initialize DynamoDB tables
-database_storage_table = dynamodb.Table(database_storage_table_name)
-database_metadata_table = dynamodb.Table(database_metadata_storage_table_name)
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
+database_storage_table = dynamodb.Table(database_storage_table_name) if database_storage_table_name else None
+database_metadata_table = dynamodb.Table(database_metadata_storage_table_name) if database_metadata_storage_table_name else None
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
 
 #######################
 # Data Retrieval Functions

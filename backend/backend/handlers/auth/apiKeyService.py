@@ -1,7 +1,6 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 import uuid
@@ -17,6 +16,7 @@ from common.apiRoutes import (
     API_AUTH_USER_API_KEYS,
     API_AUTH_USER_API_KEY_BY_ID,
 )
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -41,14 +41,19 @@ logger = safeLogger(service_name="ApiKeyService")
 claims_and_roles = {}
 
 try:
-    api_key_table_name = os.environ["API_KEY_STORAGE_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_STORAGE_TABLE_NAME"]
+    api_key_table_name = get_table_name(ResourceKeys.API_KEY_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving API key table name")
+    api_key_table_name = None
 
-api_key_table = dynamodb.Table(api_key_table_name)
-user_roles_table = dynamodb.Table(user_roles_table_name)
+try:
+    user_roles_table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving user roles table name")
+    user_roles_table_name = None
+
+api_key_table = dynamodb.Table(api_key_table_name) if api_key_table_name else None
+user_roles_table = dynamodb.Table(user_roles_table_name) if user_roles_table_name else None
 
 
 def _extract_api_key_id(event, path):

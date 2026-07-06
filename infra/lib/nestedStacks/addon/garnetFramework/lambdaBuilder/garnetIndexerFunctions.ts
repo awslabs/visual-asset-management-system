@@ -17,6 +17,7 @@ import {
     globalLambdaEnvironmentsAndPermissions,
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../helper/security";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -52,19 +53,6 @@ export function buildGarnetDataIndexDatabaseFunction(
                 : undefined,
 
         environment: {
-            // Database tables
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            DATABASE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.databaseMetadataStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-
-            // Authentication tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
             // Garnet configuration
             GARNET_INGESTION_QUEUE_URL:
                 config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl,
@@ -72,14 +60,10 @@ export function buildGarnetDataIndexDatabaseFunction(
         },
     });
 
-    // Grant DynamoDB permissions
+    // Grant DynamoDB permissions (auth table access comes from the security helper below)
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant permission to send messages to external Garnet ingestion queue
     const garnetQueueArn = convertSqsUrlToArn(
@@ -97,6 +81,7 @@ export function buildGarnetDataIndexDatabaseFunction(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -130,25 +115,6 @@ export function buildGarnetDataIndexAssetFunction(
                 : undefined,
 
         environment: {
-            // Asset tables
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetVersionsStorageTable.tableName,
-
-            // Authentication tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
             // Garnet configuration
             GARNET_INGESTION_QUEUE_URL:
                 config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl,
@@ -156,17 +122,13 @@ export function buildGarnetDataIndexAssetFunction(
         },
     });
 
-    // Grant DynamoDB permissions
+    // Grant DynamoDB permissions (auth table access comes from the security helper below)
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant permission to send messages to external Garnet ingestion queue
     const garnetQueueArn = convertSqsUrlToArn(
@@ -184,6 +146,7 @@ export function buildGarnetDataIndexAssetFunction(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -217,21 +180,6 @@ export function buildGarnetDataIndexFileFunction(
                 : undefined,
 
         environment: {
-            // File tables
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetFileMetadataStorageTable.tableName,
-            FILE_ATTRIBUTE_STORAGE_TABLE_NAME:
-                storageResources.dynamo.fileAttributeStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-
-            // Authentication tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
             // Garnet configuration
             GARNET_INGESTION_QUEUE_URL:
                 config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl,
@@ -239,15 +187,11 @@ export function buildGarnetDataIndexFileFunction(
         },
     });
 
-    // Grant DynamoDB permissions
+    // Grant DynamoDB permissions (auth table access comes from the security helper below)
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     // Grant permission to send messages to external Garnet ingestion queue
     const garnetQueueArn = convertSqsUrlToArn(
@@ -266,6 +210,7 @@ export function buildGarnetDataIndexFileFunction(
     // Apply security helpers
     grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 

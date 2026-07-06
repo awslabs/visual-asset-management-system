@@ -64,17 +64,33 @@ claims_and_roles = {}
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
-    asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    try:
+        asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_versions_table_name = None
+    try:
+        asset_aux_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    except Exception:
+        asset_aux_bucket_name = ""
     send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
-    asset_file_metadata_versions_table_name = os.environ.get("ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE_NAME")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
+    try:
+        asset_file_metadata_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_versions_table_name = None
+    try:
+        asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_table_name = None
+    try:
+        file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    except Exception:
+        file_attribute_table_name = None
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

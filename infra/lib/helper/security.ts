@@ -10,8 +10,9 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../config/config";
 import { Construct } from "constructs";
-import { Service } from "../helper/service-helper";
+import { Service, IAMArn } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
+import { Stack } from "aws-cdk-lib";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync } from "fs";
@@ -125,6 +126,14 @@ function mergeCSPSources(existingSources: string[], additionalSources?: string[]
     return merged;
 }
 
+/**
+ * Module-level set to guard against duplicate SSM lookup stack suppressions.
+ * Used by globalLambdaEnvironmentsAndPermissions() to apply the SSM parameter
+ * wildcard suppression only once per stack, since many Lambda functions in the
+ * same stack share the SSM policy grant.
+ */
+const ssmLookupSuppressedStacks = new Set<string>();
+
 export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
     config: Config.Config
@@ -163,6 +172,41 @@ export function globalLambdaEnvironmentsAndPermissions(
     } else {
         lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");
     }
+
+    // Resource-name resolution: prefix for SSM Parameter Store lookups
+    lambdaFunction.addEnvironment("VAMS_RESOURCE_PARAM_PREFIX", config.resourceNamesSSMParamPrefix);
+    const resourceParamPathNoSlash = config.resourceNamesSSMParamPrefix.replace(/^\//, "");
+    lambdaFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+            resources: [
+                IAMArn(resourceParamPathNoSlash).ssm,
+                IAMArn(`${resourceParamPathNoSlash}/*`).ssm,
+            ],
+        })
+    );
+
+    // Apply stack-level CDK Nag suppression for the SSM parameter grant. Stack suppressions
+    // are evaluated at check time against every finding in the stack, so they cover synthesis-
+    // time resources (OverflowPolicy1, OverflowPolicy2, etc.) that do not exist when per-construct
+    // suppressions are applied. Only add once per stack (many Lambdas in the same stack share
+    // the SSM policy grant).
+    const lambdaStack = Stack.of(lambdaFunction);
+    if (!ssmLookupSuppressedStacks.has(lambdaStack.node.addr)) {
+        ssmLookupSuppressedStacks.add(lambdaStack.node.addr);
+        NagSuppressions.addStackSuppressions(lambdaStack, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Wildcard is scoped to the deployment-specific SSM resource-name parameter prefix (/{name}-{baseStackName}/resourceNames/*) that Lambda functions read at cold start to resolve DynamoDB table, S3 bucket, and CloudWatch log group names.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*\\/resourceNames(\\/\\*)?$/g",
+                    },
+                ],
+            },
+        ]);
+    }
 }
 
 /**
@@ -177,62 +221,6 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     lambdaFunction: lambda.Function,
     storageResources: storageResources
 ): void {
-    // Add authentication and authorization environment variables
-    lambdaFunction.addEnvironment(
-        "AUTH_TABLE_NAME",
-        storageResources.dynamo.authEntitiesStorageTable.tableName
-    );
-    lambdaFunction.addEnvironment(
-        "CONSTRAINTS_TABLE_NAME",
-        storageResources.dynamo.constraintsStorageTable.tableName
-    );
-    lambdaFunction.addEnvironment(
-        "USER_ROLES_TABLE_NAME",
-        storageResources.dynamo.userRolesStorageTable.tableName
-    );
-    lambdaFunction.addEnvironment(
-        "ROLES_TABLE_NAME",
-        storageResources.dynamo.rolesStorageTable.tableName
-    );
-
-    // Add CloudWatch audit log group environment variables
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHENTICATION",
-        storageResources.cloudWatchAuditLogGroups.authentication.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHORIZATION",
-        storageResources.cloudWatchAuditLogGroups.authorization.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_FILEUPLOAD",
-        storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_FILEDOWNLOAD",
-        storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_FILEDOWNLOAD_STREAMED",
-        storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHOTHER",
-        storageResources.cloudWatchAuditLogGroups.authOther.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_AUTHCHANGES",
-        storageResources.cloudWatchAuditLogGroups.authChanges.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_ACTIONS",
-        storageResources.cloudWatchAuditLogGroups.actions.logGroupName
-    );
-    lambdaFunction.addEnvironment(
-        "AUDIT_LOG_ERRORS",
-        storageResources.cloudWatchAuditLogGroups.errors.logGroupName
-    );
-
     // Grant read permissions to authentication and authorization tables
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);

@@ -520,6 +520,10 @@ The recommended approach for bulk-importing existing assets is to use **init fil
 You do not need to copy or move your 3D models into a separate VAMS bucket. By configuring your existing bucket as an external bucket, VAMS reads files directly from their original location. No data duplication occurs.
 :::
 
+:::note[Archived assets]
+When a new file is placed directly in S3 under an archived asset's prefix, the bucket sync restores the asset record to active state (a record-only unarchive attributed to `SYSTEM_USER`). The asset's previously archived files keep their S3 delete markers — the files present under the prefix define the asset's contents, and older archived files can be restored individually through the file unarchive API.
+:::
+
 ### Prerequisites
 
 -   Your existing S3 bucket must be configured as an external bucket in VAMS (see [Step-by-step setup](#step-by-step-setup) above) and the CDK stack must be deployed so that Amazon S3 event notifications are active.

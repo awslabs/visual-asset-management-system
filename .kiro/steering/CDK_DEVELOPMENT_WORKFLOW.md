@@ -971,20 +971,7 @@ export function build[FunctionName]Function(
 
         // Environment Variables Pattern
         environment: {
-            // DynamoDB Table Names
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-
-            // S3 Bucket Names
-            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-
-            // Authentication Tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
-            // Configuration Values
+            // Handler-specific env vars only (resource names resolved from SSM)
             PRESIGNED_URL_TIMEOUT_SECONDS: config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
@@ -992,10 +979,7 @@ export function build[FunctionName]Function(
     // Permissions Pattern - DynamoDB
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // Permissions Pattern - S3
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -1005,9 +989,11 @@ export function build[FunctionName]Function(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Global Permissions and Environment
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
 
     // CDK Nag Suppressions
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -1157,6 +1143,15 @@ export class Wafv2BasicConstruct extends Construct {
 ```
 
 ### **Security Helper Integration**
+
+#### **What the Security Helpers Do**
+
+-   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
+-   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all 9 audit log groups. **No longer injects table or log group environment variables** (non-pipeline handlers resolve these from SSM).
+-   **`globalLambdaEnvironmentsAndPermissions`**: Adds `VAMS_RESOURCE_PARAM_PREFIX` env var (SSM parameter prefix for resource name resolution) and grants ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath on the deployment's resource-name parameter prefix. Also injects COGNITO_AUTH_ENABLED flag and PRESIGNED_URL_TIMEOUT_SECONDS.
+-   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
+-   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
 
 #### **KMS Key Permissions Pattern**
 
@@ -1637,29 +1632,14 @@ export function build[FunctionName]Function(
             ? { subnets: subnets } : undefined,
 
         environment: {
-            // DynamoDB Tables
-            [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
-
-            // Authentication Tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
-            // S3 Buckets
-            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-
-            // Configuration Values
+            // Handler-specific env vars only (resource names resolved from SSM)
             CUSTOM_CONFIG_VALUE: config.app.[feature].[setting].toString(),
         },
     });
 
     // DynamoDB Permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // S3 Permissions
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -1669,9 +1649,11 @@ export function build[FunctionName]Function(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Global Environment and Permissions
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
 
     // CDK Nag Suppressions
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -2051,7 +2033,7 @@ When making CDK infrastructure changes, update the corresponding documentation a
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
--   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
+-   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
 -   **New or changed CloudWatch log group** → Update the Amazon CloudWatch section in `architecture/aws-resources.md` and the log group cleanup in `deployment/uninstall.md`
 -   **New nested stack** → Update `architecture/details.md`

@@ -1,12 +1,12 @@
 """Role service handler for VAMS API."""
 
-import os
 import boto3
 from datetime import datetime
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -14,10 +14,10 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_changes
 from common.dynamodb import validate_pagination_info
 from models.common import (
-    APIGatewayProxyResponseV2, 
-    internal_error, 
-    success, 
-    validation_error, 
+    APIGatewayProxyResponseV2,
+    internal_error,
+    success,
+    validation_error,
     authorization_error,
     VAMSGeneralErrorResponse
 )
@@ -42,17 +42,20 @@ logger = safeLogger(service_name="RoleService")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
 try:
-    roles_table_name = os.environ["ROLES_TABLE_NAME"]
-    user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
+    roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving roles table name")
+    roles_table_name = None
 
-# Initialize DynamoDB tables
-roles_table = dynamodb.Table(roles_table_name)
-user_roles_table = dynamodb.Table(user_roles_table_name)
+try:
+    user_roles_table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving user roles table name")
+    user_roles_table_name = None
+
+roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
+user_roles_table = dynamodb.Table(user_roles_table_name) if user_roles_table_name else None
 
 #######################
 # Business Logic Functions

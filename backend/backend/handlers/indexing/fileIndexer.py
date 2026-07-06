@@ -19,6 +19,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -57,15 +58,15 @@ claims_and_roles = {}
 
 # Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Get SSM parameter values

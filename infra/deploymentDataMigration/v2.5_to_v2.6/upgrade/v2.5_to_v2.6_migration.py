@@ -24,6 +24,12 @@ both indexes from the source DynamoDB and S3 records. ``--clear-indexes`` is
 cleared. Pass ``--clear-indexes`` only if you are re-running the migration
 against an already-populated v3 index and want a clean slate.
 
+Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack
+output ``ResourceNamesSSMParamPrefixOutput``) and the reindexer function name
+is resolved automatically from SSM Parameter Store. The explicit
+``reindexer_function_name`` field remains supported as an optional override
+and as the required path for deployments without the prefix filled in.
+
 Usage:
     # Dry run (recommended first step)
     python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --dry-run
@@ -43,7 +49,8 @@ Usage:
 Requirements:
     - Python 3.6+
     - boto3
-    - AWS credentials with lambda:InvokeFunction permission
+    - AWS credentials with lambda:InvokeFunction permission (and ssm:GetParametersByPath
+      when using the SSM prefix lookup)
 """
 
 import argparse
@@ -56,6 +63,10 @@ from typing import Dict, Optional
 
 import boto3
 from botocore.exceptions import ClientError, ReadTimeoutError
+
+# Shared migration tooling (infra/deploymentDataMigration/tools)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
+from ssm_resource_lookup import ResourceParamKeys, SsmResourceLookup  # noqa: E402
 
 # Configure logging
 logging.basicConfig(
@@ -301,11 +312,6 @@ Notes:
 
     config = load_config_from_file(args.config)
 
-    function_name = config.get('reindexer_function_name')
-    if not function_name:
-        logger.error("Configuration is missing required field 'reindexer_function_name'.")
-        sys.exit(1)
-
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
     # CLI flag wins; otherwise fall back to config (default false)
@@ -313,6 +319,31 @@ Notes:
     limit = args.limit if args.limit is not None else config.get('limit')
     profile = args.profile or config.get('aws_profile')
     region = args.region or config.get('aws_region')
+
+    # Resolve the reindexer function name: explicit config value wins; otherwise look it
+    # up from the deployment's SSM resource-name parameters via the base prefix (core
+    # stack output 'ResourceNamesSSMParamPrefixOutput').
+    function_name = config.get('reindexer_function_name')
+    if function_name and function_name.startswith('<'):
+        function_name = None  # unfilled template placeholder
+    base_param_prefix = config.get('resource_names_ssm_param_prefix')
+    if base_param_prefix and base_param_prefix.startswith('<'):
+        base_param_prefix = None
+    if not function_name:
+        if not base_param_prefix:
+            logger.error(
+                "Configuration must set either 'resource_names_ssm_param_prefix' (from the "
+                "core stack output 'ResourceNamesSSMParamPrefixOutput') or an explicit "
+                "'reindexer_function_name'."
+            )
+            sys.exit(1)
+        try:
+            lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+            function_name = lookup.resolve(ResourceParamKeys.CR_OS_REINDEXER_FUNCTION)
+            logger.info(f"Resolved reindexer function from SSM: {function_name}")
+        except Exception as e:
+            logger.error(f"Failed resolving reindexer function name from SSM: {e}")
+            sys.exit(1)
 
     invocation_type = 'Event' if args.async_invoke else 'RequestResponse'
 

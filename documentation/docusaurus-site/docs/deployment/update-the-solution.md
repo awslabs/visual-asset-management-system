@@ -315,13 +315,15 @@ The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteIte
     cp v2.5_to_v2.6_migration_config.json my_migration_config.json
     ```
 
-4.  Set `reindexer_function_name` in the config to the value of the CloudFormation output `ReindexerFunctionNameOutput` from your stack:
+4.  Set `resource_names_ssm_param_prefix` in the config to the value of the CloudFormation output `ResourceNamesSSMParamPrefixOutput` from your stack, and set `aws_region` (and `aws_profile` if needed):
 
     ```bash
     aws cloudformation describe-stacks --stack-name your-vams-stack \
-      --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \
+      --query 'Stacks[0].Outputs[?OutputKey==`ResourceNamesSSMParamPrefixOutput`].OutputValue' \
       --output text
     ```
+
+    The reindexer Lambda function name is then resolved automatically from the deployment's SSM Parameter Store resource-name parameters (requires `ssm:GetParametersByPath` on the prefix). To skip or override the lookup, set `reindexer_function_name` explicitly to the value of the CloudFormation output `ReindexerFunctionNameOutput` instead.
 
 5.  Run the migration:
 

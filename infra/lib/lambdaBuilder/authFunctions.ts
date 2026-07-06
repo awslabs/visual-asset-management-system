@@ -174,7 +174,6 @@ export function buildAuthLoginProfile(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
             EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled
                 ? config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl
                 : "", //Optional environment field they may get used for customConfigCommon method
@@ -320,10 +319,7 @@ export function buildApiKeyServiceFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            API_KEY_STORAGE_TABLE_NAME: storageResources.dynamo.apiKeyStorageTable.tableName,
-            USER_ROLES_STORAGE_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.apiKeyStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
@@ -384,10 +380,7 @@ export function buildApiGatewayAuthorizerRestFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
     }
 
-    // Add API Key authentication environment variables
-    environment.API_KEY_STORAGE_TABLE_NAME = storageResources.dynamo.apiKeyStorageTable.tableName;
-    environment.USER_ROLES_STORAGE_TABLE_NAME =
-        storageResources.dynamo.userRolesStorageTable.tableName;
+    // API Key authentication table names resolved via SSM (no env vars needed)
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),

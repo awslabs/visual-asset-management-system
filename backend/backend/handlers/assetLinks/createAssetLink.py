@@ -32,10 +32,11 @@ logger = safeLogger(service_name="CreateAssetLink")
 
 # Load environment variables
 try:
-    asset_links_table_v2_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_links_table_v2_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

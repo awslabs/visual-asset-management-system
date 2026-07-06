@@ -38,13 +38,13 @@ the metadata call, which is the first-touch check on every render.
 """
 
 import json
-import os
 from typing import Any, Dict, Optional, Tuple
 
 import boto3
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.config import Config as BotoConfig
 
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
 from models.common import commonHeaders
 
@@ -100,19 +100,21 @@ logger = safeLogger(service_name="PhysnaViewer")
 _retry_config = BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"})
 _dynamodb = boto3.resource("dynamodb", config=_retry_config)
 
-# Module-level env vars. Mirror physnaCommon's pattern — required in production,
-# tolerated at import time for unit tests.
 try:
-    _ASSET_STORAGE_TABLE_NAME = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    _DATABASE_STORAGE_TABLE_NAME = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-except KeyError as e:
+    _ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
     logger.warning(
-        f"PhysnaViewer env vars not set at import time (OK for tests): {e}"
+        f"Failed resolving asset storage table name (OK for tests): {e}"
     )
-    _ASSET_STORAGE_TABLE_NAME = os.environ.get("ASSET_STORAGE_TABLE_NAME", "")
-    _DATABASE_STORAGE_TABLE_NAME = os.environ.get(
-        "DATABASE_STORAGE_TABLE_NAME", ""
+    _ASSET_STORAGE_TABLE_NAME = None
+
+try:
+    _DATABASE_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.warning(
+        f"Failed resolving database storage table name (OK for tests): {e}"
     )
+    _DATABASE_STORAGE_TABLE_NAME = None
 
 asset_storage_table = (
     _dynamodb.Table(_ASSET_STORAGE_TABLE_NAME)

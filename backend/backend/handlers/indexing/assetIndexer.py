@@ -20,6 +20,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -45,16 +46,16 @@ claims_and_roles = {}
 
 # Load environment variables with error handling
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
     opensearch_asset_index_ssm_param = os.environ["OPENSEARCH_ASSET_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Get SSM parameter values

@@ -751,10 +751,17 @@ class ArchiveAssetRequestModel(BaseModel, extra='ignore'):
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for archiving
 
 class UnarchiveAssetRequestModel(BaseModel, extra='ignore'):
-    """Request model for unarchiving an asset (restore from soft delete)"""
+    """Request model for unarchiving an asset (restore from soft delete).
+
+    By default only the asset record is restored; files remain archived. Set
+    unarchiveFiles=true to also restore the files the asset archive operation
+    archived (assetArchive provenance); files archived individually beforehand
+    always stay archived.
+    """
     confirmUnarchive: bool = Field(default=False)
     reason: Optional[str] = Field(None, max_length=256)  # Optional reason for unarchiving
-    
+    unarchiveFiles: bool = Field(default=False)
+
     @validator('confirmUnarchive')
     def validate_confirmation(cls, v):
         """Ensure confirmation is provided for unarchiving"""

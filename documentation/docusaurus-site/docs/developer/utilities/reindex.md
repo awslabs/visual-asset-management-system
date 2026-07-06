@@ -79,17 +79,17 @@ Direct mode (`--mode direct`) imports the backend reindexer handler and runs it 
 **Additional prerequisites for direct mode:**
 
 -   The VAMS backend source available locally — the `backend/backend` directory containing the `handlers` and `common` packages. The script defaults `--backend-path` to this directory resolved relative to the script, so it is only needed to override a non-standard checkout layout.
--   The backend reindexer handler's Python libraries installed locally: `boto3`, `botocore`, `urllib3`, and `opensearch-py` (the last only when using `--clear-indexes`):
+-   The backend reindexer handler's Python libraries installed locally: `boto3`, `botocore`, `urllib3`, `aws-lambda-powertools`, and `opensearch-py` (the last only when using `--clear-indexes`):
 
     ```bash
-    pip install boto3 botocore urllib3 opensearch-py
+    pip install boto3 botocore urllib3 aws-lambda-powertools opensearch-py
     ```
 
     These libraries are only needed for direct mode. The script imports the backend handler lazily — only when `--mode direct` runs — and `opensearch-py` only when `--clear-indexes` is also used. A lambda-mode run loads none of them and requires only `boto3`.
 
 -   AWS credentials with the same permissions the reindexer Lambda role has: read on the asset, S3-asset-bucket, and asset-file-metadata Amazon DynamoDB tables; write on the asset-file-metadata table; `ssm:GetParameter` on the index-name and endpoint parameters; and Amazon OpenSearch access (only for `--clear-indexes`).
 
-**Direct-mode inputs** (the table-name and SSM-parameter values mirror the reindexer Lambda's environment variables; find them in the CDK stack outputs / AWS Systems Manager or on the Lambda's environment configuration). All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
+**Direct-mode inputs** (the utility injects the table-name values as environment variables before importing the handler; the backend's resource-name resolver honors these environment-variable overrides ahead of its AWS Systems Manager Parameter Store lookup, so direct mode works without the deployment's resource-name parameters). Find the table-name values under the deployment's `/<name>-<baseStackName>/resourceNames/dynamoTables/` SSM parameters or in the Amazon DynamoDB console. All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
 
 | Argument                                   | Lambda environment variable              | Description                                                                                                     |
 | :----------------------------------------- | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------------- |

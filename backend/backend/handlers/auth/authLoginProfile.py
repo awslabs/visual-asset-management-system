@@ -1,7 +1,6 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import json
 import boto3
 from botocore.config import Config
@@ -9,6 +8,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from customConfigCommon.customAuthLoginProfile import customAuthProfileLoginWriteOverride
 from handlers.auth import request_to_claims
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_other
@@ -26,12 +26,12 @@ logger = safeLogger(service_name="AuthLoginProfile")
 claims_and_roles = {}
 
 try:
-    user_table_name = os.environ["USER_STORAGE_TABLE_NAME"]
+    user_table_name = get_table_name(ResourceKeys.USER_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving user table name")
+    user_table_name = None
 
-user_table = dynamodb.Table(user_table_name)
+user_table = dynamodb.Table(user_table_name) if user_table_name else None
 
 
 def create_update_user(userId, email, lambdaRequestEvent):

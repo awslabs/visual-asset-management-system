@@ -9,6 +9,7 @@ from boto3.dynamodb.conditions import Attr
 import json
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
+from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -33,18 +34,17 @@ try:
 except Exception as e:
     logger.exception("Failed Loading Error Functions")
 
-bucket_name_assetAuxiliary = None
-
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
-    workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-    bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_Database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    pipeline_Database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    workflow_execution_database = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE)
+    bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
-except:
+except Exception as e:
     logger.exception("Failed loading environment variables")
+    raise e
 
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 

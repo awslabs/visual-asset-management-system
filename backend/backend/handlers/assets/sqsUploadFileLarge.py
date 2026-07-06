@@ -54,10 +54,11 @@ allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

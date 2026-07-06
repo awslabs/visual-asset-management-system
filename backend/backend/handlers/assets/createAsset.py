@@ -38,14 +38,15 @@ logger = safeLogger(service_name="CreateAsset")
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    tag_type_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
-    tag_table_name = os.environ["TAG_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
+    from common.resourceNames import ResourceKeys, get_table_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    db_database = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    tag_type_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
+    tag_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

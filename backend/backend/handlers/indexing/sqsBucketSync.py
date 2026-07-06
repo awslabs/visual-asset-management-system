@@ -11,6 +11,7 @@ import hashlib
 import urllib.parse
 from datetime import datetime
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.assets.createAsset import create_asset
 from handlers.assets.assetCount import update_asset_count
 from models.assetsV3 import CreateAssetRequestModel
@@ -51,17 +52,17 @@ logger = safeLogger(service_name="sqsBucketSync")
 try:
     asset_bucket_name = os.environ.get('ASSET_BUCKET_NAME')
     asset_bucket_prefix = os.environ.get('ASSET_BUCKET_PREFIX')
-    s3_asset_buckets_table = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME')
-    asset_table_name = os.environ.get('ASSET_STORAGE_TABLE_NAME')
-    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    database_id = os.environ.get('DEFAULT_DATABASE_ID')  
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    database_id = os.environ.get('DEFAULT_DATABASE_ID')
     file_indexer_sns_topic_arn = os.environ.get("FILE_INDEXER_SNS_TOPIC_ARN", "")
     workflow_auto_execute_sqs_url = os.environ.get("WORKFLOW_AUTO_EXECUTE_SQS_URL", "")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 if not database_id:

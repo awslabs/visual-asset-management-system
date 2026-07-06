@@ -10,6 +10,7 @@ import string
 from boto3.dynamodb.conditions import Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -34,24 +35,25 @@ lambda_client = boto3.client('lambda')
 
 # Load environment variables
 try:
-    db_table_name = os.environ.get("DATABASE_STORAGE_TABLE_NAME")
-    pipeline_table_name = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
-    workflow_table_name = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
-    enable_pipeline_function_name = os.environ.get("ENABLE_PIPELINE_FUNCTION_NAME")
-    enable_pipeline_function_arn = os.environ.get("ENABLE_PIPELINE_FUNCTION_ARN")
-    lambda_role_to_attach = os.environ.get("ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE")
-    lambda_pipeline_sample_function_bucket = os.environ.get("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET")
-    lambda_pipeline_sample_function_key = os.environ.get("LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY")
-    subnet_ids_string = os.environ.get("SUBNET_IDS", "")
-    security_group_ids_string = os.environ.get("SECURITYGROUP_IDS", "")
-    lambda_python_version = os.environ.get("LAMBDA_PYTHON_VERSION")
-
-    if not all([pipeline_table_name, db_table_name]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading required environment variables")
     raise e
+
+enable_pipeline_function_name = os.environ.get("ENABLE_PIPELINE_FUNCTION_NAME")
+enable_pipeline_function_arn = os.environ.get("ENABLE_PIPELINE_FUNCTION_ARN")
+lambda_role_to_attach = os.environ.get("ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE")
+lambda_pipeline_sample_function_key = os.environ.get("LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY")
+subnet_ids_string = os.environ.get("SUBNET_IDS", "")
+security_group_ids_string = os.environ.get("SECURITYGROUP_IDS", "")
+lambda_python_version = os.environ.get("LAMBDA_PYTHON_VERSION")
+
+try:
+    lambda_pipeline_sample_function_bucket = get_bucket_name(ResourceKeys.ARTEFACTS_BUCKET)
+except:
+    lambda_pipeline_sample_function_bucket = None
 
 # Parse subnet and security group IDs
 subnet_ids = subnet_ids_string.split(',') if subnet_ids_string else []

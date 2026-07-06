@@ -118,7 +118,7 @@ aws cloudformation delete-stack \
     --retain-resources <RESOURCE_LOGICAL_ID_1> <RESOURCE_LOGICAL_ID_2>
 ```
 
-Then manually delete the retained resources using the steps in Step 2 through Step 8.
+Then manually delete the retained resources using the steps in Step 2 through Step 9.
 
 ## Step 2: Delete S3 buckets
 
@@ -264,7 +264,28 @@ done
 VAMS log group names are deterministic (a hash of the stack name plus account ID). If you intend to redeploy VAMS with the same configuration name into the same account, you **must** delete any orphaned `/aws/vendedlogs/...` groups first. A pre-existing log group with the same name causes the deployment's log group creation to fail. This most commonly affects the conditional `VAMSCloudTrailLogs` (when `addStackCloudTrailLogs` is enabled) and `VAMSCloudWatchVPCLogs` (when `useGlobalVpc` is enabled) groups.
 :::
 
-## Step 5: Schedule AWS KMS key deletion
+## Step 5: Delete AWS Systems Manager parameters
+
+VAMS creates explicitly named SSM parameters under the deployment prefix `/<name>-<baseStackName>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
+
+```bash
+# List remaining VAMS parameters for the deployment
+aws ssm get-parameters-by-path \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --recursive \
+    --query 'Parameters[].Name' --output text
+
+# Delete them (deleteParameters accepts up to 10 names per call)
+for P in $(aws ssm get-parameters-by-path \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --recursive \
+    --query 'Parameters[].Name' --output text); do
+    echo "Deleting parameter ${P}..."
+    aws ssm delete-parameter --name "${P}"
+done
+```
+
+## Step 6: Schedule AWS KMS key deletion
 
 If VAMS was deployed with KMS CMK encryption (`app.useKmsCmkEncryption.enabled: true`) and the key was created by VAMS (not an imported external key), schedule the key for deletion.
 
@@ -287,7 +308,7 @@ AWS KMS enforces a minimum 7-day and maximum 30-day waiting period before a key 
 If you provided an external KMS key via `app.useKmsCmkEncryption.optionalExternalCmkArn`, do **not** delete that key. It may be in use by other applications. Only remove the VAMS-specific key policy statements.
 :::
 
-## Step 6: Delete the Amazon Cognito user pool
+## Step 7: Delete the Amazon Cognito user pool
 
 If VAMS was deployed with Amazon Cognito authentication, the user pool may be retained after stack deletion.
 
@@ -306,7 +327,7 @@ aws cognito-idp delete-user-pool \
     --user-pool-id <USER_POOL_ID>
 ```
 
-## Step 7: Delete Amazon OpenSearch Service resources
+## Step 8: Delete Amazon OpenSearch Service resources
 
 If Amazon OpenSearch Service was enabled, delete the collection (Serverless) or domain (Provisioned).
 
@@ -355,7 +376,7 @@ aws opensearch delete-domain \
     --domain-name <DOMAIN_NAME>
 ```
 
-## Step 8: Clean up VPC resources
+## Step 9: Clean up VPC resources
 
 If VAMS was deployed with a VPC (`app.useGlobalVpc.enabled: true`) and the VPC was created by VAMS (not imported), verify VPC endpoints and the VPC itself are deleted.
 

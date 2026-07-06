@@ -45,9 +45,10 @@ Usage (direct mode — runs the backend handler locally, no 15-minute limit):
 Requirements:
     - Python 3.6+
     - lambda mode:  boto3; AWS credentials with lambda:InvokeFunction permission
-    - direct mode:  boto3, botocore, urllib3 (and opensearch-py only when using --clear-indexes);
-                    AWS credentials with the same DynamoDB / SSM / OpenSearch permissions the
-                    reindexer Lambda role has; the VAMS backend source available locally.
+    - direct mode:  boto3, botocore, urllib3, aws-lambda-powertools (and opensearch-py only when
+                    using --clear-indexes); AWS credentials with the same DynamoDB / SSM /
+                    OpenSearch permissions the reindexer Lambda role has; the VAMS backend source
+                    available locally.
 """
 
 import argparse

@@ -287,10 +287,10 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveAsset`
 
-Soft-deletes an asset by archiving it. Archived assets can be restored using the [Unarchive Asset](#unarchive-asset) endpoint. The asset's files in S3 are archived using delete markers on the versioned bucket.
+Soft-deletes an asset by archiving it. Archived assets can be restored using the [Unarchive Asset](#unarchive-asset) endpoint. The asset's files in S3 are archived using delete markers on the versioned bucket, and each archived file is recorded with `assetArchive` provenance in the file version history so a later unarchive can selectively restore them.
 
 :::info[Reversible Operation]
-Archiving is a soft-delete. The asset data is preserved and can be restored. For permanent deletion, use the [Delete Asset](#delete-asset) endpoint.
+Archiving is a soft-delete. The asset data is preserved and can be restored. Unarchiving restores the asset record only by default; restoring the archived files is a separate opt-in (`unarchiveFiles`). For permanent deletion, use the [Delete Asset](#delete-asset) endpoint.
 :::
 
 **Request Parameters:**
@@ -322,14 +322,17 @@ Archiving is a soft-delete. The asset data is preserved and can be restored. For
 
 `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset`
 
-Restores a previously archived asset, making it active again.
+Restores a previously archived asset record, making it active again. The asset's files remain archived by default. Setting `unarchiveFiles` to `true` also restores the files that the asset archive operation archived (matched by `assetArchive` provenance in the file version history); files archived individually before the asset archive always remain archived and can be restored with the [Unarchive File](files.md#unarchive-file) endpoint. Assets archived before provenance tracking have no restorable file set, so no files are restored for them.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description          |
-| ------------ | -------- | ------ | -------- | -------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier. |
-| `assetId`    | path     | string | Yes      | Asset identifier.    |
+| Parameter          | Location | Type    | Required | Description                                                           |
+| ------------------ | -------- | ------- | -------- | --------------------------------------------------------------------- |
+| `databaseId`       | path     | string  | Yes      | Database identifier.                                                  |
+| `assetId`          | path     | string  | Yes      | Asset identifier.                                                     |
+| `confirmUnarchive` | body     | boolean | Yes      | Must be `true`.                                                       |
+| `reason`           | body     | string  | No       | Reason for unarchiving.                                               |
+| `unarchiveFiles`   | body     | boolean | No       | Also restore files archived by the asset archive. Default is `false`. |
 
 **Response:**
 

@@ -236,26 +236,41 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
 }
 ```
 
-### **Pattern 4: DynamoDB Table Names Are Environment Variables**
+### **Pattern 4: Resource Names Resolve via SSM Parameter Store**
 
-DynamoDB table names are **never** hardcoded. They are injected by CDK lambda builders as environment variables into every Lambda function.
+DynamoDB table names, non-asset S3 bucket names, and audit log group names are **never** hardcoded. Non-pipeline backend Lambda functions resolve these names from SSM Parameter Store at runtime, with environment variable overrides for development and testing.
 
 ```python
-# ✅ CORRECT - Read table name from environment
-import os
-ASSET_STORAGE_TABLE_NAME = os.environ["ASSET_STORAGE_TABLE_NAME"]
+# ✅ CORRECT - Resolve table name at module level
+from backend.common.resourceNames import get_table_name, ResourceKeys
 
-# ❌ INCORRECT - Never hardcode table names
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed loading resource names")
+    raise e
+
+# ❌ INCORRECT - Never hardcode resource names
 ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 ```
 
 ```typescript
-// ✅ CORRECT - CDK lambda builder injects table names
+// ✅ CORRECT - CDK publishes resource names to SSM and injects prefix
+// ResourceNamesBuilder nested stack publishes 39 SSM parameters
+import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+new ssm.StringParameter(this, "AssetStorageTableParam", {
+    parameterName: `${prefix}/${RESOURCE_PARAM_KEYS.dynamoTables.assetStorage}`,
+    stringValue: storageResources.dynamo.assetStorageTable.tableName,
+});
+
+// Lambda receives prefix + SSM grant (via globalLambdaEnvironmentsAndPermissions)
 environment: {
-    ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-    DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+    VAMS_RESOURCE_PARAM_PREFIX: config.resourceNamesSSMParamPrefix,
 }
 ```
+
+**Resolution order:** Environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → one paginated GetParametersByPath fetch of all resource names. Constants are defined in `infra/common/resourceParamKeys.ts` (TypeScript) and mirrored in `backend/backend/common/resourceNames.py` (Python `ResourceKeys` class). Pipeline Lambda functions continue to use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 
@@ -573,20 +588,26 @@ For user-facing documentation:
 
 ### **Environment Variables (Backend)**
 
-All Lambda handlers receive these common environment variables from CDK lambda builders:
+Non-pipeline backend Lambda handlers receive one resource-resolution environment variable from CDK lambda builders:
 
 ```
-ASSET_STORAGE_TABLE_NAME          # DynamoDB: asset storage
-DATABASE_STORAGE_TABLE_NAME       # DynamoDB: database storage
-AUTH_TABLE_NAME                   # DynamoDB: auth entities
-CONSTRAINTS_TABLE_NAME            # DynamoDB: permission constraints
-USER_ROLES_TABLE_NAME             # DynamoDB: user-role mappings
-ROLES_TABLE_NAME                  # DynamoDB: role definitions
-S3_ASSET_AUXILIARY_BUCKET          # S3: auxiliary/staging bucket
+VAMS_RESOURCE_PARAM_PREFIX        # SSM parameter prefix for resource names
+                                  # (e.g., "/{config.name}-{baseStackName}/resourceNames")
+```
+
+Handlers resolve DynamoDB table names, the auxiliary and artefacts bucket names, and audit log group names from SSM Parameter Store using `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, and `get_log_group_name(ResourceKeys.*)` from `backend.common.resourceNames`. A 60-minute in-module cache minimizes SSM API calls. Environment variable overrides (the legacy table-name env vars) provide a break-glass path for testing and local utilities.
+
+**Pipeline Lambda functions** (in `backendPipelines/`) continue to receive legacy table-name environment variables and are excluded from SSM resolution.
+
+All handlers (including pipelines) receive these additional environment variables:
+
+```
+COGNITO_AUTH_ENABLED              # Enable/disable Cognito auth
+AWS_REGION                        # AWS region (set by Lambda runtime)
 PRESIGNED_URL_TIMEOUT_SECONDS     # S3 presigned URL TTL
 ```
 
-Domain-specific handlers receive additional env vars for their resources.
+Domain-specific handlers receive additional env vars for their resources (e.g., `SEND_EMAIL_FUNCTION_NAME` for notification handlers).
 
 ### **DynamoDB Access Pattern**
 
@@ -631,9 +652,14 @@ VAMS uses single-table design with composite keys. Common patterns:
 
 1. Create table in `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`
 2. Export via `storageResources` interface
-3. Pass table name as env var in lambda builder
-4. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builder
-5. Read table name from `os.environ` in backend handler
+3. Add constant to `ResourceKeys` class in `backend/backend/common/resourceNames.py`
+4. Add matching entry to `RESOURCE_PARAM_KEYS.dynamoTables` in `infra/common/resourceParamKeys.ts`
+5. Add matching constant to `ResourceParamKeys` in `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (migration scripts resolve names from these SSM parameters)
+6. Register descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`
+7. Grant permissions (`grantReadData`, `grantReadWriteData`) in lambda builder
+8. Resolve table name using `get_table_name(ResourceKeys.*)` at module level in backend handler
+
+The same three-way constants update applies to new audit CloudWatch log groups. Deprecated tables retained for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 
 ### **Adding a New Viewer Plugin**
 
@@ -731,7 +757,7 @@ When implementing any VAMS change, comments and documentation must be **commensu
 2. **Importing Pydantic v2 APIs** (`model_validator`, `ConfigDict`) -- use v1
 3. **Skipping Tier 2 auth checks** in backend handlers -- both tiers required
 4. **Using BrowserRouter** in frontend -- must use HashRouter
-5. **Hardcoding DynamoDB table names** -- always use env vars
+5. **Hardcoding DynamoDB table names** -- always resolve via `common.resourceNames`
 6. **Creating Lambda without CDK Nag suppression review** -- all resources must pass checks
 7. **Adding API routes without corresponding handler** -- causes 500 errors
 8. **Deploying features without feature switches** -- breaks conditional deployment

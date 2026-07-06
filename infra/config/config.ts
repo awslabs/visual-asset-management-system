@@ -149,6 +149,10 @@ export function getConfig(app: cdk.App): Config {
     config.openSearchDomainEndpointSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "endPoint"].join("/");
 
+    //Resource name distribution prefix (tables, non-asset buckets, audit log groups)
+    config.resourceNamesSSMParamPrefix =
+        "/" + [config.name + "-" + config.app.baseStackName, "resourceNames"].join("/");
+
     //Location Service Variables
     config.locationServiceApiKeyArnSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "location", "apiKeyArn"].join("/");
@@ -1229,6 +1233,19 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    if (
+        config.app.useGlobalVpc.enabled &&
+        config.app.useGlobalVpc.useForAllLambdas &&
+        !config.app.useGlobalVpc.addVpcEndpoints
+    ) {
+        console.warn(
+            "Configuration Warning: useGlobalVpc.useForAllLambdas with addVpcEndpoints=false requires " +
+                "an operator-managed SSM interface VPC endpoint (com.amazonaws.{region}.ssm). All VAMS " +
+                "Lambda functions resolve resource names from SSM Parameter Store at cold start and " +
+                "will fail without it."
+        );
+    }
+
     //OpenSearch provisioned only supports a zone-aware domain spread across 2 or 3 Availability Zones.
     if (
         config.app.openSearch.useProvisioned.enabled &&
@@ -2094,4 +2111,5 @@ export interface Config extends ConfigPublic {
     openSearchDomainEndpointSSMParam: string;
     locationServiceApiKeyArnSSMParam: string; // Location Service API key SSM parameter
     webUrlDeploymentSSMParam: string; // Web URL Deployment SSM parameter
+    resourceNamesSSMParamPrefix: string; // Prefix for resource-name SSM parameters
 }

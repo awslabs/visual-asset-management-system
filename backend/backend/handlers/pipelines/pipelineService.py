@@ -1,13 +1,13 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
 from botocore.exceptions import ClientError
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
@@ -35,14 +35,10 @@ lambda_client = boto3.client('lambda')
 
 # Load environment variables
 try:
-    pipeline_database = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
-    workflow_database = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
-
-    if not pipeline_database:
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 

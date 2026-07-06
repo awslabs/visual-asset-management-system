@@ -1,10 +1,10 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 from common.constants import STANDARD_JSON_RESPONSE
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="SendEmail")
@@ -14,9 +14,9 @@ sns_client = boto3.client('sns')
 main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed loading environment variables")
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving resource names")
     main_rest_response['body'] = json.dumps(
         {"message": "Failed Loading Environment Variables"})
 

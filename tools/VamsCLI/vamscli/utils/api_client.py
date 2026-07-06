@@ -1247,17 +1247,22 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to archive asset: {e}")
 
-    def unarchive_asset(self, database_id: str, asset_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+    def unarchive_asset(self, database_id: str, asset_id: str, reason: Optional[str] = None,
+                        unarchive_files: bool = False) -> Dict[str, Any]:
         """
         Unarchive an asset (restore from soft delete) using the
         /database/{databaseId}/assets/{assetId}/unarchiveAsset PUT endpoint.
 
-        Restores the asset's files and its preview by removing their S3 delete markers.
+        Restores the asset record to active state. Files remain archived unless
+        unarchive_files is True, which also restores the files archived by the
+        asset archive operation (files archived individually beforehand always
+        stay archived).
 
         Args:
             database_id: Database ID (with or without the #deleted suffix)
             asset_id: Asset ID
             reason: Optional reason for unarchiving the asset
+            unarchive_files: Also restore files archived by the asset archive
 
         Returns:
             API response data with operation result
@@ -1273,6 +1278,8 @@ class APIClient:
             data = {'confirmUnarchive': True}
             if reason:
                 data['reason'] = reason
+            if unarchive_files:
+                data['unarchiveFiles'] = True
 
             response = self.put(endpoint, data=data)
             return response.json()

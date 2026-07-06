@@ -46,11 +46,12 @@ logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
 ALWAYS_REDIRECT_TO_PRESIGNED = True
 
 try:
-    auxasset_bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    auxasset_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

@@ -1,10 +1,10 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 import datetime
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.comments.commentService import get_single_comment
 from common.auth.apiEvent import normalize_event
@@ -16,7 +16,6 @@ from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 
-# Create a logger object to log the events
 logger = safeLogger(service="EditComment")
 
 dynamodb = boto3.resource("dynamodb")
@@ -24,14 +23,13 @@ s3c = boto3.client("s3")
 
 main_rest_response = STANDARD_JSON_RESPONSE
 
-comment_database = None
-
 try:
-    comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed Loading Environment Variables")
+    comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving comment table name")
+    comment_database = None
     main_rest_response["statusCode"] = 500
-    main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
+    main_rest_response["body"] = json.dumps({"message": "Failed resolving comment table name"})
 
 
 def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:

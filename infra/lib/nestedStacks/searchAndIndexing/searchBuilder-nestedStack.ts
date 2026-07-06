@@ -25,8 +25,10 @@ import * as cdk from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 
 export class SearchBuilderNestedStack extends NestedStack {
     public reindexerFunctionName = "";
@@ -422,6 +424,16 @@ export function searchBuilder(
                 ClearIndexes: "true",
                 Timestamp: Date.now().toString(),
             },
+        });
+    }
+
+    // Publish the reindexer function name for data-migration tooling. Created here
+    // rather than through the resource-name registry because this stack builds after
+    // the ResourceNames stack materializes the registry.
+    if (reindexerFunction) {
+        new ssm.StringParameter(scope, "ResourceNameParamCrOsReindexer", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer}`,
+            stringValue: reindexerFunction.functionName,
         });
     }
 

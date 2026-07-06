@@ -1,11 +1,11 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
+from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
@@ -17,19 +17,18 @@ from common.dynamodb import validate_pagination_info
 
 claims_and_roles = {}
 
-# Create a logger object to log the events
 logger = safeLogger(service="CommentService")
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
 main_rest_response = STANDARD_JSON_RESPONSE
-comment_database = None
 
 try:
-    comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
-except:
-    logger.exception("Failed Loading Comment Storage Environment Variables")
-    main_rest_response["body"]["message"] = "Failed Loading Comment Storage Environment Variables"
+    comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving comment table name")
+    comment_database = None
+    main_rest_response["body"]["message"] = "Failed resolving comment table name"
 
 
 def get_all_comments(queryParams: dict, showDeleted=False) -> dict:

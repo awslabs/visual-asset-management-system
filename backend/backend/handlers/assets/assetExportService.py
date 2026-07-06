@@ -64,18 +64,19 @@ bucket_cache = {}
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     asset_links_function_name = os.environ["ASSET_LINKS_FUNCTION_NAME"]
     presigned_url_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

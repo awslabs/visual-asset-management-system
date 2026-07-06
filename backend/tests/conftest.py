@@ -119,6 +119,17 @@ _s3_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3_module = _s3mk_importlib_util.module_from_spec(_s3_spec)
 _s3_spec.loader.exec_module(_s3_module)
 sys.modules['common.s3'] = _s3_module
+# resourceNames resolves table/bucket/log-group names (env-var override first, SSM
+# second). Handlers import it at module level, so it must be resolvable at collection
+# time. Load the REAL module by path — its boto3 ssm client is created lazily and the
+# conftest env vars satisfy the override path, so no AWS call happens during tests.
+_rn_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.resourceNames',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'resourceNames.py')
+)
+_rn_module = _s3mk_importlib_util.module_from_spec(_rn_spec)
+_rn_spec.loader.exec_module(_rn_module)
+sys.modules['common.resourceNames'] = _rn_module
 # handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
 # Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
 if 'handlers' not in sys.modules:

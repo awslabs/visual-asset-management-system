@@ -78,16 +78,29 @@ logger = safeLogger(service_name="AssetFiles")
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_aux_bucket_name = os.environ.get("S3_ASSET_AUXILIARY_BUCKET", "")
-    asset_file_metadata_table_name = os.environ.get("ASSET_FILE_METADATA_STORAGE_TABLE_NAME")
-    file_attribute_table_name = os.environ.get("FILE_ATTRIBUTE_STORAGE_TABLE_NAME")
-    asset_file_version_history_table_name = os.environ.get("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME")
+    from common.resourceNames import ResourceKeys, get_table_name, get_bucket_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_database_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_version_files_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    try:
+        asset_aux_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    except Exception:
+        asset_aux_bucket_name = ""
+    try:
+        asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    except Exception:
+        asset_file_metadata_table_name = None
+    try:
+        file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    except Exception:
+        file_attribute_table_name = None
+    try:
+        asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
+    except Exception:
+        asset_file_version_history_table_name = None
     send_email_function_name = os.environ.get("SEND_EMAIL_FUNCTION_NAME", "")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

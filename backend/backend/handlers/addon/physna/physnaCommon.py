@@ -913,31 +913,40 @@ def delete_folder_if_empty(
 
 
 from boto3.dynamodb.conditions import Key
+from common.resourceNames import get_table_name, ResourceKeys
 
 _dynamodb = boto3.resource("dynamodb", config=_retry_config)
 _s3_client = boto3.client("s3", config=_retry_config)
 
 try:
-    _ASSET_STORAGE_TABLE_NAME = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    _DATABASE_STORAGE_TABLE_NAME = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    _ASSET_FILE_METADATA_STORAGE_TABLE_NAME = os.environ[
-        "ASSET_FILE_METADATA_STORAGE_TABLE_NAME"
-    ]
-    _FILE_ATTRIBUTE_STORAGE_TABLE_NAME = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-except KeyError as e:
-    logger.warning(f"Physna storage env vars not set at import (OK for tests): {e}")
-    _ASSET_STORAGE_TABLE_NAME = os.environ.get("ASSET_STORAGE_TABLE_NAME", "")
-    _DATABASE_STORAGE_TABLE_NAME = os.environ.get("DATABASE_STORAGE_TABLE_NAME", "")
-    _ASSET_FILE_METADATA_STORAGE_TABLE_NAME = os.environ.get(
-        "ASSET_FILE_METADATA_STORAGE_TABLE_NAME", ""
-    )
-    _FILE_ATTRIBUTE_STORAGE_TABLE_NAME = os.environ.get(
-        "FILE_ATTRIBUTE_STORAGE_TABLE_NAME", ""
-    )
-    _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = os.environ.get(
-        "S3_ASSET_BUCKETS_STORAGE_TABLE_NAME", ""
-    )
+    _ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.warning(f"Failed resolving asset storage table name (OK for tests): {e}")
+    _ASSET_STORAGE_TABLE_NAME = None
+
+try:
+    _DATABASE_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+except Exception as e:
+    logger.warning(f"Failed resolving database storage table name (OK for tests): {e}")
+    _DATABASE_STORAGE_TABLE_NAME = None
+
+try:
+    _ASSET_FILE_METADATA_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+except Exception as e:
+    logger.warning(f"Failed resolving asset file metadata table name (OK for tests): {e}")
+    _ASSET_FILE_METADATA_STORAGE_TABLE_NAME = None
+
+try:
+    _FILE_ATTRIBUTE_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+except Exception as e:
+    logger.warning(f"Failed resolving file attribute table name (OK for tests): {e}")
+    _FILE_ATTRIBUTE_STORAGE_TABLE_NAME = None
+
+try:
+    _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception as e:
+    logger.warning(f"Failed resolving S3 asset buckets table name (OK for tests): {e}")
+    _S3_ASSET_BUCKETS_STORAGE_TABLE_NAME = None
 
 asset_storage_table = _dynamodb.Table(_ASSET_STORAGE_TABLE_NAME) if _ASSET_STORAGE_TABLE_NAME else None
 database_storage_table = _dynamodb.Table(_DATABASE_STORAGE_TABLE_NAME) if _DATABASE_STORAGE_TABLE_NAME else None

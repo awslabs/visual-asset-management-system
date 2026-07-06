@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -23,28 +24,20 @@ from models.common import success, validation_error, authorization_error, intern
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.assetsV3 import AssetUploadTableModel
 
-asset_Database = None
-db_Database = None
-workflow_execution_database = None
-asset_upload_table_name = None
-s3_asset_buckets_table = None
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
 
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
     file_upload_function = os.environ['FILE_UPLOAD_LAMBDA_FUNCTION_NAME']
-    asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
-    db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-
+    asset_Database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise
+    logger.exception("Failed loading environment variables or resolving resource names")
+    raise e
 
 s3c = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')

@@ -1,8 +1,11 @@
 {
     "comments": "Configuration for VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3)",
 
-    "_comment_function": "Lambda function name from CDK stack output 'ReindexerFunctionNameOutput'",
-    "reindexer_function_name": "<REINDEXER_FUNCTION_NAME>",
+    "_comment_prefix": "SSM resource-name base prefix from CDK core stack output 'ResourceNamesSSMParamPrefixOutput' (format: /{configName}-{baseStackName}/resourceNames). When set, the reindexer function name is resolved automatically from SSM Parameter Store.",
+    "resource_names_ssm_param_prefix": "<RESOURCE_NAMES_SSM_PARAM_PREFIX>",
+
+    "_comment_function": "Optional override: explicit reindexer Lambda function name (CDK stack output 'ReindexerFunctionNameOutput'). Only needed when the SSM prefix above is not filled in, or to override the SSM-resolved value.",
+    "reindexer_function_name": null,
 
     "_comment_operation": "What to reindex: 'assets', 'files', or 'both' (default: both)",
     "operation": "both",
@@ -23,12 +26,17 @@
     "_comment_instructions": "How to use this configuration file",
     "_instructions": [
         "=== SETUP ===",
-        "1. Get the reindexer Lambda function name from the CDK stack outputs:",
+        "1. Get the SSM resource-name base prefix from the CDK core stack outputs:",
         "   aws cloudformation describe-stacks --stack-name your-vams-stack \\",
-        "     --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \\",
+        "     --query 'Stacks[0].Outputs[?OutputKey==`ResourceNamesSSMParamPrefixOutput`].OutputValue' \\",
         "     --output text",
         "",
-        "2. Set 'reindexer_function_name' in this file to that value.",
+        "2. Set 'resource_names_ssm_param_prefix' in this file to that value, and set",
+        "   'aws_region' (and 'aws_profile' if needed). The reindexer Lambda function name",
+        "   is then resolved automatically from SSM Parameter Store.",
+        "",
+        "   Alternative: set 'reindexer_function_name' explicitly (CDK stack output",
+        "   'ReindexerFunctionNameOutput') to skip or override the SSM lookup.",
         "",
         "=== EXECUTION ===",
         "3. Run a dry run first (HIGHLY RECOMMENDED):",

@@ -99,15 +99,16 @@ allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
     large_file_processing_queue_url = os.environ.get("LARGE_FILE_PROCESSING_QUEUE_URL")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables

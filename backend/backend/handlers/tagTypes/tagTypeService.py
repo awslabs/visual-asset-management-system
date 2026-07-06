@@ -1,7 +1,6 @@
 # Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import boto3
 import json
 from datetime import datetime
@@ -11,6 +10,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from botocore.config import Config
 
+from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -41,17 +41,20 @@ logger = safeLogger(service_name="TagTypeService")
 # Global variables
 claims_and_roles = {}
 
-# Load environment variables
 try:
-    tag_table_name = os.environ["TAGS_STORAGE_TABLE_NAME"]
-    tag_type_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
+    tag_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+    logger.exception("Failed resolving tags table name")
+    tag_table_name = None
 
-# Initialize DynamoDB tables
-tag_table = dynamodb.Table(tag_table_name)
-tag_type_table = dynamodb.Table(tag_type_table_name)
+try:
+    tag_type_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving tag types table name")
+    tag_type_table_name = None
+
+tag_table = dynamodb.Table(tag_table_name) if tag_table_name else None
+tag_type_table = dynamodb.Table(tag_type_table_name) if tag_type_table_name else None
 
 #######################
 # Business Logic Functions

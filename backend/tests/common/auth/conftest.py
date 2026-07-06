@@ -27,9 +27,15 @@ _auth_dir = os.path.join(
 )
 _auth_dir = os.path.abspath(_auth_dir)
 
-# Package marker first, then pure modules, then authorizerCore (depends on clientIp).
+_common_dir = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "backend", "common"
+)
+_common_dir = os.path.abspath(_common_dir)
+
+# Package marker first, then dependencies (resourceNames), then pure modules, then authorizerCore (depends on clientIp and resourceNames).
 if "common.auth" not in sys.modules:
     _load("common.auth", os.path.join(_auth_dir, "__init__.py"))
+_load("common.resourceNames", os.path.join(_common_dir, "resourceNames.py"))
 _load("common.auth.clientIp", os.path.join(_auth_dir, "clientIp.py"))
 _load("common.auth.apiEvent", os.path.join(_auth_dir, "apiEvent.py"))
 _load("common.auth.authorizerCore", os.path.join(_auth_dir, "authorizerCore.py"))

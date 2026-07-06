@@ -60,8 +60,9 @@ except (ValueError, TypeError):
 
 # Load environment variables
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
