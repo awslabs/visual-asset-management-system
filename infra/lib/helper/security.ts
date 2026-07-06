@@ -142,45 +142,44 @@ const ssmLookupSuppressedStacks = new Set<string>();
  */
 const auditLogSuppressedStacks = new Set<string>();
 
-export function globalLambdaEnvironmentsAndPermissions(
-    lambdaFunction: lambda.Function,
-    config: Config.Config
-) {
-    // The Cognito MFA check requires Lambda functions to call Amazon Cognito. VAMS creates
-    // cognito-idp / cognito-identity VPC interface endpoints when Cognito is enabled, so
-    // Lambda functions in the VPC (including isolated subnets) can reach Amazon Cognito and
-    // perform the MFA check. Cognito auth is therefore enabled whenever Cognito is the auth
-    // provider, regardless of VPC topology.
-    //
-    // The only case where the check must be disabled is when Lambda functions run in the VPC
-    // AND the deployment is in a partition where Amazon Cognito PrivateLink is not available
-    // at all — AWS GovCloud (US), AWS European Sovereign Cloud, or the ISO partitions. VAMS
-    // cannot create the Cognito interface endpoints there and there is no in-VPC path to
-    // Cognito. This is expressed as a deny-list (not an allow-list of `aws`) because Cognito
-    // PrivateLink IS available in the AWS China partition (`aws-cn`), which must stay enabled.
-    //
-    // Note: `useGlobalVpc.addVpcEndpoints = false` does NOT disable the check. That option
-    // means the operator creates the required VPC endpoints by hand (e.g. under
-    // organizational restrictions that forbid the solution creating them). The Cognito
-    // endpoints are expected to exist in that case, so Cognito remains reachable — see the
-    // documented list of required endpoints.
-    const lambdasInVpc =
-        (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
-        config.app.openSearch.useProvisioned.enabled ||
-        (config.app.openSearch.useServerless.enabled &&
-            !config.app.openSearch.useServerless.allowPublic);
+/**
+ * Whether the API Gateway authorizer Lambda can reach Amazon Cognito to perform the
+ * MFA-preference check. The check runs only in the authorizer (its result is passed to
+ * handler Lambdas through the authorizer context), so only the authorizer's own VPC
+ * placement matters.
+ *
+ * VAMS creates cognito-idp / cognito-identity VPC interface endpoints when Cognito is
+ * enabled, so an in-VPC authorizer (including isolated subnets) can reach Amazon Cognito.
+ * The only case where the check must be disabled is when the authorizer runs in the VPC
+ * AND the deployment is in a partition where Amazon Cognito PrivateLink is not available
+ * at all — AWS GovCloud (US), AWS European Sovereign Cloud, or the ISO partitions. VAMS
+ * cannot create the Cognito interface endpoints there and there is no in-VPC path to
+ * Cognito. This is expressed as a deny-list (not an allow-list of `aws`) because Cognito
+ * PrivateLink IS available in the AWS China partition (`aws-cn`), which must stay enabled.
+ *
+ * Note: `useGlobalVpc.addVpcEndpoints = false` does NOT disable the check. That option
+ * means the operator creates the required VPC endpoints by hand (e.g. under
+ * organizational restrictions that forbid the solution creating them). The Cognito
+ * endpoints are expected to exist in that case, so Cognito remains reachable — see the
+ * documented list of required endpoints.
+ */
+export function isCognitoMfaCheckEnabled(config: Config.Config): boolean {
+    const authorizerInVpc =
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
     const cognitoPrivateLinkUnavailable =
         config.env.partition === "aws-us-gov" ||
         config.env.partition === "aws-eusc" ||
         config.env.partition.startsWith("aws-iso");
-    const cognitoUnreachableInVpc = lambdasInVpc && cognitoPrivateLinkUnavailable;
+    return (
+        config.app.authProvider.useCognito.enabled &&
+        !(authorizerInVpc && cognitoPrivateLinkUnavailable)
+    );
+}
 
-    if (config.app.authProvider.useCognito.enabled && !cognitoUnreachableInVpc) {
-        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE");
-    } else {
-        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");
-    }
-
+export function globalLambdaEnvironmentsAndPermissions(
+    lambdaFunction: lambda.Function,
+    config: Config.Config
+) {
     // Resource-name resolution: prefix for SSM Parameter Store lookups
     lambdaFunction.addEnvironment("VAMS_RESOURCE_PARAM_PREFIX", config.resourceNamesSSMParamPrefix);
     const resourceParamPathNoSlash = config.resourceNamesSSMParamPrefix.replace(/^\//, "");

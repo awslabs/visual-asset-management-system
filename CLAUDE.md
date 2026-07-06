@@ -602,10 +602,11 @@ Handlers resolve DynamoDB table names, the auxiliary and artefacts bucket names,
 All handlers (including pipelines) receive these additional environment variables:
 
 ```
-COGNITO_AUTH_ENABLED              # Enable/disable Cognito auth
 AWS_REGION                        # AWS region (set by Lambda runtime)
 PRESIGNED_URL_TIMEOUT_SECONDS     # S3 presigned URL TTL
 ```
+
+The API Gateway authorizer Lambda additionally receives `COGNITO_AUTH_ENABLED` (whether the MFA-preference check can reach Cognito). The authorizer resolves the user's MFA status and passes it to handler Lambdas as the `vams:mfaEnabled` authorizer context value — handler Lambdas make no Cognito calls.
 
 Domain-specific handlers receive additional env vars for their resources (e.g., `SEND_EMAIL_FUNCTION_NAME` for notification handlers).
 

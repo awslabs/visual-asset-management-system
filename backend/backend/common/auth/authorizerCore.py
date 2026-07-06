@@ -155,6 +155,31 @@ def _lookup_api_key_by_hash(key_hash: str):
         # On error, return cached record if available (even if expired), else None
         return cached['record'] if cached else None
 
+# MFA sign-in check hook (customConfigCommon is a customer-customizable module: Cognito
+# MFA-preference check by default, external OAuth IDP logic slot for external mode)
+try:
+    from customConfigCommon.customAuthClaimsCheck import customMFATokenScopeCheckOverride
+except Exception:
+    customMFATokenScopeCheckOverride = None
+    logger.error("customAuthClaimsCheck module not available; MFA check disabled")
+
+
+def resolve_mfa_enabled(username: str, claims: Dict[str, Any], event: dict) -> bool:
+    """
+    Resolve whether the user signed in with MFA via the customizable
+    customMFATokenScopeCheckOverride hook. Runs at authorization time so the result
+    can be passed to handler lambdas through the authorizer context. Returns False
+    when the hook is unavailable or raises.
+    """
+    if not customMFATokenScopeCheckOverride or not username:
+        return False
+    try:
+        return bool(customMFATokenScopeCheckOverride(username, claims, event))
+    except Exception as e:
+        logger.error(f"MFA check hook failed, defaulting to false: {str(e)}")
+        return False
+
+
 # Cache for public keys to avoid fetching them on every request
 # Download them only on cold start as per AWS best practices
 # https://aws.amazon.com/blogs/compute/container-reuse-in-lambda/
@@ -734,5 +759,17 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
     for key, value in claims.items():
         if value is not None:
             context[key] = str(value)
+
+    # MFA sign-in check: resolved once at authorization time via the customizable hook
+    # (Cognito MFA preference by default; external IDP logic slot for external mode) and
+    # passed to handlers through the authorizer context, so handler Lambdas make no IDP
+    # calls of their own.
+    username = (
+        claims.get('cognito:username')
+        or claims.get('username')
+        or claims.get('sub')
+    )
+    mfa_enabled = resolve_mfa_enabled(username, claims, event)
+    context['vams:mfaEnabled'] = 'true' if mfa_enabled else 'false'
 
     return {"authorized": True, "context": context, "reason": None}

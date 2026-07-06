@@ -110,6 +110,15 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         if (config.app.authProvider.useCognito.enabled) {
             authorizerFn.addEnvironment("USER_POOL_ID", props.authResources.cognito.userPoolId);
             authorizerFn.addEnvironment("APP_CLIENT_ID", props.authResources.cognito.webClientId);
+            // The authorizer resolves the user's MFA preference (AdminGetUser) and passes it
+            // to handler Lambdas through the authorizer context
+            authorizerFn.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["cognito-idp:AdminGetUser"],
+                    resources: [props.authResources.cognito.userPool.userPoolArn],
+                })
+            );
         }
 
         // 2) Role API Gateway assumes to invoke the authorizer

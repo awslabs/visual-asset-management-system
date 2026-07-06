@@ -322,7 +322,7 @@ At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_
 3. **SSM GetParametersByPath** — one paginated call fetching all parameters under the prefix on first access
 
 :::tip[Lambda Builder Pattern]
-Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`, `COGNITO_AUTH_ENABLED`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.
+Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.
 :::
 
 ## Next Steps

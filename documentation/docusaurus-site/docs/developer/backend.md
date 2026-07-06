@@ -670,26 +670,30 @@ The email field is used by systems that send notifications to the user. If the e
 
 The file `customAuthClaimsCheck.py` controls how authentication claims are verified, including Multi-Factor Authentication (MFA) status.
 
-**Default behavior for Amazon Cognito:** Calls the Cognito `get_user` API with the access token to check if MFA is enabled for the authenticated user. Results are cached per user based on `auth_time` to reduce external API calls.
+The MFA check runs **once at authorization time**: the API Gateway custom authorizer calls `customMFATokenScopeCheckOverride` after verifying the caller's JWT and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. Handler Lambda functions read that context value in `request_to_claims` — they make no identity provider calls of their own.
 
-**Default behavior for external OAuth IDP:** Sets `mfaEnabled` to `false`. Organizations must implement their own MFA verification logic for external identity providers.
+**Default behavior for Amazon Cognito:** Resolves the user's MFA preference with the Cognito `AdminGetUser` API, cached per user per sign-in session (`auth_time`).
+
+**Default behavior for external OAuth IDP:** Sets `mfaEnabled` to `false`. Organizations implement their own MFA verification logic (for example, a call to the IDP userinfo endpoint using the bearer token from the authorizer event headers) in the marked section of the hook.
 
 ```python
 # backend/backend/customConfigCommon/customAuthClaimsCheck.py
-def customMFATokenScopeCheckOverride(user, lambdaRequest):
-    # For Cognito: checks UserMFASettingList via get_user API
+def customMFATokenScopeCheckOverride(user, authorizerJwtClaims, lambdaRequest):
+    # Called by the API Gateway authorizer after JWT verification
+    # For Cognito: checks UserMFASettingList via the AdminGetUser API
     # For external IDP: returns False by default
     # Override with your organization's MFA verification logic
     return mfaLoginEnabled
 
 def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
-    # Calls customMFATokenScopeCheckOverride and sets mfaEnabled flag
-    # Add additional claims validation logic here
+    # Called by handler lambdas; mfaEnabled is already resolved from the
+    # vams:mfaEnabled authorizer context value before this hook runs
+    # Add additional handler-time claims validation logic here
     return claims_and_roles
 ```
 
 :::warning[Performance Consideration]
-The `customAuthClaimsCheck` functions are called frequently during VAMS API authorization checks. Use caching (the default implementation caches by `auth_time`) and minimize external API calls to avoid performance impacts.
+`customMFATokenScopeCheckOverride` runs inside the API Gateway authorizer on every non-cached authorization. Cache external lookups (the default implementation caches by `auth_time`) and minimize external API calls to avoid adding latency to every request.
 :::
 
 ## Anti-Patterns

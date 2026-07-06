@@ -949,7 +949,7 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 | Variable                        | Required | Description                                                                    |
 | ------------------------------- | -------- | ------------------------------------------------------------------------------ |
 | `VAMS_RESOURCE_PARAM_PREFIX`    | Yes      | SSM parameter prefix for resource name resolution (non-pipeline handlers only) |
-| `COGNITO_AUTH_ENABLED`          | Yes      | Enable/disable Cognito auth                                                    |
+| `COGNITO_AUTH_ENABLED`          | No       | Authorizer Lambda only: whether the Cognito MFA-preference check is reachable  |
 | `AWS_REGION`                    | Auto     | AWS region (set by Lambda runtime)                                             |
 | `PRESIGNED_URL_TIMEOUT_SECONDS` | Yes      | S3 presigned URL TTL                                                           |
 | `SEND_EMAIL_FUNCTION_NAME`      | Varies   | Email notification Lambda name (handler-specific)                              |

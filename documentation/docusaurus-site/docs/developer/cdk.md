@@ -135,7 +135,7 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `kmsKeyLambdaPermissionAddToResourcePolicy`        | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases                                                                                      |
 | `setupSecurityAndLoggingEnvironmentAndPermissions` | Adds env vars for auth tables and 9 audit log groups. Grants DynamoDB read on auth, constraints, userRoles, roles tables. Grants Amazon CloudWatch PutLogEvents on audit log groups. |
-| `globalLambdaEnvironmentsAndPermissions`           | Sets `COGNITO_AUTH_ENABLED` based on Amazon Cognito and VPC configuration                                                                                                            |
+| `globalLambdaEnvironmentsAndPermissions`           | Injects `VAMS_RESOURCE_PARAM_PREFIX` and grants AWS Systems Manager parameter read access for resource-name resolution                                                               |
 | `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards                                                                                                                    |
 
 ## API Route Wiring

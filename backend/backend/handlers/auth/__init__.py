@@ -62,6 +62,13 @@ def request_to_claims(request):
     if 'vams:externalAttributes' in claims:
         externalAttributes = json.loads(claims['vams:externalAttributes'])
 
+    #MFA sign-in status is resolved at authorization time by the API Gateway authorizer
+    #(common/auth/authorizerCore.py via the customMFATokenScopeCheckOverride hook) and
+    #passed through the authorizer context as vams:mfaEnabled
+    if 'vams:mfaEnabled' in claims:
+        mfaValue = claims['vams:mfaEnabled']
+        mfaEnabled = mfaValue == 'true' if isinstance(mfaValue, str) else bool(mfaValue)
+
     claims_and_roles = {
             "tokens": tokens,
             "roles": roles,
@@ -69,7 +76,7 @@ def request_to_claims(request):
             "mfaEnabled": mfaEnabled
         }
 
-    #Conduct custom claims check, including MFA sign-in
+    #Conduct custom claims check
     try:
         claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
     except:
