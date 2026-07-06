@@ -30,6 +30,15 @@ from common.s3MetadataKeys import (
     DATABASE_ID_METADATA_KEY,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.syncTracking import (
+    SYNC_ACTION_CREATE,
+    SYNC_ACTION_DELETE,
+    SYNC_ACTION_MODIFY,
+    SYNC_OBJECT_TYPE_ASSET_FILE,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_SUCCESS,
+    write_outbound_sync_record,
+)
 
 from . import physnaCommon
 from .physnaCommon import (
@@ -309,6 +318,24 @@ def _delete_physna_asset_by_uuid(
     )
 
 
+def _record_file_sync(database_id, asset_id, relative_path, action, sync_status,
+                      s3_version_id=None, physna_asset_uuid=None, error_message=None):
+    """Best-effort outbound sync tracking record for a file-level Physna sync."""
+    write_outbound_sync_record(
+        SYNC_OBJECT_TYPE_ASSET_FILE,
+        database_id,
+        physnaCommon.SYNC_SYSTEM_TYPE,
+        physnaCommon.get_sync_system_unique_id(),
+        action,
+        sync_status,
+        asset_id=asset_id,
+        file_path=relative_path,
+        s3_version_id=s3_version_id,
+        error_message=error_message,
+        sync_system_entity_id=physna_asset_uuid,
+    )
+
+
 def _upload_file_to_physna(
     database_id: str,
     asset_id: str,
@@ -316,6 +343,32 @@ def _upload_file_to_physna(
     bucket_name: str,
     s3_key: str,
     client: Optional[PhysnaClient] = None,
+) -> bool:
+    """Sync a VAMS file to Physna, recording the outcome in sync tracking."""
+    sync_ctx: Dict[str, Any] = {}
+    try:
+        return _upload_file_to_physna_impl(
+            database_id, asset_id, relative_path, bucket_name, s3_key,
+            client=client, sync_ctx=sync_ctx,
+        )
+    except Exception as e:
+        _record_file_sync(
+            database_id, asset_id, relative_path,
+            sync_ctx.get("action", SYNC_ACTION_MODIFY), SYNC_STATUS_FAILED,
+            s3_version_id=sync_ctx.get("s3VersionId"),
+            error_message=str(e),
+        )
+        raise
+
+
+def _upload_file_to_physna_impl(
+    database_id: str,
+    asset_id: str,
+    relative_path: str,
+    bucket_name: str,
+    s3_key: str,
+    client: Optional[PhysnaClient] = None,
+    sync_ctx: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Sync a VAMS file to Physna, respecting ``__VAMS__FileVersion`` tracking.
 
@@ -362,6 +415,12 @@ def _upload_file_to_physna(
             f"Could not determine current Physna state for {full_path}; "
             f"proceeding with upload: {e}"
         )
+
+    # Sync tracking: a pre-existing Physna asset means this is a modify.
+    sync_action = SYNC_ACTION_MODIFY if existing_uuid else SYNC_ACTION_CREATE
+    if sync_ctx is not None:
+        sync_ctx["action"] = sync_action
+        sync_ctx["s3VersionId"] = current_s3_version
 
     # Step 2a: identical version already in Physna — skip the upload
     if (
@@ -515,6 +574,8 @@ def _upload_file_to_physna(
             f"obtainable; skipping metadata set. Will retry on next VAMS "
             f"metadata change."
         )
+        _record_file_sync(database_id, asset_id, relative_path, sync_action,
+                          SYNC_STATUS_SUCCESS, s3_version_id=current_s3_version)
         return True
 
     try:
@@ -527,6 +588,9 @@ def _upload_file_to_physna(
             f"The file is in Physna; metadata will be retried on the next "
             f"VAMS metadata change."
         )
+    _record_file_sync(database_id, asset_id, relative_path, sync_action,
+                      SYNC_STATUS_SUCCESS, s3_version_id=current_s3_version,
+                      physna_asset_uuid=physna_asset_uuid)
     return True
 
 
@@ -761,11 +825,16 @@ def _delete_physna_asset(
         f"/tenants/{physnaCommon.PHYSNA_TENANT_ID}/assets/{physna_asset_uuid}",
     )
     if response.status not in (200, 204, 404):
+        _record_file_sync(database_id, asset_id, relative_path, SYNC_ACTION_DELETE,
+                          SYNC_STATUS_FAILED, physna_asset_uuid=physna_asset_uuid,
+                          error_message=f"Delete failed with status {response.status}")
         raise PhysnaError(
             f"Delete failed for {path} ({physna_asset_uuid}) with status "
             f"{response.status}: {response.data!r}"
         )
     logger.info(f"Deleted Physna asset (or already gone): {path}")
+    _record_file_sync(database_id, asset_id, relative_path, SYNC_ACTION_DELETE,
+                      SYNC_STATUS_SUCCESS, physna_asset_uuid=physna_asset_uuid)
 
     folder = build_physna_folder_path(database_id, asset_id, relative_path)
     if folder:
@@ -969,9 +1038,14 @@ def _handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
             f"Metadata update failed for {full_path}: {e}. File stays in "
             f"Physna; will retry on next VAMS metadata change."
         )
+        _record_file_sync(database_id, asset_id, relative, SYNC_ACTION_MODIFY,
+                          SYNC_STATUS_FAILED, physna_asset_uuid=physna_asset_uuid,
+                          error_message=str(e))
         return True
 
     if updated:
+        _record_file_sync(database_id, asset_id, relative, SYNC_ACTION_MODIFY,
+                          SYNC_STATUS_SUCCESS, physna_asset_uuid=physna_asset_uuid)
         return True
 
     # Lookup said asset exists but PATCH returned 404 (race / just-deleted).

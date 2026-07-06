@@ -78,6 +78,7 @@ function buildCommonPhysnaLambda(props: BuildPhysnaLambdaProps): lambda.Function
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.syncTrackingOutboundStorageTable.grantReadWriteData(fun);
 
     // S3 read access to all asset buckets for file downloads
     grantReadPermissionsToAllAssetBuckets(fun);

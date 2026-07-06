@@ -113,6 +113,7 @@ interface storageResources {
         assetFileVersionsStorageTable;
         assetFileVersionHistoryStorageTable;
         assetHistoryStorageTable;
+        syncTrackingOutboundStorageTable;
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
         commentStorageTable;

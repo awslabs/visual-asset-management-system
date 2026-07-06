@@ -48,6 +48,9 @@ VAMS_RESERVED_METADATA_KEYS = frozenset(
     }
 )
 
+# System type identifier for outbound sync tracking records.
+SYNC_SYSTEM_TYPE = "physna"
+
 
 def apply_vams_reserved_metadata(
     metadata_payload: Dict[str, Any],
@@ -317,6 +320,11 @@ except KeyError as e:
     PHYSNA_TOKEN_URL = os.environ.get("PHYSNA_TOKEN_URL", "")
     PHYSNA_AUTH_TYPE = os.environ.get("PHYSNA_AUTH_TYPE", "cognito")
     PHYSNA_CREDS_SECRET_ARN = os.environ.get("PHYSNA_CREDS_SECRET_ARN", "")
+
+
+def get_sync_system_unique_id():
+    """Identifies the target Physna environment + tenant for sync tracking."""
+    return f"{PHYSNA_API_BASE}#{PHYSNA_TENANT_ID}"
 
 
 class PhysnaError(Exception):

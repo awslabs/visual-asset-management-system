@@ -49,6 +49,8 @@ backend/
 │   │   ├── s3MetadataKeys.py            # Canonical S3 object user-metadata keys (assetid, vams-*)
 │   │   ├── assetHistory.py              # Asset lifecycle history writer (change source constants,
 │   │   │                                #   build_asset_snapshot, write_asset_history_record; best-effort)
+│   │   ├── syncTracking.py              # Outbound external-system sync record writer (status/action/
+│   │   │                                #   objectType constants, write_outbound_sync_record; best-effort)
 │   │   ├── s3PathPatterns.py            # Reserved S3 prefix folders, .previewFile. pattern,
 │   │   │                                #   allowed preview extensions (mirrored in
 │   │   │                                #   web/src/common/constants/fileFormats.ts)

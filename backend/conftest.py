@@ -13,6 +13,7 @@ import os
 
 # Set environment variables for testing
 os.environ['AWS_REGION'] = 'us-east-1'
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'  # boto3 clients created at module import time
 os.environ['REGION'] = 'us-east-1'  # Some handlers use REGION instead of AWS_REGION
 os.environ['COGNITO_AUTH_ENABLED'] = 'true'
 os.environ['COGNITO_AUTH'] = 'cognito-idp.us-east-1.amazonaws.com/us-east-1_example'
@@ -85,6 +86,21 @@ common_auth_apievent = import_module_from_path_early(
     os.path.join(os.path.dirname(__file__), 'backend', 'common', 'auth', 'apiEvent.py')
 )
 sys.modules['common.auth.apiEvent'] = common_auth_apievent
+
+# Load resourceNames and syncTracking early too: addon handler test modules
+# (tests/handlers/addon/physna) import the real handler modules at collection
+# time, and those handlers import common.syncTracking at module level.
+common_resource_names_early = import_module_from_path_early(
+    'common.resourceNames',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
+)
+sys.modules['common.resourceNames'] = common_resource_names_early
+
+common_sync_tracking_early = import_module_from_path_early(
+    'common.syncTracking',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
+)
+sys.modules['common.syncTracking'] = common_sync_tracking_early
 
 # Set up mock imports
 import pytest
@@ -174,6 +190,13 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'assetHistory.py')
     )
     sys.modules['common.assetHistory'] = asset_history_module
+
+    # syncTracking is a real module (outbound system sync writer); load it
+    sync_tracking_module = import_module_from_path(
+        'common.syncTracking',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'syncTracking.py')
+    )
+    sys.modules['common.syncTracking'] = sync_tracking_module
 
     # common.auth modules are pure logic with no AWS state dependencies - load real modules
     auth_pkg_module = import_module_from_path(

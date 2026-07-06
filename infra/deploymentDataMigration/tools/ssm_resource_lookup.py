@@ -48,6 +48,7 @@ class ResourceParamKeys:
     ASSET_FILE_VERSIONS_STORAGE_TABLE = "dynamoTables/assetFileVersionsStorage"
     ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE = "dynamoTables/assetFileVersionHistoryStorage"
     ASSET_HISTORY_STORAGE_TABLE = "dynamoTables/assetHistoryStorage"
+    SYNC_TRACKING_OUTBOUND_STORAGE_TABLE = "dynamoTables/syncTrackingOutboundStorage"
     ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE = "dynamoTables/assetFileMetadataVersionsStorage"
     ASSET_FILE_METADATA_STORAGE_TABLE = "dynamoTables/assetFileMetadataStorage"
     AUTH_ENTITIES_STORAGE_TABLE = "dynamoTables/authEntitiesStorage"

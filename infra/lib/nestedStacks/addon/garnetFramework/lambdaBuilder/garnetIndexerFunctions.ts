@@ -64,6 +64,7 @@ export function buildGarnetDataIndexDatabaseFunction(
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.syncTrackingOutboundStorageTable.grantReadWriteData(fun);
 
     // Grant permission to send messages to external Garnet ingestion queue
     const garnetQueueArn = convertSqsUrlToArn(
@@ -129,6 +130,7 @@ export function buildGarnetDataIndexAssetFunction(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.syncTrackingOutboundStorageTable.grantReadWriteData(fun);
 
     // Grant permission to send messages to external Garnet ingestion queue
     const garnetQueueArn = convertSqsUrlToArn(
@@ -192,6 +194,7 @@ export function buildGarnetDataIndexFileFunction(
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.syncTrackingOutboundStorageTable.grantReadWriteData(fun);
 
     // Grant permission to send messages to external Garnet ingestion queue
     const garnetQueueArn = convertSqsUrlToArn(

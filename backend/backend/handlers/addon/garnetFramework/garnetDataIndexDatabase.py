@@ -22,6 +22,15 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.syncTracking import (
+    SYNC_OBJECT_TYPE_DATABASE,
+    SYNC_ACTION_CREATE,
+    SYNC_ACTION_DELETE,
+    SYNC_ACTION_MODIFY,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_SUCCESS,
+    write_outbound_sync_record,
+)
 from common.validators import validate
 from models.common import VAMSGeneralErrorResponse
 
@@ -43,6 +52,29 @@ retry_config = Config(
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetDatabaseIndexer")
+
+# System type identifier for outbound sync tracking records.
+SYNC_SYSTEM_TYPE = "garnetFramework"
+
+
+def _record_sync(object_type, action, success, database_id, asset_id=None,
+                 file_path=None, s3_version_id=None, entity_id=None):
+    """Best-effort outbound sync tracking record. Success means the entity was
+    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    write_outbound_sync_record(
+        object_type,
+        database_id,
+        SYNC_SYSTEM_TYPE,
+        garnet_ingestion_queue_url,
+        action,
+        SYNC_STATUS_SUCCESS if success else SYNC_STATUS_FAILED,
+        asset_id=asset_id,
+        file_path=file_path,
+        s3_version_id=s3_version_id,
+        error_message=None if success else "Failed to send entity to Garnet ingestion queue",
+        sync_system_entity_id=entity_id,
+    )
+
 
 try:
     database_storage_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
@@ -472,6 +504,8 @@ def handle_database_stream(event_record: Dict[str, Any]) -> bool:
                 logger.info(f"Successfully sent database deletion to Garnet: {database_id}")
             else:
                 logger.error(f"Failed to send database deletion to Garnet: {database_id}")
+            _record_sync(SYNC_OBJECT_TYPE_DATABASE, SYNC_ACTION_DELETE, success,
+                         database_id, entity_id=ngsi_ld_entity["id"])
             return success
         
         # For INSERT/MODIFY events, use NewImage
@@ -515,6 +549,9 @@ def handle_database_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent database to Garnet: {database_id}")
         else:
             logger.error(f"Failed to send database to Garnet: {database_id}")
+        _record_sync(SYNC_OBJECT_TYPE_DATABASE,
+                     SYNC_ACTION_CREATE if event_name == 'INSERT' else SYNC_ACTION_MODIFY,
+                     success, database_id, entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:
@@ -577,6 +614,8 @@ def handle_database_metadata_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent database to Garnet after metadata change: {database_id}")
         else:
             logger.error(f"Failed to send database to Garnet after metadata change: {database_id}")
+        _record_sync(SYNC_OBJECT_TYPE_DATABASE, SYNC_ACTION_MODIFY, success,
+                     database_id, entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:

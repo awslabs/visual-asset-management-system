@@ -81,7 +81,7 @@ infra/
         customResources/
           populateS3AssetBucketsTable.ts   # Custom resource for S3 bucket table population
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # Publishes 40 SSM String parameters (29 DynamoDB tables, 2 S3 buckets, 9 audit log groups)
+        resourceNamesBuilder-nestedStack.ts  # Publishes 41 SSM String parameters (30 DynamoDB tables, 2 S3 buckets, 9 audit log groups)
         resourceNameRegistry.ts            # Cross-stack resource name descriptor registry (ResourceNameDescriptor interface)
       auth/
         authBuilder-nestedStack.ts         # Cognito user pool, identity pool, SAML, external OAuth
@@ -166,7 +166,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 40 SSM parameters; depends on Storage)
+  |     +-- ResourceNamesBuilder (publishes 41 SSM parameters; depends on Storage)
   |     |
   |     +-- AuthBuilder (depends on Storage)
   |     |     |
@@ -229,6 +229,7 @@ interface storageResources {
         assetFileVersionsStorageTable;
         assetFileVersionHistoryStorageTable;
         assetHistoryStorageTable;
+        syncTrackingOutboundStorageTable;
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
         commentStorageTable;

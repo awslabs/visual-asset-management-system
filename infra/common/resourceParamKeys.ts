@@ -24,6 +24,7 @@ export const RESOURCE_PARAM_KEYS = {
         assetFileVersionsStorage: "dynamoTables/assetFileVersionsStorage",
         assetFileVersionHistoryStorage: "dynamoTables/assetFileVersionHistoryStorage",
         assetHistoryStorage: "dynamoTables/assetHistoryStorage",
+        syncTrackingOutboundStorage: "dynamoTables/syncTrackingOutboundStorage",
         assetFileMetadataVersionsStorage: "dynamoTables/assetFileMetadataVersionsStorage",
         assetFileMetadataStorage: "dynamoTables/assetFileMetadataStorage",
         authEntitiesStorage: "dynamoTables/authEntitiesStorage",

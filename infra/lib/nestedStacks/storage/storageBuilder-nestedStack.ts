@@ -96,6 +96,7 @@ export interface storageResources {
         assetFileMetadataStorageTable: dynamodb.Table;
         assetFileVersionHistoryStorageTable: dynamodb.Table;
         assetHistoryStorageTable: dynamodb.Table;
+        syncTrackingOutboundStorageTable: dynamodb.Table;
         fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
@@ -1158,6 +1159,67 @@ export function storageResourcesBuilder(
         },
     });
 
+    // Sync Tracking Outbound — one record per outbound synchronization of a
+    // VAMS object (database, asset, assetFile) to an external system (e.g.
+    // Physna, Garnet Framework). PK is the hierarchical object identifier
+    // (databaseId | databaseId:assetId | databaseId:assetId:/filePath); SK is
+    // the timestamp-prefixed syncRecordId, queried with ScanIndexForward=false
+    // for newest-first. Append-only; no stream (the Garnet indexers route
+    // stream events by table-name substring and must never see this table).
+    const syncTrackingOutboundStorageTable = new dynamodb.Table(
+        scope,
+        "SyncTrackingOutboundStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "objectId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "syncRecordId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSIs for narrowing sync records by database, database+system, and system.
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseSystemIndex",
+        partitionKey: {
+            name: "databaseId:systemType:systemUniqueId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "SystemIndex",
+        partitionKey: {
+            name: "systemType:systemUniqueId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTableV2", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1691,6 +1753,7 @@ export function storageResourcesBuilder(
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,
             assetFileVersionHistoryStorageTable: assetFileVersionHistoryStorageTable,
             assetHistoryStorageTable: assetHistoryStorageTable,
+            syncTrackingOutboundStorageTable: syncTrackingOutboundStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             tagStorageTable: tagStorageTable,
@@ -2142,6 +2205,8 @@ export function storageResourcesBuilder(
             storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.assetHistoryStorage]:
             storageResources.dynamo.assetHistoryStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.syncTrackingOutboundStorage]:
+            storageResources.dynamo.syncTrackingOutboundStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataVersionsStorage]:
             storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataStorage]:

@@ -101,6 +101,6 @@ class TestSsmResolution:
 class TestConstantsCompleteness:
     def test_all_keys_have_param_key_and_env_names(self, rn):
         keys = [v for k, v in vars(rn.ResourceKeys).items() if isinstance(v, rn.ResourceParamKey)]
-        assert len(keys) == 40
+        assert len(keys) == 41
         assert all(k.param_key and k.env_var_names for k in keys)
-        assert len({k.param_key for k in keys}) == 40
+        assert len({k.param_key for k in keys}) == 41
