@@ -352,4 +352,7 @@ Combined.pem
 #Claude
 .claude/settings.local.*
 docs/superpowers/*
-docs/*
+.codegraph/
+infra/cdk.context.json
+*.bak*
+.claude.json

@@ -10,3 +10,5 @@ cdk.out
 cdk.out.*
 .idea
 outfile*
+
+.codegraph/
