@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.1">
 <title data-rh="true">Network Architecture | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/networking"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Network Architecture | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="VAMS supports multiple network deployment configurations to accommodate commercial AWS, AWS GovCloud, and the AWS European Sovereign Cloud. This page describes the network topology for each deployment mode, VPC configuration options, VPC endpoints, and subnet architecture."><meta data-rh="true" property="og:description" content="VAMS supports multiple network deployment configurations to accommodate commercial AWS, AWS GovCloud, and the AWS European Sovereign Cloud. This page describes the network topology for each deployment mode, VPC configuration options, VPC endpoints, and subnet architecture."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/networking"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/networking" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/networking" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Network Architecture","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/networking"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.06da6833.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.0d93c92e.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.0/assets/js/main.f08fc176.js" defer="defer"></script>
 </head>
 <body>
@@ -22,7 +22,7 @@
 <ul>
 <li class="">Amazon CloudFront serves the React web application from an Amazon S3 origin bucket</li>
 <li class="">API requests are proxied through Amazon CloudFront to the REST API, with CloudFront&#x27;s <code>/api/*</code> behavior using an originPath of <code>/api</code> (the REST API stage) to absorb the stage path</li>
-<li class="">An optional AWS WAF Web ACL (deployed in <code>us-east-1</code>) protects the distribution</li>
+<li class="">When AWS WAF is enabled, a <code>CLOUDFRONT</code>-scoped Web ACL (deployed in <code>us-east-1</code>) protects the distribution, and a separate regional Web ACL protects the API Gateway stage (see <a href="#waf-protection-scope" class="">WAF Protection Scope</a>)</li>
 <li class="">Custom domain names are supported via <code>useCloudFront.customDomain</code> configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone</li>
 <li class="">The API endpoint type is configurable: <code>REGIONAL</code> (default, public; not routed through any VPC endpoint) or <code>PRIVATE</code> (VPC interface endpoint only, incompatible with CloudFront)</li>
 </ul>
@@ -36,7 +36,7 @@
 <li class="">The ALB requires a domain host name and an AWS Certificate Manager certificate ARN</li>
 <li class="">The ALB redirects <code>/api*</code> and <code>/secure-config*</code> paths by prepending <code>/api</code> (the REST API stage) to absorb the stage path</li>
 <li class="">The ALB can be deployed in public subnets (<code>useAlb.usePublicSubnet = true</code>) or isolated subnets (<code>useAlb.usePublicSubnet = false</code>)</li>
-<li class="">An optional AWS WAF Web ACL (regional) protects the ALB when WAF is enabled and CloudFront is not</li>
+<li class="">When AWS WAF is enabled, a single regional Web ACL protects both the ALB and the API Gateway stage</li>
 <li class="">VPC is required (<code>useGlobalVpc.enabled = true</code>)</li>
 <li class="">A dedicated Amazon S3 interface VPC endpoint forwards static web file requests from the ALB to the Amazon S3 web-app bucket (see <a href="#vpc-endpoints" class="">ALB Amazon S3 interface endpoint</a>)</li>
 <li class="">The API endpoint type is configurable: <code>REGIONAL</code> (public; not routed through any VPC endpoint) or <code>PRIVATE</code> (VPC interface endpoint only)</li>
@@ -80,12 +80,14 @@
 </ul>
 <p>This keeps the browser/CLI base URL unchanged (<code>/api/version</code>). The stage name is shared with the VamsCLI endpoint constants, so it is fixed in the codebase rather than configurable.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="waf-protection-scope">WAF Protection Scope<a href="#waf-protection-scope" class="hash-link" aria-label="Direct link to WAF Protection Scope" title="Direct link to WAF Protection Scope" translate="no">​</a></h3>
-<p>When AWS WAF is enabled (<code>app.useWaf = true</code>), the WAF Web ACL scope depends on the web distribution:</p>
+<p>When AWS WAF is enabled (<code>app.useWaf = true</code>), VAMS always creates a <strong>regional</strong> Web ACL in the deployment Region and associates it with the API Gateway stage — for both <code>REGIONAL</code> and <code>PRIVATE</code> endpoint types. The API&#x27;s <code>execute-api</code> endpoint stays directly reachable in every fronting configuration (CloudFront and the ALB proxy <code>/api/*</code>, but neither replaces direct API access), so protecting the API stage itself closes a path that fronting alone does not cover.</p>
+<p>The web distribution determines whether a second Web ACL is also created:</p>
 <ul>
-<li class=""><strong>CloudFront deployment</strong>: A CLOUDFRONT-scoped Web ACL (deployed in <code>us-east-1</code>) protects the distribution. The REST API stage does <strong>not</strong> receive a separate regional Web ACL association.</li>
-<li class=""><strong>ALB deployment (without CloudFront)</strong>: A REGIONAL Web ACL protects the REST API stage and the ALB. Both are associated with the same regional Web ACL.</li>
+<li class=""><strong>CloudFront deployment</strong>: A <code>CLOUDFRONT</code>-scoped Web ACL (deployed in <code>us-east-1</code>) protects the distribution, <strong>and</strong> the regional Web ACL protects the API Gateway stage. Two Web ACLs are required because AWS WAF does not allow a CloudFront-associated Web ACL to be shared with any other resource type, and API Gateway requires a regional-scoped Web ACL in the deployment Region. This holds even when the deployment Region is <code>us-east-1</code>.</li>
+<li class=""><strong>ALB deployment (without CloudFront)</strong>: A single regional Web ACL protects both the REST API stage and the ALB.</li>
+<li class=""><strong>No CloudFront or ALB</strong>: The regional Web ACL protects the API Gateway stage.</li>
 </ul>
-<p>This ensures that every request is filtered by WAF at the entry point, whether through CloudFront or directly to the ALB and API.</p>
+<p>Both Web ACLs (when two exist) are built from the same <code>config/policy/wafPolicyConfig.json</code> rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="vpc-configuration-options">VPC Configuration Options<a href="#vpc-configuration-options" class="hash-link" aria-label="Direct link to VPC Configuration Options" title="Direct link to VPC Configuration Options" translate="no">​</a></h2>
 <p>VAMS supports three VPC modes:</p>
 

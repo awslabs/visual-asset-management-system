@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.1">
 <title data-rh="true">AWS Resources Inventory | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/aws-resources"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="AWS Resources Inventory | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page provides a comprehensive inventory of all AWS resources deployed by VAMS. Resources are organized by service. Some resources are conditionally deployed based on the deployment configuration."><meta data-rh="true" property="og:description" content="This page provides a comprehensive inventory of all AWS resources deployed by VAMS. Resources are organized by service. Some resources are conditionally deployed based on the deployment configuration."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/aws-resources"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/aws-resources" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/aws-resources" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"AWS Resources Inventory","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/aws-resources"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.06da6833.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.0d93c92e.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.0/assets/js/main.f08fc176.js" defer="defer"></script>
 </head>
 <body>
@@ -945,8 +945,19 @@
 
 
 
-<table><thead><tr><th>Resource</th><th>Purpose</th></tr></thead><tbody><tr><td><strong>WAFv2 Web ACL</strong></td><td>Web application firewall for Amazon CloudFront or Application Load Balancer</td></tr></tbody></table>
-<p>For Amazon CloudFront deployments, the WAF stack is deployed in <code>us-east-1</code>. For Application Load Balancer deployments, the WAF is regional.</p>
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Resource</th><th>Scope</th><th>Region</th><th>Attached to</th></tr></thead><tbody><tr><td><strong>WAFv2 Web ACL (regional)</strong></td><td><code>REGIONAL</code></td><td>Deployment Region</td><td>Amazon API Gateway stage; Application Load Balancer (when enabled)</td></tr><tr><td><strong>WAFv2 Web ACL (CloudFront)</strong></td><td><code>CLOUDFRONT</code></td><td><code>us-east-1</code></td><td>Amazon CloudFront distribution (only when CloudFront is enabled)</td></tr></tbody></table>
+<p>A regional web ACL is always created and associated with the API Gateway stage (for both <code>REGIONAL</code> and <code>PRIVATE</code> endpoint types), so the API&#x27;s <code>execute-api</code> endpoint is protected in every fronting configuration. When Amazon CloudFront is enabled, a second <code>CLOUDFRONT</code>-scoped web ACL is created in <code>us-east-1</code> for the distribution — AWS WAF requires a separate scope for CloudFront, and a CloudFront-associated web ACL cannot be shared with any other resource type. Both web ACLs use the same <code>config/policy/wafPolicyConfig.json</code> rule policy.</p>
+<p>The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is <code>{name}-waf-{baseStackName}</code>. When CloudFront is enabled, the regional stack is <code>{name}-waf-regional-{baseStackName}</code> and the CloudFront stack is <code>{name}-waf-{baseStackName}</code> (in <code>us-east-1</code>).</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="aws-batch">AWS Batch<a href="#aws-batch" class="hash-link" aria-label="Direct link to AWS Batch" title="Direct link to AWS Batch" translate="no">​</a></h2>
 <p>Deployed conditionally for each enabled pipeline:</p>
 
