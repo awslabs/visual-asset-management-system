@@ -1,6 +1,7 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 import datetime
@@ -20,7 +21,7 @@ logger = safeLogger(service="AddComment")
 dynamodb = boto3.resource("dynamodb")
 s3c = boto3.client("s3")
 
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
     comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
@@ -75,7 +76,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :returns: Http response object (statusCode, headers, body)
     """
     normalize_event(event)
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     logger.info(event)
 
     # Parse request body
@@ -186,7 +187,11 @@ def lambda_handler(event: dict, context: dict) -> dict:
             return response
     except Exception as e:
         logger.exception(f"caught exception")
-        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+        # Only botocore ClientError carries a `.response`; guard the access so a
+        # non-ClientError (e.g. a KeyError/IndexError from malformed path params)
+        # does not raise AttributeError here and collapse into an opaque 502.
+        error_code = getattr(e, "response", {}).get("Error", {}).get("Code")
+        if error_code == "ConditionalCheckFailedException":
             response["statusCode"] = 400
             response["body"] = json.dumps(
                 {"message": "Comment already exists."}

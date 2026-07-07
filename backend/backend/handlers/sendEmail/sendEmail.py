@@ -1,6 +1,7 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 from common.constants import STANDARD_JSON_RESPONSE
@@ -11,7 +12,7 @@ logger = safeLogger(service="SendEmail")
 dynamodb_client = boto3.client('dynamodb')
 sns_client = boto3.client('sns')
 
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -26,7 +27,7 @@ def lambda_handler(event, context):
     assetId = event["assetId"]
     databaseId = event["databaseId"]
 
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     try:
         resp = dynamodb_client.query(
             TableName=asset_table_name,

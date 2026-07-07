@@ -71,7 +71,7 @@ One folder per domain. The current domains:
 -   `tagTypes/` — Tag type management
 -   `userRoles/` — User-role assignment
 -   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
--   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer)
+-   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
 
 ## 📋 **Development Workflow Checklist**
 
@@ -599,10 +599,14 @@ def handle_get_request(event):
         # Check authorization
         if resource:
             resource.update({"object__type": "[objectType]"})
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not casbin_enforcer.enforce(resource, "GET"):
-                    return authorization_error()
+            # Fail closed: an empty token list means no authenticated identity, so deny
+            # rather than fall through to returning the resource. Never gate the enforce
+            # inside `if len(tokens) > 0` without an else that denies.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(resource, "GET"):
+                return authorization_error()
 
             # Convert to response model
             try:
@@ -1180,10 +1184,14 @@ def create_[domain]([domain]_data, claims_and_roles):
     try:
         # Check authorization
         [domain]_data.update({"object__type": "[domain]"})
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce([domain]_data, "POST"):
-                return authorization_error()
+        # Fail closed: an empty token list means no authenticated identity, so deny
+        # rather than fall through to the mutation. Never gate the enforce inside
+        # `if len(tokens) > 0` without an else that denies.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce([domain]_data, "POST"):
+            return authorization_error()
 
         # Create the [domain]
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
@@ -1272,10 +1280,14 @@ def handle_get_request(event):
             # Check if [domain] exists and user has permission
             if [domain]:
                 [domain].update({"object__type": "[domain]"})
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce([domain], "GET"):
-                        return authorization_error()
+                # Fail closed: an empty token list means no authenticated identity, so
+                # deny rather than fall through to returning the resource. Never gate the
+                # enforce inside `if len(tokens) > 0` without an else that denies.
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not casbin_enforcer.enforce([domain], "GET"):
+                    return authorization_error()
 
                 # Convert to response model
                 try:
@@ -2065,13 +2077,19 @@ sns = boto3.client('sns', config=retry_config)
 ### **Authorization Check Pattern**
 
 ```python
-# Standard authorization check pattern
+# Standard authorization check pattern (single resource)
 if resource:
     resource.update({"object__type": "[objectType]"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(resource, "[ACTION]"):
-            return authorization_error()
+    # Fail closed: an empty token list means no authenticated identity, so deny rather
+    # than fall through. Never gate the enforce inside `if len(tokens) > 0` without an
+    # else that denies — that silently skips authorization when tokens are empty.
+    # (List-filtering handlers are the exception: they append only when enforce passes,
+    # so an empty token list yields an empty result set, which is already fail-closed.)
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforce(resource, "[ACTION]"):
+        return authorization_error()
 ```
 
 ### **Response Model Conversion Pattern**

@@ -16,7 +16,8 @@ graph LR
 
     subgraph AWS Cloud
         CF["Amazon CloudFront<br/>Distribution"]
-        WAF["AWS WAF<br/>(Optional)"]
+        WAFCF["AWS WAF<br/>(CLOUDFRONT scope, us-east-1)"]
+        WAFR["AWS WAF<br/>(REGIONAL scope)"]
         S3W["Amazon S3<br/>(Web App Bucket)"]
         APIGW["Amazon API Gateway<br/>REST API (v1)"]
         AUTH["Custom Lambda<br/>Authorizer"]
@@ -24,7 +25,8 @@ graph LR
     end
 
     USER -->|HTTPS| CF
-    WAF -.->|Protects| CF
+    WAFCF -.->|Protects| CF
+    WAFR -.->|Protects| APIGW
     CF -->|Static Assets| S3W
     CF -->|API Requests| APIGW
     APIGW --> AUTH
@@ -37,7 +39,7 @@ In this mode:
 
 -   Amazon CloudFront serves the React web application from an Amazon S3 origin bucket
 -   API requests are proxied through Amazon CloudFront to the REST API, with CloudFront's `/api/*` behavior using an originPath of `/api` (the REST API stage) to absorb the stage path
--   An optional AWS WAF Web ACL (deployed in `us-east-1`) protects the distribution
+-   When AWS WAF is enabled, a `CLOUDFRONT`-scoped Web ACL (deployed in `us-east-1`) protects the distribution, and a separate regional Web ACL protects the API Gateway stage (see [WAF Protection Scope](#waf-protection-scope))
 -   Custom domain names are supported via `useCloudFront.customDomain` configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone
 -   The API endpoint type is configurable: `REGIONAL` (default, public; not routed through any VPC endpoint) or `PRIVATE` (VPC interface endpoint only, incompatible with CloudFront)
 
@@ -62,6 +64,7 @@ graph LR
 
     USER -->|HTTPS| ALB
     WAF -.->|Protects| ALB
+    WAF -.->|Protects| APIGW
     ALB -->|Static Assets| S3W
     ALB -->|API Proxy| APIGW
     APIGW --> AUTH
@@ -76,7 +79,7 @@ In this mode:
 -   The ALB requires a domain host name and an AWS Certificate Manager certificate ARN
 -   The ALB redirects `/api*` and `/secure-config*` paths by prepending `/api` (the REST API stage) to absorb the stage path
 -   The ALB can be deployed in public subnets (`useAlb.usePublicSubnet = true`) or isolated subnets (`useAlb.usePublicSubnet = false`)
--   An optional AWS WAF Web ACL (regional) protects the ALB when WAF is enabled and CloudFront is not
+-   When AWS WAF is enabled, a single regional Web ACL protects both the ALB and the API Gateway stage
 -   VPC is required (`useGlobalVpc.enabled = true`)
 -   A dedicated Amazon S3 interface VPC endpoint forwards static web file requests from the ALB to the Amazon S3 web-app bucket (see [ALB Amazon S3 interface endpoint](#vpc-endpoints))
 -   The API endpoint type is configurable: `REGIONAL` (public; not routed through any VPC endpoint) or `PRIVATE` (VPC interface endpoint only)
@@ -154,12 +157,15 @@ This keeps the browser/CLI base URL unchanged (`/api/version`). The stage name i
 
 ### WAF Protection Scope
 
-When AWS WAF is enabled (`app.useWaf = true`), the WAF Web ACL scope depends on the web distribution:
+When AWS WAF is enabled (`app.useWaf = true`), VAMS always creates a **regional** Web ACL in the deployment Region and associates it with the API Gateway stage — for both `REGIONAL` and `PRIVATE` endpoint types. The API's `execute-api` endpoint stays directly reachable in every fronting configuration (CloudFront and the ALB proxy `/api/*`, but neither replaces direct API access), so protecting the API stage itself closes a path that fronting alone does not cover.
 
--   **CloudFront deployment**: A CLOUDFRONT-scoped Web ACL (deployed in `us-east-1`) protects the distribution. The REST API stage does **not** receive a separate regional Web ACL association.
--   **ALB deployment (without CloudFront)**: A REGIONAL Web ACL protects the REST API stage and the ALB. Both are associated with the same regional Web ACL.
+The web distribution determines whether a second Web ACL is also created:
 
-This ensures that every request is filtered by WAF at the entry point, whether through CloudFront or directly to the ALB and API.
+-   **CloudFront deployment**: A `CLOUDFRONT`-scoped Web ACL (deployed in `us-east-1`) protects the distribution, **and** the regional Web ACL protects the API Gateway stage. Two Web ACLs are required because AWS WAF does not allow a CloudFront-associated Web ACL to be shared with any other resource type, and API Gateway requires a regional-scoped Web ACL in the deployment Region. This holds even when the deployment Region is `us-east-1`.
+-   **ALB deployment (without CloudFront)**: A single regional Web ACL protects both the REST API stage and the ALB.
+-   **No CloudFront or ALB**: The regional Web ACL protects the API Gateway stage.
+
+Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint.
 
 ## VPC Configuration Options
 

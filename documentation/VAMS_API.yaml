@@ -12,10 +12,49 @@ servers:
 paths:
     /api/amplify-config:
         get:
-            summary: "Get secure configuration."
+            summary: "Get authentication provider configuration."
+            description: "Returns the authentication provider configuration used to bootstrap the web application. This endpoint is unauthenticated."
             responses:
                 "200":
                     description: OK.
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /secure-config:
+        get:
+            summary: "Get secure runtime configuration."
+            description: "Returns the runtime configuration for the authenticated user, including the enabled feature flags, the Amazon Location Service map API URL (when enabled), and the deployed web application URL."
+            responses:
+                "200":
+                    description: Runtime configuration retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    featuresEnabled:
+                                        type: string
+                                        description: "Comma-separated list of enabled feature flags"
+                                        example: "CLOUDFRONTDEPLOY,LOCATIONSERVICES,AUTHPROVIDER_COGNITO"
+                                    locationServiceApiUrl:
+                                        type: string
+                                        description: "Amazon Location Service map style descriptor URL with embedded API key; empty when Location Services is not enabled"
+                                    webDeployedUrl:
+                                        type: string
+                                        description: "Deployed web application URL; empty when not configured"
+                                required:
+                                    - featuresEnabled
+                                    - locationServiceApiUrl
+                                    - webDeployedUrl
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Internal server error.
                     content:

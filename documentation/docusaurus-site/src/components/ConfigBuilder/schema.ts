@@ -1413,7 +1413,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "addons",
         advanced: true,
-        help: "Required when Physna Sync is enabled.",
+        help: "Cognito client ID. VAMS creates and populates the credentials secret at deploy time.",
         visibleWhen: physna,
     },
     {
@@ -1422,7 +1422,16 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "addons",
         advanced: true,
-        help: "Required when Physna Sync is enabled. Stored in Secrets Manager at deploy.",
+        help: "Cognito client secret. VAMS populates the secret via a custom resource so the value is not written into the CloudFormation template.",
+        visibleWhen: physna,
+    },
+    {
+        path: "app.addons.usePhysnaSync.credentialsSecretArn",
+        label: "Physna — credentials secret ARN (optional)",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        help: "Optional: ARN of an operator-managed Secrets Manager secret ({clientId, clientSecret}). When set, client ID/secret above are ignored.",
         visibleWhen: physna,
     },
 

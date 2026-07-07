@@ -39,6 +39,33 @@ const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f
 const IPV4_PATTERN =
     /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 const SQS_URL_PATTERN = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
+
+/** True when a value looks like a valid URL (config.ts uses `new URL(...)`). */
+function isValidUrl(value: unknown): boolean {
+    if (typeof value !== "string" || value === "") return false;
+    try {
+        // eslint-disable-next-line no-new
+        new URL(value);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/** Physna credentials supplied via an operator-managed secret ARN (config.ts:1623). */
+function physnaHasSecretArn(cfg: ConfigShape): boolean {
+    return !isUnset(g(cfg, "app.addons.usePhysnaSync.credentialsSecretArn"));
+}
+
+/** Physna credentials supplied inline as clientId + clientSecret (config.ts:1627). */
+function physnaHasInlineCreds(cfg: ConfigShape): boolean {
+    return (
+        !isUnset(g(cfg, "app.addons.usePhysnaSync.clientId")) &&
+        !isUnset(g(cfg, "app.addons.usePhysnaSync.clientSecret"))
+    );
+}
 
 /** True if any external-OAuth IdP required field is unset (config.ts:849-877). */
 function oauthFieldsMissing(cfg: ConfigShape): boolean {
@@ -603,6 +630,109 @@ export const RULES: Rule[] = [
         },
         message:
             "Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL (https://sqs.<region>.amazonaws.com/<account>/<queue>).",
+    },
+
+    // ----- Physna Sync (config.ts:1560-1653) -----
+    {
+        id: "physna-tenant-uuid",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.tenantId"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            const tenant = g(c, "app.addons.usePhysnaSync.tenantId");
+            return isUnset(tenant) || !UUID_PATTERN.test(tenant);
+        },
+        message: "Physna Sync requires tenantId to be a valid UUID when enabled.",
+    },
+    {
+        id: "physna-apibaseendpoint-required",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.apiBaseEndpoint"],
+        appliesWhen: (c) =>
+            g(c, "app.addons.usePhysnaSync.enabled") &&
+            isUnset(g(c, "app.addons.usePhysnaSync.apiBaseEndpoint")),
+        message: "Physna Sync requires apiBaseEndpoint when enabled.",
+    },
+    {
+        id: "physna-apibaseendpoint-url",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.apiBaseEndpoint"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            const endpoint = g(c, "app.addons.usePhysnaSync.apiBaseEndpoint");
+            if (isUnset(endpoint)) return false; // covered by physna-apibaseendpoint-required
+            return !isValidUrl(endpoint);
+        },
+        message: "Physna Sync apiBaseEndpoint must be a valid URL.",
+    },
+    {
+        id: "physna-apibaseendpoint-trailing-slash",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.apiBaseEndpoint"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            const endpoint = g(c, "app.addons.usePhysnaSync.apiBaseEndpoint");
+            if (isUnset(endpoint) || !isValidUrl(endpoint)) return false; // ordered after the above
+            return typeof endpoint === "string" && !endpoint.endsWith("/");
+        },
+        message: "Physna Sync apiBaseEndpoint must end with a trailing slash '/'.",
+    },
+    {
+        id: "physna-authtokenendpoint-required",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.authTokenEndpoint"],
+        appliesWhen: (c) =>
+            g(c, "app.addons.usePhysnaSync.enabled") &&
+            isUnset(g(c, "app.addons.usePhysnaSync.authTokenEndpoint")),
+        message: "Physna Sync requires authTokenEndpoint when enabled.",
+    },
+    {
+        id: "physna-authtokenendpoint-url",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.authTokenEndpoint"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            const endpoint = g(c, "app.addons.usePhysnaSync.authTokenEndpoint");
+            if (isUnset(endpoint)) return false; // covered by physna-authtokenendpoint-required
+            return !isValidUrl(endpoint);
+        },
+        message: "Physna Sync authTokenEndpoint must be a valid URL.",
+    },
+    {
+        id: "physna-authtype",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.authType"],
+        appliesWhen: (c) =>
+            g(c, "app.addons.usePhysnaSync.enabled") &&
+            g(c, "app.addons.usePhysnaSync.authType") !== "cognito",
+        message: 'Physna Sync authType must be "cognito" (the only supported value).',
+    },
+    {
+        id: "physna-credentials-required",
+        severity: "error",
+        fieldPaths: [
+            "app.addons.usePhysnaSync.clientId",
+            "app.addons.usePhysnaSync.clientSecret",
+            "app.addons.usePhysnaSync.credentialsSecretArn",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.addons.usePhysnaSync.enabled") &&
+            !physnaHasSecretArn(c) &&
+            !physnaHasInlineCreds(c),
+        message:
+            "Physna Sync requires credentials when enabled. Set both clientId and clientSecret, or credentialsSecretArn.",
+    },
+    {
+        id: "physna-secretarn-format",
+        severity: "error",
+        fieldPaths: ["app.addons.usePhysnaSync.credentialsSecretArn"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
+            if (!physnaHasSecretArn(c)) return false; // inline-credential path
+            const arn = g(c, "app.addons.usePhysnaSync.credentialsSecretArn");
+            return !SECRETSMANAGER_ARN_PATTERN.test(arn);
+        },
+        message: "Physna Sync credentialsSecretArn must be a valid AWS Secrets Manager secret ARN.",
     },
 
     // ===== Warnings (config.ts console.warn advisories) =====

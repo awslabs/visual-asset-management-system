@@ -187,6 +187,11 @@ keys_cache = {}
 keys_cache_expiry = 0
 CACHE_TTL = 60 * 60  # 1 hour in seconds
 
+# Resolved JWKS URI per external issuer, cached so OpenID Connect discovery is not
+# performed on the hot path of every authenticated request. Maps issuer_url ->
+# {"jwks_uri": str, "expiry": timestamp}.
+jwks_uri_cache = {}
+
 # URL Templates
 COGNITO_JWKS_URL_TEMPLATE = "{cognito_base_url}/{user_pool_id}/.well-known/jwks.json"
 EXTERNAL_JWKS_URL_TEMPLATE = "{issuer_url}/.well-known/jwks.json"
@@ -354,8 +359,10 @@ def verify_cognito_jwt(token: str) -> Optional[Dict[str, Any]]:
         # Import the public key using joserfc
         public_key = joserfc_jwk.import_key(keys[key_index])
 
-        # Decode and verify the token using joserfc
-        token_result = joserfc_jwt.decode(token, public_key)
+        # Decode and verify the token using joserfc, pinning the accepted algorithm to
+        # RS256 (Cognito's issuance algorithm). An explicit allow-list prevents algorithm
+        # confusion / alg=none from ever being accepted, matching verify_external_jwt.
+        token_result = joserfc_jwt.decode(token, public_key, algorithms=['RS256'])
 
         logger.info('JWT signature successfully verified')
 
@@ -608,7 +615,10 @@ def discover_jwks_uri(issuer_url: str) -> Optional[str]:
 
 def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     """
-    Get JWKS URI for external IDP with discovery fallback
+    Get JWKS URI for external IDP with discovery fallback.
+
+    The resolved URI is cached per issuer for CACHE_TTL so OpenID Connect discovery
+    is not performed on the hot path of every authenticated request.
 
     Args:
         issuer_url: The issuer URL for the external IDP
@@ -616,15 +626,30 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     Returns:
         The JWKS URI to use for fetching keys
     """
+    global jwks_uri_cache
+
+    current_time = time.time()
+    cached = jwks_uri_cache.get(issuer_url)
+    if cached and current_time < cached["expiry"]:
+        return cached["jwks_uri"]
+
     # First try OpenID Connect discovery
     discovered_uri = discover_jwks_uri(issuer_url)
     if discovered_uri:
         logger.info(f"Using discovered JWKS URI: {discovered_uri}")
+        jwks_uri_cache[issuer_url] = {
+            "jwks_uri": discovered_uri,
+            "expiry": current_time + CACHE_TTL,
+        }
         return discovered_uri
 
     # Fall back to standard .well-known/jwks.json
     fallback_uri = EXTERNAL_JWKS_URL_TEMPLATE.format(issuer_url=issuer_url)
     logger.info(f"OpenID Connect discovery failed, falling back to: {fallback_uri}")
+    jwks_uri_cache[issuer_url] = {
+        "jwks_uri": fallback_uri,
+        "expiry": current_time + CACHE_TTL,
+    }
     return fallback_uri
 
 

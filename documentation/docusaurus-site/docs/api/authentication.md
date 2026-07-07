@@ -150,12 +150,13 @@ None.
 
 ```json
 {
-    "featuresEnabled": ["CLOUDFRONTDEPLOY", "LOCATIONSERVICES", "AUTHPROVIDER_COGNITO"],
-    "config": {
-        "region": "us-east-1"
-    }
+    "featuresEnabled": "CLOUDFRONTDEPLOY,LOCATIONSERVICES,AUTHPROVIDER_COGNITO",
+    "locationServiceApiUrl": "https://maps.geo.us-east-1.amazonaws.com/v2/styles/Standard/descriptor?key=<apiKey>",
+    "webDeployedUrl": "https://example.cloudfront.net"
 }
 ```
+
+`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` and `webDeployedUrl` are empty strings when Amazon Location Service or the web deployment URL is not configured.
 
 **Error Responses:**
 

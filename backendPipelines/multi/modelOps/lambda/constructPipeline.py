@@ -3,6 +3,7 @@
 
 import json
 import os
+import shlex
 import boto3
 from customLogging.logger import safeLogger
 
@@ -57,7 +58,12 @@ def construct_modelops_definition(event) -> dict:
         config["state"]["extension"] = input_s3_asset_extension.replace(".", "")
 
         command_string = json.dumps(config)
-        command = "printf '" + command_string + "' | /home/app/apps/handler/dist/index.js -i yaml --debug"
+        # The config JSON is derived from the asset filename/key and caller parameters.
+        # Pass it as a single shell-quoted literal to `printf '%s'` so its contents are
+        # never parsed by the shell; this prevents command injection via a value
+        # containing a single quote (which json.dumps does not escape) or other shell
+        # metacharacters.
+        command = "printf '%s' " + shlex.quote(command_string) + " | /home/app/apps/handler/dist/index.js -i yaml --debug"
 
     else:
         # if no input parameters are found, execute standard command

@@ -1,0 +1,33 @@
+{
+    "managedRuleGroups": [
+        {
+            "name": "AWS-AWSManagedRulesCommonRuleSet",
+            "vendorName": "AWS",
+            "managedRuleGroupName": "AWSManagedRulesCommonRuleSet",
+            "priority": 1,
+            "block": true
+        },
+        {
+            "name": "AWS-AWSManagedRulesKnownBadInputsRuleSet",
+            "vendorName": "AWS",
+            "managedRuleGroupName": "AWSManagedRulesKnownBadInputsRuleSet",
+            "priority": 2,
+            "block": true
+        },
+        {
+            "name": "AWS-AWSManagedRulesAmazonIpReputationList",
+            "vendorName": "AWS",
+            "managedRuleGroupName": "AWSManagedRulesAmazonIpReputationList",
+            "priority": 3,
+            "block": true
+        }
+    ],
+    "rateBasedRules": [
+        {
+            "name": "VAMS-RateLimit",
+            "priority": 10,
+            "limit": 2000,
+            "aggregateKeyType": "IP"
+        }
+    ]
+}

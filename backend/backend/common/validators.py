@@ -300,11 +300,13 @@ def validate_number(name, value):
         return (False, name + " is invalid. Must be a number.")
     
 def validate_bool(name, value):
-    try:
-        bool(str(value))
+    # bool(str(value)) is truthy for any non-empty string, so it never rejects — check
+    # against an explicit allow-list of boolean literals instead.
+    if isinstance(value, bool):
         return (True, '')
-    except ValueError:
-        return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
+    if isinstance(value, str) and value.strip().lower() in ('true', 'false'):
+        return (True, '')
+    return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
 
 
 def validate_sqs_queue_url(name, value):
@@ -345,20 +347,23 @@ def validate(values):
             if not isinstance(v['allowGlobalKeyword'], bool):
                 raise Exception("The allowGlobalKeyword field in validator for " + k + " field must be of type bool")
 
-        #Empty checks across types. If optional, return success. Otherwise error on empty. 
+        #Empty checks across types. If optional, skip THIS field and keep validating the
+        #rest (use `continue`, not `return` — a `return` here would report the whole
+        #request valid and silently skip every field ordered after an empty optional one).
+        #Otherwise error on empty.
         if v['value'] is None:
             if optional:
-                return (True, "")
+                continue
             else:
                 return (False, k + " is a required field.")
         if not "_ARRAY" in v['validator'] and isinstance(v['value'], str) and v['value'] == '':
             if optional:
-                return (True, "")
+                continue
             else:
                 return (False, k + " is a required field.")
         if "_ARRAY" in v['validator'] and isinstance(v['value'], (list)) and len(v['value']) == 0:
             if optional:
-                return (True, "")
+                continue
             else:
                 return (False, k + " is a required field.")
             

@@ -303,11 +303,14 @@ See the [Network Architecture](networking.md) page for full VPC endpoint details
 
 Deployed when `useWaf = true`:
 
-| Resource          | Purpose                                                                     |
-| ----------------- | --------------------------------------------------------------------------- |
-| **WAFv2 Web ACL** | Web application firewall for Amazon CloudFront or Application Load Balancer |
+| Resource                       | Scope        | Region            | Attached to                                                        |
+| ------------------------------ | ------------ | ----------------- | ------------------------------------------------------------------ |
+| **WAFv2 Web ACL (regional)**   | `REGIONAL`   | Deployment Region | Amazon API Gateway stage; Application Load Balancer (when enabled) |
+| **WAFv2 Web ACL (CloudFront)** | `CLOUDFRONT` | `us-east-1`       | Amazon CloudFront distribution (only when CloudFront is enabled)   |
 
-For Amazon CloudFront deployments, the WAF stack is deployed in `us-east-1`. For Application Load Balancer deployments, the WAF is regional.
+A regional web ACL is always created and associated with the API Gateway stage (for both `REGIONAL` and `PRIVATE` endpoint types), so the API's `execute-api` endpoint is protected in every fronting configuration. When Amazon CloudFront is enabled, a second `CLOUDFRONT`-scoped web ACL is created in `us-east-1` for the distribution — AWS WAF requires a separate scope for CloudFront, and a CloudFront-associated web ACL cannot be shared with any other resource type. Both web ACLs use the same `config/policy/wafPolicyConfig.json` rule policy.
+
+The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is `{name}-waf-{baseStackName}`. When CloudFront is enabled, the regional stack is `{name}-waf-regional-{baseStackName}` and the CloudFront stack is `{name}-waf-{baseStackName}` (in `us-east-1`).
 
 ## AWS Batch
 

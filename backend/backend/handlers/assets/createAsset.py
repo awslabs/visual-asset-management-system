@@ -703,11 +703,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             "tags": request_model.tags
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
-                return authorization_error()
-        
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than fall through to the mutation.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
+            return authorization_error()
+
         # Process request
         response = create_asset(request_model, claims_and_roles)
         return success(body=response.dict())

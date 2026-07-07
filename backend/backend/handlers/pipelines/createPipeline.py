@@ -8,6 +8,7 @@ import datetime
 import random
 import string
 from boto3.dynamodb.conditions import Attr
+from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
@@ -318,15 +319,38 @@ def upload_pipeline(request_model, claims_and_roles, event):
     # table already initialized above for the existence check
     keys_map, values_map, expr = to_update_expr(item)
 
-    table.update_item(
-        Key={
+    update_kwargs = {
+        'Key': {
             'databaseId': request_model.databaseId,
             'pipelineId': request_model.pipelineId,
         },
-        UpdateExpression=expr,
-        ExpressionAttributeNames=keys_map,
-        ExpressionAttributeValues=values_map,
-    )
+        'UpdateExpression': expr,
+        'ExpressionAttributeNames': keys_map,
+        'ExpressionAttributeValues': values_map,
+    }
+
+    # On create (no existing item), guard against a concurrent create of the same
+    # (databaseId, pipelineId) racing between the existence check and this write, closing
+    # the same-key clobber window. Cross-database pipelineId uniqueness (a non-key
+    # attribute) is still enforced by find_conflicting_database above.
+    if not existing_item:
+        update_kwargs['ConditionExpression'] = (
+            'attribute_not_exists(databaseId) AND attribute_not_exists(pipelineId)'
+        )
+
+    try:
+        table.update_item(**update_kwargs)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.warning(
+                f"Concurrent create detected for pipelineId {request_model.pipelineId} "
+                f"in database {request_model.databaseId}"
+            )
+            return validation_error(
+                body={'message': "Pipeline ID is already in use. Choose a different ID."},
+                event=event
+            )
+        raise
 
     if request_model.updateAssociatedWorkflows:
         body_dict = request_model.dict()

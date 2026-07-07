@@ -6,6 +6,10 @@ on:
     pull_request:
         branches: [main]
 
+# Least-privilege token: the build job only checks out code and uploads artifacts
+permissions:
+    contents: read
+
 jobs:
     build:
         runs-on: ubuntu-latest

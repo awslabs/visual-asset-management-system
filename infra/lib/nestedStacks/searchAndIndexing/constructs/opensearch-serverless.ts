@@ -371,7 +371,7 @@ export class OpensearchServerlessConstruct extends Construct {
         NagSuppressions.addResourceSuppressions(schemaDeployProvider, [
             {
                 id: "AwsSolutions-L1",
-                reason: "Configured as intended.",
+                reason: "Runtime is managed by the CDK custom-resources framework (cr.Provider) that backs the OpenSearch schema-deploy custom resource; VAMS does not control this provider function's runtime version.",
             },
         ]);
 

@@ -97,19 +97,54 @@ External buckets can be added incrementally across deployments. Each bucket requ
 
 ### WAF and FIPS (`app`)
 
-| Field                        | Type    | Default | Description                                                                                                                           |
-| ---------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.useWaf`                 | boolean | `true`  | Enables AWS WAF for Amazon CloudFront or ALB and Amazon API Gateway attachment points. Disabling this generates a deployment warning. |
-| `app.useFips`                | boolean | `false` | Enables FIPS-compliant AWS partition endpoints. Must be combined with the `AWS_USE_FIPS_ENDPOINT=true` environment variable.          |
-| `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                  |
+| Field                        | Type    | Default | Description                                                                                                                                                                                    |
+| ---------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.useWaf`                 | boolean | `true`  | Enables AWS WAF. Always protects the Amazon API Gateway API and, when present, the Amazon CloudFront distribution or Application Load Balancer. Disabling this generates a deployment warning. |
+| `app.useFips`                | boolean | `false` | Enables FIPS-compliant AWS partition endpoints. Must be combined with the `AWS_USE_FIPS_ENDPOINT=true` environment variable.                                                                   |
+| `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                                                                           |
 
 :::info[Implemented by]
 These three keys do **not** map to a single nested stack:
 
--   `app.useWaf` — standalone stack `infra/lib/cf-waf-stack.ts` (`CfWafStack`), gated in `infra/bin/infra.ts` and associated with the distribution/ALB in `staticWebApp/staticWebBuilder-nestedStack.ts`.
+-   `app.useWaf` — standalone WAF stack(s) `infra/lib/cf-waf-stack.ts` (`CfWafStack`), gated in `infra/bin/infra.ts`. The regional web ACL attaches to the API Gateway stage in `apiLambda/constructs/rest-api-gateway-construct.ts` and to the ALB in `staticWebApp/staticWebBuilder-nestedStack.ts`; the CloudFront web ACL attaches to the distribution in `staticWebApp/constructs/cloudfront-s3-website-construct.ts`.
 -   `app.useFips` — global endpoint resolution in `infra/lib/helper/service-helper.ts` (no stack of its own).
 -   `app.addStackCloudTrailLogs` — created inline in the root stack `infra/lib/core-stack.ts` (`CoreVAMSStack`).
     :::
+
+#### How many web ACLs are created
+
+When `app.useWaf` is enabled, VAMS always creates a **regional-scoped** web ACL in the deployment Region and associates it with the API Gateway API stage — for both `REGIONAL` and `PRIVATE` endpoint types, and regardless of whether a CloudFront distribution or ALB fronts the application. This protects the API's `execute-api` endpoint, which remains directly reachable in every fronting configuration.
+
+The number of web ACLs depends on the front-end distribution:
+
+| Front-end (`app.useCloudFront` / `app.useAlb`) | Web ACLs created                                                                  | Attached to                                |
+| ---------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------ |
+| CloudFront enabled                             | **2** — a regional ACL (deployment Region) **and** a CloudFront ACL (`us-east-1`) | API Gateway stage; CloudFront distribution |
+| ALB enabled                                    | 1 — a regional ACL (deployment Region)                                            | API Gateway stage; ALB                     |
+| Neither                                        | 1 — a regional ACL (deployment Region)                                            | API Gateway stage                          |
+
+AWS WAF scopes are not interchangeable, so a **CloudFront deployment requires two web ACLs**. A web ACL associated with a CloudFront distribution is `CLOUDFRONT`-scoped, lives in `us-east-1`, and — per AWS WAF — cannot be associated with any other resource type. API Gateway and ALB require a `REGIONAL`-scoped web ACL in the deployment Region. This holds even when the deployment Region is `us-east-1`: the CloudFront ACL and the regional ACL are different scopes, so a single ACL cannot cover both the distribution and the API Gateway. Both web ACLs are built from the same `wafPolicyConfig.json` policy, so their rule sets are identical.
+
+The two web ACLs are created as separate CloudFormation stacks. The regional stack is named `{name}-waf-{baseStackName}` when CloudFront is disabled, or `{name}-waf-regional-{baseStackName}` when CloudFront is enabled; the CloudFront stack (when present) is named `{name}-waf-{baseStackName}` and deployed to `us-east-1`.
+
+#### WAF rule policy (`config/policy/wafPolicyConfig.json`)
+
+When `app.useWaf` is enabled, the rules attached to the web ACL(s) are defined by the file `infra/config/policy/wafPolicyConfig.json`. This keeps the firewall posture in a dedicated policy file, separate from the main `config.json`, alongside the S3 bucket-policy and IAM-role customization files. The same policy file is applied to both the regional and CloudFront web ACLs.
+
+The file has two sections:
+
+| Section             | Purpose                                                                                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `managedRuleGroups` | AWS or third-party managed rule groups to attach. Each entry sets `name`, `vendorName`, `managedRuleGroupName`, `priority`, and `block` (`true` applies the group's own block actions; `false` runs the group in count-only mode). |
+| `rateBasedRules`    | Rate-based rules for L7 DDoS and brute-force throttling. Each entry sets `name`, `priority`, `limit` (requests per 5-minute window per aggregate key), and `aggregateKeyType` (`IP` or `FORWARDED_IP`).                            |
+
+The shipped file applies the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a 2,000-request-per-IP rate limit. The web ACL default action remains `allow`, so only requests matching a rule are blocked or counted.
+
+If the file is empty or absent, VAMS applies its baseline rule set: a single AWS Common Rule Set in count-only mode. Populate the file to enable enforced protection.
+
+:::tip[Validate before enabling block mode]
+Managed rule groups can match legitimate traffic (for example, large multipart uploads or presigned-URL flows). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives.
+:::
 
 ### KMS encryption (`app.useKmsCmkEncryption`)
 
@@ -750,17 +785,35 @@ Nested stack: `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts` (`Addon
 
 One-way synchronization of supported VAMS files and metadata to a Physna tenant for geometric and semantic 3D search.
 
-| Field                                        | Type    | Default                                                            | Description                                                           |
-| -------------------------------------------- | ------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `app.addons.usePhysnaSync.enabled`           | boolean | `false`                                                            | Enables the Physna Sync add-on.                                       |
-| `app.addons.usePhysnaSync.tenantId`          | string  | _(required when enabled)_                                          | Physna tenant UUID.                                                   |
-| `app.addons.usePhysnaSync.apiBaseEndpoint`   | string  | `https://app-api.physna.com/v3/`                                   | Physna REST API base URL. Must end with `/`.                          |
-| `app.addons.usePhysnaSync.authTokenEndpoint` | string  | `https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token` | OAuth2 token endpoint for Physna's Cognito user pool.                 |
-| `app.addons.usePhysnaSync.authType`          | string  | `cognito`                                                          | Authentication mode. Only `cognito` is supported in phase 1.          |
-| `app.addons.usePhysnaSync.clientId`          | string  | _(required when enabled)_                                          | Cognito client ID. Written to AWS Secrets Manager at deploy time.     |
-| `app.addons.usePhysnaSync.clientSecret`      | string  | _(required when enabled)_                                          | Cognito client secret. Written to AWS Secrets Manager at deploy time. |
+| Field                                           | Type    | Default                                                            | Description                                                                                                                                                                             |
+| ----------------------------------------------- | ------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.addons.usePhysnaSync.enabled`              | boolean | `false`                                                            | Enables the Physna Sync add-on.                                                                                                                                                         |
+| `app.addons.usePhysnaSync.tenantId`             | string  | _(required when enabled)_                                          | Physna tenant UUID.                                                                                                                                                                     |
+| `app.addons.usePhysnaSync.apiBaseEndpoint`      | string  | `https://app-api.physna.com/v3/`                                   | Physna REST API base URL. Must end with `/`.                                                                                                                                            |
+| `app.addons.usePhysnaSync.authTokenEndpoint`    | string  | `https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token` | OAuth2 token endpoint for Physna's Cognito user pool.                                                                                                                                   |
+| `app.addons.usePhysnaSync.authType`             | string  | `cognito`                                                          | Authentication mode. Only `cognito` is supported in phase 1.                                                                                                                            |
+| `app.addons.usePhysnaSync.clientId`             | string  | _(required when enabled)_                                          | Cognito client ID. VAMS creates the credentials secret and populates it at deploy time.                                                                                                 |
+| `app.addons.usePhysnaSync.clientSecret`         | string  | _(required when enabled)_                                          | Cognito client secret. VAMS creates the credentials secret and populates it at deploy time without writing the value into the CloudFormation template.                                  |
+| `app.addons.usePhysnaSync.credentialsSecretArn` | string  | `""`                                                               | Optional. ARN of an operator-managed AWS Secrets Manager secret holding `{ "clientId", "clientSecret" }`. When set, VAMS imports that secret and `clientId`/`clientSecret` are ignored. |
+
+Provide the OAuth2 client credentials in one of two ways:
+
+-   **Inline `clientId` + `clientSecret` (default).** Put the credentials directly in the configuration. VAMS creates the Secrets Manager secret during deployment and populates it via a custom resource whose Lambda carries the values in its code asset. Because CDK references code assets by content hash (uploaded to the CDK assets bucket), the credential value never appears in the synthesized CloudFormation template or its resource properties — and no secret has to be created ahead of deployment.
+
+-   **`credentialsSecretArn` (operator-managed).** Create the secret yourself with a JSON value of `{ "clientId": "...", "clientSecret": "..." }` and reference it by ARN. VAMS imports the secret by ARN and ignores the inline `clientId`/`clientSecret`. Use this when secret provisioning is centralized or must be managed outside the VAMS deployment.
+
+    ```bash
+    aws secretsmanager create-secret \
+        --name my-vams-physna-credentials \
+        --secret-string '{"clientId":"...","clientSecret":"..."}'
+    # then set app.addons.usePhysnaSync.credentialsSecretArn to the returned ARN
+    ```
 
 Enabling the Physna Sync add-on also enables the in-app Physna add-on frontend features (currently the Physna Viewer plugin; more Physna-powered UI surfaces are planned). The backend emits a `PHYSNA_ADDON` feature flag in `/api/secure-config` whenever `app.addons.usePhysnaSync.enabled` is `true`, and the frontend consumes that flag to decide whether to surface Physna add-on features for supported file types. No separate configuration is required.
+
+:::warning[Physna Viewer tokens grant tenant-wide reach]
+The Physna Viewer plugin (`GET /addon/physna/viewer`) enforces VAMS two-tier authorization on the requested asset, then returns a Physna viewer token to the browser. Physna issues this token at **tenant** scope rather than per-asset (Physna does not currently support asset-scoped viewer tokens), so a user authorized to view one synced asset holds a token whose reach spans the Physna tenant for its lifetime. Treat access to the Physna Viewer feature as granting visibility into the connected Physna tenant, and scope the `api` and `asset` permissions for the viewer route accordingly.
+:::
 
 ## Example configurations
 

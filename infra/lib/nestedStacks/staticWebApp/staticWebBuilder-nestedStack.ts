@@ -30,7 +30,10 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     webAppBuildPath: string;
     apiUrl: string;
     storageResources: storageResources;
-    ssmWafArn: string;
+    // CloudFront-scoped WAF ACL ARN (us-east-1) for the CloudFront distribution.
+    ssmWafArnCloudfront: string;
+    // Regional-scoped WAF ACL ARN (core region) for the ALB.
+    ssmWafArnRegional: string;
     authResources: authResources;
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
@@ -179,7 +182,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webAppBucket,
                 webAppAccessLogsBucket,
                 webSiteBuildPath: props.webAppBuildPath,
-                webAcl: props.ssmWafArn,
+                webAcl: props.ssmWafArnCloudfront,
                 apiUrl: props.apiUrl,
                 csp: cspPolicy,
                 cognitoDomain: cognitoHostedUiUrl,
@@ -290,7 +293,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webAppBucket,
                 webAppAccessLogsBucket,
                 webSiteBuildPath: props.webAppBuildPath,
-                webAcl: props.ssmWafArn,
+                webAcl: props.ssmWafArnRegional,
                 apiUrl: props.apiUrl,
                 apiStageName: Config.API_GATEWAY_STAGE_NAME,
                 csp: cspPolicy,

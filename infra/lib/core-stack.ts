@@ -38,7 +38,12 @@ import { CfnStack } from "aws-cdk-lib";
 export interface EnvProps {
     env: cdk.Environment;
     stackName: string;
-    ssmWafArn: string;
+    // Regional-scoped WAF web ACL ARN (core region) — attaches to the API Gateway stage
+    // and, for ALB deployments, the ALB. Empty string when WAF is disabled.
+    ssmWafArnRegional: string;
+    // CloudFront-scoped WAF web ACL ARN (us-east-1) — attaches to the CloudFront
+    // distribution. Empty string when CloudFront or WAF is disabled.
+    ssmWafArnCloudfront: string;
     config: Config.Config;
     description: string;
     synthesizer?: cdk.IStackSynthesizer;
@@ -313,7 +318,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 vpc: this.vpc,
                 subnets: this.subnetsIsolated,
                 vamsCreatedApiGatewayVpcEndpointId: this.apiGatewayVpcEndpointId,
-                wafArn: props.ssmWafArn,
+                wafArn: props.ssmWafArnRegional,
             });
             apiNestedStack.addDependency(storageResourcesNestedStack);
             apiNestedStack.addDependency(authBuilderNestedStack);
@@ -335,7 +340,8 @@ export class CoreVAMSStack extends cdk.Stack {
                         webAppBuildPath: this.webAppBuildPath,
                         apiUrl: apiNestedStack.apiEndpoint,
                         storageResources: storageResourcesNestedStack.storageResources,
-                        ssmWafArn: props.ssmWafArn,
+                        ssmWafArnCloudfront: props.ssmWafArnCloudfront,
+                        ssmWafArnRegional: props.ssmWafArnRegional,
                         authResources: authBuilderNestedStack.authResources,
                     }
                 );

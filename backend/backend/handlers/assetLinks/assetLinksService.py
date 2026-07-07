@@ -64,6 +64,25 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 # Utility Functions
 #######################
 
+
+def query_all_items(table, **query_kwargs) -> List[Dict]:
+    """Query a DynamoDB table to exhaustion, returning every matching item.
+
+    A single ``table.query`` returns at most one 1 MB page, so relationship listings and
+    the alias-conflict check must page through ``LastEvaluatedKey`` — otherwise links
+    beyond the first page are silently dropped (incomplete trees, and a duplicate alias
+    slipping past the uniqueness check).
+    """
+    items: List[Dict] = []
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get('Items', []))
+        last_key = response.get('LastEvaluatedKey')
+        if not last_key:
+            break
+        query_kwargs['ExclusiveStartKey'] = last_key
+    return items
+
 def get_asset_details(asset_id: str, database_id: str) -> Optional[Dict]:
     """Get asset details from the asset storage table"""
     try:
@@ -136,14 +155,15 @@ def check_asset_permission(asset: Dict, claims_and_roles: Dict, action: str = "G
 def delete_asset_link_metadata(asset_link_id: str):
     """Delete all metadata associated with an asset link"""
     try:
-        # Query all metadata for this asset link
-        response = asset_links_metadata_table.query(
+        # Query all metadata for this asset link (page to exhaustion)
+        metadata_items = query_all_items(
+            asset_links_metadata_table,
             KeyConditionExpression=boto3.dynamodb.conditions.Key('assetLinkId').eq(asset_link_id)
         )
-        
+
         # Delete all metadata items
         with asset_links_metadata_table.batch_writer() as batch:
-            for item in response.get('Items', []):
+            for item in metadata_items:
                 batch.delete_item(
                     Key={
                         'assetLinkId': item['assetLinkId'],
@@ -151,7 +171,7 @@ def delete_asset_link_metadata(asset_link_id: str):
                     }
                 )
         
-        logger.info(f"Deleted {len(response.get('Items', []))} metadata items for asset link {asset_link_id}")
+        logger.info(f"Deleted {len(metadata_items)} metadata items for asset link {asset_link_id}")
         
     except Exception as e:
         logger.exception(f"Error deleting asset link metadata: {e}")
@@ -219,18 +239,20 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
             raise PermissionError("Not authorized to view links for this asset")
         
         # Get all links where this asset is the 'from' asset (children/related going out)
-        from_response = asset_links_table.query(
+        from_items = query_all_items(
+            asset_links_table,
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key)
         )
-        
+
         # Get all links where this asset is the 'to' asset (parents/related coming in)
-        to_response = asset_links_table.query(
+        to_items = query_all_items(
+            asset_links_table,
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key)
         )
-        
-        all_links = from_response.get('Items', []) + to_response.get('Items', [])
+
+        all_links = from_items + to_items
         
         # Collect all unique asset keys for batch retrieval
         asset_keys = set()
@@ -350,16 +372,17 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
             new_path = current_path.copy()
             new_path.add(asset_key)
             
-            # Get all children of this asset
-            response = asset_links_table.query(
+            # Get all children of this asset (page to exhaustion)
+            child_links = query_all_items(
+                asset_links_table,
                 IndexName='fromAssetGSI',
                 KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
-            
+
             tree_nodes = []
-            
-            for link in response.get('Items', []):
+
+            for link in child_links:
                 child_asset = get_asset_details(link['toAssetId'], link['toAssetDatabaseId'])
                 
                 if child_asset and check_asset_permission(child_asset, claims_and_roles):
@@ -450,15 +473,17 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
                 to_key = f"{link_item['toAssetDatabaseId']}:{link_item['toAssetId']}"
                 
                 # Get ALL parent->child relationships for this parent-child pair
-                conflict_response = asset_links_table.query(
+                # (page to exhaustion so the alias-uniqueness check sees every link)
+                conflict_items = query_all_items(
+                    asset_links_table,
                     IndexName='fromAssetGSI',
-                    KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) & 
+                    KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) &
                                          Key('toAssetDatabaseId:toAssetId').eq(to_key),
                     FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
                 )
-                
+
                 # Check if any existing links have the same new alias (excluding current link)
-                for item in conflict_response.get('Items', []):
+                for item in conflict_items:
                     if item['assetLinkId'] != asset_link_id:
                         existing_alias = item.get('assetLinkAliasId')
                         # Both have no alias

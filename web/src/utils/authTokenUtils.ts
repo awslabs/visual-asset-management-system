@@ -114,6 +114,31 @@ export function setExternalOauth2Token(oauth2Token: OAuth2Token): void {
 }
 
 /**
+ * Coalesces concurrent OAuth2 refreshes onto a single in-flight promise. Several API
+ * calls firing in parallel after the access token expires would otherwise each issue
+ * their own refreshToken() with the same refresh token; IdPs that rotate refresh tokens
+ * invalidate it after the first use, so the rest fail and force a spurious re-login.
+ */
+let oauth2RefreshInFlight: Promise<string> | null = null;
+
+async function refreshOAuth2AccessToken(): Promise<string> {
+    if (oauth2RefreshInFlight) {
+        return oauth2RefreshInFlight;
+    }
+    oauth2RefreshInFlight = (async () => {
+        const oauth2Client = getOAuth2ClientInstance();
+        const currentToken = getExternalOAuth2Token();
+        const newToken = await oauth2Client.refreshToken(currentToken);
+        setExternalOauth2Token(newToken);
+        console.log("OAuth2 token refreshed successfully");
+        return newToken.accessToken;
+    })().finally(() => {
+        oauth2RefreshInFlight = null;
+    });
+    return oauth2RefreshInFlight;
+}
+
+/**
  * Gets a valid, fresh access token for API calls (Works with both Cognito and OAuth2)
  * Handles both Cognito and OAuth2 modes
  * Automatically refreshes expired tokens when possible
@@ -132,14 +157,10 @@ export async function getDualValidAccessToken(): Promise<string> {
         }
 
         if (refreshTokenValid) {
-            // Access token expired but refresh token exists, attempt to refresh
+            // Access token expired but refresh token exists, attempt to refresh.
+            // Coalesced so parallel callers share one refresh (see refreshOAuth2AccessToken).
             try {
-                const oauth2Client = getOAuth2ClientInstance();
-                const currentToken = getExternalOAuth2Token();
-                const newToken = await oauth2Client.refreshToken(currentToken);
-                setExternalOauth2Token(newToken);
-                console.log("OAuth2 token refreshed successfully");
-                return newToken.accessToken;
+                return await refreshOAuth2AccessToken();
             } catch (error) {
                 console.error("Failed to refresh OAuth2 token:", error);
                 throw new Error("Failed to refresh OAuth2 token. Please log in again.");
@@ -151,7 +172,14 @@ export async function getDualValidAccessToken(): Promise<string> {
         // Cognito Mode
         try {
             const session = await fetchAuthSession();
-            return session.tokens?.idToken?.toString() || "";
+            const token = session.tokens?.idToken?.toString();
+            // Throw on an absent token rather than returning "" — an empty Bearer header
+            // would otherwise be sent, deferring detection of a dead session by a failed
+            // round-trip. Mirrors the OAuth2 branch, which throws on absence.
+            if (!token) {
+                throw new Error("No valid Cognito token available. Please log in again.");
+            }
+            return token;
         } catch (error) {
             console.error("Failed to get Cognito session:", error);
             throw new Error("Failed to get valid Cognito token. Please log in again.");

@@ -486,12 +486,15 @@ class FieldClassifier:
         
         # Characters that need escaping in OpenSearch query_string
         # NOTE: Hyphen (-) is NOT escaped as it's commonly used in identifiers and should match literally
+        # The backslash MUST be escaped first; otherwise the backslashes inserted for the
+        # other special characters would themselves be re-escaped, doubling them and
+        # corrupting the query.
         if preserve_wildcards:
             # Don't escape * and ? if user wants wildcards
-            special_chars = r'+=&|><!(){}[]^"~:\/'
+            special_chars = r'\+=&|><!(){}[]^"~:/'
         else:
-            special_chars = r'+=&|><!(){}[]^"~*?:\/'
-        
+            special_chars = r'\+=&|><!(){}[]^"~*?:/'
+
         escaped = query
         for char in special_chars:
             escaped = escaped.replace(char, f'\\{char}')
@@ -1266,19 +1269,25 @@ class DualIndexQueryBuilder:
                     
                     # Extract field name with backward compatibility
                     prefix, field_name = self._extract_metadata_field_name(field_part)
-                    
+
+                    # Escape the field name too — it is user-controlled and interpolated
+                    # into the query_string text, so an unescaped special character could
+                    # otherwise alter the parsed query. Wildcards are never meaningful in a
+                    # field name, so do not preserve them here.
+                    escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
                     # Check if user provided wildcards
                     has_wildcards = '*' in value_part or '?' in value_part
-                    
+
                     # Escape the value part (preserve wildcards if user provided them)
                     escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-                    
+
                     # Build flat object query
                     if has_wildcards:
-                        query_str = f"{prefix}.{field_name}:{escaped_value}"
+                        query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
                     else:
                         # Exact match - quote the value for phrase matching
-                        query_str = f'{prefix}.{field_name}:"{escaped_value}"'
+                        query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
                     
                     # Build query for this specific field:value pair
                     pair_queries.append({
@@ -1319,19 +1328,22 @@ class DualIndexQueryBuilder:
             
             # Extract field name with backward compatibility
             prefix, field_name = self._extract_metadata_field_name(field_part)
-            
+
+            # Escape the user-controlled field name so it cannot alter the parsed query.
+            escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
             # Check if user provided wildcards
             has_wildcards = '*' in value_part or '?' in value_part
-            
+
             # Escape the value part for query_string (preserve wildcards if user provided them)
             escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-            
+
             # Build flat object query
             if has_wildcards:
-                query_str = f"{prefix}.{field_name}:{escaped_value}"
+                query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
             else:
                 # Exact match - quote the value for phrase matching
-                query_str = f'{prefix}.{field_name}:"{escaped_value}"'
+                query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
             
             # Build query for specific field:value pair
             return {

@@ -92,11 +92,14 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             props.vamsCreatedApiGatewayVpcEndpointId
         );
 
-        // Implementation-specific decision 2: a WAF web ACL can only attach to the regional
-        // REST API stage when it is regional-scoped. When CloudFront is enabled the ACL is
-        // CloudFront-scoped (it protects the distribution edge) and must not be associated
-        // here; the regional API sits behind CloudFront + the custom authorizer.
-        const wafIsRegional = config.app.useWaf && !config.app.useCloudFront.enabled;
+        // Implementation-specific decision 2: attach the regional-scoped WAF web ACL to the
+        // REST API stage whenever WAF is enabled. The ACL passed in (props.wafArn) is always
+        // the regional-scoped ACL created in the core Region, which is what API Gateway
+        // requires — for both REGIONAL and PRIVATE endpoint types, and independently of
+        // whether CloudFront or an ALB fronts the app. (The CloudFront-scoped ACL is a
+        // separate us-east-1 ACL attached to the distribution, not here.) This protects the
+        // API's direct execute-api endpoint, which stays reachable regardless of fronting.
+        const wafEnabled = config.app.useWaf;
 
         // 1) REST authorizer Lambda (custom; reuses shared auth core)
         const authorizerFn = buildApiGatewayAuthorizerRestFunction(
@@ -263,8 +266,8 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
         });
         this.restApi.deploymentStage = stage;
 
-        // 6.5) WAF association for the REST API stage (regional-scoped ACL only — see above).
-        if (props.wafArn && props.wafArn !== "" && wafIsRegional) {
+        // 6.5) WAF association for the REST API stage (regional-scoped ACL — see above).
+        if (props.wafArn && props.wafArn !== "" && wafEnabled) {
             const wafAssociation = new wafv2.CfnWebACLAssociation(this, "RestApiWafAssociation", {
                 resourceArn: `arn:${Partition()}:apigateway:${config.env.region}::/restapis/${
                     this.restApi.restApiId

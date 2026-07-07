@@ -280,6 +280,7 @@ const COMMERCIAL: ConfigShape = {
                 authTokenEndpoint:
                     "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
                 authType: "cognito",
+                credentialsSecretArn: "",
                 clientId: "",
                 clientSecret: "",
             },

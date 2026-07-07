@@ -3,6 +3,9 @@
 import json
 from customConfigCommon.customAuthClaimsCheck import customAuthClaimsCheckOverride
 from common.auth.apiEvent import normalize_event
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service="RequestToClaims")
 
 def request_to_claims(request):
     normalize_event(request)
@@ -76,10 +79,13 @@ def request_to_claims(request):
             "mfaEnabled": mfaEnabled
         }
 
-    #Conduct custom claims check
+    #Conduct custom claims check. If a customer-supplied hook raises, fail closed by
+    #dropping roles (rather than silently passing the un-filtered claims through) so a
+    #broken claims-restriction hook cannot grant more access than intended.
     try:
         claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
-    except:
-        pass
+    except Exception as e:
+        logger.exception(f"customAuthClaimsCheckOverride failed; denying roles: {e}")
+        claims_and_roles["roles"] = []
 
     return claims_and_roles
