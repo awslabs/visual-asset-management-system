@@ -2035,6 +2035,7 @@ When making CDK infrastructure changes, update the corresponding documentation a
 #### **Docusaurus Documentation Updates:**
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
@@ -2118,6 +2119,17 @@ if (props.config.app.newFeature.enabled) {
     this.enabledFeatures.push(VAMS_APP_FEATURES.NEW_FEATURE);
 }
 ```
+
+#### **Step 4: Update Documentation and the ConfigBuilder**
+
+The docs-site config generator is a hand-maintained mirror of `config.ts` — it does **not** auto-update. After adding the option:
+
+1. Document it in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+2. Update the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`):
+    - `schema.ts` — add a `FIELDS` entry (path + label + input kind + section).
+    - `defaults.ts` — add the default (kept deep-equal to `config.template.commercial.json` / `config.template.govcloud.json`).
+    - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`.
+3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field.
 
 ### **Creating New Nested Stacks**
 

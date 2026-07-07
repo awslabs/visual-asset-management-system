@@ -105,6 +105,10 @@ jobs:
               working-directory: vams/infra
               run: npm install
 
+            - name: Infra tests
+              working-directory: vams/infra
+              run: npm test
+
             # - name: Npm audit infrastructure directory
             #   working-directory: vams/infra
             #   run: npm audit --omit=dev

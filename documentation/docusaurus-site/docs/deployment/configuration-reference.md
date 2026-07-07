@@ -36,6 +36,10 @@ The `env.partition` field is automatically derived from the Region and should no
 
 Controls how Amazon S3 asset storage buckets are provisioned.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` (`StorageResourcesBuilderNestedStack`) — Amazon S3 asset buckets plus a DynamoDB bucket registry populated by the custom resource `customResources/populateS3AssetBucketsTable.ts`.
+:::
+
 | Field                                              | Type    | Default                                     | Description                                                                                                                                                                                                                                                                            |
 | -------------------------------------------------- | ------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.assetBuckets.createNewBucket`                 | boolean | `true`                                      | When `true`, VAMS creates a new Amazon S3 bucket for asset storage. When `false`, you must define at least one external asset bucket.                                                                                                                                                  |
@@ -99,7 +103,19 @@ External buckets can be added incrementally across deployments. Each bucket requ
 | `app.useFips`                | boolean | `false` | Enables FIPS-compliant AWS partition endpoints. Must be combined with the `AWS_USE_FIPS_ENDPOINT=true` environment variable.          |
 | `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                  |
 
+:::info[Implemented by]
+These three keys do **not** map to a single nested stack:
+
+-   `app.useWaf` — standalone stack `infra/lib/cf-waf-stack.ts` (`CfWafStack`), gated in `infra/bin/infra.ts` and associated with the distribution/ALB in `staticWebApp/staticWebBuilder-nestedStack.ts`.
+-   `app.useFips` — global endpoint resolution in `infra/lib/helper/service-helper.ts` (no stack of its own).
+-   `app.addStackCloudTrailLogs` — created inline in the root stack `infra/lib/core-stack.ts` (`CoreVAMSStack`).
+    :::
+
 ### KMS encryption (`app.useKmsCmkEncryption`)
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` (`StorageResourcesBuilderNestedStack`) — provisions (or imports) the AWS KMS CMK and applies it to all Amazon S3, DynamoDB, SQS, SNS, and OpenSearch resources.
+:::
 
 | Field                                            | Type    | Default | Description                                                                                                                                                                                |
 | ------------------------------------------------ | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -121,6 +137,10 @@ kms:CreateGrant
 :::
 
 ### GovCloud (`app.govCloud`)
+
+:::info[Implemented by]
+GovCloud is a cross-cutting switch, not a dedicated nested stack. It is validated in `getConfig()` (`infra/config/config.ts`) and applied as feature flags and partition selection in the root stack `infra/lib/core-stack.ts` (`CoreVAMSStack`), which in turn constrains the VPC, web distribution, and Location Service stacks.
+:::
 
 | Field                       | Type    | Default | Description                                                                                                                                        |
 | --------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -145,6 +165,10 @@ Letting VAMS manage IAM roles is the recommended default — grants stay automat
 :::
 
 ## VPC (`app.useGlobalVpc`)
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` (`VPCBuilderNestedStack`) — Amazon VPC, subnets, VPC interface/gateway endpoints, and the shared security group.
+:::
 
 | Field                                                | Type    | Default       | Description                                                                                                                                                                    |
 | ---------------------------------------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -227,6 +251,10 @@ When `addVpcEndpoints=false` (you create the VPC endpoints by hand, for example 
 
 ## Amazon OpenSearch Service (`app.openSearch`)
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts` (`SearchBuilderNestedStack`) — Amazon OpenSearch Serverless collection or a provisioned OpenSearch Service domain.
+:::
+
 | Field                                                    | Type    | Default            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------------------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.openSearch.useServerless.enabled`                   | boolean | `false`            | Deploys Amazon OpenSearch Serverless for pay-per-use search capability.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -283,11 +311,19 @@ If you do not have a specific requirement that mandates Provisioned, prefer `app
 
 ## Amazon Location Service (`app.useLocationService`)
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/locationService/location-service-nestedStack.ts` (`LocationServiceNestedStack`) — Amazon Location Service map resources (commercial partitions only).
+:::
+
 | Field                            | Type    | Default | Description                                                                                                                                                                     |
 | -------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.useLocationService.enabled` | boolean | `true`  | Enables Amazon Location Service for map visualization of asset metadata with geographic coordinates. Not available in AWS GovCloud. Map views require OpenSearch to be enabled. |
 
 ## Web distribution
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` (`StaticWebBuilderNestedStack`) — an Amazon S3 web bucket fronted by either Amazon CloudFront (`useCloudFront`) or an Application Load Balancer (`useAlb`). These two options are mutually exclusive.
+:::
 
 ### Application Load Balancer (`app.useAlb`)
 
@@ -315,6 +351,10 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 :::
 
 ## Authentication (`app.authProvider`)
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/auth/authBuilder-nestedStack.ts` (`AuthBuilderNestedStack`) — Amazon Cognito user and identity pools, SAML federation, and external OAuth IdP wiring. IP-range restrictions (`authorizerOptions.allowedIpRanges`) are enforced by the custom Lambda authorizer in `apiLambda/apigatewayv2-amplify-nestedStack.ts`.
+:::
 
 ### General authentication settings
 
@@ -368,6 +408,10 @@ When external OAuth IdP is enabled, **all** fields in this section are required.
 
 ## API configuration (`app.api`)
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/apiLambda/api-nestedStack.ts` (`ApiNestedStack`) — builds the Amazon API Gateway REST API through `RestApiGatewayConstruct`, including the endpoint type (`REGIONAL`/`PRIVATE`) and stage throttling (rate and burst limits).
+:::
+
 | Field                                                      | Type   | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ---------------------------------------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.api.apiType`                                          | string | `"APIGATEWAY_REST"` | Backend API implementation type. Only `"APIGATEWAY_REST"` (an Amazon API Gateway REST API) is supported; any other value fails configuration validation.                                                                                                                                                                                                                                                                           |
@@ -392,6 +436,10 @@ Amazon API Gateway itself does **not** remove a previously-set resource policy w
 
 ## Web UI (`app.webUi`)
 
+:::note[Implemented by]
+Consumed by the static web hosting stack `infra/lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` (`StaticWebBuilderNestedStack`). `allowUnsafeEvalFeatures` feeds Content Security Policy generation in `infra/lib/helper/security.ts`.
+:::
+
 | Field                                 | Type    | Default | Description                                                                                                                                                                                                          |
 | ------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                   |
@@ -400,6 +448,10 @@ Amazon API Gateway itself does **not** remove a previously-set resource policy w
 ## Metadata schema (`app.metadataSchema`)
 
 Controls auto-loading of default metadata schemas during deployment.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`ApiBuilderNestedStack`) — a default-schema seeding custom resource that writes to the metadata-schema DynamoDB table.
+:::
 
 | Field                                                | Type    | Default | Description                                                                                                                                                                         |
 | ---------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -410,9 +462,17 @@ Controls auto-loading of default metadata schemas during deployment.
 
 ## Processing pipelines (`app.pipelines`)
 
+:::note[Implemented by]
+All pipelines are orchestrated by `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` (`PipelineBuilderNestedStack`). Each enabled pipeline below is conditionally instantiated as its own child nested stack (named in each section).
+:::
+
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
 
 Converts between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ formats. Does not require a VPC.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/conversion/3dBasic/conversion3dBasicBuilder-nestedStack.ts` (`Conversion3dBasicNestedStack`) — AWS Batch on Fargate.
+:::
 
 | Field                                                     | Type    | Default | Description                                                                               |
 | --------------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------- |
@@ -422,6 +482,10 @@ Converts between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ format
 ### CAD/mesh metadata extraction (`app.pipelines.useConversionCadMeshMetadataExtraction`)
 
 Extracts metadata from CAD and mesh file formats. Does not require a VPC.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack.ts` (`ConversionMeshCadMetadataExtractionNestedStack`).
+:::
 
 | Field                                                                                      | Type    | Default | Description                                                                        |
 | ------------------------------------------------------------------------------------------ | ------- | ------- | ---------------------------------------------------------------------------------- |
@@ -444,6 +508,10 @@ Reprojects E57, LAS, LAZ, and PLY point cloud files between coordinate reference
 
 Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires VPC.** Uses a GPL-licensed library.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack.ts` (`PcPotreeViewerBuilderNestedStack`).
+:::
+
 | Field                                                                        | Type    | Default | Description                                                               |
 | ---------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
 | `app.pipelines.usePreviewPcPotreeViewer.enabled`                             | boolean | `false` | Enables the point cloud Potree viewer pipeline.                           |
@@ -455,6 +523,10 @@ Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires
 
 Generates animated GIF and static PNG preview thumbnails from 3D mesh, point cloud, CAD, and USD files. **Requires VPC.** Uses LGPL-licensed libraries. Supports input files up to 100 GB.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack.ts` (`Preview3dThumbnailBuilderNestedStack`).
+:::
+
 | Field                                                                     | Type    | Default | Description                                                                           |
 | ------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------- |
 | `app.pipelines.usePreview3dThumbnail.enabled`                             | boolean | `false` | Enables the 3D preview thumbnail pipeline.                                            |
@@ -464,6 +536,10 @@ Generates animated GIF and static PNG preview thumbnails from 3D mesh, point clo
 ### GenAI metadata labeling (`app.pipelines.useGenAiMetadata3dLabeling`)
 
 Uses Amazon Bedrock to generate descriptive metadata labels for GLB, FBX, and OBJ files. **Requires VPC.**
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack.ts` (`Metadata3dLabelingNestedStack`) — AWS Batch with Amazon Bedrock inference.
+:::
 
 | Field                                                                          | Type    | Default                   | Description                                                                                              |
 | ------------------------------------------------------------------------------ | ------- | ------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -476,6 +552,10 @@ Uses Amazon Bedrock to generate descriptive metadata labels for GLB, FBX, and OB
 
 Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/splatToolboxBuilder-nestedStack.ts` (`SplatToolboxBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
+
 | Field                                                     | Type    | Default | Description                                                               |
 | --------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
 | `app.pipelines.useSplatToolbox.enabled`                   | boolean | `false` | Enables the Gaussian splatting pipeline.                                  |
@@ -485,6 +565,10 @@ Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 ### Mesh to Gaussian Splat (`app.pipelines.useMesh2Splat`)
 
 Converts GLB mesh files to 3D Gaussian Splat PLY files using GPU-accelerated conversion. **Requires VPC.**
+
+:::warning[Implemented by]
+No `useMesh2Splat` configuration key or nested stack currently exists in the infrastructure code (`infra/config/config.ts`, `infra/lib/nestedStacks/pipelines/`). This section documents a planned pipeline that is not yet implemented.
+:::
 
 | Field                                                             | Type    | Default | Description                                                         |
 | ----------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------- |
@@ -496,6 +580,10 @@ Converts GLB mesh files to 3D Gaussian Splat PLY files using GPU-accelerated con
 
 Third-party spatial data optimization. **Requires VPC and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi).**
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipeline/rapidPipeline-nestedStack.ts` (`RapidPipelineNestedStack`) — Amazon ECS.
+:::
+
 | Field                                                        | Type    | Default                   | Description                                                     |
 | ------------------------------------------------------------ | ------- | ------------------------- | --------------------------------------------------------------- |
 | `app.pipelines.useRapidPipeline.useEcs.enabled`              | boolean | `false`                   | Enables RapidPipeline on Amazon ECS.                            |
@@ -505,6 +593,10 @@ Third-party spatial data optimization. **Requires VPC and an [AWS Marketplace su
 ### RapidPipeline on Amazon EKS (`app.pipelines.useRapidPipeline.useEks`)
 
 Third-party spatial data optimization on Amazon EKS. **Requires VPC with 2+ Availability Zones and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi).**
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack.ts` (`RapidPipelineEKSNestedStack`) — Amazon EKS.
+:::
 
 | Field                                                                         | Type    | Default                   | Description                                                                            |
 | ----------------------------------------------------------------------------- | ------- | ------------------------- | -------------------------------------------------------------------------------------- |
@@ -528,6 +620,10 @@ Third-party spatial data optimization on Amazon EKS. **Requires VPC with 2+ Avai
 
 Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).**
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/modelOps/modelOps-nestedStack.ts` (`ModelOpsNestedStack`) — AWS Batch.
+:::
+
 | Field                                            | Type    | Default                   | Description                                                |
 | ------------------------------------------------ | ------- | ------------------------- | ---------------------------------------------------------- |
 | `app.pipelines.useModelOps.enabled`              | boolean | `false`                   | Enables the ModelOps pipeline.                             |
@@ -537,6 +633,10 @@ Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketpl
 ### Isaac Lab training (`app.pipelines.useIsaacLabTraining`)
 
 NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Requires VPC.**
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack.ts` (`IsaacLabTrainingBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
 
 | Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -549,6 +649,10 @@ NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Re
 ### NVIDIA Cosmos Predict (`app.pipelines.useNvidiaCosmos`)
 
 NVIDIA Cosmos world foundation models for generating videos from text prompts (Text2World) and from images/videos (Video2World). **Requires VPC** and internet access for HuggingFace model downloads.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/cosmos/cosmosBuilder-nestedStack.ts` (`CosmosBuilderNestedStack`) — AWS Batch on GPU instances. This single stack implements all NVIDIA Cosmos models: Predict, Reason, and Transfer.
+:::
 
 | Field                                                                                             | Type    | Default                                          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -609,6 +713,10 @@ NVIDIA Cosmos Transfer model for video transformation with control signal condit
 
 NVIDIA Gr00t (GR00T-N1.5-3B) fine-tuning pipeline for embodied AI robot training. Uses LeRobot v2.1 datasets stored as VAMS assets. Operates at the asset level -- downloads the entire asset, looks for training data in a `dataset/` subfolder (configurable), and outputs model checkpoints. **Requires VPC** and internet access for HuggingFace model downloads.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/gr00t/gr00tBuilder-nestedStack.ts` (`Gr00tBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
+
 | Setting                                                                         | Type    | Default                                          | Description                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------- | ------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.pipelines.useNvidiaGr00t.enabled`                                          | boolean | `false`                                          | Enables the NVIDIA Gr00t fine-tuning pipeline.                                                                                                                                                                                  |
@@ -626,6 +734,10 @@ NVIDIA Gr00t (GR00T-N1.5-3B) fine-tuning pipeline for embodied AI robot training
 ### Garnet Framework (`app.addons.useGarnetFramework`)
 
 Integration with the Garnet Framework external knowledge graph for NGSI-LD data synchronization.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts` (`AddonBuilderNestedStack`), which instantiates `addon/garnetFramework/garnetFrameworkBuilder-nestedStack.ts` (`GarnetFrameworkBuilderNestedStack`).
+:::
 
 | Field                                                      | Type    | Default                   | Description                                                                                                              |
 | ---------------------------------------------------------- | ------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |

@@ -611,6 +611,8 @@ The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the Op
 3. Add validation logic in `getConfig()` if constraints exist
 4. Update **ALL** config template files: `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json`. A new or changed config option must be reflected in every template; a missed template silently falls back to `getConfig()` defaults and drops any operator-set value, leaving the templates inconsistent.
 5. Update `config.json` for the active deployment
+6. Document the option in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+7. Mirror the change into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see its `README.md` for which files to touch (`schema.ts` for the field, `defaults.ts` for the default, `validation.ts` for any new `throw`/`console.warn`), then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`)
 
 ### 2. Adding a New Lambda Function
 
@@ -833,6 +835,15 @@ if (config.app.myNewFeature.enabled && !config.app.myNewFeature.someOption) {
     throw new Error("Configuration Error: myNewFeature requires someOption when enabled");
 }
 ```
+
+> **Also update the ConfigBuilder.** The docs-site config generator
+> (`documentation/docusaurus-site/src/components/ConfigBuilder/`) is a
+> hand-maintained mirror of this interface and its validation. After adding a
+> property, add it to the component's `schema.ts` (and `defaults.ts` /
+> `validation.ts` as applicable — see the component `README.md`), then confirm
+> `infra/test/configBuilderSync.test.ts` passes (`cd infra && npm test`). That
+> test deep-equals `defaults.ts` against the template JSONs and asserts every
+> `ConfigPublic` leaf has a corresponding form field.
 
 ---
 
