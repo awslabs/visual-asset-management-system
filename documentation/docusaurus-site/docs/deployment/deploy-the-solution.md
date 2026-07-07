@@ -86,7 +86,13 @@ See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deplo
 
 ## Step 5: Configure the deployment
 
-Edit the configuration file at `infra/config/config.json` to set your deployment parameters. Template files are provided as starting points:
+Edit the configuration file at `infra/config/config.json` to set your deployment parameters.
+
+:::tip[Use the interactive configuration builder]
+The easiest way to assemble a valid `config.json` is the interactive [Configuration builder](config-builder.mdx). Choose a Commercial or GovCloud starting template, fill in the fields you need, and download a ready-to-use `config.json` — it validates cross-field rules (such as the GovCloud and authentication constraints) as you go, before you ever run `cdk synth`. Place the downloaded file at `infra/config/config.json`.
+:::
+
+If you prefer to edit by hand, template files are provided as starting points:
 
 | Template       | File                                           |
 | -------------- | ---------------------------------------------- |
@@ -108,7 +114,7 @@ cp config/config.template.commercial.json config/config.json
 | `app.adminUserId`       | Username for the initial admin account                            | `administrator`     |
 | `app.baseStackName`     | Stack environment name (appended to resource names)               | `prod`              |
 
-For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md).
+For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md). To build the file interactively, use the [Configuration builder](config-builder.mdx).
 
 :::note[Configuration templates]
 The GovCloud template pre-configures settings required for AWS GovCloud: VPC enabled, CloudFront disabled, ALB enabled, Location Service disabled, FIPS enabled, and KMS CMK encryption enabled.

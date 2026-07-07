@@ -13,6 +13,7 @@ VAMS documentation is built with **Docusaurus** (React-based static site generat
 -   **Sidebar config**: `documentation/docusaurus-site/sidebars.ts`
 -   **Source pages**: `documentation/docusaurus-site/docs/` (78 Markdown files)
 -   **Custom CSS**: `documentation/docusaurus-site/src/css/custom.css`
+-   **Custom React components**: `documentation/docusaurus-site/src/components/` (e.g. `ConfigBuilder/` — the interactive `config.json` builder embedded in `docs/deployment/config-builder.mdx`)
 -   **Static images**: `documentation/docusaurus-site/static/img/`
 -   **Architecture diagrams**: `documentation/diagrams/` (source PNGs, JPEGs, draw.io files)
 -   **OpenAPI spec**: `documentation/VAMS_API.yaml`
@@ -109,7 +110,7 @@ npm run build
 | Change Type                                      | Documentation to Update                                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | New or changed API endpoint (incl. path renames) | **Both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md` for `/auth/*`) — these are two separate sources of truth and both must be kept in sync. Also `cli/command-reference.md` if the CLI changed.                                                                        |
-| New config option                                | `deployment/configuration-reference.md`                                                                                                                                                                                                                                                                                                      |
+| New config option                                | `deployment/configuration-reference.md` + the **ConfigBuilder** component (`src/components/ConfigBuilder/`, embedded in `deployment/config-builder.mdx`) — then run `infra/test/configBuilderSync.test.ts`                                                                                                                                   |
 | New pipeline                                     | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts`                                                                                                                                                                                                                                               |
 | New viewer plugin                                | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`                                                                                                                                                                                                                                                        |
 | New DynamoDB table                               | `architecture/aws-resources.md`, `architecture/data-model.md`                                                                                                                                                                                                                                                                                |
@@ -133,18 +134,19 @@ When you add, remove, rename, or change the request/response shape of an endpoin
 
 ## Key Files to Cross-Reference
 
-| Documentation Topic | Source Files                                                                  |
-| ------------------- | ----------------------------------------------------------------------------- |
-| Config options      | `infra/config/config.ts` (ConfigPublic interface)                             |
-| API endpoints       | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml` |
-| DynamoDB tables     | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                |
-| Feature flags       | `infra/common/vamsAppFeatures.ts`                                             |
-| Backend handlers    | `backend/backend/handlers/`                                                   |
-| Pydantic models     | `backend/backend/models/`                                                     |
-| CLI commands        | `tools/VamsCLI/vamscli/commands/`                                             |
-| Viewer plugins      | `web/src/visualizerPlugin/config/viewerConfig.json`                           |
-| Lambda builders     | `infra/lib/lambdaBuilder/`                                                    |
-| Pipeline configs    | `infra/lib/nestedStacks/pipelines/`                                           |
+| Documentation Topic                                       | Source Files                                                                                                                                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                  |
+| ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud}.json` — mirror is guarded by `infra/test/configBuilderSync.test.ts` |
+| API endpoints                                             | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml`                                                                                                      |
+| DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                     |
+| Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                  |
+| Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                        |
+| Pydantic models                                           | `backend/backend/models/`                                                                                                                                                          |
+| CLI commands                                              | `tools/VamsCLI/vamscli/commands/`                                                                                                                                                  |
+| Viewer plugins                                            | `web/src/visualizerPlugin/config/viewerConfig.json`                                                                                                                                |
+| Lambda builders                                           | `infra/lib/lambdaBuilder/`                                                                                                                                                         |
+| Pipeline configs                                          | `infra/lib/nestedStacks/pipelines/`                                                                                                                                                |
 
 ---
 
