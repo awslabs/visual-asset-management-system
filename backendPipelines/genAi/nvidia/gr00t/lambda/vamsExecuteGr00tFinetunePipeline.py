@@ -87,6 +87,8 @@ def lambda_handler(event, context):
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
 
         # Source input configuration (3rd priority) and asset metadata (2nd priority) from S3,
         # falling back to inline payload fields for the legacy/transition path.

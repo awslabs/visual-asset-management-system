@@ -97,9 +97,12 @@ class TestVamsExecute:
     def _manifest(self):
         return {
             "inputFiles": [{"bucket": "abkt", "key": "xidM/clip.mp4", "assetId": "xidM",
-                            "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/clip.mp4/genAi/cosmos/predict/",
+                            "databaseId": "dbM", "assetRootS3Key": "xidM/",
+                            "auxPreviewPrefix": "dbM/xidM/clip.mp4/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/cosmosPredict/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -154,7 +157,7 @@ class TestVamsExecute:
         assert payload["modelType"] == cfg["modelType"]
         assert payload["inputS3AssetFilePath"] == cfg["expectedInputPath"]
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/clip.mp4/genAi/cosmos/predict/"
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/cosmosPredict/E1/"
         assert payload["assetId"] == "xidM"
         assert payload["databaseId"] == "dbM"
         # LOCATIONS travel, never inline content (vamsExecute is the content boundary).

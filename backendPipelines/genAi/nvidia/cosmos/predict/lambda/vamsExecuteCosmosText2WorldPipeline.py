@@ -92,6 +92,8 @@ def lambda_handler(event, context):
 
         # Resolve manifest-preferred inputs (locations + paths), legacy-fallback
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
 
         # Read metadata + input configuration content from S3 (inline fallback for transition)
         metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location'])

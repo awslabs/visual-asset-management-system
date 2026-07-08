@@ -308,17 +308,51 @@ never used it had the dead read removed: `conversion/meshCadMetadataExtraction`,
 
 ## Lean SFN pipeline-task body
 
-The per-pipeline Step Functions task body now carries only what is unavailable from the manifest:
+The per-pipeline Step Functions task body carries only what is unavailable from the manifest:
 the manifest and per-pipeline input-configuration S3 locations (`inputManifestS3Location`,
-`inputConfigurationS3Location`), the workflow-execution-level fields (`bucketAsset`,
-`bucketAssetAuxiliary`, `inputAssetFileKey`, `inputAssetLocationKey`, `workflowDatabaseId`,
-`workflowId`, `executionId`, `workflowExecutionId`), the executing-user context, and the callback
-`TaskToken`. Everything describing the pipeline's inputs and outputs — the resolved input files
-(per-file `bucket`/`key`/`versionId`/`databaseId`/`assetId`, so inputs may span buckets), the
-output/auxiliary/metadata locations, `auxTempPrefix`, the asset identity, and the orchestration
-config — is read from the manifest at `inputManifestS3Location` via
-`manifestHelper.resolve_pipeline_inputs`. The manifest is rebuilt per pipeline (pipeline 1 at
-launch, pipeline N+1 by the interim lambda), so each step's manifest is specific to that step.
+`inputConfigurationS3Location`), the workflow-execution I/O bucket
+(`workflowExecutionS3InputOutputBucket` — where the ASL pulls the manifest/config files from and
+where the shared output folder lives), the workflow/execution identifiers (`workflowDatabaseId`,
+`workflowId`, `workflowExecutionId`), the executing-user context, and the callback `TaskToken`.
+The auxiliary bucket is NOT threaded in the body — it lives in the manifest (`manifest.auxBucket`),
+resolved by the interim lambda. No single triggering input-file key travels in the body —
+it is input-file-agnostic and multi-file-ready. Everything describing the pipeline's inputs and
+outputs — the resolved input files (per-file `bucket`/`key`/`versionId`/`databaseId`/`assetId`/
+`assetRootS3Key`/`auxPreviewPrefix`, so inputs may span buckets), the output locations (a single
+output bucket + bucket-relative prefixes), `auxBucket` + `auxTempPrefix`, the asset identity, and
+the orchestration config — is read from the manifest at `inputManifestS3Location` via
+`manifestHelper.resolve_pipeline_inputs`, which reconstructs the `s3://` forms the pipeline
+forwards. The manifest is rebuilt per pipeline (pipeline 1 at launch, pipeline N+1 by the interim
+lambda), so each step's manifest is specific to that step.
+
+The orchestration bus ARN + event source prefix are NOT threaded through the SFN input either:
+they live in the manifest's `systemConfig` (for pipelines) and in the interim tracking lambda's
+environment (`ORCHESTRATION_BUS_ARN`, `ORCHESTRATION_EVENT_SOURCE_PREFIX`, for building each
+next-pipeline manifest) — each per its intended purpose.
+
+### Relative locations, reconstructed downstream
+
+The manifest never carries pre-built `s3://` URIs. The `outputs` block carries a single `bucket`
+plus bucket-relative prefixes; `auxBucket` is the auxiliary bucket name; `auxTempPrefix` is a
+bucket-relative, execution-scoped working prefix (`pipelines/{pipelineName}/{execId}/`); and each
+input file carries a bucket-relative `assetRootS3Key` and its own unique `auxPreviewPrefix`
+(`{databaseId}/{assetFileKey}/preview`, where `assetFileKey` is the full asset-bucket key so a
+custom asset base prefix is preserved). `manifestHelper.resolve_inputs`
+reconstructs the flat `s3://` fields the pipelines forward (`outputS3AssetFilesPath`,
+`inputOutputS3AssetAuxiliaryFilesPath`, and — for preview/viewer pipelines — `auxPreviewS3Path`,
+which combines `auxBucket` + the input file's `auxPreviewPrefix` + the per-pipeline
+`auxPreviewPipelinePrefix`). Pipelines that hardcoded a viewer aux path (e.g. `pcPotreeViewer`'s
+`/PotreeViewer`) now read `auxPreviewS3Path`; the viewer subfolder will come from the pipeline
+configuration via `auxPreviewPipelinePrefix` (empty for now).
+
+### Single-file guard (multi-file-ready SFN, single-file pipelines)
+
+The SFN + manifest layer is engineered for multi-file inputs (a manifest may carry many
+`inputFiles`), but the use-case pipelines still process one file per execution. Each `vamsExecute`
+lambda calls `manifestHelper.enforce_single_input_file(resolved)` right after resolving, which
+raises a clear error if the manifest supplies more than one input file. When per-pipeline
+multi-file support becomes a workflow/pipeline configuration flag, that guard is relaxed per
+pipeline; until then it fails fast rather than silently processing only the first file.
 
 Use-case pipelines read their inputs from the manifest and translate to whatever their downstream
 layer needs. `conversion/meshCadMetadataExtraction` (which had no manifest helper) was migrated to
@@ -330,12 +364,15 @@ the fallback for direct/local invocations.
 The manifest envelope carries an `outputTarget` block (`locationType`, `assetId`, `databaseId`,
 `fileBaseExecutionPathExtension`) identifying where the execution's outputs are written.
 `locationType` is `asset` today and the target equals the input asset, but it is threaded
-explicitly: `executeWorkflow` writes it into the top-level SFN input and the pipeline-1 manifest;
-the interim lambda carries it into each subsequent manifest; the process-outputs payload carries
+explicitly: `executeWorkflow` writes it into the pipeline-1 manifest and into the top-level SFN
+input (the top-level copy is read only by the end-state `processWorkflowExecutionOutput` lambda,
+which has no manifest of its own); the interim lambda carries it into each subsequent manifest; the
+process-outputs payload carries
 `outputLocationType`/`outputAssetId`/`outputDatabaseId`/`outputFileBaseExecutionPathExtension`; and
-the end-state `processWorkflowExecutionOutput` lambda resolves its output asset from those fields
-(falling back to the input asset for older state machines). This removes the prior implicit
-assumption that the output target is always the input asset.
+the end-state lambda resolves its output asset from those fields (falling back to the input asset
+for older state machines). This removes the prior implicit assumption that the output target is
+always the input asset, and keeps the output-target identity in exactly one channel per consumer
+(the manifest for pipelines, the SFN top-level for the end-state lambda) rather than duplicated.
 
 `outputFileBaseExecutionPathExtension` is a path segment inserted between the output asset's
 location key and each output file's relative path when outputs are written back to the asset
@@ -346,10 +383,30 @@ The recorded output-file `relativeFilePath` includes the extension so output pro
 asset file version-history join stay aligned with the actual write location. It is reserved for a
 future feature that writes an execution's outputs under a per-execution sub-folder of the asset.
 
+## Data migration — existing aux preview files
+
+The auxiliary-bucket preview layout changed. Preview/viewer data is now written per input file at
+`{databaseId}/{assetId}/{relativeAssetFileKey}/preview` (with an optional per-pipeline viewer
+subfolder appended from `auxPreviewPipelinePrefix`, e.g. `/PotreeViewer`), keyed on database +
+asset + the file's asset-relative path. Existing deployments wrote preview data under the older
+file-key-based layout (e.g. `{inputAssetFileKey}/preview/PotreeViewer`).
+
+**A data migration script is required** to move existing aux preview files from the old location to
+the new `{databaseId}/{assetId}/{relativeAssetFileKey}/preview` location so viewers (e.g. the Potree
+octree viewer, which reads octree files directly from the auxiliary bucket) keep resolving after the
+refactor deploys. The migration belongs under `infra/deploymentDataMigration/` alongside the other
+version-to-version migrations and must be paired with the frontend viewer's aux-path resolution
+(the viewer read path is out of scope for the execution-side refactor and moves with the overhaul).
+
 ## Future changes list
 
 -   Drop the legacy `inputMetadata` / `inputParameters` / `outputType` fallbacks once all pipelines
     are redeploy-confirmed, and bump `ASL_SCHEMA_VERSION` / `MANIFEST_SCHEMA_VERSION` (see above).
+-   Source `auxPreviewPipelinePrefix` from the pipeline table/configuration (currently always empty)
+    so viewer pipelines like `pcPotreeViewer` get their `/PotreeViewer` subfolder without hardcoding
+    it in pipeline code.
+-   Relax the `enforce_single_input_file` guard per pipeline once multi-file input becomes a
+    workflow/pipeline configuration flag (the SFN + manifest layer is already multi-file-ready).
 -   Rename the pipeline definition's `inputParameters` field to `inputConfiguration` (pipelines
     table + workflow/pipeline models, registration custom resources, and the execute-time override
     `pipelineInputParameters`). The execution layer already treats this value as the per-pipeline

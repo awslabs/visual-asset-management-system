@@ -143,13 +143,14 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
     """Resolve the next pipeline's input FILE entries (the shadowing logic).
 
     original_inputs: list of self-locating entries {relativePath, databaseId, assetId,
-        assetFilesS3Root, bucket, key, versionId} for the execution's original input files.
-    For each original input, if a file exists at the SAME asset-relative path under the output
-    files prefix, the resolved entry points at that output file's bucket/key/latest versionId (a
-    prior pipeline shadowed it) -- preserving the original's databaseId/assetId/root for
-    traceability; otherwise it keeps the original entry. Only the output FILES folder shadows.
-    Output files at relative paths with no matching input are appended as additional inputs
-    (new files a prior pipeline produced), located in the output bucket."""
+        assetRootS3Key, auxPreviewPrefix, bucket, key, versionId} for the execution's original
+        input files. For each original input, if a file exists at the SAME asset-relative path
+        under the output files prefix, the resolved entry points at that output file's
+        bucket/key/latest versionId (a prior pipeline shadowed it) -- preserving the original's
+        databaseId/assetId/root/aux-preview for traceability; otherwise it keeps the original
+        entry. Only the output FILES folder shadows. Output files at relative paths with no
+        matching input are appended as additional inputs (new files a prior pipeline produced),
+        located in the output bucket."""
     output_by_rel = {}
     for f in list_current_output_files(s3_client, output_bucket, output_files_prefix):
         output_by_rel[f["relativePath"]] = f
@@ -162,16 +163,18 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
         shadow = output_by_rel.get(rel)
         if shadow:
             # Shadowed in place: point at the output file's version but keep the original's
-            # asset identity/root for traceability.
+            # asset identity/root/aux-preview for traceability.
             resolved.append(er.build_manifest_entry(
                 rel, output_bucket, shadow["key"], shadow.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
-                asset_files_s3_root=entry.get("assetFilesS3Root", "")))
+                asset_root_s3_key=entry.get("assetRootS3Key", ""),
+                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
         else:
             resolved.append(er.build_manifest_entry(
                 rel, entry.get("bucket", ""), entry.get("key", ""), entry.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
-                asset_files_s3_root=entry.get("assetFilesS3Root", "")))
+                asset_root_s3_key=entry.get("assetRootS3Key", ""),
+                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
 
     # New output files (no matching original input path) become additional inputs, located in
     # the output bucket (no originating asset identity).
@@ -186,10 +189,11 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
     """Build the next pipeline's full manifest envelope: resolve the input files (shadowing),
     then wrap them with the output/aux locations + system config from envelope_context.
 
-    envelope_context: {inputMetadataS3Location, outputs{files,previews,metadata,results},
-        outputTarget{locationType,assetId,databaseId}, auxBucketS3Root, auxTempPrefix,
-        auxPreviewPrefix, systemConfig}. When omitted (legacy callers/tests), returns an envelope
-        with empty location/config fields."""
+    envelope_context: {inputMetadataS3Location, outputs{bucket,files,previews,metadata,results},
+        outputTarget{locationType,assetId,databaseId}, auxBucket, auxTempPrefix,
+        auxPreviewPipelinePrefix, systemConfig}. When omitted (legacy callers/tests), returns an
+        envelope with empty location/config fields. Per-input-file aux preview prefixes live on
+        each resolved input file entry (carried through from the original inputs)."""
     ctx = envelope_context or {}
     resolved_files = resolve_manifest_input_files(
         s3_client, original_inputs, output_bucket, output_files_prefix)
@@ -197,9 +201,9 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
         input_files=resolved_files,
         input_metadata_s3_location=ctx.get("inputMetadataS3Location", ""),
         outputs=ctx.get("outputs", {}),
-        aux_bucket_s3_root=ctx.get("auxBucketS3Root", ""),
+        aux_bucket=ctx.get("auxBucket", ""),
         aux_temp_prefix=ctx.get("auxTempPrefix", ""),
-        aux_preview_prefix=ctx.get("auxPreviewPrefix", ""),
+        aux_preview_pipeline_prefix=ctx.get("auxPreviewPipelinePrefix", ""),
         system_config=ctx.get("systemConfig", {}),
         output_target=ctx.get("outputTarget"),
     )

@@ -29,7 +29,6 @@ from common.workflows.stepfunctions_builder import (
 )
 from common.s3PathPatterns import (
     PIPELINES_PREFIX,
-    AUXILIARY_PREVIEW_PREFIX,
     PIPELINE_OUTPUT_PREFIX,
     PIPELINE_OUTPUT_FILES_PREFIX,
     PIPELINE_OUTPUT_PREVIEWS_PREFIX,
@@ -251,14 +250,18 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     first_pipeline_name = pipelines[0]['name']
     first_job_name = job_names[0]
 
-    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
-    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
-    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
-    global_output_s3_asset_results_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_RESULTS_PREFIX}', $.workflowExecutionS3InputOutputBucket, $$.Execution.Name)"
-
-    # Asset-bucket-relative output FILES prefix (no s3:// scheme) for the interim output diff.
+    # Asset-bucket-RELATIVE output prefixes (no s3:// scheme, no bucket) for each output kind. The
+    # next pipeline's manifest carries these plus the output bucket separately; downstream
+    # reconstructs s3://{bucket}/{prefix} as needed. The output bucket is the workflow-execution
+    # I/O bucket ($.workflowExecutionS3InputOutputBucket), threaded to the interim lambda.
     output_files_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}"
+    output_previews_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}"
+    output_metadata_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}"
+    output_results_prefix_template = f"{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_RESULTS_PREFIX}"
     output_files_prefix_uri = f"States.Format('{output_files_prefix_template}', $$.Execution.Name)"
+    output_previews_prefix_uri = f"States.Format('{output_previews_prefix_template}', $$.Execution.Name)"
+    output_metadata_prefix_uri = f"States.Format('{output_metadata_prefix_template}', $$.Execution.Name)"
+    output_results_prefix_uri = f"States.Format('{output_results_prefix_template}', $$.Execution.Name)"
 
     # Per-execution input-definition folder (asset bucket), keyed only on the execution id so
     # it matches er.execution_input_prefix(executionId) and the keys executeWorkflow writes.
@@ -315,24 +318,23 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         # Insert an interim-tracking state between this pipeline and the next.
         if i < len(pipelines) - 1:
             interim_state_id = f"interim-{i + 1}-{uuid.uuid1().hex[:8]}"
-            # Aux working prefix for the NEXT pipeline.
+            # Bucket-relative, execution-scoped aux temp working prefix for the NEXT pipeline
+            # (pipelines/{nextName}/{executionId}/). The next pipeline's per-input-file aux preview
+            # prefix is built inside the interim lambda from the input rows, not here.
             next_pipeline = pipelines[i + 1]
-            next_aux_subfolder = PIPELINES_PREFIX.rstrip('/')
-            if next_pipeline.get('pipelineType', 'standardFile') == 'previewFile':
-                next_aux_subfolder = AUXILIARY_PREVIEW_PREFIX.rstrip('/')
-            next_aux_prefix_uri = (
-                f"States.Format('{{}}/{next_aux_subfolder}/{next_pipeline['name']}/', "
-                f"$.inputAssetFileKey)")
+            next_aux_temp_prefix_uri = (
+                f"States.Format('{PIPELINES_PREFIX}{next_pipeline['name']}/{{}}/', "
+                f"$$.Execution.Name)")
             interim_payload = {
                 "body": {
-                    # --- Workflow-execution identity + buckets ---
+                    # --- Workflow-execution identity + I/O bucket (the aux bucket is resolved by
+                    #     the interim lambda itself, not threaded through the SFN input) ---
                     "workflowExecutionId.$": "$.workflowExecutionId",
                     "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
-                    "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
 
                     # --- Just-finished pipeline: output diff (list its output files, attribute,
                     #     and record them). outputFilesPrefix is the asset-bucket-RELATIVE listing
-                    #     prefix (vs. outputFilesUri below, the full s3:// URI for the next manifest).
+                    #     prefix, reused below as the next manifest's relative output FILES prefix.
                     "fromPipelineExecutionId.$": f"$.pipelineExecutionIds[{i}]",
                     "priorPipelineExecutionIds.$": "$.pipelineExecutionIds",
                     "outputFilesPrefix.$": output_files_prefix_uri,
@@ -345,22 +347,20 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
                     "nextPipelineConfigS3Key.$": (
                         f"States.Format('{input_folder_template}pipeline{i + 2}/config.json', "
                         f"$$.Execution.Name)"),
-                    "nextPipelineAuxPrefix.$": next_aux_prefix_uri,
+                    "nextPipelineAuxTempPrefix.$": next_aux_temp_prefix_uri,
 
-                    # --- Envelope context written into the NEXT pipeline's manifest ---
-                    "outputFilesUri.$": global_output_s3_asset_files_uri,
-                    "outputPreviewsUri.$": global_output_s3_asset_preview_uri,
-                    "outputMetadataUri.$": global_output_s3_asset_metadata_uri,
-                    "outputResultsUri.$": global_output_s3_asset_results_uri,
+                    # --- Envelope context written into the NEXT pipeline's manifest. Output
+                    #     prefixes are asset-bucket-RELATIVE (no s3://); the output bucket is the
+                    #     workflow-execution I/O bucket, threaded separately. ---
+                    "outputFilesPrefixRelative.$": output_files_prefix_uri,
+                    "outputPreviewsPrefixRelative.$": output_previews_prefix_uri,
+                    "outputMetadataPrefixRelative.$": output_metadata_prefix_uri,
+                    "outputResultsPrefixRelative.$": output_results_prefix_uri,
                     "inputMetadataS3Location.$": input_metadata_uri,
                     "outputLocationType.$": "$.outputLocationType",
                     "outputAssetId.$": "$.outputAssetId",
                     "outputDatabaseId.$": "$.outputDatabaseId",
                     "outputFileBaseExecutionPathExtension.$": "$.outputFileBaseExecutionPathExtension",
-
-                    # --- Orchestration (next pipeline's event prefix is built from these) ---
-                    "orchestrationBusArn.$": "$.orchestrationBusArn",
-                    "orchestrationEventSourcePrefix.$": "$.orchestrationEventSourcePrefix",
                 },
             }
             interim_state = create_interim_tracking_state(

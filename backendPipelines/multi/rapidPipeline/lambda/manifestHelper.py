@@ -14,25 +14,37 @@ everything static a pipeline needs:
     {
       "schemaVersion": 1,
       "inputFiles": [ { "relativePath", "databaseId", "assetId",
-                        "assetFilesS3Root", "bucket", "key", "versionId" } ],
+                        "assetRootS3Key", "auxPreviewPrefix", "bucket", "key", "versionId" } ],
       "inputMetadataS3Location": "s3://.../metadata.json",
-      "outputs": { "files", "previews", "metadata", "results" },   # s3:// URIs
-      "auxBucketS3Root": "s3://aux/",
-      "auxTempPrefix": "s3://aux/.../",
-      "auxPreviewPrefix": "s3://aux/.../",
+      "outputs": { "bucket", "files", "previews", "metadata", "results" },  # bucket + relative keys
+      "auxBucket": "aux-bucket-name",
+      "auxTempPrefix": "pipelines/{pipelineName}/{executionId}/",
+      "auxPreviewPipelinePrefix": "",
       "systemConfig": { "orchestrationBusArn", "orchestrationEventPrefix" }
     }
 
-``resolve_inputs`` normalizes the envelope into the same flat field names the pipelines already
-forward (``inputS3AssetFilePath``, ``outputS3AssetFilesPath``, ...), preferring the manifest and
-falling back to the legacy payload fields when no manifest is present. This keeps the change
-non-breaking: a payload without a manifest resolves exactly to today's behavior.
+Locations are carried as relative keys plus their bucket (never a pre-built ``s3://`` URI): the
+``outputs`` block pairs a single ``bucket`` with bucket-relative prefixes, ``auxBucket`` is the
+auxiliary bucket NAME, ``auxTempPrefix`` is bucket-relative, and each input file carries its own
+``assetRootS3Key`` (bucket-relative asset root) and ``auxPreviewPrefix`` (bucket-relative, unique
+per file). ``resolve_inputs`` RECONSTRUCTS the ``s3://`` forms into the same flat field names the
+pipelines already forward (``inputS3AssetFilePath``, ``outputS3AssetFilesPath``, ...), preferring
+the manifest and falling back to the legacy payload fields when no manifest is present. This keeps
+the change non-breaking: a payload without a manifest resolves exactly to today's behavior.
 """
 
 import json
 
 # Output S3 paths must keep a trailing slash so containers can append filenames.
 _OUTPUT_KEYS = ("files", "previews", "metadata", "results")
+
+
+def _join_s3(bucket, key):
+    """Reconstruct an ``s3://bucket/key`` URI from a bucket name + bucket-relative key. Returns
+    ``""`` when the bucket is empty; a missing key yields the bucket root (``s3://bucket/``)."""
+    if not bucket:
+        return ""
+    return f"s3://{bucket}/{key or ''}"
 
 
 def parse_s3_uri(uri):
@@ -167,6 +179,14 @@ def resolve_inputs(data, manifest=None):
         "assetId": "",
         "databaseId": "",
         "inputFiles": [],
+        # Reconstructed s3:// aux preview location for the first input file (auxBucket +
+        # per-file auxPreviewPrefix + the per-pipeline auxPreviewPipelinePrefix). No legacy
+        # fallback: aux preview locations are manifest-only.
+        "auxPreviewS3Path": "",
+        # The per-pipeline viewer subfolder from the manifest (empty until sourced from the
+        # pipeline configuration). Exposed so a viewer pipeline can detect the empty case and
+        # apply its own hardcoded fallback subfolder so it does not break in the interim.
+        "auxPreviewPipelinePrefix": "",
         "orchestrationBusArn": "",
         "orchestrationEventPrefix": "",
         "manifestUsed": False,
@@ -191,16 +211,39 @@ def resolve_inputs(data, manifest=None):
         if first_file.get("databaseId"):
             resolved["databaseId"] = first_file["databaseId"]
 
+    # Outputs are reconstructed from the single output bucket + each bucket-relative prefix.
     outputs = manifest.get("outputs") or {}
+    output_bucket = outputs.get("bucket", "")
     if outputs.get("files"):
-        resolved["outputS3AssetFilesPath"] = outputs["files"]
+        resolved["outputS3AssetFilesPath"] = _join_s3(output_bucket, outputs["files"])
     if outputs.get("previews"):
-        resolved["outputS3AssetPreviewPath"] = outputs["previews"]
+        resolved["outputS3AssetPreviewPath"] = _join_s3(output_bucket, outputs["previews"])
     if outputs.get("metadata"):
-        resolved["outputS3AssetMetadataPath"] = outputs["metadata"]
+        resolved["outputS3AssetMetadataPath"] = _join_s3(output_bucket, outputs["metadata"])
 
-    if manifest.get("auxTempPrefix"):
-        resolved["inputOutputS3AssetAuxiliaryFilesPath"] = manifest["auxTempPrefix"]
+    # The aux temporary working path is reconstructed from the aux bucket + bucket-relative
+    # aux temp prefix.
+    aux_bucket = manifest.get("auxBucket", "")
+    if aux_bucket and manifest.get("auxTempPrefix"):
+        resolved["inputOutputS3AssetAuxiliaryFilesPath"] = _join_s3(aux_bucket, manifest["auxTempPrefix"])
+
+    # The per-pipeline viewer subfolder from the manifest (empty until sourced from the pipeline
+    # configuration); exposed so a viewer pipeline can apply its own fallback when empty.
+    resolved["auxPreviewPipelinePrefix"] = manifest.get("auxPreviewPipelinePrefix", "") or ""
+
+    # The aux PREVIEW path is per-input-file: aux bucket + the first input file's own
+    # auxPreviewPrefix + the per-pipeline auxPreviewPipelinePrefix (viewer subfolder, e.g.
+    # "/PotreeViewer"; empty by default). Pipelines writing preview/viewer data use this.
+    input_files = resolved["inputFiles"]
+    if aux_bucket and input_files:
+        file_preview_prefix = (input_files[0] or {}).get("auxPreviewPrefix", "")
+        if file_preview_prefix:
+            pipeline_suffix = (manifest.get("auxPreviewPipelinePrefix", "") or "").strip("/")
+            preview_key = file_preview_prefix.rstrip("/")
+            if pipeline_suffix:
+                preview_key = f"{preview_key}/{pipeline_suffix}"
+            resolved["auxPreviewS3Path"] = _join_s3(aux_bucket, preview_key)
+
     if manifest.get("inputMetadataS3Location"):
         resolved["inputMetadataS3Location"] = manifest["inputMetadataS3Location"]
 
@@ -217,3 +260,19 @@ def resolve_pipeline_inputs(data, s3_client):
     manifest is available."""
     manifest = fetch_manifest(s3_client, manifest_location(data))
     return resolve_inputs(data, manifest)
+
+
+def enforce_single_input_file(resolved):
+    """Raise when a resolved manifest carries more than one input file.
+
+    The SFN/manifest layer is multi-file-ready (a manifest may carry many input files), but the
+    use-case pipelines still process a single file per execution. Until per-pipeline multi-file
+    support is a workflow/pipeline configuration flag, a ``vamsExecute`` lambda calls this to fail
+    fast with a clear message rather than silently processing only the first file. A manifest with
+    zero or one input file (or a legacy no-manifest payload) passes through."""
+    input_files = (resolved or {}).get("inputFiles") or []
+    if len(input_files) > 1:
+        raise Exception(
+            f"This pipeline processes a single input file per execution, but the workflow "
+            f"manifest supplied {len(input_files)} input files. Multi-file input is not yet "
+            f"supported for this pipeline.")

@@ -54,11 +54,18 @@ class TestPrefixDerivation:
         assert prefixes["metadata"] == "pipelines/myPipe/abcde-myPipe/output/EXEC1/metadata/"
         assert prefixes["results"] == "pipelines/myPipe/abcde-myPipe/output/EXEC1/results/"
 
-    def test_aux_prefix_standard_vs_preview(self):
-        # standardFile -> 'pipelines' subfolder; previewFile -> 'preview'
-        # ASL layout: {fileKey}/{subfolder}/{pipelineName}/
-        assert er.aux_pipeline_prefix("std", "standardFile", "/f/x.e57") == "/f/x.e57/pipelines/std/"
-        assert er.aux_pipeline_prefix("prev", "previewFile", "/f/x.e57") == "/f/x.e57/preview/prev/"
+    def test_aux_temp_prefix_is_execution_scoped(self):
+        # Bucket-relative, execution-scoped temp working prefix: pipelines/{pipelineName}/{execId}/
+        assert er.aux_pipeline_prefix("std", "EXEC1") == "pipelines/std/EXEC1/"
+
+    def test_aux_preview_file_prefix_is_per_file(self):
+        # Per-input-file aux preview prefix keyed on the FULL asset file key (location key +
+        # relative path), so a custom asset base prefix is preserved: {databaseId}/{assetFileKey}/preview
+        assert er.aux_preview_file_prefix("db", "xid/test/pump.e57") == "db/xid/test/pump.e57/preview"
+        # Custom asset base prefix in the location key is preserved.
+        assert er.aux_preview_file_prefix("db", "custom/base/xid/scan.e57") == "db/custom/base/xid/scan.e57/preview"
+        # Empty file key -> {db}/preview
+        assert er.aux_preview_file_prefix("db", "") == "db/preview"
 
 
 @pytest.mark.unit
@@ -244,7 +251,21 @@ class TestOutputBuilders:
     def test_manifest_envelope_includes_output_target(self):
         env = er.build_manifest_envelope(
             input_files=[], input_metadata_s3_location="", outputs={},
-            aux_bucket_s3_root="", aux_temp_prefix="", aux_preview_prefix="",
+            aux_bucket="", aux_temp_prefix="", aux_preview_pipeline_prefix="",
             output_target=er.build_manifest_output_target(asset_id="a1", database_id="db"))
         assert env["outputTarget"]["assetId"] == "a1"
         assert env["outputTarget"]["fileBaseExecutionPathExtension"] == "/"
+
+    def test_manifest_envelope_locations_are_relative(self):
+        # outputs = bucket + relative prefixes; auxBucket = name only; no top-level auxPreviewPrefix.
+        env = er.build_manifest_envelope(
+            input_files=[], input_metadata_s3_location="",
+            outputs=er.build_manifest_outputs(bucket="abkt", files="f/", previews="p/",
+                                              metadata="m/", results="r/"),
+            aux_bucket="auxbkt", aux_temp_prefix="pipelines/pipe/EXEC1/",
+            aux_preview_pipeline_prefix="")
+        assert env["outputs"]["bucket"] == "abkt" and env["outputs"]["files"] == "f/"
+        assert env["auxBucket"] == "auxbkt"
+        assert env["auxTempPrefix"] == "pipelines/pipe/EXEC1/"
+        assert env["auxPreviewPipelinePrefix"] == ""
+        assert "auxPreviewPrefix" not in env and "auxBucketS3Root" not in env

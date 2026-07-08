@@ -134,16 +134,18 @@ class TestCreateWorkflowStage2ASL:
 
     def test_pipeline_payload_carries_manifest_location_and_top_level_fields(self):
         # The lean body carries the manifest + per-pipeline config S3 LOCATIONS, plus the fields
-        # only available at the workflow-execution level (bucket names, asset keys, ids, context).
+        # only available at the workflow-execution level (the I/O bucket, ids, context). The aux
+        # bucket is NOT threaded — it lives in the manifest (manifest.auxBucket).
         definition, _jobs = cw.generate_workflow_asl(_pipelines(2), "db", "wf")
         body = _pipeline_states(definition["States"])[0]["Parameters"]["Payload"]["body"]
         for field in ("inputManifestS3Location.$", "inputConfigurationS3Location.$",
-                      "workflowExecutionS3InputOutputBucket.$", "bucketAssetAuxiliary.$",
-                      "inputAssetFileKey.$",
+                      "workflowExecutionS3InputOutputBucket.$",
                       "workflowExecutionId.$",
                       "workflowDatabaseId.$", "workflowId.$",
                       "executingUserName.$", "executingRequestContext.$"):
             assert field in body
+        # The auxiliary bucket is not threaded in the pipeline body.
+        assert "bucketAssetAuxiliary.$" not in body
 
     def test_pipeline_payload_omits_manifest_recoverable_and_inline_fields(self):
         # Everything the pipeline can read from the manifest (resolved input file, output/aux/
@@ -156,10 +158,13 @@ class TestCreateWorkflowStage2ASL:
             "inputS3AssetFilePath.$", "outputS3AssetFilesPath.$", "outputS3AssetPreviewPath.$",
             "outputS3AssetMetadataPath.$", "inputOutputS3AssetAuxiliaryFilesPath.$",
             "assetId.$", "databaseId.$", "inputMetadataS3Location.$",
-            "inputAssetFilesS3Root.$", "auxTempPrefix.$", "outputType",
+            "inputAssetRootS3Key.$", "auxTempPrefix.$", "outputType",
             # inputAssetLocationKey is no longer threaded: each input file is self-locating in the
-            # manifest (per-file assetFilesS3Root), so pipelines derive the asset root from there.
+            # manifest (per-file assetRootS3Key + bucket), so pipelines derive the asset root there.
             "inputAssetLocationKey.$",
+            # No single triggering file key is threaded: the SFN body is input-file-agnostic and
+            # multi-file-ready (each input file is self-locating in the manifest).
+            "inputAssetFileKey.$",
             # executionId is a redundant alias of workflowExecutionId — dropped.
             "executionId.$",
         ):
@@ -211,16 +216,24 @@ class TestCreateWorkflowStage2ASL:
         assert body["outputDatabaseId.$"] == "$.outputDatabaseId"
         assert body["outputFileBaseExecutionPathExtension.$"] == "$.outputFileBaseExecutionPathExtension"
 
-    def test_interim_carries_all_four_output_uris(self):
-        # All four output-location URIs are threaded so the rebuilt next-pipeline manifest's
-        # outputs block (files/previews/metadata/results) matches pipeline 1's manifest.
+    def test_interim_carries_all_four_output_prefixes_relative(self):
+        # All four asset-bucket-RELATIVE output prefixes are threaded (no s3://) so the rebuilt
+        # next-pipeline manifest's outputs block (bucket + files/previews/metadata/results relative
+        # prefixes) matches pipeline 1's manifest. The output bucket travels separately (the
+        # workflow-execution I/O bucket).
         definition, _jobs = cw.generate_workflow_asl(_pipelines(2), "db", "wf")
         states = definition["States"]
         interim = [s for k, s in states.items() if k.startswith("interim-")][0]
         body = interim["Parameters"]["Payload"]["body"]
-        for field in ("outputFilesUri.$", "outputPreviewsUri.$", "outputMetadataUri.$",
-                      "outputResultsUri.$"):
+        for field in ("outputFilesPrefixRelative.$", "outputPreviewsPrefixRelative.$",
+                      "outputMetadataPrefixRelative.$", "outputResultsPrefixRelative.$"):
             assert field in body
+        # The next pipeline's aux temp prefix is threaded bucket-relative + execution-scoped.
+        assert body["nextPipelineAuxTempPrefix.$"].startswith("States.Format('pipelines/")
+        # Orchestration bus config is NOT threaded through the SFN input (interim sources it from
+        # its own environment).
+        assert "orchestrationBusArn.$" not in body
+        assert "orchestrationEventSourcePrefix.$" not in body
 
     def test_interim_omits_unused_workflow_identity(self):
         # The interim lambda never reads workflowDatabaseId/workflowId, so they are not threaded.

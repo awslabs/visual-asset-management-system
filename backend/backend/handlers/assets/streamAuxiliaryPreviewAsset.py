@@ -175,9 +175,11 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return general_error(body={'message': message}, status_code=404, event=event)
     
-    # Resolve the full S3 key
-    object_key = resolve_asset_file_path(assetLocationKey, object_key)
-    
+    # Auxiliary preview objects live under the database-scoped per-file layout
+    # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
+    # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
+    object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+
     try:
         # Use head_object to get metadata without downloading file content
         head_response = s3_client.head_object(
@@ -356,7 +358,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     error_response['headers'].update(streaming_headers)
                     return error_response
 
-                object_key = resolve_asset_file_path(assetLocationKey, object_key)
+                # Auxiliary preview objects live under the database-scoped per-file layout
+                # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
+                # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
+                object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
 
                 # Prepare the S3 GetObject request parameters
                 s3_params = {

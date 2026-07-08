@@ -421,7 +421,7 @@ def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execu
                               pipeline_execution_ids=None, input_config_keys=None,
                               output_asset_id="", output_database_id="",
                               output_file_base_execution_path_extension="/",
-                              input_asset_files_s3_root="",
+                              input_asset_root_s3_key="",
                               input_metadata_asset_id="", input_metadata_database_id="",
                               input_metadata_file_s3_key=""):
     """Write the V2 main execution row plus workflow-level inputs/config and one
@@ -456,7 +456,7 @@ def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execu
         workflow_execution_id=execution_id, database_id=database_id, asset_id=asset_id,
         input_asset_file_key=input_asset_file_key, execution_start_date=start_date,
         workflow_id=workflow_id, workflow_database_id=workflow_database_id,
-        s3_bucket=asset_bucket, asset_files_s3_root=input_asset_files_s3_root,
+        s3_bucket=asset_bucket, asset_root_s3_key=input_asset_root_s3_key,
     ))
 
     # 3) Workflow execution configuration row: pipeline snapshot + input metadata + output
@@ -483,15 +483,18 @@ def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execu
     if pipeline_execution_ids is None:
         pipeline_execution_ids = [er.new_guid() for _ in pipelines]
     input_config_keys = input_config_keys or []
+    # Per-file aux preview prefix, keyed on the FULL asset file key (asset location key + relative
+    # path) so any custom asset base prefix is preserved: {databaseId}/{assetFileKey}/preview.
+    aux_preview_prefix = er.aux_preview_file_prefix(database_id, input_asset_file_key)
+
     prev_id = ""
     for idx, pipeline in enumerate(pipelines):
         pexec_id = pipeline_execution_ids[idx]
         is_end_state = (idx == len(pipelines) - 1)
         resource_arn, _rtype = _parse_pipeline_resource(pipeline)
-        # Raw file key so the stored aux prefix matches the ASL's aux path layout.
-        aux_prefix = er.aux_pipeline_prefix(
-            pipeline['name'], pipeline.get('pipelineType', 'standardFile'),
-            input_asset_file_key)
+        # Bucket-relative, execution-scoped temp working prefix (matches the manifest's aux temp
+        # prefix layout: pipelines/{pipelineName}/{executionId}/).
+        aux_temp_prefix = er.aux_pipeline_prefix(pipeline['name'], execution_id)
         cfg_key = input_config_keys[idx] if idx < len(input_config_keys) else ""
         # Orchestration event prefix (empty when the bus is not configured).
         event_prefix = er.orchestration_event_prefix(
@@ -505,7 +508,7 @@ def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execu
             output_prefixes=output_prefixes,
             input_metadata_file_prefix="",
             input_config_file_prefix=cfg_key,
-            aux_temp_prefix=aux_prefix, aux_preview_prefix=aux_prefix,
+            aux_temp_prefix=aux_temp_prefix, aux_preview_prefix=aux_preview_prefix,
             pipeline_execution_type=pipeline.get('pipelineExecutionType', 'Lambda'),
             wait_for_callback=pipeline.get('waitForCallback', 'Disabled'),
             pipeline_resource_arn=resource_arn, from_pipeline_execution_id=prev_id,
@@ -567,24 +570,28 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
     else:
         first_job_name = (uuid.uuid1().hex[:5] + "-" + first_pipeline_name)[:80] if first_pipeline_name else ""
 
-    # Build pipeline 1's input file manifest entry (relative path = key after the asset base).
+    # Build pipeline 1's input file manifest entry. Locations are carried as relative keys plus
+    # the file's own bucket (never a pre-built s3:// URI): assetRootS3Key is the asset-root prefix
+    # within the bucket (relativePath is the key after that root), and each input file gets its own
+    # unique aux preview prefix ({databaseId}/{assetId}/{relativeFileKey}/preview).
     base_key = inputAssetLocationKey or ""
     relative_input = inputAssetFileKey[len(base_key):] if inputAssetFileKey.startswith(base_key) else inputAssetFileKey
-    asset_files_root = f"s3://{inputAssetBucket}/{base_key}"
+    # Aux preview prefix keyed on the FULL asset file key (location key + relative path) so a
+    # custom asset base prefix is preserved: {databaseId}/{assetFileKey}/preview.
+    first_aux_preview_prefix = er.aux_preview_file_prefix(database_id, inputAssetFileKey)
     first_input_files = [er.build_manifest_entry(
         relative_path=relative_input, bucket=inputAssetBucket, key=inputAssetFileKey,
         version_id="", database_id=database_id, asset_id=asset_id,
-        asset_files_s3_root=asset_files_root)]
+        asset_root_s3_key=base_key, aux_preview_prefix=first_aux_preview_prefix)]
 
     # Build pipeline 1's full manifest envelope (output/aux locations + system config), using
-    # the ASL-stored job name so output locations match the ASL's paths.
+    # the ASL-stored job name so output locations match the ASL's paths. outputs carries the asset
+    # bucket + bucket-relative prefixes; the aux temp prefix is bucket-relative and scoped to this
+    # execution (pipelines/{pipelineName}/{executionId}/).
     out_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, executionId) \
         if pipelines else {"files": "", "previews": "", "metadata": "", "results": ""}
-    outputs = {k: (f"s3://{inputAssetBucket}/{v}" if v else "") for k, v in out_prefixes.items()}
-    # Aux prefix uses the raw file key so it matches the ASL's aux path layout.
-    first_aux_prefix = er.aux_pipeline_prefix(
-        first_pipeline_name, pipelines[0].get('pipelineType', 'standardFile') if pipelines else 'standardFile',
-        inputAssetFileKey) if pipelines else ""
+    outputs = er.build_manifest_outputs(bucket=inputAssetBucket, **out_prefixes)
+    first_aux_temp_prefix = er.aux_pipeline_prefix(first_pipeline_name, executionId) if pipelines else ""
     metadata_metadata_location = f"s3://{inputAssetBucket}/{er.execution_input_metadata_key(executionId)}"
     first_event_prefix = er.orchestration_event_prefix(
         orchestration_event_source_prefix, executionId, pipeline_execution_ids[0]) \
@@ -593,9 +600,11 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
         input_files=first_input_files,
         input_metadata_s3_location=metadata_metadata_location,
         outputs=outputs,
-        aux_bucket_s3_root=f"s3://{bucket_name_assetAuxiliary}/",
-        aux_temp_prefix=f"s3://{bucket_name_assetAuxiliary}/{first_aux_prefix}" if first_aux_prefix else "",
-        aux_preview_prefix=f"s3://{bucket_name_assetAuxiliary}/{first_aux_prefix}" if first_aux_prefix else "",
+        aux_bucket=bucket_name_assetAuxiliary,
+        aux_temp_prefix=first_aux_temp_prefix,
+        # Per-pipeline viewer subfolder appended to each input file's aux preview prefix; empty
+        # until sourced from the pipeline configuration.
+        aux_preview_pipeline_prefix="",
         system_config=er.build_manifest_system_config(
             orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=first_event_prefix),
@@ -612,11 +621,12 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
         original_input_manifest=original_input_manifest)
 
     # The SFN execution input carries only what the ASL ($.X) references: identity, the
-    # workflow-execution + auxiliary buckets, the asset file keys (the manifest/config files are
-    # addressed by their per-pipeline computed S3 keys in the ASL, not threaded here), the output
-    # target, the per-pipeline execution ids, and the orchestration config. The input-definition
-    # files themselves were already written to S3 above (input_locations); the ASL recomputes
-    # their keys, so the top-level convenience copies are not needed.
+    # workflow-execution + auxiliary buckets, the output target, the per-pipeline execution ids,
+    # and the executing-user context. Per-input-file locations live in the manifest (addressed by
+    # per-pipeline computed S3 keys), so no single triggering file key is threaded here — the SFN
+    # layer is input-file-agnostic and multi-file-ready. Orchestration bus config is not threaded
+    # through the SFN input either: it belongs in the manifest (for pipelines) and in the interim
+    # lambda's environment (for the next-pipeline manifest build), each per its intended purpose.
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
         name=executionId,
@@ -627,13 +637,12 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
             'workflowId': workflow_id,
             'endStatePipelineExecutionId': end_state_pipeline_execution_id,
             'pipelineExecutionIds': pipeline_execution_ids,
-            # Buckets + primary input file key (the manifest carries each input file's own
-            # location; inputAssetLocationKey is no longer threaded — pipelines derive the asset
-            # root from the manifest's per-file assetFilesS3Root)
+            # Workflow-execution I/O bucket: where the ASL pulls the manifest/config files from and
+            # where the shared output folder lives. The auxiliary bucket is NOT threaded here — it
+            # is resolved by the interim lambda and carried in each manifest (manifest.auxBucket).
             'workflowExecutionS3InputOutputBucket': inputAssetBucket,
-            'bucketAssetAuxiliary': bucket_name_assetAuxiliary,
-            'inputAssetFileKey': inputAssetFileKey,
-            # Output target identity (where outputs are written; == the input asset today)
+            # Output target identity (where outputs are written; == the input asset today). Read
+            # only by the end-state process-output lambda, which has no manifest of its own.
             'outputLocationType': "asset",
             'outputAssetId': asset_id,
             'outputDatabaseId': database_id,
@@ -641,9 +650,6 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
             # Executing-user context
             'executingUserName': executingUserName,
             'executingRequestContext': executingRequestContext,
-            # Orchestration bus + source prefix for the interim lambda's manifest build
-            'orchestrationBusArn': orchestration_bus_arn,
-            'orchestrationEventSourcePrefix': orchestration_event_source_prefix,
         })
     )
     logger.info("Workflow Response: ")
@@ -672,7 +678,7 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
         input_config_keys=input_locations['configKeys'],
         output_asset_id=asset_id, output_database_id=database_id,
         output_file_base_execution_path_extension=output_file_base_execution_path_extension,
-        input_asset_files_s3_root=asset_files_root,
+        input_asset_root_s3_key=base_key,
         input_metadata_asset_id=asset_id, input_metadata_database_id=database_id,
         input_metadata_file_s3_key=input_locations['metadataFileS3Key'],
     )

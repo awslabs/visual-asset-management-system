@@ -552,7 +552,6 @@ Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeV
 | `app.pipelines.usePreviewPcPotreeViewer.enabled`                             | boolean | `false` | Enables the point cloud Potree viewer pipeline.                           |
 | `app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS`                | boolean | `false` | Automatically registers the pipeline during deployment.                   |
 | `app.pipelines.usePreviewPcPotreeViewer.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads.                      |
-| `app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified`           | boolean | `false` | Automatically runs the pipeline via Amazon SQS when an asset is modified. |
 
 ### 3D preview thumbnail (`app.pipelines.usePreview3dThumbnail`)
 
@@ -595,7 +594,6 @@ Nested stack: `infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/splatToolbo
 | --------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
 | `app.pipelines.useSplatToolbox.enabled`                   | boolean | `false` | Enables the Gaussian splatting pipeline.                                  |
 | `app.pipelines.useSplatToolbox.autoRegisterWithVAMS`      | boolean | `true`  | Automatically registers the pipeline during deployment.                   |
-| `app.pipelines.useSplatToolbox.sqsAutoRunOnAssetModified` | boolean | `false` | Automatically runs the pipeline via Amazon SQS when an asset is modified. |
 
 ### Mesh to Gaussian Splat (`app.pipelines.useMesh2Splat`)
 

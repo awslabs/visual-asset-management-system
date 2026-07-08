@@ -76,9 +76,12 @@ class TestVamsExecuteCosmosReasonPipeline:
     def _manifest(self):
         return {
             "inputFiles": [{"bucket": "abkt", "key": "xidM/test/clip.mp4", "assetId": "xidM",
-                            "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/test/clip.mp4/genAi/cosmos/reason/",
+                            "databaseId": "dbM", "assetRootS3Key": "xidM/",
+                            "auxPreviewPrefix": "dbM/xidM/test/clip.mp4/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/cosmosReason/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -120,7 +123,7 @@ class TestVamsExecuteCosmosReasonPipeline:
         # Manifest-resolved input + identity + outputs + aux.
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/test/clip.mp4"
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/test/clip.mp4/genAi/cosmos/reason/"
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/cosmosReason/E1/"
         assert payload["assetId"] == "xidM"
         assert payload["databaseId"] == "dbM"
         assert payload["sfnExternalTaskToken"] == "tok-123"

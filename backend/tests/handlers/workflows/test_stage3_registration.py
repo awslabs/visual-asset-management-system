@@ -49,21 +49,23 @@ class TestManifestEnvelopeAndHelpers:
         env = er.build_manifest_envelope(
             input_files=[er.build_manifest_entry("/a.glb", "bkt", "x/a.glb", "v1",
                                                  database_id="db", asset_id="x",
-                                                 asset_files_s3_root="s3://bkt/x/")],
+                                                 asset_root_s3_key="x/",
+                                                 aux_preview_prefix="db/x/a.glb/preview")],
             input_metadata_s3_location="s3://bkt/.../metadata.json",
-            outputs={"files": "s3://bkt/o/files/", "previews": "", "metadata": "", "results": ""},
-            aux_bucket_s3_root="s3://aux/",
-            aux_temp_prefix="s3://aux/k/pipelines/p/",
-            aux_preview_prefix="s3://aux/k/preview/p/",
+            outputs=er.build_manifest_outputs(bucket="bkt", files="o/files/"),
+            aux_bucket="aux",
+            aux_temp_prefix="pipelines/p/E/",
+            aux_preview_pipeline_prefix="",
             system_config=er.build_manifest_system_config(
                 orchestration_bus_arn="arn:bus", orchestration_event_prefix="vams.p.execution.E.pipeline.P"))
         assert env["schemaVersion"] == er.MANIFEST_SCHEMA_VERSION
-        # Each input file is self-locating.
+        # Each input file is self-locating with relative keys + its own aux preview prefix.
         f = env["inputFiles"][0]
-        assert f["assetId"] == "x" and f["assetFilesS3Root"] == "s3://bkt/x/" and f["versionId"] == "v1"
-        # Grouped sections present.
-        assert env["outputs"]["files"] == "s3://bkt/o/files/"
-        assert env["auxBucketS3Root"] == "s3://aux/"
+        assert f["assetId"] == "x" and f["assetRootS3Key"] == "x/" and f["versionId"] == "v1"
+        assert f["auxPreviewPrefix"] == "db/x/a.glb/preview"
+        # Grouped sections present; outputs carry a bucket + relative prefixes, auxBucket is a name.
+        assert env["outputs"]["bucket"] == "bkt" and env["outputs"]["files"] == "o/files/"
+        assert env["auxBucket"] == "aux"
         assert env["systemConfig"]["orchestrationBusArn"] == "arn:bus"
         assert env["systemConfig"]["orchestrationEventPrefix"] == "vams.p.execution.E.pipeline.P"
 

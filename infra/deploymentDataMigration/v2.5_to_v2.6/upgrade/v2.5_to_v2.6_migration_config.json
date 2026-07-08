@@ -15,6 +15,9 @@
     "asset_versions_table_name": null,
     "asset_history_table_name": null,
 
+    "_comment_aux_preview": "auxPreviewRelocation step: moves aux-bucket preview objects from {assetLocationKey}{relativeFileKey}/preview/... to {databaseId}/{assetLocationKey}{relativeFileKey}/preview/... (the asset location key may include a custom base prefix, so matching is on that base, not a bare assetId). The aux bucket + asset table names resolve automatically from the SSM prefix; the explicit override below is only needed when the prefix is not set (asset_storage_table_name above is reused for the asset location-key -> databaseId lookup).",
+    "asset_auxiliary_bucket_name": null,
+
     "_comment_operation": "What to reindex: 'assets', 'files', or 'both' (default: both). Reindex step only.",
     "operation": "both",
 
@@ -81,6 +84,7 @@
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex",
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps assetHistory",
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps workflowExecutions",
+        "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps auxPreviewRelocation",
         "",
         "7. (Reindex re-run only) Clear the v3 indexes first if a previous run partially populated them:",
         "   python v2.5_to_v2.6_migration.py --config v2.5_to_v2.6_migration_config.json --steps reindex --clear-indexes",
@@ -114,6 +118,15 @@
         "  overwrite rather than duplicate.",
         "- Table names are resolved from the SSM prefix; set the explicit *_table_name overrides only when needed.",
         "- Set skip_asset_history_backfill=true (or --steps without assetHistory) to skip it.",
-        "- dry_run and limit apply to this step as well."
+        "- dry_run and limit apply to this step as well.",
+        "",
+        "=== AUXILIARY PREVIEW RELOCATION STEP ===",
+        "- Moves existing auxiliary-bucket preview/viewer data (e.g. Potree octree files) from the old",
+        "  {assetId}/{relativeFileKey}/preview/... layout to the per-file {databaseId}/{assetId}/{relativeFileKey}/preview/... layout.",
+        "- The aux bucket name and asset table name resolve from the SSM prefix (asset_auxiliary_bucket_name /",
+        "  asset_storage_table_name overrides only needed when the prefix is not set).",
+        "- Each asset's databaseId is looked up from the asset storage table and inserted in front of the assetId path.",
+        "- Reserved working prefixes (pipeline/pipelines/temp-upload/temp-uploads) are ignored; the step is idempotent.",
+        "- dry_run logs each planned move without copying; limit caps objects scanned."
     ]
 }

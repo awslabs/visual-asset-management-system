@@ -3,9 +3,9 @@
 
 """Tests for the Stage-3 manifest refactor of the preview/pcPotreeViewer pipeline (threading-only;
 the container does not consume metadata/config). Covers: vamsExecute threads metadata + config S3
-LOCATIONS and preserves the bespoke aux-only Potree output override, sqsExecute auto-trigger with
-no workflow context, openPipeline threading + registration, constructPipeline definition carries
-locations, and the container PipelineDefinition accepts the new definition keys."""
+LOCATIONS and resolves the per-file aux preview output location, openPipeline threading +
+registration, constructPipeline definition carries locations, and the container PipelineDefinition
+accepts the new definition keys."""
 
 import os
 import sys
@@ -30,7 +30,6 @@ if "customLogging" not in sys.modules:
 
 for k, v in {
     "OPEN_PIPELINE_FUNCTION_NAME": "test-open-pipeline",
-    "S3_ASSETAUXILIARY_BUCKET_NAME": "test-aux",
     "AWS_DEFAULT_REGION": "us-east-1",
     "AWS_REGION": "us-east-1",
     "STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:PcPotree",
@@ -66,7 +65,14 @@ class TestVamsExecute:
 
     def _manifest(self):
         return {
-            "inputFiles": [{"bucket": "abkt", "key": "xidM/scan.e57", "assetId": "xidM", "databaseId": "dbM"}],
+            "inputFiles": [{"bucket": "abkt", "key": "xidM/scan.e57", "assetId": "xidM",
+                            "databaseId": "dbM", "assetRootS3Key": "xidM/",
+                            "auxPreviewPrefix": "dbM/xidM/scan.e57/preview"}],
+            "outputs": {"bucket": "abkt"},
+            "auxBucket": "aux-bkt",
+            # Empty until sourced from pipeline configuration; a value like "/PotreeViewer" would
+            # append a viewer subfolder to the per-file aux preview prefix.
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -82,8 +88,25 @@ class TestVamsExecute:
         assert resp["statusCode"] == 200
         payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/scan.e57"
-        # The bespoke aux-only Potree viewer location override is preserved (frontend reads it).
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux-bkt/xidM/scan.e57/preview/PotreeViewer"
+        # Potree writes to the per-input-file aux preview location: auxBucket + the file's own
+        # aux preview prefix + the per-pipeline viewer subfolder. auxPreviewPipelinePrefix is empty
+        # here, so the pipeline falls back to the hardcoded "PotreeViewer" subfolder to stay intact.
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux-bkt/dbM/xidM/scan.e57/preview/PotreeViewer"
+
+    def test_uses_manifest_pipeline_prefix_when_present(self):
+        # When the manifest supplies a viewer subfolder, it is used instead of the hardcoded
+        # fallback.
+        mod = self._load()
+        manifest = self._manifest()
+        manifest["auxPreviewPipelinePrefix"] = "/CustomViewer"
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
+        invoke = MagicMock(return_value={"StatusCode": 200})
+        with patch.object(mod, "s3_client", s3), patch.object(mod.lambda_client, "invoke", invoke):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 200
+        payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux-bkt/dbM/xidM/scan.e57/preview/CustomViewer"
         # Output paths stay empty (aux-only pipeline, not a process-output target).
         assert payload["outputS3AssetFilesPath"] == ""
         assert payload["inputMetadataS3Location"] == "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json"
@@ -91,31 +114,6 @@ class TestVamsExecute:
         assert payload["orchestrationEventPrefix"] == "vams.prod.execution.E1.pipeline.P1"
         assert "inputMetadata" not in payload
         assert "inputParameters" not in payload
-
-
-@pytest.mark.unit
-class TestSqsExecute:
-    def _load(self):
-        if "sqsExecutePreviewPcPotreeViewerPipeline" in sys.modules:
-            return importlib.reload(sys.modules["sqsExecutePreviewPcPotreeViewerPipeline"])
-        return importlib.import_module("sqsExecutePreviewPcPotreeViewerPipeline")
-
-    def _sqs_event(self, key="myasset/scan.las"):
-        s3_message = {"Records": [{"s3": {"bucket": {"name": "abkt"}, "object": {"key": key}}}]}
-        return {"Records": [{"body": json.dumps({"Message": json.dumps(s3_message)})}]}
-
-    def test_no_context_empty_locations(self):
-        mod = self._load()
-        invoke = MagicMock(return_value={"StatusCode": 200})
-        with patch.object(mod.lambda_client, "invoke", invoke):
-            resp = mod.lambda_handler(self._sqs_event(), MagicMock())
-        assert resp["statusCode"] == 200
-        payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
-        assert payload["inputS3AssetFilePath"] == "s3://abkt/myasset/scan.las"
-        assert payload["inputMetadataS3Location"] == ""
-        assert payload["inputConfigurationS3Location"] == ""
-        assert payload["sfnExternalTaskToken"] == ""
-        assert "inputMetadata" not in payload and "inputParameters" not in payload
 
 
 @pytest.mark.unit

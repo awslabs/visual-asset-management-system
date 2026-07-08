@@ -1965,12 +1965,10 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
-                sqsAutoRunOnAssetModified: boolean;
             };
             useSplatToolbox: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
-                sqsAutoRunOnAssetModified: boolean;
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;

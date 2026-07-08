@@ -180,7 +180,7 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 
 ### Step 7: Add Config Flag
 
-1. Add the pipeline block to the `ConfigPublic` interface in `infra/config/config.ts` under `pipelines`. Standard fields: `enabled`, `autoRegisterWithVAMS`, and where applicable `autoRegisterAutoTriggerOnFileUpload`, `sqsAutoRunOnAssetModified`, `useCodeBuild`.
+1. Add the pipeline block to the `ConfigPublic` interface in `infra/config/config.ts` under `pipelines`. Standard fields: `enabled`, `autoRegisterWithVAMS`, and where applicable `autoRegisterAutoTriggerOnFileUpload`, `useCodeBuild`.
 2. Add a backward-compatibility `undefined` check with defaults in `getConfig()`.
 3. Add validation in `getConfig()` if constraints exist. If the pipeline needs a VPC, add it to the `vpcRequiringFeatures` checks.
 4. Update **ALL** config template files: `config.template.commercial.json`, `config.template.govcloud.json`, AND `config.template.eusovereign.json` — a missed template silently drops operator-set values.

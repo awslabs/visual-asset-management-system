@@ -79,7 +79,8 @@ def fetch_input_configuration(input_configuration_s3_location):
 def resolve_inputs_from_manifest(data):
     """Resolve the input file path and output-files path from the workflow manifest
     (inputManifestS3Location), falling back to the legacy top-level body fields for direct/local
-    invocations. Returns (input_s3_asset_file_path, output_s3_asset_files_path)."""
+    invocations. Locations are carried as bucket + relative keys, so s3:// URIs are reconstructed
+    here. Returns (input_s3_asset_file_path, output_s3_asset_files_path)."""
     manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
     input_files = (manifest or {}).get("inputFiles") or []
     input_path = ""
@@ -88,8 +89,12 @@ def resolve_inputs_from_manifest(data):
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
     input_path = input_path or data.get("inputS3AssetFilePath", "")
-    output_path = (manifest or {}).get("outputs", {}).get("files", "") \
-        or data.get("outputS3AssetFilesPath", "")
+    # Output-files path reconstructed from the outputs bucket + bucket-relative files prefix.
+    outputs = (manifest or {}).get("outputs", {})
+    output_path = ""
+    if outputs.get("bucket") and outputs.get("files"):
+        output_path = f"s3://{outputs['bucket']}/{outputs['files']}"
+    output_path = output_path or data.get("outputS3AssetFilesPath", "")
     return input_path, output_path
 
 

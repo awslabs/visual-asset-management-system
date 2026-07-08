@@ -98,9 +98,17 @@ def lambda_handler(event, context):
 
         # Resolve input file + metadata/config S3 locations from the workflow manifest
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
-        inputOutputS3AssetAuxiliaryFilesPath = f"s3://{data['bucketAssetAuxiliary']}/{data['inputAssetFileKey']}/preview/PotreeViewer" #override to proper preview location output
+        # Potree writes its octree viewer data to the per-input-file aux preview location. The
+        # viewer subfolder comes from the manifest's auxPreviewPipelinePrefix; until that is
+        # sourced from the pipeline configuration it is empty, so fall back to the hardcoded
+        # "PotreeViewer" subfolder here to keep the viewer path intact.
+        inputOutputS3AssetAuxiliaryFilesPath = resolved['auxPreviewS3Path']
+        if not resolved.get('auxPreviewPipelinePrefix') and inputOutputS3AssetAuxiliaryFilesPath:
+            inputOutputS3AssetAuxiliaryFilesPath = inputOutputS3AssetAuxiliaryFilesPath.rstrip('/') + "/PotreeViewer"
 
         # Starts excution of pipeline
         execute_pipeline(resolved['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath

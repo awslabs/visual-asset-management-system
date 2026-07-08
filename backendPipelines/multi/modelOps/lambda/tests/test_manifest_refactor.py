@@ -66,9 +66,12 @@ class TestVamsExecute:
 
     def _manifest(self):
         return {
-            "inputFiles": [{"bucket": "abkt", "key": "xidM/model.glb", "assetId": "xidM", "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/model.glb/modelOps/",
+            "inputFiles": [{"bucket": "abkt", "key": "xidM/model.glb", "assetId": "xidM", "databaseId": "dbM",
+                            "assetRootS3Key": "xidM/", "auxPreviewPrefix": "dbM/xidM/model.glb/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/modelOps/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},

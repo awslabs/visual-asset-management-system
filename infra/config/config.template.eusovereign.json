@@ -109,8 +109,7 @@
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true,
-                "sqsAutoRunOnAssetModified": false
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,

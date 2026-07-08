@@ -22,11 +22,12 @@ This lambda is reused for every interim gap; the SFN payload carries the gap-spe
 from/to pipeline indices + ids. It does NOT modify use-case pipeline containers.
 """
 
+import os
 import json
 import boto3
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
-from common.resourceNames import get_table_name, ResourceKeys
+from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 
@@ -40,20 +41,17 @@ try:
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    # Auxiliary bucket name, written into each next pipeline's manifest.auxBucket. Resolved here
+    # (not threaded through the SFN input) so the aux bucket lives in one place per its purpose.
+    bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+    # Orchestration bus ARN + event source prefix, written into each next pipeline's
+    # manifest.systemConfig. Sourced from the lambda environment (not the SFN input) so the
+    # config lives in one place per its intended purpose. Optional: empty if unset.
+    orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
-
-
-def _base_key_from_root(asset_files_s3_root, bucket):
-    """The asset-bucket-relative base key from a stored assetFilesS3Root (s3://bucket/baseKey/).
-    Returns "" when the root is empty or only the bucket root."""
-    root = (asset_files_s3_root or "")
-    if not root.startswith("s3://"):
-        return ""
-    without_scheme = root[len("s3://"):]
-    _bkt, _, base = without_scheme.partition("/")
-    return base
 
 
 def _relative_to_asset(full_file_key, base_key):
@@ -70,14 +68,16 @@ def _relative_to_asset(full_file_key, base_key):
 
 def _get_original_input_entries(workflow_execution_id):
     """Reconstruct the execution's original input asset files as manifest source entries
-    ({relativePath, bucket, key, versionId, assetFilesS3Root, ...}) from the WorkflowExecutionInputs
-    rows.
+    ({relativePath, bucket, key, versionId, assetRootS3Key, auxPreviewPrefix, ...}) from the
+    WorkflowExecutionInputs rows.
 
-    Each input file is self-locating: its own s3Bucket + assetFilesS3Root are stored per row, so
-    inputs that span different assets/buckets each resolve against their own root. The stored
-    inputAssetFileKey is the FULL asset-bucket key; relativePath must be ASSET-RELATIVE (that
-    file's own base key stripped) so it matches the asset-relative keys build_resolved_manifest
-    derives from the output FILES folder. key stays the full S3 key (the actual object location)."""
+    Each input file is self-locating: its own s3Bucket + assetRootS3Key (a bucket-relative asset
+    root prefix, no s3:// URI) are stored per row, so inputs that span different assets/buckets
+    each resolve against their own root. The stored inputAssetFileKey is the FULL asset-bucket key;
+    relativePath must be ASSET-RELATIVE (that file's own asset-root key stripped) so it matches the
+    asset-relative keys build_resolved_manifest derives from the output FILES folder. key stays the
+    full S3 key (the actual object location). Each file's aux preview prefix is rebuilt from its
+    database/asset identity + asset-relative path so it stays per-file and unique."""
     table = dynamodb.Table(workflow_execution_inputs_table)
     entries = []
     kwargs = {'KeyConditionExpression': Key('workflowExecutionId').eq(workflow_execution_id)}
@@ -86,13 +86,18 @@ def _get_original_input_entries(workflow_execution_id):
         for row in resp.get('Items', []):
             file_key = row.get('inputAssetFileKey', '')
             file_bucket = row.get('s3Bucket', '')
-            asset_files_root = row.get('assetFilesS3Root', '')
-            base_key = _base_key_from_root(asset_files_root, file_bucket)
+            asset_root_s3_key = row.get('assetRootS3Key', '')
+            database_id = row.get('databaseId', '')
+            asset_id = row.get('assetId', '')
+            relative_path = _relative_to_asset(file_key, asset_root_s3_key)
             entries.append({
-                "relativePath": _relative_to_asset(file_key, base_key),
-                "databaseId": row.get('databaseId', ''),
-                "assetId": row.get('assetId', ''),
-                "assetFilesS3Root": asset_files_root,
+                "relativePath": relative_path,
+                "databaseId": database_id,
+                "assetId": asset_id,
+                "assetRootS3Key": asset_root_s3_key,
+                # Keyed on the FULL asset file key (location key + relative path) so a custom asset
+                # base prefix is preserved: {databaseId}/{assetFileKey}/preview.
+                "auxPreviewPrefix": er.aux_preview_file_prefix(database_id, file_key.lstrip('/')),
                 "bucket": file_bucket,
                 "key": file_key.lstrip('/'),
                 "versionId": "",
@@ -149,34 +154,38 @@ def prepare_next_pipeline(body):
     next_manifest_key = body.get('nextPipelineManifestS3Key', '')
     next_config_key = body.get('nextPipelineConfigS3Key', '')
 
-    # Envelope context for the next pipeline (output/aux/metadata locations + system config),
-    # threaded from the ASL. The next pipeline's orchestration event prefix is built here from
-    # the source prefix + execution id + the next pipeline-execution id.
-    aux_bucket = body.get('bucketAssetAuxiliary', '')
-    next_aux_prefix = body.get('nextPipelineAuxPrefix', '')
+    # Envelope context for the next pipeline (output/aux/metadata locations + system config). The
+    # output prefixes are asset-bucket-RELATIVE (threaded from the ASL) and pair with the output
+    # bucket (the workflow-execution I/O bucket); the aux temp prefix is bucket-relative and
+    # execution-scoped. The next pipeline's orchestration event prefix is built here from the
+    # env-sourced source prefix + execution id + the next pipeline-execution id (the bus config
+    # is not threaded through the SFN input).
+    aux_bucket = bucket_name_assetAuxiliary
+    next_aux_temp_prefix = body.get('nextPipelineAuxTempPrefix', '')
     next_event_prefix = ""
-    src_prefix = body.get('orchestrationEventSourcePrefix', '')
     next_pexec_id = body.get('nextPipelineExecutionId', '')
-    if src_prefix and next_pexec_id:
-        next_event_prefix = er.orchestration_event_prefix(src_prefix, workflow_execution_id, next_pexec_id)
+    if orchestration_event_source_prefix and next_pexec_id:
+        next_event_prefix = er.orchestration_event_prefix(
+            orchestration_event_source_prefix, workflow_execution_id, next_pexec_id)
     envelope_context = {
         "inputMetadataS3Location": body.get('inputMetadataS3Location', ''),
-        "outputs": {
-            "files": body.get('outputFilesUri', ''),
-            "previews": body.get('outputPreviewsUri', ''),
-            "metadata": body.get('outputMetadataUri', ''),
-            "results": body.get('outputResultsUri', ''),
-        },
+        "outputs": er.build_manifest_outputs(
+            bucket=wf_exec_bucket,
+            files=body.get('outputFilesPrefixRelative', ''),
+            previews=body.get('outputPreviewsPrefixRelative', ''),
+            metadata=body.get('outputMetadataPrefixRelative', ''),
+            results=body.get('outputResultsPrefixRelative', '')),
         "outputTarget": er.build_manifest_output_target(
             location_type=body.get('outputLocationType', 'asset'),
             asset_id=body.get('outputAssetId', ''),
             database_id=body.get('outputDatabaseId', ''),
             file_base_execution_path_extension=body.get('outputFileBaseExecutionPathExtension', '/')),
-        "auxBucketS3Root": f"s3://{aux_bucket}/" if aux_bucket else "",
-        "auxTempPrefix": f"s3://{aux_bucket}/{next_aux_prefix}" if (aux_bucket and next_aux_prefix) else "",
-        "auxPreviewPrefix": f"s3://{aux_bucket}/{next_aux_prefix}" if (aux_bucket and next_aux_prefix) else "",
+        "auxBucket": aux_bucket,
+        "auxTempPrefix": next_aux_temp_prefix,
+        # Per-pipeline viewer subfolder; empty until sourced from pipeline configuration.
+        "auxPreviewPipelinePrefix": "",
         "systemConfig": er.build_manifest_system_config(
-            orchestration_bus_arn=body.get('orchestrationBusArn', ''),
+            orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=next_event_prefix),
     }
 

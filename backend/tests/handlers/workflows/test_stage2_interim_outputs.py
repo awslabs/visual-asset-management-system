@@ -148,27 +148,31 @@ class TestInterimPipelineTracking:
 
     def test_original_input_relativepath_is_stripped_to_asset_relative(self):
         # The stored inputAssetFileKey is the FULL asset-ID-prefixed key; _get_original_input_entries
-        # strips each file's OWN base key (derived from its per-row assetFilesS3Root) so relativePath
-        # is asset-relative and matches the asset-relative output-files keys for shadow detection.
+        # strips each file's OWN asset-root key (the per-row assetRootS3Key, bucket-relative) so
+        # relativePath is asset-relative and matches the asset-relative output-files keys for shadow
+        # detection. Each file's own aux preview prefix is rebuilt per file.
         inputs_table = MagicMock(query=MagicMock(return_value={"Items": [
-            {"inputAssetFileKey": "/a1xyz/test/pump.e57", "s3Bucket": "abkt",
-             "assetFilesS3Root": "s3://abkt/a1xyz/"},
+            {"inputAssetFileKey": "/a1xyz/test/pump.e57", "databaseId": "db", "assetId": "a1xyz",
+             "s3Bucket": "abkt", "assetRootS3Key": "a1xyz/"},
         ]}))
         with patch.object(ipt.dynamodb, "Table", return_value=inputs_table):
             entries = ipt._get_original_input_entries("EXEC1")
         assert entries[0]["relativePath"] == "/test/pump.e57"   # base stripped, asset-relative
         assert entries[0]["key"] == "a1xyz/test/pump.e57"       # full key preserved for S3
         assert entries[0]["bucket"] == "abkt"                   # the file's own bucket
+        assert entries[0]["assetRootS3Key"] == "a1xyz/"         # relative asset-root key
+        # Per-file aux preview prefix keyed on the FULL asset file key: {databaseId}/{assetFileKey}/preview.
+        assert entries[0]["auxPreviewPrefix"] == "db/a1xyz/test/pump.e57/preview"
 
     def test_shadowing_matches_after_stripping(self):
         # End-to-end shadow check with the full-prefixed stored key: pump.e57 was rewritten by
         # a prior pipeline (present in the output files folder), scan.las was not. Each input row
-        # is self-locating (its own s3Bucket + assetFilesS3Root).
+        # is self-locating (its own s3Bucket + assetRootS3Key).
         inputs_table = MagicMock(query=MagicMock(return_value={"Items": [
             {"inputAssetFileKey": "/a1xyz/test/pump.e57", "databaseId": "db", "assetId": "a1",
-             "s3Bucket": "abkt", "assetFilesS3Root": "s3://abkt/a1xyz/"},
+             "s3Bucket": "abkt", "assetRootS3Key": "a1xyz/"},
             {"inputAssetFileKey": "/a1xyz/test/scan.las", "databaseId": "db", "assetId": "a1",
-             "s3Bucket": "abkt", "assetFilesS3Root": "s3://abkt/a1xyz/"},
+             "s3Bucket": "abkt", "assetRootS3Key": "a1xyz/"},
         ]}))
         body = {
             "workflowExecutionId": "EXEC1",

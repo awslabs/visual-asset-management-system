@@ -31,57 +31,6 @@ import {
     grantReadPermissionsToAllAssetBuckets,
 } from "../../../../../helper/security";
 
-export function buildSqsExecutePcPotreeViewerPipelineFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    assetAuxiliaryBucket: s3.IBucket,
-    openPipelineLambdaFunction: lambda.IFunction,
-    bucketName: string,
-    bucketPrefix: string,
-    index: number,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    kmsKey?: kms.IKey
-): lambda.Function {
-    const name = "sqsExecutePreviewPcPotreeViewerPipeline";
-    const fun = new lambda.Function(scope, name + "-" + index, {
-        code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/preview/pcPotreeViewer/lambda`
-            )
-        ),
-        handler: `${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(5),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {
-            OPEN_PIPELINE_FUNCTION_NAME: openPipelineLambdaFunction.functionName,
-            S3_ASSETAUXILIARY_BUCKET_NAME: assetAuxiliaryBucket.bucketName,
-        },
-    });
-
-    grantReadPermissionsToAllAssetBuckets(fun);
-    assetAuxiliaryBucket.grantRead(fun);
-    openPipelineLambdaFunction.grantInvoke(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
-
-    suppressCdkNagLambda(fun);
-    return fun;
-}
-
 export function buildVamsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,

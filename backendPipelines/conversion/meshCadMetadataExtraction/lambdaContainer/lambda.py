@@ -129,8 +129,9 @@ def _fetch_json_from_s3(s3_location):
 def resolve_inputs_from_manifest(data):
     """Resolve the input file path, its asset base key, and the output-metadata path from the
     workflow manifest (inputManifestS3Location), falling back to the legacy top-level body fields
-    when no manifest is present (direct/local invocations). The asset base key comes from the
-    input file's OWN assetFilesS3Root (each input file is self-locating). Returns
+    when no manifest is present (direct/local invocations). The asset base key is the input file's
+    OWN assetRootS3Key (a bucket-relative asset root key; each input file is self-locating).
+    Locations are carried as bucket + relative keys, so s3:// URIs are reconstructed here. Returns
     (input_s3_asset_file_path, input_asset_base_key, output_s3_asset_metadata_path)."""
     manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
     input_files = (manifest or {}).get("inputFiles") or []
@@ -140,14 +141,16 @@ def resolve_inputs_from_manifest(data):
         first = input_files[0]
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
-        # Asset base key = the key portion of this file's own assetFilesS3Root (s3://bucket/baseKey).
-        root = first.get("assetFilesS3Root", "")
-        if root.startswith("s3://"):
-            asset_base_key = root[len("s3://"):].partition("/")[2]
+        # Asset base key = this file's own bucket-relative asset root key.
+        asset_base_key = first.get("assetRootS3Key", "")
     input_path = input_path or data.get("inputS3AssetFilePath", "")
     asset_base_key = asset_base_key or data.get("inputAssetLocationKey", "")
-    output_path = (manifest or {}).get("outputs", {}).get("metadata", "") \
-        or data.get("outputS3AssetMetadataPath", "")
+    # Output-metadata path reconstructed from the outputs bucket + bucket-relative metadata prefix.
+    outputs = (manifest or {}).get("outputs", {})
+    output_path = ""
+    if outputs.get("bucket") and outputs.get("metadata"):
+        output_path = f"s3://{outputs['bucket']}/{outputs['metadata']}"
+    output_path = output_path or data.get("outputS3AssetMetadataPath", "")
     return input_path, asset_base_key, output_path
 
 

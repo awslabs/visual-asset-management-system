@@ -416,12 +416,10 @@ class TaskStateBuilder(ABC):
                 "workflowId.$": "$.workflowId",
                 "workflowExecutionId.$": "$.workflowExecutionId",
 
-                # --- Buckets + primary input file key (the manifest carries each input file's
-                #     own location; inputAssetFileKey is the top-level triggering file key some
-                #     pipelines use to build aux output paths) ---
+                # --- Workflow-execution I/O bucket only (the manifest carries each input file's own
+                #     location + its aux bucket/preview prefix; no single triggering file key is
+                #     threaded, so the body is input-file-agnostic and multi-file-ready) ---
                 "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
-                "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
-                "inputAssetFileKey.$": "$.inputAssetFileKey",
 
                 # --- Executing-user context ---
                 "executingUserName.$": "$.executingUserName",

@@ -381,6 +381,8 @@ def lambda_handler(event, context):
             data = event
         if isinstance(data, dict):
             resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+            # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+            manifestHelper.enforce_single_input_file(resolved)
             logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']})")
             for field in ('inputS3AssetFilePath', 'outputS3AssetFilesPath', 'outputS3AssetPreviewPath',
                           'outputS3AssetMetadataPath', 'inputOutputS3AssetAuxiliaryFilesPath',

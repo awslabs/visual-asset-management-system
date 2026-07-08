@@ -74,9 +74,12 @@ class TestVamsExecute:
     def _manifest(self):
         return {
             "inputFiles": [{"bucket": "abkt", "key": "xidM/clips/source.mp4",
-                            "assetId": "xidM", "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/clips/source.mp4/cosmos/transfer/",
+                            "assetId": "xidM", "databaseId": "dbM", "assetRootS3Key": "xidM/",
+                            "auxPreviewPrefix": "dbM/xidM/clips/source.mp4/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/cosmosTransfer/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -123,7 +126,7 @@ class TestVamsExecute:
         # Manifest-resolved input + outputs + aux.
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/clips/source.mp4"
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/clips/source.mp4/cosmos/transfer/"
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/cosmosTransfer/E1/"
         assert payload["assetId"] == "xidM"
         assert payload["databaseId"] == "dbM"
         # The metadata + input-configuration S3 LOCATIONS are forwarded.

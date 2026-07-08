@@ -102,6 +102,8 @@ def lambda_handler(event, context):
 
         # Resolve input/output locations from the workflow manifest, falling back to payload path fields
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Starts excution of pipeline

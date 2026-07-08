@@ -105,14 +105,28 @@ def pipeline_output_prefixes(first_pipeline_name: str, first_job_name: str, exec
     }
 
 
-def aux_pipeline_prefix(pipeline_name: str, pipeline_type: str, input_asset_file_key: str) -> str:
-    """Auxiliary-bucket working prefix for a pipeline, mirroring the ASL
-    inputOutputS3AssetAuxiliaryFilesPath layout: fileKey, then subfolder, then
-    pipeline name (standardFile -> 'pipelines', previewFile -> 'preview')."""
-    subfolder = _PIPELINES_PREFIX.rstrip("/")
-    if pipeline_type == "previewFile":
-        subfolder = _AUXILIARY_PREVIEW_PREFIX.rstrip("/")
-    return f"{input_asset_file_key}/{subfolder}/{pipeline_name}/"
+def aux_pipeline_prefix(pipeline_name: str, execution_id: str) -> str:
+    """Auxiliary-bucket temporary working prefix for a pipeline execution, relative to the aux
+    bucket (no scheme, no bucket): 'pipelines/{pipelineName}/{executionId}/'. Scoped to the
+    execution so concurrent runs of the same pipeline cannot collide on working files."""
+    return f"{_PIPELINES_PREFIX}{pipeline_name}/{execution_id}/"
+
+
+def aux_preview_file_prefix(database_id: str, asset_file_key: str) -> str:
+    """Per-input-file auxiliary-bucket preview prefix, relative to the aux bucket (no scheme, no
+    bucket, no trailing slash): '{databaseId}/{assetFileKey}/preview'.
+
+    The asset file key is the FULL asset-bucket key (asset location key + relative file path), so
+    any custom asset base prefix carried by the asset location key is preserved rather than assuming
+    the key is prefixed by the asset id. Every input file gets its own unique aux preview location
+    regardless of pipeline type. A pipeline that writes preview/viewer data appends the manifest's
+    auxPreviewPipelinePrefix (e.g. '/PotreeViewer') to target a viewer-specific subfolder here."""
+    fk = (asset_file_key or "").strip("/")
+    base = database_id or ""
+    preview_segment = _AUXILIARY_PREVIEW_PREFIX.rstrip("/")
+    if fk:
+        return f"{base}/{fk}/{preview_segment}"
+    return f"{base}/{preview_segment}"
 
 
 # Per-execution input-definition folder (asset bucket): the shared input metadata file plus
@@ -143,14 +157,20 @@ def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
 
 def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: str = "",
                          database_id: str = "", asset_id: str = "",
-                         asset_files_s3_root: str = "") -> dict:
+                         asset_root_s3_key: str = "", aux_preview_prefix: str = "") -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
-    location (bucket/key/versionId) and asset identity a pipeline reads for that path."""
+    location (bucket/key/versionId) and asset identity a pipeline reads for that path.
+
+    Locations are carried as relative keys plus the file's own bucket (never a pre-built
+    s3:// URI): `assetRootS3Key` is this file's asset-root prefix within `bucket`, and
+    `auxPreviewPrefix` is this file's unique auxiliary-bucket preview prefix. Downstream
+    consumers reconstruct s3:// as needed from `bucket` + the relevant relative key."""
     return {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",
         "assetId": asset_id or "",
-        "assetFilesS3Root": asset_files_s3_root or "",
+        "assetRootS3Key": asset_root_s3_key or "",
+        "auxPreviewPrefix": aux_preview_prefix or "",
         "bucket": bucket,
         "key": key,
         "versionId": version_id or "",
@@ -176,26 +196,47 @@ def build_manifest_output_target(location_type="asset", asset_id="", database_id
     }
 
 
+def build_manifest_outputs(bucket="", files="", previews="", metadata="", results=""):
+    """outputs block for the manifest envelope: a single output `bucket` plus bucket-relative
+    prefixes for each output kind (no pre-built s3:// URIs). Downstream consumers reconstruct
+    s3://{bucket}/{prefix} as needed."""
+    return {
+        "bucket": bucket or "",
+        "files": files or "",
+        "previews": previews or "",
+        "metadata": metadata or "",
+        "results": results or "",
+    }
+
+
 def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
-                            aux_bucket_s3_root, aux_temp_prefix, aux_preview_prefix,
-                            system_config=None, output_target=None):
+                            aux_bucket, aux_temp_prefix,
+                            system_config=None, output_target=None,
+                            aux_preview_pipeline_prefix=""):
     """The per-pipeline manifest envelope (schemaVersion-stamped): resolved input files plus
     the metadata, output, and auxiliary-bucket locations, the output-target identity, and the
-    systemConfig block."""
+    systemConfig block.
+
+    Locations avoid pre-built s3:// URIs: `outputs` carries a bucket + bucket-relative prefixes,
+    `auxBucket` is the auxiliary bucket NAME only, and `auxTempPrefix` is a bucket-relative
+    temporary working prefix. Per-input-file aux preview locations live on each input file entry
+    (`auxPreviewPrefix`); `auxPreviewPipelinePrefix` is a per-pipeline viewer subfolder (e.g.
+    '/PotreeViewer', empty by default) a pipeline appends to its input file's preview prefix."""
     return {
         "schemaVersion": MANIFEST_SCHEMA_VERSION,
         "inputFiles": input_files or [],
         "inputMetadataS3Location": input_metadata_s3_location or "",
-        "outputs": {
-            "files": (outputs or {}).get("files", ""),
-            "previews": (outputs or {}).get("previews", ""),
-            "metadata": (outputs or {}).get("metadata", ""),
-            "results": (outputs or {}).get("results", ""),
-        },
+        "outputs": build_manifest_outputs(
+            bucket=(outputs or {}).get("bucket", ""),
+            files=(outputs or {}).get("files", ""),
+            previews=(outputs or {}).get("previews", ""),
+            metadata=(outputs or {}).get("metadata", ""),
+            results=(outputs or {}).get("results", ""),
+        ),
         "outputTarget": output_target or build_manifest_output_target(),
-        "auxBucketS3Root": aux_bucket_s3_root or "",
+        "auxBucket": aux_bucket or "",
         "auxTempPrefix": aux_temp_prefix or "",
-        "auxPreviewPrefix": aux_preview_prefix or "",
+        "auxPreviewPipelinePrefix": aux_preview_pipeline_prefix or "",
         "systemConfig": system_config or {},
     }
 
@@ -333,14 +374,15 @@ def build_pipeline_input_file_record(
 def build_workflow_execution_input_record(
     workflow_execution_id, database_id, asset_id, input_asset_file_key,
     execution_start_date, workflow_id, workflow_database_id,
-    s3_bucket="", asset_files_s3_root="",
+    s3_bucket="", asset_root_s3_key="",
 ):
     """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth).
 
-    s3Bucket + assetFilesS3Root locate this input file's own asset root. Each input file may
-    belong to a different asset (different bucket and base location key), so its root is stored
-    per file rather than assumed shared; the interim lambda uses it to compute the asset-relative
-    path for the rebuilt manifest."""
+    s3Bucket + assetRootS3Key locate this input file's own asset root: the bucket name plus the
+    bucket-relative asset-root prefix (no s3:// URI). Each input file may belong to a different
+    asset (different bucket and base location key), so its root is stored per file rather than
+    assumed shared; the interim lambda uses it to compute the asset-relative path for the rebuilt
+    manifest."""
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
         "databaseId:assetId:inputAssetFileKey": input_file_composite_key(
@@ -350,7 +392,7 @@ def build_workflow_execution_input_record(
         "databaseId": database_id,
         "inputAssetFileKey": normalize_file_key(input_asset_file_key),
         "s3Bucket": s3_bucket,
-        "assetFilesS3Root": asset_files_s3_root,
+        "assetRootS3Key": asset_root_s3_key,
         "executionStartDate": execution_start_date,  # GSI SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,

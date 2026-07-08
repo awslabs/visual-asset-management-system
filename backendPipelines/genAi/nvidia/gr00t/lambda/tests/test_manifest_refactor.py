@@ -65,9 +65,12 @@ class TestResolveInputs:
 
     def _manifest(self):
         return {
-            "inputFiles": [{"bucket": "abkt", "key": "xidM/asset/", "assetId": "xidM", "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/gr00t/",
+            "inputFiles": [{"bucket": "abkt", "key": "xidM/asset/", "assetId": "xidM", "databaseId": "dbM",
+                            "assetRootS3Key": "xidM/", "auxPreviewPrefix": "dbM/xidM/asset/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/gr00t/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -91,7 +94,7 @@ class TestResolveInputs:
         assert r["inputS3AssetFilePath"] == "s3://abkt/xidM/asset/"
         assert r["assetId"] == "xidM" and r["databaseId"] == "dbM"
         assert r["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
-        assert r["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/gr00t/"
+        assert r["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/gr00t/E1/"
         assert r["inputMetadataS3Location"] == "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json"
         # config location rides in the SFN body, not the manifest envelope -> stays from legacy
         assert r["inputConfigurationS3Location"] == self._legacy()["inputConfigurationS3Location"]
@@ -179,9 +182,12 @@ class TestVamsExecuteGr00tFinetunePipeline:
 
     def _manifest(self):
         return {
-            "inputFiles": [{"bucket": "abkt", "key": "xidM/asset/", "assetId": "xidM", "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/gr00t/",
+            "inputFiles": [{"bucket": "abkt", "key": "xidM/asset/", "assetId": "xidM", "databaseId": "dbM",
+                            "assetRootS3Key": "xidM/", "auxPreviewPrefix": "dbM/xidM/asset/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/gr00t/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -223,7 +229,7 @@ class TestVamsExecuteGr00tFinetunePipeline:
         assert payload["inputS3AssetPath"] == "s3://abkt/xidM/asset/"
         assert payload["assetId"] == "xidM" and payload["databaseId"] == "dbM"
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/gr00t/"
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/gr00t/E1/"
         # The metadata + input-configuration S3 LOCATIONS travel, never the inline content.
         assert payload["inputMetadataS3Location"] == "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json"
         assert payload["inputConfigurationS3Location"] == "s3://abkt/pipelines/workflowExecutionInputs/E1/pipeline1/config.json"

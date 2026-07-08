@@ -9,11 +9,7 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
-import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -21,7 +17,6 @@ import {
     buildConstructPipelineFunction,
     buildOpenPipelineFunction,
     buildVamsExecutePcPotreeViewerPipelineFunction,
-    buildSqsExecutePcPotreeViewerPipelineFunction,
     buildPipelineEndFunction,
 } from "../lambdaBuilder/pcPotreeViewerFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
@@ -433,78 +428,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        if (
-            props.config.app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified === true
-        ) {
-            //Add subscription for each bucket to kick-off lambda function of pipeline (as the main pipeline execution action)
-            const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-            let index = 0;
-            for (const record of assetBucketRecords) {
-                const onS3ObjectCreatedQueue = new sqs.Queue(
-                    this,
-                    "pcPotreePipelineS3EventCreated-" + record.bucket,
-                    {
-                        queueName: `${props.config.name}-${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
-                        visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
-                        encryption: props.storageResources.encryption.kmsKey
-                            ? sqs.QueueEncryption.KMS
-                            : sqs.QueueEncryption.SQS_MANAGED,
-                        encryptionMasterKey: props.storageResources.encryption.kmsKey,
-                        enforceSSL: true,
-                    }
-                );
-                onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
-
-                //Build Lambda SNS Execution Function (as an optional pipeline execution action)
-                const PcPotreeViewerPipelineSqsExecuteFunction =
-                    buildSqsExecutePcPotreeViewerPipelineFunction(
-                        this,
-                        props.lambdaCommonBaseLayer,
-                        props.storageResources.s3.assetAuxiliaryBucket,
-                        openPipelineFunction,
-                        record.bucket.bucketName,
-                        record.prefix,
-                        index,
-                        props.config,
-                        props.vpc,
-                        props.pipelineSubnets,
-                        props.storageResources.encryption.kmsKey
-                    );
-
-                //Add event notifications for syncing
-                if (record.snsS3ObjectCreatedTopic) {
-                    record.snsS3ObjectCreatedTopic.addSubscription(
-                        new SqsSubscription(onS3ObjectCreatedQueue)
-                    );
-                }
-
-                onS3ObjectCreatedQueue.grantConsumeMessages(
-                    PcPotreeViewerPipelineSqsExecuteFunction
-                );
-
-                // The functions poll the respective queues, which is populated by messages sent to the topic.
-                const esmPcCreated = new lambda.EventSourceMapping(
-                    this,
-                    `SQSEventSourceBucketSyncPCCreated-${index}`,
-                    {
-                        eventSourceArn: onS3ObjectCreatedQueue.queueArn,
-                        target: PcPotreeViewerPipelineSqsExecuteFunction,
-                        batchSize: 1, // Max configurable records w/o maxBatchingWindow.
-                        maxBatchingWindow: cdk.Duration.seconds(0), // Max configurable time to wait before function is invoked.
-                    }
-                );
-
-                // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
-                // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-                if (props.config.app.govCloud.enabled) {
-                    const cfnEsm = esmPcCreated.node.defaultChild as lambda.CfnEventSourceMapping;
-                    cfnEsm.addPropertyDeletionOverride("Tags");
-                }
-
-                index = index + 1;
-            }
-        }
-
         // Create custom resource to automatically register pipeline and workflow
         if (props.config.app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS === true) {
             const importFunction = lambda.Function.fromFunctionArn(
@@ -571,17 +494,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
             PcPotreeViewerPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-SQS3",
-                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
-                },
-            ],
-            true
-        );
-
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
 

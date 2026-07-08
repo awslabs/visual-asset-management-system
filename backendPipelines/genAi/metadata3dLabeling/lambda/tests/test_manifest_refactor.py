@@ -75,10 +75,13 @@ class TestVamsExecute:
     def _manifest(self):
         return {
             "inputFiles": [{"bucket": "abkt", "key": "xidM/test/pump.glb", "assetId": "xidM",
-                            "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/",
-                        "metadata": "s3://abkt/pipelines/p1/MJOB/output/E1/metadata/"},
-            "auxTempPrefix": "s3://aux/xidM/test/pump.glb/genAi/metadata3dLabeling/",
+                            "databaseId": "dbM", "assetRootS3Key": "xidM/",
+                            "auxPreviewPrefix": "dbM/xidM/test/pump.glb/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/",
+                        "metadata": "pipelines/p1/MJOB/output/E1/metadata/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/metadata3dLabeling/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -97,7 +100,7 @@ class TestVamsExecute:
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/test/pump.glb"
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
         assert payload["outputS3AssetMetadataPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/metadata/"
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/test/pump.glb/genAi/metadata3dLabeling/"
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/metadata3dLabeling/E1/"
         assert payload["sfnExternalTaskToken"] == "tok-123"
         # The metadata + input-configuration S3 LOCATIONS are forwarded, never the inline content
         # (the vamsExecute lambda is the content boundary for both).

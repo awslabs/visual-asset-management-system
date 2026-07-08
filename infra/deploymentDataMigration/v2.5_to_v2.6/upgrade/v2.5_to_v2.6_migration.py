@@ -27,6 +27,18 @@ The v2.6 release introduces:
      deterministic record ID, so re-runs overwrite rather than duplicate.
      Set ``skip_asset_history_backfill: true`` in the config to run the
      reindex only.
+  5. A new per-file auxiliary-bucket preview layout. Preview/viewer data
+     (e.g. Potree octree files) moves from the old file-key-based layout
+     ``{assetLocationKey}{relativeFileKey}/preview/...`` to the database-scoped
+     per-file layout ``{databaseId}/{assetLocationKey}{relativeFileKey}/preview/...``.
+     The ``auxPreviewRelocation`` step scans the auxiliary bucket, matches each
+     object against the known asset location-key bases (the asset location key
+     may include a custom base prefix, so matching is on that base rather than
+     a bare assetId), looks up that asset's databaseId, inserts it in front of
+     the key, and copies+deletes each preview object to the new key. Reserved
+     working prefixes (``pipeline``/``pipelines``/``temp-upload``/``temp-uploads``)
+     are ignored, and the step is idempotent (already-migrated objects, whose
+     leading segment is a known databaseId, are skipped).
 
 Because the v3 indexes are empty after the v2.6 CDK deploy, this migration
 delegates to the existing reindexer Lambda (``crReindexer``) to re-populate
@@ -738,6 +750,211 @@ def run_workflow_executions_step(config: dict, args) -> int:
     return 0 if counts['errors'] == 0 else 1
 
 
+# =============================================================================
+# STEP 3: Auxiliary-bucket preview relocation to the per-file preview layout
+# =============================================================================
+
+# Reserved top-level auxiliary-bucket prefixes that are NOT per-asset preview data and
+# must never be relocated (execution working folders, temp uploads, etc.).
+_AUX_RESERVED_TOP_PREFIXES = ("pipeline", "pipelines", "temp-upload", "temp-uploads")
+
+# The auxiliary preview marker segment. Old preview objects live under
+# ``{assetId}/{relativeFileKey}/preview/...``; the new layout is
+# ``{databaseId}/{assetId}/{relativeFileKey}/preview/...``.
+_AUX_PREVIEW_SEGMENT = "preview"
+
+
+def _build_asset_location_index(dynamodb_client, asset_table_name: str):
+    """Return (location_index, database_ids) from the asset storage table (live partitions only;
+    ``#deleted`` archived partitions are skipped so previews resolve to the live database).
+
+    ``location_index`` maps each asset's location-key base (``assetLocation.Key``, normalized to a
+    trailing slash) -> databaseId. The asset location key may carry a custom base prefix (it is not
+    necessarily the bare assetId), so old aux preview keys are matched against this location base
+    rather than assuming an assetId prefix. ``database_ids`` is the set of known database ids, used
+    to detect already-migrated objects (whose leading segment is a databaseId)."""
+    logger.info(f"Building asset location-key -> databaseId index from {asset_table_name}...")
+    location_index: Dict[str, str] = {}
+    database_ids = set()
+    for item in scan_all_items(dynamodb_client, asset_table_name):
+        database_id = item.get('databaseId', {}).get('S', '')
+        if not database_id or database_id.endswith('#deleted'):
+            continue
+        database_ids.add(database_id)
+        location_key = item.get('assetLocation', {}).get('M', {}).get('Key', {}).get('S', '')
+        location_key = (location_key or '').strip('/')
+        if location_key:
+            location_index[location_key + '/'] = database_id
+    logger.info(f"Indexed {len(location_index)} asset locations across {len(database_ids)} databases")
+    return location_index, database_ids
+
+
+def _new_aux_preview_key(old_key: str, location_index: Dict[str, str], database_ids) -> Optional[str]:
+    """Compute the new aux preview key for an old key, or None to skip it.
+
+    Old preview objects are keyed ``{assetLocationKey}{relativeFileKey}/preview/...`` (the asset
+    location key may include a custom base prefix). The new layout inserts the asset's databaseId at
+    the front: ``{databaseId}/{assetLocationKey}{relativeFileKey}/preview/...``. Returns None when
+    the key is a reserved (non-preview) prefix, has no ``preview`` segment, does not start with a
+    known asset location key, or is already migrated (its leading segment is a known databaseId)."""
+    segments = old_key.split('/')
+    if not segments:
+        return None
+    # Skip reserved working prefixes (never asset preview data).
+    if segments[0] in _AUX_RESERVED_TOP_PREFIXES:
+        return None
+    # Only relocate objects that live under a 'preview' segment (viewer/preview data).
+    if _AUX_PREVIEW_SEGMENT not in segments:
+        return None
+    # Already migrated: leading segment is a known databaseId.
+    if segments[0] in database_ids:
+        return None
+    # Match against the longest asset location-key base the object starts with, then prefix that
+    # asset's databaseId. Longest match wins so nested location keys resolve to the right asset.
+    best_base = None
+    for base in location_index:
+        if old_key.startswith(base) and (best_base is None or len(base) > len(best_base)):
+            best_base = base
+    if best_base is None:
+        return None
+    return f"{location_index[best_base]}/{old_key}"
+
+
+def relocate_aux_previews(
+    aux_bucket_name: str,
+    asset_table_name: str,
+    profile: Optional[str] = None,
+    region: Optional[str] = None,
+    dry_run: bool = False,
+    limit: Optional[int] = None,
+) -> Dict:
+    """Relocate existing auxiliary-bucket preview objects to the per-file preview layout.
+
+    Old layout: ``{assetLocationKey}{relativeFileKey}/preview/...`` (keyed on the asset file key;
+    the asset location key may include a custom base prefix).
+    New layout: ``{databaseId}/{assetLocationKey}{relativeFileKey}/preview/...`` (per-file,
+    database-scoped).
+
+    Each object under a ``preview`` segment that starts with a known asset location-key base is
+    copied to the new key (databaseId inserted in front) and the old object deleted. Reserved
+    working prefixes (``pipeline``/``pipelines``/``temp-upload``/``temp-uploads``) are ignored, as
+    are objects with no matching asset location or that are already migrated. Idempotent: a re-run
+    skips already-relocated objects (their leading segment is a known databaseId)."""
+    logger.info("=" * 80)
+    logger.info("AUXILIARY PREVIEW RELOCATION (per-file preview layout)")
+    logger.info(f"Aux bucket: {aux_bucket_name}")
+    logger.info(f"Asset table: {asset_table_name}")
+    logger.info(f"Dry run: {dry_run}, Limit: {limit}")
+    logger.info("=" * 80)
+
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    session = boto3.Session(**session_kwargs)
+    s3_client = session.client('s3')
+    dynamodb_client = session.client('dynamodb')
+
+    location_index, database_ids = _build_asset_location_index(dynamodb_client, asset_table_name)
+
+    stats = {'objects_scanned': 0, 'objects_relocated': 0, 'objects_skipped': 0, 'errors': 0}
+
+    paginator = s3_client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=aux_bucket_name):
+        for obj in page.get('Contents', []):
+            old_key = obj.get('Key', '')
+            if not old_key or old_key.endswith('/'):
+                continue
+            if limit and stats['objects_scanned'] >= limit:
+                break
+            stats['objects_scanned'] += 1
+
+            new_key = _new_aux_preview_key(old_key, location_index, database_ids)
+            if not new_key or new_key == old_key:
+                stats['objects_skipped'] += 1
+                continue
+
+            if dry_run:
+                logger.info(f"  Would relocate: {old_key} -> {new_key}")
+                stats['objects_relocated'] += 1
+                continue
+
+            try:
+                s3_client.copy_object(
+                    Bucket=aux_bucket_name,
+                    CopySource={'Bucket': aux_bucket_name, 'Key': old_key},
+                    Key=new_key,
+                )
+                s3_client.delete_object(Bucket=aux_bucket_name, Key=old_key)
+                stats['objects_relocated'] += 1
+            except ClientError as e:
+                stats['errors'] += 1
+                logger.error(f"Failed relocating {old_key} -> {new_key}: {e}")
+
+            if stats['objects_scanned'] % 500 == 0:
+                logger.info(f"  Scanned {stats['objects_scanned']} objects, "
+                            f"{stats['objects_relocated']} relocated...")
+
+        if limit and stats['objects_scanned'] >= limit:
+            break
+
+    action = "Would relocate" if dry_run else "Relocated"
+    logger.info("=" * 80)
+    logger.info("AUXILIARY PREVIEW RELOCATION COMPLETE")
+    logger.info(f"Objects scanned:   {stats['objects_scanned']}")
+    logger.info(f"{action}: {stats['objects_relocated']}")
+    logger.info(f"Objects skipped:   {stats['objects_skipped']}")
+    logger.info(f"Errors:            {stats['errors']}")
+    logger.info("=" * 80)
+    return stats
+
+
+def run_aux_preview_relocation_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Resolve the aux bucket + asset table names (explicit config or SSM) and relocate previews.
+    Returns 0 on success."""
+    def _override(key):
+        value = config.get(key)
+        if value and str(value).startswith('<'):
+            return None
+        return value
+
+    aux_bucket_override = _override('asset_auxiliary_bucket_name')
+    asset_table_override = _override('asset_storage_table_name')
+
+    if not base_param_prefix and not (aux_bucket_override and asset_table_override):
+        logger.error(
+            "Auxiliary preview relocation needs the aux bucket + asset table names: set "
+            "'resource_names_ssm_param_prefix' or both 'asset_auxiliary_bucket_name' and "
+            "'asset_storage_table_name' in the config."
+        )
+        return 1
+
+    try:
+        if aux_bucket_override and asset_table_override:
+            aux_bucket_name, asset_table_name = aux_bucket_override, asset_table_override
+        else:
+            lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+            aux_bucket_name = lookup.resolve_with_override(
+                aux_bucket_override, ResourceParamKeys.ASSET_AUXILIARY_BUCKET)
+            asset_table_name = lookup.resolve_with_override(
+                asset_table_override, ResourceParamKeys.ASSET_STORAGE_TABLE)
+    except Exception as e:
+        logger.error(f"Failed resolving names for auxiliary preview relocation: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+    stats = relocate_aux_previews(
+        aux_bucket_name=aux_bucket_name,
+        asset_table_name=asset_table_name,
+        profile=profile,
+        region=region,
+        dry_run=dry_run,
+        limit=limit,
+    )
+    return 0 if stats.get('errors', 0) == 0 else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
@@ -766,7 +983,9 @@ Notes:
 
     parser.add_argument('--config', required=True,
                         help='Path to the migration JSON configuration file')
-    parser.add_argument('--steps', choices=['reindex', 'assetHistory', 'workflowExecutions', 'all'], default='all',
+    parser.add_argument('--steps',
+                        choices=['reindex', 'assetHistory', 'workflowExecutions', 'auxPreviewRelocation', 'all'],
+                        default='all',
                         help="Which release migration step(s) to run (default: all)")
     parser.add_argument('--operation', choices=['assets', 'files', 'both'],
                         help='Operation to perform (default: both, can also be set in config)')
@@ -795,6 +1014,7 @@ Notes:
     run_reindex = args.steps in ('reindex', 'all')
     run_asset_history = args.steps in ('assetHistory', 'all')
     run_workflow_executions = args.steps in ('workflowExecutions', 'all')
+    run_aux_preview_relocation = args.steps in ('auxPreviewRelocation', 'all')
 
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
@@ -913,6 +1133,13 @@ Notes:
         logger.info("")
         logger.info("##### STEP: Workflow executions storage overhaul #####")
         rc = run_workflow_executions_step(config, args)
+        if rc != 0:
+            exit_code = rc
+
+    if run_aux_preview_relocation:
+        logger.info("")
+        logger.info("##### STEP: Auxiliary preview relocation #####")
+        rc = run_aux_preview_relocation_step(config, args, base_param_prefix, profile, region, dry_run)
         if rc != 0:
             exit_code = rc
 

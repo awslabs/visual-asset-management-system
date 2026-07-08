@@ -50,7 +50,8 @@ flat resolved-files list with a grouped envelope:
             "relativePath": "/test/pump.e57",
             "databaseId": "my-database",
             "assetId": "xabc123",
-            "assetFilesS3Root": "s3://asset-bucket/xabc123/",
+            "assetRootS3Key": "xabc123/",
+            "auxPreviewPrefix": "my-database/xabc123/test/pump.e57/preview",
             "bucket": "asset-bucket",
             "key": "xabc123/test/pump.e57",
             "versionId": "v3"
@@ -58,10 +59,11 @@ flat resolved-files list with a grouped envelope:
     ],
     "inputMetadataS3Location": "s3://asset-bucket/pipelines/workflowExecutionInputs/{execId}/metadata.json",
     "outputs": {
-        "files": "s3://asset-bucket/.../output/{execId}/files/",
-        "previews": "s3://asset-bucket/.../output/{execId}/previews/",
-        "metadata": "s3://asset-bucket/.../output/{execId}/metadata/",
-        "results": "s3://asset-bucket/.../output/{execId}/results/"
+        "bucket": "asset-bucket",
+        "files": "pipelines/{pipelineName}/{jobName}/output/{execId}/files/",
+        "previews": "pipelines/{pipelineName}/{jobName}/output/{execId}/previews/",
+        "metadata": "pipelines/{pipelineName}/{jobName}/output/{execId}/metadata/",
+        "results": "pipelines/{pipelineName}/{jobName}/output/{execId}/results/"
     },
     "outputTarget": {
         "locationType": "asset",
@@ -69,9 +71,9 @@ flat resolved-files list with a grouped envelope:
         "databaseId": "{outputDatabaseId}",
         "fileBaseExecutionPathExtension": "/"
     },
-    "auxBucketS3Root": "s3://aux-bucket/",
-    "auxTempPrefix": "s3://aux-bucket/{fileKey}/pipelines/{pipelineName}/",
-    "auxPreviewPrefix": "s3://aux-bucket/{fileKey}/preview/{pipelineName}/",
+    "auxBucket": "aux-bucket",
+    "auxTempPrefix": "pipelines/{pipelineName}/{execId}/",
+    "auxPreviewPipelinePrefix": "",
     "systemConfig": {
         "orchestrationBusArn": "arn:...:event-bus/...-orchestration",
         "orchestrationEventPrefix": "vams.prod.execution.{execId}.pipeline.{pipelineExecutionId}"
@@ -81,13 +83,28 @@ flat resolved-files list with a grouped envelope:
 
 Design points:
 
+-   **Locations are relative keys plus a bucket, never pre-built `s3://` URIs.** The `outputs`
+    block pairs a single `bucket` with bucket-relative prefixes; `auxBucket` is the auxiliary
+    bucket name; `auxTempPrefix` is a bucket-relative, execution-scoped working prefix
+    (`pipelines/{pipelineName}/{execId}/`); and each input file's `assetRootS3Key` is the
+    bucket-relative asset root. Downstream consumers (via `manifestHelper`) reconstruct `s3://`
+    forms as needed for their integration layer. This keeps the contract composable — a consumer
+    can address a bucket and a key independently — and multi-file/multi-bucket ready.
 -   **Each input file is self-locating.** A file can be a different asset / version (especially
     once outputs from a prior pipeline shadow an original input), so every entry carries its own
-    `assetFilesS3Root`, `bucket`, `key`, and `versionId` rather than a single shared root.
--   **No `previewMode` field.** Whether a "preview"-style pipeline gets a separate aux preview
-    location is conveyed by the presence of `auxPreviewPrefix` (and the aux subfolder it points
-    at), so a redundant boolean is not carried. `auxBucketS3Root` is provided so the pipeline can
-    resolve aux locations itself.
+    `assetRootS3Key`, `bucket`, `key`, `versionId`, and its own unique `auxPreviewPrefix` rather
+    than a single shared root.
+-   **Per-input-file aux preview location.** Every input file carries a unique
+    `auxPreviewPrefix` (`{databaseId}/{assetFileKey}/preview`, where `assetFileKey` is the full
+    asset-bucket key — the asset location key plus the relative file path, so a custom asset base
+    prefix is preserved), regardless of pipeline type — a pipeline that writes preview/viewer data
+    resolves it against `auxBucket`.
+    The top-level `auxPreviewPipelinePrefix` is a per-pipeline viewer subfolder (e.g.
+    `/PotreeViewer`) appended to that per-file prefix; it is empty until sourced from the pipeline
+    configuration, replacing hardcoded viewer paths in pipeline code.
+-   **No `previewMode` field.** A redundant boolean is not carried; a pipeline resolves its aux
+    preview location itself from `auxBucket` + the input file's `auxPreviewPrefix` (+ the
+    per-pipeline `auxPreviewPipelinePrefix`).
 -   **`outputTarget`** identifies where the execution's outputs are written: `locationType`
     (`asset` today), and the `assetId` / `databaseId` of the output asset. The target equals the
     input asset today but is carried explicitly so the end-state process-output step writes to the

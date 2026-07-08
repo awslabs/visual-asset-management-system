@@ -77,19 +77,20 @@ class TestResolveInputs:
             "schemaVersion": 1,
             "inputFiles": [{
                 "relativePath": "/test/pump.glb", "databaseId": "dbM", "assetId": "xidM",
-                "assetFilesS3Root": "s3://abkt/xidM/", "bucket": "abkt",
-                "key": "xidM/test/pump.glb", "versionId": "v3",
+                "assetRootS3Key": "xidM/", "auxPreviewPrefix": "dbM/xidM/test/pump.glb/preview",
+                "bucket": "abkt", "key": "xidM/test/pump.glb", "versionId": "v3",
             }],
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "outputs": {
-                "files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/",
-                "previews": "s3://abkt/pipelines/p1/MJOB/output/E1/previews/",
-                "metadata": "s3://abkt/pipelines/p1/MJOB/output/E1/metadata/",
-                "results": "s3://abkt/pipelines/p1/MJOB/output/E1/results/",
+                "bucket": "abkt",
+                "files": "pipelines/p1/MJOB/output/E1/files/",
+                "previews": "pipelines/p1/MJOB/output/E1/previews/",
+                "metadata": "pipelines/p1/MJOB/output/E1/metadata/",
+                "results": "pipelines/p1/MJOB/output/E1/results/",
             },
-            "auxBucketS3Root": "s3://aux/",
-            "auxTempPrefix": "s3://aux/xidM/test/pump.glb/preview/p1/",
-            "auxPreviewPrefix": "s3://aux/xidM/test/pump.glb/preview/p1/",
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/p1/E1/",
+            "auxPreviewPipelinePrefix": "",
             "systemConfig": {
                 "orchestrationBusArn": "arn:bus",
                 "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1",
@@ -115,10 +116,13 @@ class TestResolveInputs:
         # input path + identity come from the manifest's first resolved file
         assert r["inputS3AssetFilePath"] == "s3://abkt/xidM/test/pump.glb"
         assert r["assetId"] == "xidM" and r["databaseId"] == "dbM"
-        # outputs + aux come from the manifest
+        # outputs + aux are RECONSTRUCTED from the manifest's bucket + relative prefixes
         assert r["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
         assert r["outputS3AssetPreviewPath"].endswith("/previews/")
-        assert r["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/test/pump.glb/preview/p1/"
+        assert r["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/p1/E1/"
+        # The per-input-file aux preview path = auxBucket + the file's auxPreviewPrefix (+ empty
+        # pipeline suffix here).
+        assert r["auxPreviewS3Path"] == "s3://aux/dbM/xidM/test/pump.glb/preview"
         assert r["inputMetadataS3Location"].endswith("/metadata.json")
         assert r["orchestrationBusArn"] == "arn:bus"
         assert r["orchestrationEventPrefix"] == "vams.prod.execution.E1.pipeline.P1"
@@ -249,9 +253,12 @@ class TestVamsExecuteUsesManifest:
     def _manifest(self):
         return {
             "inputFiles": [{"bucket": "abkt", "key": "xidM/test/pump.glb", "assetId": "xidM",
-                            "databaseId": "dbM"}],
-            "outputs": {"files": "s3://abkt/pipelines/p1/MJOB/output/E1/files/"},
-            "auxTempPrefix": "s3://aux/xidM/test/pump.glb/preview/p1/",
+                            "databaseId": "dbM", "assetRootS3Key": "xidM/",
+                            "auxPreviewPrefix": "dbM/xidM/test/pump.glb/preview"}],
+            "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
+            "auxBucket": "aux",
+            "auxTempPrefix": "pipelines/p1/E1/",
+            "auxPreviewPipelinePrefix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {
                 "orchestrationBusArn": "arn:bus",
@@ -269,11 +276,12 @@ class TestVamsExecuteUsesManifest:
                 patch.object(mod.lambda_client, "invoke", invoke):
             resp = mod.lambda_handler({"body": json.dumps(self._manifest_body())}, MagicMock())
         assert resp["statusCode"] == 200
-        # The open-pipeline invoke carries the MANIFEST-resolved values, not the legacy ones.
+        # The open-pipeline invoke carries the MANIFEST-resolved values (reconstructed s3://), not
+        # the legacy ones.
         payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/test/pump.glb"
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/pipelines/p1/MJOB/output/E1/files/"
-        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/xidM/test/pump.glb/preview/p1/"
+        assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/pipelines/p1/E1/"
         assert payload["assetId"] == "xidM"
         # The task token is taken from the payload, not the manifest.
         assert payload["sfnExternalTaskToken"] == "tok-123"

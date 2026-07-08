@@ -938,14 +938,6 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
     },
     {
-        path: "app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified",
-        label: "Potree viewer — run on asset modified (SQS)",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
-    },
-    {
         path: "app.pipelines.useGenAiMetadata3dLabeling.enabled",
         label: "GenAI metadata labeling",
         input: "boolean",
@@ -991,14 +983,6 @@ export const FIELDS: FieldMeta[] = [
     {
         path: "app.pipelines.useSplatToolbox.autoRegisterWithVAMS",
         label: "Gaussian splatting — auto-register",
-        input: "boolean",
-        section: "pipelines-gpu",
-        advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useSplatToolbox.enabled"),
-    },
-    {
-        path: "app.pipelines.useSplatToolbox.sqsAutoRunOnAssetModified",
-        label: "Gaussian splatting — run on asset modified (SQS)",
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,

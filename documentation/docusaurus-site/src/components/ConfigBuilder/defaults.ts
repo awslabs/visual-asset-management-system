@@ -210,7 +210,6 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
-                sqsAutoRunOnAssetModified: false,
             },
             useGenAiMetadata3dLabeling: {
                 enabled: false,

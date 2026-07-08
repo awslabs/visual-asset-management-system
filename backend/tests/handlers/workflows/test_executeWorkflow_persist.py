@@ -227,18 +227,21 @@ class TestLaunchWorkflow:
         assert sfn_input["endStatePipelineExecutionId"]
         # Stage 2: SFN input carries the pre-generated per-pipeline ids.
         assert len(sfn_input["pipelineExecutionIds"]) == 2
-        # The SFN input is lean: it does NOT carry the input-definition file keys nor the
-        # input asset identity/metadata (the ASL recomputes the manifest/config S3 keys, and
-        # the pipelines resolve identity + metadata from the manifest). Those convenience
-        # top-level copies were removed. inputAssetLocationKey is likewise dropped: each input
-        # file is self-locating in the manifest (per-file assetFilesS3Root).
+        # The SFN input is lean and input-file-agnostic: it does NOT carry the input-definition
+        # file keys, the input asset identity/metadata, any single triggering file key, or the
+        # orchestration bus config. Each input file is self-locating in the manifest (per-file
+        # assetRootS3Key + bucket + auxPreviewPrefix); the interim lambda sources the bus config
+        # from its environment; the SFN layer is multi-file-ready.
         for dead_key in ("inputMetadataFileS3Key", "firstPipelineConfigS3Key",
                          "firstPipelineManifestS3Key", "inputConfigKeys",
-                         "assetId", "databaseId", "inputMetadata", "inputAssetLocationKey"):
+                         "assetId", "databaseId", "inputMetadata", "inputAssetLocationKey",
+                         "inputAssetFileKey", "orchestrationBusArn",
+                         "orchestrationEventSourcePrefix", "bucketAssetAuxiliary"):
             assert dead_key not in sfn_input
-        # The primary input file key IS still threaded (some pipelines build aux paths from it).
-        assert sfn_input["inputAssetFileKey"] == "folder/x.glb"
-        # The output target identity IS threaded (where outputs land).
+        # The workflow-execution I/O bucket IS threaded (the ASL pulls manifest/config from it).
+        assert sfn_input["workflowExecutionS3InputOutputBucket"] == "abkt"
+        # The output target identity IS threaded (where outputs land; read by the end-state
+        # process-output lambda, which has no manifest of its own).
         assert sfn_input["outputAssetId"] and sfn_input["outputDatabaseId"]
         # Input-definition files are still written to the asset bucket: metadata + 2 configs + manifest.
         assert put_object.call_count == 4
@@ -283,31 +286,38 @@ class TestLaunchWorkflow:
         assert md["schemaVersion"] == er.METADATA_SCHEMA_VERSION
         assert md["metadata"] == {"VAMS": {"k": "v"}}
 
-    def test_manifest_aux_prefix_has_single_slash(self):
-        # The manifest aux prefixes must not contain a double slash after the bucket
-        # (Finding #3): the raw file key, not a leading-slash-normalized key, is used.
+    def test_manifest_aux_locations_are_relative(self):
+        # The aux temp prefix is bucket-relative and execution-scoped
+        # (pipelines/{pipelineName}/{executionId}/); auxBucket carries the name only; the per-file
+        # aux preview prefix lives on each input file entry, not the top-level envelope.
         pipelines = [{"name": "p1", "databaseId": "db", "pipelineType": "standardFile",
                       "pipelineExecutionType": "Lambda", "waitForCallback": "Disabled",
                       "userProvidedResource": json.dumps({"resourceId": "arn:fn1", "resourceType": "Lambda"})}]
-        _eid, put_object = self._run_launch(pipelines)
+        eid, put_object = self._run_launch(pipelines)
         manifest = self._written(put_object, "manifest.json")
         # The aux bucket resolves via ResourceKeys.ASSET_AUXILIARY_BUCKET; the root conftest's
         # S3_ASSET_AUXILIARY_BUCKET override (highest precedence) supplies the name.
         aux_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
-        assert manifest["auxTempPrefix"] == f"s3://{aux_bucket}/folder/x.glb/pipelines/p1/"
-        assert manifest["auxPreviewPrefix"] == f"s3://{aux_bucket}/folder/x.glb/pipelines/p1/"
-        assert "//" not in manifest["auxTempPrefix"].split("s3://", 1)[1]
+        assert manifest["auxBucket"] == aux_bucket
+        assert manifest["auxTempPrefix"] == f"pipelines/p1/{eid}/"
+        assert manifest["auxPreviewPipelinePrefix"] == ""
+        assert "auxPreviewPrefix" not in manifest
+        # The per-input-file aux preview prefix keyed on the full asset file key:
+        # {databaseId}/{assetFileKey}/preview.
+        assert manifest["inputFiles"][0]["auxPreviewPrefix"] == "db/folder/x.glb/preview"
 
     def test_manifest_outputs_use_stored_job_name(self):
         # Pipeline 1's manifest outputs use the ASL-stored job name so they resolve to the
-        # SAME S3 folder the ASL hands the container (Finding #1).
+        # SAME S3 folder the ASL hands the container (Finding #1). Outputs carry a single bucket +
+        # bucket-relative prefixes (no pre-built s3:// URIs).
         pipelines = [{"name": "p1", "databaseId": "db", "pipelineType": "standardFile",
                       "pipelineExecutionType": "Lambda", "waitForCallback": "Disabled",
                       "userProvidedResource": json.dumps({"resourceId": "arn:fn1", "resourceType": "Lambda"})}]
         eid, put_object = self._run_launch(pipelines, stored_job_names=["zz999-p1"])
         manifest = self._written(put_object, "manifest.json")
-        # The stored job name segment appears in every output URI.
-        assert f"s3://abkt/pipelines/p1/zz999-p1/output/{eid}/files/" == manifest["outputs"]["files"]
+        assert manifest["outputs"]["bucket"] == "abkt"
+        # The stored job name segment appears in every relative output prefix.
+        assert manifest["outputs"]["files"] == f"pipelines/p1/zz999-p1/output/{eid}/files/"
         assert "/zz999-p1/" in manifest["outputs"]["previews"]
         assert "/zz999-p1/" in manifest["outputs"]["metadata"]
         assert "/zz999-p1/" in manifest["outputs"]["results"]

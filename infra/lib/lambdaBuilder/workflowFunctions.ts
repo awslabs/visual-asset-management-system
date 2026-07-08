@@ -458,15 +458,12 @@ export function buildInterimPipelineTrackingFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
-            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
-            PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.tableName,
-            WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionInputsStorageTable.tableName,
+            // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Only non-SSM
+            // values are set here: the shared workflow SFN log group ARN and the orchestration
+            // bus ARN + event source prefix written into each next pipeline's manifest.
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
@@ -511,12 +508,8 @@ export function buildHandleExecutionErrorFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTableV2.tableName,
-            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
-            PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
+            // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Only the
+            // non-SSM shared workflow SFN log group ARN is set here (used to pull failed-run logs).
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
         },
     });
@@ -562,10 +555,9 @@ export function buildRegisterPipelineExecutionFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.pipelineExecutionsStorageTable.tableName,
-        },
+        // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX), set by
+        // globalLambdaEnvironmentsAndPermissions below; no per-table env vars are needed.
+        environment: {},
     });
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
 

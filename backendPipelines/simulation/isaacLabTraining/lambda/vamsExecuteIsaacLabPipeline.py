@@ -100,6 +100,8 @@ def lambda_handler(event, context):
 
         # Resolve input/output/aux locations from the workflow manifest (legacy-payload fallback)
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Read the input configuration from S3 to extract training/compute config
@@ -110,12 +112,12 @@ def lambda_handler(event, context):
 
         # The asset-files root (bucket + base location key) used by openPipeline to resolve
         # relative paths (checkpointPath, customEnvironmentPath). It comes from the manifest's
-        # first resolved input file (assetFilesS3Root = s3://bucket/baseKey), falling back to the
-        # legacy payload fields for non-manifest invocations.
-        asset_bucket, asset_location_key = manifestHelper.parse_s3_uri(
-            (resolved.get("inputFiles") or [{}])[0].get("assetFilesS3Root", ""))
-        asset_bucket = asset_bucket or data.get("workflowExecutionS3InputOutputBucket", "")
-        asset_location_key = asset_location_key or data.get("inputAssetLocationKey", "")
+        # first resolved input file: its own bucket + assetRootS3Key (a bucket-relative asset
+        # root key), falling back to the legacy payload fields for non-manifest invocations.
+        first_input_file = (resolved.get("inputFiles") or [{}])[0]
+        asset_bucket = first_input_file.get("bucket", "") or data.get("workflowExecutionS3InputOutputBucket", "")
+        asset_location_key = first_input_file.get("assetRootS3Key", "") or data.get("inputAssetLocationKey", "")
+        input_asset_file_key = first_input_file.get("key", "") or data.get("inputAssetFileKey", "")
 
         # Build Step Functions input from standard VAMS messagePayload. bucketAsset +
         # inputAssetLocationKey define the asset root in S3 (the asset-files location, from the
@@ -126,7 +128,7 @@ def lambda_handler(event, context):
             "jobName": job_name,
             "bucketAsset": asset_bucket,
             "inputAssetLocationKey": asset_location_key,
-            "inputAssetFileKey": data.get("inputAssetFileKey", ""),
+            "inputAssetFileKey": input_asset_file_key,
             "assetId": resolved["assetId"],
             "databaseId": resolved["databaseId"],
             "inputS3AssetFilePath": resolved["inputS3AssetFilePath"],
