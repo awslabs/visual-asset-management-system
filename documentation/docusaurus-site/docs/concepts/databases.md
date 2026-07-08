@@ -19,16 +19,16 @@ A database does not create an Amazon S3 bucket on its own. Buckets are provision
 
 To create a database, you provide the following fields:
 
-| Field                             | Required | Description                                                                                                                                                                                             |
-| --------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`                      | Yes      | Unique identifier. 4-63 characters, alphanumeric plus `-` and `_`. Cannot be `GLOBAL` (reserved).                                                                                                       |
-| `description`                     | Yes      | Human-readable description. 4-256 characters.                                                                                                                                                           |
-| `defaultBucketId`                 | Yes      | References a pre-configured Amazon S3 bucket and prefix combination.                                                                                                                                    |
-| `restrictMetadataOutsideSchemas`  | No       | When `true`, metadata for assets and files in this database must conform to an applied metadata schema. Defaults to `false`.                                                                            |
-| `restrictFileUploadsToExtensions` | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all extensions (subject to system-wide restrictions). Defaults to empty (no restrictions). |
+| Field                             | Required | Description                                                                                                                                                                                                                                    |
+| --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`                      | Yes      | Unique identifier. 4-63 characters, alphanumeric plus `-` and `_`. Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces`), case-insensitively. |
+| `description`                     | Yes      | Human-readable description. 4-256 characters.                                                                                                                                                                                                  |
+| `defaultBucketId`                 | Yes      | References a pre-configured Amazon S3 bucket and prefix combination.                                                                                                                                                                           |
+| `restrictMetadataOutsideSchemas`  | No       | When `true`, metadata for assets and files in this database must conform to an applied metadata schema. Defaults to `false`.                                                                                                                   |
+| `restrictFileUploadsToExtensions` | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all extensions (subject to system-wide restrictions). Defaults to empty (no restrictions).                                        |
 
 :::warning[Database name restrictions]
-The `databaseId` cannot be changed after creation. Choose a meaningful, permanent identifier. The value `GLOBAL` is reserved for cross-database operations such as schemas and pipelines.
+The `databaseId` cannot be changed after creation. Choose a meaningful, permanent identifier. The value `GLOBAL` is reserved for cross-database operations such as schemas and pipelines. The `databaseId` also cannot match (case-insensitively) a reserved S3 keyword — `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, or `workspaces` — because the identifier becomes a path segment inside the asset bucket and would collide with folders VAMS reserves for system use.
 :::
 
 ### Example: creating a database

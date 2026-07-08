@@ -7535,6 +7535,7 @@ components:
             properties:
                 databaseId:
                     #example: vr-models-training
+                    description: "Unique database identifier. Cannot be GLOBAL or a reserved S3 keyword (pipeline(s), preview(s), temp-upload(s), workspace(s)), matched case-insensitively."
                     $ref: '#/components/schemas/id_regex'
                 description:
                     #example: 3d models used in training programs.

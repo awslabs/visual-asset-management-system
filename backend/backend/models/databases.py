@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.validators import validate, id_pattern, object_name_pattern, uuid_pattern
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="DatabaseModels")
@@ -67,6 +68,13 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
         if not valid:
             logger.error(message)
             raise ValueError(message)
+
+        # Reserved S3 keywords cannot be used as a databaseId: the ID becomes a path
+        # segment inside asset buckets and would collide with system-reserved folders.
+        database_id = values.get('databaseId')
+        if isinstance(database_id, str) and database_id.strip().lower() in RESERVED_S3_PREFIX_FOLDERS:
+            raise ValueError("databaseId is invalid. It matches a reserved keyword and cannot be used.")
+
         return values
 
 class CreateDatabaseResponseModel(BaseModel, extra='ignore'):
