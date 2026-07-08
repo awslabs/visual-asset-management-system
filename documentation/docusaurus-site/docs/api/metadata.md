@@ -80,9 +80,17 @@ Retrieves metadata items for the specified asset, one page at a time. When more 
             "metadataValueType": "xyz"
         }
     ],
-    "NextToken": "eyJ..."
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": "eyJ...",
+    "message": "Success"
 }
 ```
+
+The response always includes `restrictMetadataOutsideSchemas` (a boolean that is `true` when the database restricts metadata to schema-defined fields and at least one schema exists) and a `message` field.
+
+:::info[Schema Enrichment Fields]
+When a metadata schema applies to the entity, each metadata item is enriched with additional schema fields: `metadataSchemaName`, `metadataSchemaField`, `metadataSchemaRequired`, `metadataSchemaSequence`, `metadataSchemaDefaultValue`, `metadataSchemaDependsOn`, `metadataSchemaMultiFieldConflict`, and `metadataSchemaControlledListKeys`. These fields are omitted (or `null`) when no schema defines the item. This enrichment applies to the asset, file, database, and asset link metadata GET responses.
+:::
 
 **Error Responses:**
 
@@ -286,15 +294,16 @@ Retrieves metadata for a specific file within an asset.
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                                                  |
-| --------------- | -------- | ------- | -------- | ---------------------------------------------------------------------------- |
-| `databaseId`    | path     | string  | Yes      | Database identifier.                                                         |
-| `assetId`       | path     | string  | Yes      | Asset identifier.                                                            |
-| `key`           | query    | string  | Yes      | Relative file path.                                                          |
-| `type`          | query    | string  | No       | `"metadata"` (default) or `"attribute"` to retrieve file attributes instead. |
-| `maxItems`      | query    | integer | No       | Maximum items to return.                                                     |
-| `pageSize`      | query    | integer | No       | Page size for pagination.                                                    |
-| `startingToken` | query    | string  | No       | Continuation token.                                                          |
+| Parameter        | Location | Type    | Required | Description                                                                           |
+| ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------- |
+| `databaseId`     | path     | string  | Yes      | Database identifier.                                                                  |
+| `assetId`        | path     | string  | Yes      | Asset identifier.                                                                     |
+| `filePath`       | query    | string  | Yes      | Relative file path.                                                                   |
+| `type`           | query    | string  | Yes      | `"metadata"` to retrieve file metadata, or `"attribute"` to retrieve file attributes. |
+| `maxItems`       | query    | integer | No       | Maximum items to return. Default: `30000`.                                            |
+| `pageSize`       | query    | integer | No       | Page size for pagination. Default: `3000`.                                            |
+| `startingToken`  | query    | string  | No       | Continuation token.                                                                   |
+| `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                             |
 
 **Response:**
 
@@ -307,18 +316,20 @@ Retrieves metadata for a specific file within an asset.
             "metadataValueType": "string"
         }
     ],
-    "NextToken": null
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": null,
+    "message": "Success"
 }
 ```
 
 **Error Responses:**
 
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `400`  | Invalid parameters or missing `key`. |
-| `403`  | Not authorized.                      |
-| `404`  | Asset or file not found.             |
-| `500`  | Internal server error.               |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid parameters or missing `filePath`. |
+| `403`  | Not authorized.                           |
+| `404`  | Asset or file not found.                  |
+| `500`  | Internal server error.                    |
 
 ---
 
@@ -339,7 +350,7 @@ Adds metadata items to a specific file.
 
 ```json
 {
-    "key": "/models/building.ifc",
+    "filePath": "/models/building.ifc",
     "type": "metadata",
     "metadata": [
         {
@@ -351,11 +362,11 @@ Adds metadata items to a specific file.
 }
 ```
 
-| Field      | Type   | Required | Description                              |
-| ---------- | ------ | -------- | ---------------------------------------- |
-| `key`      | string | Yes      | Relative file path.                      |
-| `type`     | string | No       | `"metadata"` (default) or `"attribute"`. |
-| `metadata` | array  | Yes      | List of metadata items.                  |
+| Field      | Type   | Required | Description                    |
+| ---------- | ------ | -------- | ------------------------------ |
+| `filePath` | string | Yes      | Relative file path.            |
+| `type`     | string | Yes      | `"metadata"` or `"attribute"`. |
+| `metadata` | array  | Yes      | List of metadata items.        |
 
 **Response:**
 
@@ -382,7 +393,7 @@ Updates metadata items for a specific file.
 
 ```json
 {
-    "key": "/models/building.ifc",
+    "filePath": "/models/building.ifc",
     "type": "metadata",
     "metadata": [
         {
@@ -394,6 +405,8 @@ Updates metadata items for a specific file.
     "updateType": "update"
 }
 ```
+
+`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`; `updateType` is `"update"` (default) or `"replace_all"`.
 
 **Response:**
 
@@ -420,11 +433,13 @@ Removes metadata items from a specific file.
 
 ```json
 {
-    "key": "/models/building.ifc",
+    "filePath": "/models/building.ifc",
     "type": "metadata",
     "metadataKeys": ["author"]
 }
 ```
+
+`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`.
 
 **Response:**
 
@@ -476,7 +491,9 @@ Retrieves all metadata items for the specified database.
             "metadataValueType": "date"
         }
     ],
-    "NextToken": null
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": null,
+    "message": "Success"
 }
 ```
 
@@ -627,7 +644,9 @@ Retrieves all metadata items for the specified asset link.
             "metadataValueType": "string"
         }
     ],
-    "NextToken": null
+    "restrictMetadataOutsideSchemas": false,
+    "NextToken": null,
+    "message": "Success"
 }
 ```
 

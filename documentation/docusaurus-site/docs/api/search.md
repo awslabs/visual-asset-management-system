@@ -67,10 +67,10 @@ Executes a search query across the asset and file indexes with full control over
 | Field                     | Type    | Default      | Description                                                                                                                  |
 | ------------------------- | ------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `query`                   | string  | --           | General text search across all fields (AND with filters and metadata query). Max 5,000 characters.                           |
-| `tokens`                  | array   | `[]`         | Structured search tokens for field-specific queries. See [Search Tokens](#search-tokens).                                    |
+| `tokens`                  | array   | `[]`         | Accepted for request compatibility but does not affect results. Use `filters` or `metadataQuery` for field-specific queries. |
 | `filters`                 | array   | `[]`         | Additional OpenSearch query_string filters. See [Search Filters](#search-filters).                                           |
 | `sort`                    | array   | `["_score"]` | Sort configuration. See [Sorting](#sorting).                                                                                 |
-| `operation`               | string  | `"AND"`      | Default logical operation for combining tokens (`"AND"` or `"OR"`).                                                          |
+| `operation`               | string  | `"AND"`      | Accepted for request compatibility but does not affect results.                                                              |
 | `entityTypes`             | array   | `null`       | Filter by entity type: `["asset"]`, `["file"]`, or `["asset", "file"]`. When `null`, searches both.                          |
 | `includeArchived`         | boolean | `false`      | Include archived items in results.                                                                                           |
 | `aggregations`            | boolean | `true`       | Include aggregation facets in the response.                                                                                  |
@@ -136,7 +136,7 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
                     "str_assetid": "asset-001",
                     "str_key": "/models/building.ifc",
                     "str_fileext": "ifc",
-                    "num_size": 15728640,
+                    "num_filesize": 15728640,
                     "str_etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
                     "str_s3_version_id": "abc123",
                     "date_lastmodified": "2024-06-15T10:30:00Z"
@@ -148,24 +148,30 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
         ]
     },
     "aggregations": {
-        "asset_types": {
+        "str_assettype": {
             "buckets": [
                 { "key": "ifc", "doc_count": 45 },
                 { "key": "obj", "doc_count": 30 },
                 { "key": "glb", "doc_count": 25 }
             ]
         },
-        "file_extensions": {
+        "str_fileext": {
             "buckets": [
                 { "key": "ifc", "doc_count": 50 },
                 { "key": "jpg", "doc_count": 120 },
                 { "key": "png", "doc_count": 80 }
             ]
         },
-        "databases": {
+        "str_databaseid": {
             "buckets": [
                 { "key": "my-database", "doc_count": 100 },
                 { "key": "other-db", "doc_count": 50 }
+            ]
+        },
+        "list_tags": {
+            "buckets": [
+                { "key": "architecture", "doc_count": 60 },
+                { "key": "building", "doc_count": 40 }
             ]
         }
     },
@@ -175,11 +181,12 @@ The combined value of `from` + `size` cannot exceed 10,000. This is an OpenSearc
 
 **Error Responses:**
 
-| Status | Description                                      |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid search parameters.                       |
-| `403`  | Not authorized to access search.                 |
-| `500`  | Internal server error or OpenSearch unavailable. |
+| Status | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                          |
+| `403`  | Not authorized to access search.                                    |
+| `404`  | Search is not available when the OpenSearch feature is not enabled. |
+| `500`  | Internal server error.                                              |
 
 ---
 
@@ -234,11 +241,12 @@ Same format as [Advanced Search](#advanced-search).
 
 **Error Responses:**
 
-| Status | Description                      |
-| ------ | -------------------------------- |
-| `400`  | Invalid search parameters.       |
-| `403`  | Not authorized to access search. |
-| `500`  | Internal server error.           |
+| Status | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| `400`  | Invalid search parameters.                                          |
+| `403`  | Not authorized to access search.                                    |
+| `404`  | Search is not available when the OpenSearch feature is not enabled. |
+| `500`  | Internal server error.                                              |
 
 ---
 
@@ -254,38 +262,39 @@ None.
 
 **Response:**
 
+The response returns the mappings for both indexes, keyed by `asset_index` and `file_index`.
+
 ```json
 {
     "mappings": {
-        "dynamic_templates": [
-            {
-                "strings_as_keywords": {
-                    "match_mapping_type": "string",
-                    "match": "str_*",
-                    "mapping": {
-                        "type": "keyword",
-                        "fields": {
-                            "search": {
-                                "type": "text"
-                            }
-                        }
-                    }
+        "asset_index": {
+            "mappings": {
+                "properties": {
+                    "_rectype": { "type": "keyword" },
+                    "str_databaseid": { "type": "keyword" },
+                    "str_assetid": { "type": "keyword" },
+                    "str_assetname": { "type": "keyword" },
+                    "str_assettype": { "type": "keyword" },
+                    "str_description": { "type": "keyword" },
+                    "date_lastmodified": { "type": "date" },
+                    "bool_isdistributable": { "type": "boolean" },
+                    "list_tags": { "type": "keyword" }
                 }
             }
-        ],
-        "properties": {
-            "_rectype": { "type": "keyword" },
-            "str_databaseid": { "type": "keyword" },
-            "str_assetid": { "type": "keyword" },
-            "str_assetname": { "type": "keyword" },
-            "str_assettype": { "type": "keyword" },
-            "str_description": { "type": "keyword" },
-            "str_key": { "type": "keyword" },
-            "str_fileext": { "type": "keyword" },
-            "num_size": { "type": "long" },
-            "date_lastmodified": { "type": "date" },
-            "bool_isdistributable": { "type": "boolean" },
-            "list_tags": { "type": "keyword" }
+        },
+        "file_index": {
+            "mappings": {
+                "properties": {
+                    "_rectype": { "type": "keyword" },
+                    "str_databaseid": { "type": "keyword" },
+                    "str_assetid": { "type": "keyword" },
+                    "str_key": { "type": "keyword" },
+                    "str_fileext": { "type": "keyword" },
+                    "num_filesize": { "type": "long" },
+                    "date_lastmodified": { "type": "date" },
+                    "list_tags": { "type": "keyword" }
+                }
+            }
         }
     }
 }
@@ -293,16 +302,21 @@ None.
 
 **Error Responses:**
 
-| Status | Description                      |
-| ------ | -------------------------------- |
-| `403`  | Not authorized to access search. |
-| `500`  | Internal server error.           |
+| Status | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| `403`  | Not authorized to access search.                                    |
+| `404`  | Search is not available when the OpenSearch feature is not enabled. |
+| `500`  | Internal server error.                                              |
 
 ---
 
 ## Search Tokens
 
-Search tokens provide structured, field-specific search within the advanced search endpoint.
+:::warning[Not applied to results]
+The `tokens` array and the top-level `operation` field are accepted by the request model for compatibility but are not applied by the query builder — they do not affect which results are returned. For field-specific queries, use `filters` (see [Search Filters](#search-filters)) or `metadataQuery`.
+:::
+
+The token structure is described below for reference.
 
 ```json
 {
@@ -365,7 +379,7 @@ The `query` value follows [OpenSearch query_string syntax](https://opensearch.or
 -   Field-specific queries: `str_assettype:ifc`
 -   Boolean operators: `AND`, `OR`, `NOT`
 -   Wildcards: `str_assetname:build*`
--   Range queries: `num_size:[1000 TO 5000]`
+-   Range queries: `num_filesize:[1000 TO 5000]`
 -   Grouping: `(str_assettype:ifc OR str_assettype:obj)`
 
 ---
@@ -390,7 +404,7 @@ The `sort` field accepts an array of sort specifications. Each item can be a str
 ```
 
 :::note[Sort Field Prefixes]
-When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_size`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
+When sorting by indexed fields, use the prefixed field names (e.g., `str_assetname`, `date_lastmodified`, `num_filesize`). Sorting on non-prefixed or text-analyzed fields may produce unexpected results.
 :::
 
 ---
@@ -494,7 +508,7 @@ Documents indexed before the introduction of `geo_MD_location` will not match ge
 | `str_assetname`     | keyword   | Parent asset name.                                                                |
 | `str_key`           | keyword   | S3 object key (relative file path).                                               |
 | `str_fileext`       | keyword   | File extension.                                                                   |
-| `num_size`          | long      | File size in bytes.                                                               |
+| `num_filesize`      | long      | File size in bytes.                                                               |
 | `str_etag`          | keyword   | S3 ETag.                                                                          |
 | `str_s3_version_id` | keyword   | S3 version ID.                                                                    |
 | `date_lastmodified` | date      | Last modification date.                                                           |

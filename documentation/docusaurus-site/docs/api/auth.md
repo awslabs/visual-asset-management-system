@@ -32,16 +32,16 @@ GET /auth/constraints
     "message": {
         "Items": [
             {
-                "constraintId": "constraint-abc123#group#admin-role",
+                "constraintId": "admin-full-access",
                 "name": "Admin Full Access",
                 "description": "Full access to all resources",
                 "objectType": "asset",
-                "criteriaAnd": "[{\"field\": \"databaseId\", \"value\": \"*\", \"operator\": \"equals\"}]",
-                "criteriaOr": "[]",
-                "groupPermissions": "[{\"groupId\": \"admin-role\", \"permission\": \"Read/Write\", \"permissionType\": \"allow\"}]",
-                "userPermissions": "[]",
-                "dateCreated": "2026-03-15T10:30:00",
-                "dateModified": "2026-03-15T10:30:00"
+                "criteriaAnd": [{ "field": "databaseId", "value": ".*", "operator": "contains" }],
+                "criteriaOr": [],
+                "groupPermissions": [
+                    { "groupId": "admin-role", "permission": "GET", "permissionType": "allow" }
+                ],
+                "userPermissions": []
             }
         ]
     }
@@ -89,23 +89,23 @@ POST /auth/constraints/{constraintId}
 
 #### Request body
 
-| Field              | Type   | Required | Description                                                                                                                                                                  |
-| ------------------ | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                                       |
-| `description`      | string | No       | Description of the constraint's purpose                                                                                                                                      |
-| `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `apiKey`) |
-| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                                         |
-| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                                 |
-| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                          |
-| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                                        |
+| Field              | Type   | Required | Description                                                                                                                                                        |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                             |
+| `description`      | string | Yes      | Description of the constraint's purpose                                                                                                                            |
+| `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) |
+| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                               |
+| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                       |
+| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                |
+| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                              |
 
 Each entry in `groupPermissions`:
 
-| Field            | Type   | Required | Description                             |
-| ---------------- | ------ | -------- | --------------------------------------- |
-| `groupId`        | string | Yes      | Role/group name                         |
-| `permission`     | string | Yes      | Permission level (`Read`, `Read/Write`) |
-| `permissionType` | string | Yes      | `allow` or `deny`                       |
+| Field            | Type   | Required | Description                                  |
+| ---------------- | ------ | -------- | -------------------------------------------- |
+| `groupId`        | string | Yes      | Role/group name                              |
+| `permission`     | string | Yes      | HTTP action (`GET`, `PUT`, `POST`, `DELETE`) |
+| `permissionType` | string | Yes      | `allow` or `deny`                            |
 
 Each entry in `criteriaAnd` or `criteriaOr`:
 
@@ -137,7 +137,7 @@ A constraint may define both `criteriaAnd` and `criteriaOr`. When both are prese
     "groupPermissions": [
         {
             "groupId": "viewer-role",
-            "permission": "Read",
+            "permission": "GET",
             "permissionType": "allow"
         }
     ],
@@ -149,7 +149,12 @@ A constraint may define both `criteriaAnd` and `criteriaOr`. When both are prese
 
 ```json
 {
-    "message": "Constraint created successfully"
+    "success": true,
+    "message": "Constraint database-reader created/updated successfully",
+    "constraintId": "database-reader",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000",
+    "constraint": "{\"identifier\": \"database-reader\", \"name\": \"Database Reader\", \"description\": \"Read-only access to assets in the production database\", \"objectType\": \"asset\", \"criteriaAnd\": [{\"field\": \"databaseId\", \"value\": \"production-db\", \"operator\": \"equals\"}], \"groupPermissions\": [{\"groupId\": \"viewer-role\", \"permission\": \"GET\", \"permissionType\": \"allow\"}]}"
 }
 ```
 
@@ -193,7 +198,11 @@ DELETE /auth/constraints/{constraintId}
 
 ```json
 {
-    "message": "Constraint deleted successfully"
+    "success": true,
+    "message": "Constraint database-reader deleted successfully",
+    "constraintId": "database-reader",
+    "operation": "delete",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -282,16 +291,14 @@ GET /auth/routes/api
 
 ```json
 {
-    "message": {
-        "routes": [
-            {
-                "path": "/database/{databaseId}/assets",
-                "methods": ["GET"],
-                "category": "assets",
-                "unauthenticated": false
-            }
-        ]
-    }
+    "routes": [
+        {
+            "path": "/database/{databaseId}/assets",
+            "methods": ["GET"],
+            "category": "assets",
+            "unauthenticated": false
+        }
+    ]
 }
 ```
 
@@ -316,16 +323,14 @@ GET /auth/routes/api/allowed
 
 ```json
 {
-    "message": {
-        "routes": [
-            {
-                "path": "/database/{databaseId}/assets",
-                "methods": ["GET"],
-                "category": "assets"
-            }
-        ],
-        "userId": "user@example.com"
-    }
+    "routes": [
+        {
+            "path": "/database/{databaseId}/assets",
+            "methods": ["GET"],
+            "category": "assets"
+        }
+    ],
+    "userId": "user@example.com"
 }
 ```
 
@@ -357,9 +362,13 @@ GET /roles
     "message": {
         "Items": [
             {
+                "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                 "roleName": "admin",
                 "description": "Full administrative access",
-                "dateCreated": "2026-03-15T10:30:00"
+                "createdOn": "2026-03-15T10:30:00",
+                "source": null,
+                "sourceIdentifier": null,
+                "mfaRequired": false
             }
         ]
     }
@@ -378,10 +387,13 @@ POST /roles
 
 #### Request body
 
-| Field         | Type   | Required | Description      |
-| ------------- | ------ | -------- | ---------------- |
-| `roleName`    | string | Yes      | Unique role name |
-| `description` | string | No       | Role description |
+| Field              | Type    | Required | Description                                                    |
+| ------------------ | ------- | -------- | -------------------------------------------------------------- |
+| `roleName`         | string  | Yes      | Unique role name                                               |
+| `description`      | string  | Yes      | Role description                                               |
+| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                           |
+| `sourceIdentifier` | string  | No       | Identifier associated with the source                          |
+| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions |
 
 #### Request body example
 
@@ -396,7 +408,11 @@ POST /roles
 
 ```json
 {
-    "message": "Role created successfully"
+    "success": true,
+    "message": "Role viewer created successfully",
+    "roleName": "viewer",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -438,7 +454,7 @@ Deleting a role does not automatically remove user-role assignments referencing 
 
 ```json
 {
-    "message": "Role deleted successfully"
+    "message": "success"
 }
 ```
 
@@ -464,7 +480,8 @@ GET /user-roles
         "Items": [
             {
                 "userId": "user@example.com",
-                "roleName": "admin"
+                "roleName": ["admin", "viewer"],
+                "createdOn": "2026-03-15T10:30:00"
             }
         ]
     }
@@ -483,17 +500,17 @@ POST /user-roles
 
 #### Request body
 
-| Field      | Type   | Required | Description         |
-| ---------- | ------ | -------- | ------------------- |
-| `userId`   | string | Yes      | User identifier     |
-| `roleName` | string | Yes      | Role name to assign |
+| Field      | Type   | Required | Description                      |
+| ---------- | ------ | -------- | -------------------------------- |
+| `userId`   | string | Yes      | User identifier                  |
+| `roleName` | array  | Yes      | One or more role names to assign |
 
 #### Request body example
 
 ```json
 {
     "userId": "user@example.com",
-    "roleName": "viewer"
+    "roleName": ["viewer"]
 }
 ```
 
@@ -501,7 +518,11 @@ POST /user-roles
 
 ```json
 {
-    "message": "User role assignment created successfully"
+    "success": true,
+    "message": "User roles created successfully",
+    "userId": "user@example.com",
+    "operation": "create",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -521,9 +542,9 @@ Same structure as [Assign a role to a user](#assign-a-role-to-a-user).
 
 ---
 
-### Remove a role from a user
+### Remove all roles from a user
 
-Removes a user-role assignment.
+Removes every role assignment for a user.
 
 ```
 DELETE /user-roles
@@ -531,17 +552,19 @@ DELETE /user-roles
 
 #### Request body
 
-| Field      | Type   | Required | Description         |
-| ---------- | ------ | -------- | ------------------- |
-| `userId`   | string | Yes      | User identifier     |
-| `roleName` | string | Yes      | Role name to remove |
+| Field    | Type   | Required | Description     |
+| -------- | ------ | -------- | --------------- |
+| `userId` | string | Yes      | User identifier |
+
+:::warning[Removes all roles]
+This endpoint deletes **all** role assignments for the given `userId`. It does not accept a `roleName`, so there is no way to remove a single role through it. To leave the user with a subset of their roles, use `PUT /user-roles` with the desired role list instead.
+:::
 
 #### Request body example
 
 ```json
 {
-    "userId": "user@example.com",
-    "roleName": "viewer"
+    "userId": "user@example.com"
 }
 ```
 
@@ -549,7 +572,11 @@ DELETE /user-roles
 
 ```json
 {
-    "message": "User role assignment deleted successfully"
+    "success": true,
+    "message": "User roles deleted successfully",
+    "userId": "user@example.com",
+    "operation": "delete",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -573,17 +600,18 @@ GET /user/cognito
 
 ```json
 {
-    "message": {
-        "users": [
-            {
-                "userId": "user@example.com",
-                "email": "user@example.com",
-                "status": "CONFIRMED",
-                "enabled": true,
-                "dateCreated": "2026-03-15T10:30:00Z"
-            }
-        ]
-    }
+    "users": [
+        {
+            "userId": "user@example.com",
+            "email": "user@example.com",
+            "phone": "+12345678900",
+            "userStatus": "CONFIRMED",
+            "enabled": true,
+            "userCreateDate": "2026-03-15T10:30:00",
+            "userLastModifiedDate": "2026-03-15T10:30:00",
+            "mfaEnabled": false
+        }
+    ]
 }
 ```
 
@@ -597,17 +625,19 @@ POST /user/cognito
 
 #### Request body
 
-| Field    | Type   | Required | Description               |
-| -------- | ------ | -------- | ------------------------- |
-| `userId` | string | Yes      | Username for the new user |
-| `email`  | string | Yes      | Email address             |
+| Field    | Type   | Required | Description                                        |
+| -------- | ------ | -------- | -------------------------------------------------- |
+| `userId` | string | Yes      | Username for the new user                          |
+| `email`  | string | Yes      | Email address                                      |
+| `phone`  | string | No       | Phone number in E.164 format (e.g. `+12345678900`) |
 
 #### Request body example
 
 ```json
 {
     "userId": "newuser@example.com",
-    "email": "newuser@example.com"
+    "email": "newuser@example.com",
+    "phone": "+12345678900"
 }
 ```
 
@@ -627,10 +657,12 @@ PUT /user/cognito/{userId}
 
 #### Request body
 
-| Field     | Type    | Required | Description                |
-| --------- | ------- | -------- | -------------------------- |
-| `email`   | string  | No       | Updated email address      |
-| `enabled` | boolean | No       | Enable or disable the user |
+| Field   | Type   | Required | Description                                        |
+| ------- | ------ | -------- | -------------------------------------------------- |
+| `email` | string | No       | Updated email address                              |
+| `phone` | string | No       | Phone number in E.164 format (e.g. `+12345678900`) |
+
+At least one of `email` or `phone` must be provided.
 
 ---
 
@@ -662,11 +694,23 @@ POST /user/cognito/{userId}/resetPassword
 | --------- | ------ | -------- | --------------- |
 | `userId`  | string | Yes      | User identifier |
 
+#### Request body
+
+The request body is optional. When a body is supplied, it must set `confirmReset` to `true`.
+
+| Field          | Type    | Required | Description                                   |
+| -------------- | ------- | -------- | --------------------------------------------- |
+| `confirmReset` | boolean | No       | Must be `true` when a request body is present |
+
 #### Response
 
 ```json
 {
-    "message": "Password reset initiated successfully"
+    "success": true,
+    "message": "Password reset successfully for user user@example.com. A new temporary password has been sent to their email.",
+    "userId": "user@example.com",
+    "operation": "resetPassword",
+    "timestamp": "2026-03-15T10:30:00.000000"
 }
 ```
 
@@ -686,18 +730,19 @@ GET /auth/api-keys
 
 ```json
 {
-    "message": {
-        "Items": [
-            {
-                "apiKeyId": "key-abc123",
-                "name": "CI/CD Pipeline Key",
-                "userId": "service-account@example.com",
-                "enabled": true,
-                "dateCreated": "2026-03-15T10:30:00Z",
-                "expiresAt": "2027-03-15T10:30:00Z"
-            }
-        ]
-    }
+    "Items": [
+        {
+            "apiKeyId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "apiKeyName": "CI/CD Pipeline Key",
+            "description": "Automation key for the deployment pipeline",
+            "userId": "service-account@example.com",
+            "createdBy": "admin@example.com",
+            "createdAt": "2026-03-15T10:30:00+00:00",
+            "updatedAt": "2026-03-15T10:30:00+00:00",
+            "expiresAt": "2027-03-15T10:30:00Z",
+            "isActive": "true"
+        }
+    ]
 }
 ```
 
@@ -729,18 +774,20 @@ POST /auth/api-keys
 
 #### Request body
 
-| Field       | Type   | Required | Description                    |
-| ----------- | ------ | -------- | ------------------------------ |
-| `name`      | string | Yes      | Display name for the API key   |
-| `userId`    | string | Yes      | User to associate the key with |
-| `expiresAt` | string | No       | Expiration date (ISO 8601)     |
+| Field         | Type   | Required | Description                    |
+| ------------- | ------ | -------- | ------------------------------ |
+| `apiKeyName`  | string | Yes      | Display name for the API key   |
+| `userId`      | string | Yes      | User to associate the key with |
+| `description` | string | Yes      | Description of the API key     |
+| `expiresAt`   | string | No       | Expiration date (ISO 8601)     |
 
 #### Request body example
 
 ```json
 {
-    "name": "CI/CD Pipeline Key",
+    "apiKeyName": "CI/CD Pipeline Key",
     "userId": "service-account@example.com",
+    "description": "Automation key for the deployment pipeline",
     "expiresAt": "2027-03-15T10:30:00Z"
 }
 ```
@@ -749,17 +796,21 @@ POST /auth/api-keys
 
 ```json
 {
-    "message": {
-        "apiKeyId": "key-abc123",
-        "apiKeySecret": "vams_ak_xxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "name": "CI/CD Pipeline Key",
-        "userId": "service-account@example.com"
-    }
+    "apiKeyId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "apiKeyName": "CI/CD Pipeline Key",
+    "description": "Automation key for the deployment pipeline",
+    "userId": "service-account@example.com",
+    "createdBy": "admin@example.com",
+    "createdAt": "2026-03-15T10:30:00+00:00",
+    "updatedAt": "2026-03-15T10:30:00+00:00",
+    "expiresAt": "2027-03-15T10:30:00Z",
+    "isActive": "true",
+    "apiKey": "vams_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
 
 :::warning[Store the secret securely]
-The `apiKeySecret` value is only returned during creation. Store it securely -- it cannot be retrieved again.
+The plaintext `apiKey` value is only returned during creation. Store it securely -- it cannot be retrieved again.
 :::
 
 ---
@@ -778,11 +829,13 @@ PUT /auth/api-keys/{apiKeyId}
 
 #### Request body
 
-| Field       | Type    | Required | Description               |
-| ----------- | ------- | -------- | ------------------------- |
-| `name`      | string  | No       | Updated display name      |
-| `enabled`   | boolean | No       | Enable or disable the key |
-| `expiresAt` | string  | No       | Updated expiration date   |
+| Field         | Type   | Required | Description                             |
+| ------------- | ------ | -------- | --------------------------------------- |
+| `description` | string | No       | Updated description                     |
+| `expiresAt`   | string | No       | Updated expiration date (ISO 8601)      |
+| `isActive`    | string | No       | `"true"` or `"false"` to enable/disable |
+
+At least one of `description`, `expiresAt`, or `isActive` must be provided. The API key name is immutable after creation.
 
 ---
 
