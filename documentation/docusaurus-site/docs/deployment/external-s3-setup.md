@@ -102,7 +102,7 @@ When a bucket ARN is repeated, its `bucketAccountId`, `bucketRegion`, and `bucke
 ```
 
 :::note[Partition-aware ARNs]
-Use the correct ARN partition for your environment. Commercial AWS uses `arn:aws:s3:::`, AWS GovCloud (US) uses `arn:aws-us-gov:s3:::`. The external bucket ARN must use the same partition as the VAMS deployment.
+Use the correct ARN partition for your environment. Commercial AWS uses `arn:aws:s3:::`, AWS GovCloud (US) uses `arn:aws-us-gov:s3:::`, and the AWS European Sovereign Cloud uses `arn:aws-eusc:s3:::`. The external bucket ARN must use the same partition as the VAMS deployment.
 :::
 
 :::warning[Prefix requirements]

@@ -220,14 +220,14 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 ### Deployment Options
 
-| Feature                       | Configuration                        | Description                                                                 |
-| ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------- |
-| **Amazon CloudFront**         | `useCloudFront.enabled`              | Default web distribution with AWS-managed TLS certificate                   |
-| **CloudFront Custom Domain**  | `useCloudFront.customDomain`         | Custom domain with ACM certificate and optional Amazon Route 53 hosted zone |
-| **Application Load Balancer** | `useAlb.enabled`                     | Alternative web distribution for GovCloud and VPC-isolated deployments      |
-| **VPC**                       | `useGlobalVpc.enabled`               | Shared VPC with configurable CIDR range or external VPC import              |
-| **VPC Endpoints**             | `useGlobalVpc.addVpcEndpoints`       | Automatic VPC endpoint creation for all required AWS services               |
-| **External VPC Import**       | `useGlobalVpc.optionalExternalVpcId` | Import existing VPC with isolated, private, and public subnets              |
+| Feature                       | Configuration                        | Description                                                                                 |
+| ----------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| **Amazon CloudFront**         | `useCloudFront.enabled`              | Default web distribution with AWS-managed TLS certificate                                   |
+| **CloudFront Custom Domain**  | `useCloudFront.customDomain`         | Custom domain with ACM certificate and optional Amazon Route 53 hosted zone                 |
+| **Application Load Balancer** | `useAlb.enabled`                     | Alternative web distribution for GovCloud, EU Sovereign Cloud, and VPC-isolated deployments |
+| **VPC**                       | `useGlobalVpc.enabled`               | Shared VPC with configurable CIDR range or external VPC import                              |
+| **VPC Endpoints**             | `useGlobalVpc.addVpcEndpoints`       | Automatic VPC endpoint creation for all required AWS services                               |
+| **External VPC Import**       | `useGlobalVpc.optionalExternalVpcId` | Import existing VPC with isolated, private, and public subnets                              |
 
 ### Security
 
@@ -257,7 +257,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 
 | Feature Flag                    | Description                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                                                                                                                               |
+| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
 | `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor)                                                                                          |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |

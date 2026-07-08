@@ -17,6 +17,8 @@ VAMS costs are composed of two primary categories:
 
 The most significant cost driver for most deployments is Amazon OpenSearch Service, which is optional but required for full-text search capabilities. VPC endpoints, when enabled, also contribute a meaningful fixed monthly cost.
 
+The tables on this page show Commercial and GovCloud pricing. AWS European Sovereign Cloud deployments use the same service configuration as GovCloud (Application Load Balancer, VPC required); consult the AWS pricing pages for that partition's rates.
+
 ```mermaid
 pie title Typical Monthly Cost Distribution (with Amazon OpenSearch Serverless)
     "Amazon OpenSearch Serverless" : 703

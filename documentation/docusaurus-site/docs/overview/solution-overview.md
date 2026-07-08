@@ -4,7 +4,7 @@ Visual Asset Management System (VAMS) is a purpose-built, AWS-native solution fo
 
 Organizations working with 3D data face a common set of challenges: spatial assets are large and diverse in format, siloed across local systems and specialized tools, difficult to version or track lineage, and inaccessible to non-engineering teams that need them. VAMS solves the challenge of **spatial data sovereignty and access democratization** by providing a single pane of glass for an organization's spatial data source of truth.
 
-Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account, ensuring full data sovereignty and control while supporting both commercial AWS and AWS GovCloud regions.
+Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account, ensuring full data sovereignty and control while supporting commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud regions.
 
 ![VAMS Home Page](/img/home_page_20260323_v2.5.png)
 
@@ -45,7 +45,7 @@ VAMS delivers the following core capabilities:
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
--   **Multi-Region Deployment** -- Deploy to AWS commercial regions or AWS GovCloud (US) with full partition awareness
+-   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
 
 ---
 
@@ -81,12 +81,13 @@ The REST API provides full programmatic access for custom application developmen
 
 ## Supported Deployment Modes
 
-VAMS supports two primary deployment modes to meet different organizational and regulatory requirements.
+VAMS supports three primary deployment modes to meet different organizational and regulatory requirements.
 
-| Deployment Mode       | Web Distribution                      | Search                                      | Key Characteristics                                                                                                                                       |
-| --------------------- | ------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**    | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                        |
-| **AWS GovCloud (US)** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned               | No Amazon CloudFront. FIPS endpoint support. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments with VPC isolation. |
+| Deployment Mode                  | Web Distribution                      | Search                                      | Key Characteristics                                                                                                                                       |
+| -------------------------------- | ------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                        |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned               | No Amazon CloudFront. FIPS endpoint support. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments with VPC isolation. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Serverless or Provisioned | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                      |
 
 :::warning[GovCloud Constraints]
 AWS GovCloud deployments require `useGlobalVpc.enabled` set to `true`, `useCloudFront.enabled` set to `false`, and `useLocationService.enabled` set to `false`.
@@ -149,7 +150,7 @@ graph TB
     WAF --> ALB
 ```
 
-The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
+The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud and European Sovereign Cloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
 
 For a detailed architecture diagram, see the [Architecture Components](../architecture/overview.md) section of the Developer Guide.
 

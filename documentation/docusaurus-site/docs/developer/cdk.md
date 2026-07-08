@@ -237,11 +237,11 @@ if (config.app.myNewFeature.enabled && !config.app.myNewFeature.someOption) {
 }
 ```
 
-Also update both template files: `config.template.commercial.json` and `config.template.govcloud.json`.
+Also update all three template files: `config.template.commercial.json`, `config.template.govcloud.json`, and `config.template.eusovereign.json`.
 
 ## Service Helper
 
-The service helper provides partition-aware ARN and endpoint generation. It supports four AWS partitions: `aws` (commercial), `aws-us-gov` (GovCloud), `aws-cn` (China), and `aws-iso` (isolated).
+The service helper provides partition-aware ARN and endpoint generation. It supports the `aws` (commercial), `aws-us-gov` (GovCloud), `aws-eusc` (European Sovereign Cloud), `aws-cn` (China), and `aws-iso` (isolated) partitions.
 
 ### Initialization
 

@@ -271,17 +271,17 @@ Configuration values resolve through a four-tier fallback chain:
 
 ### Feature Flags
 
-| Feature Flag                    | Description                                    |
-| ------------------------------- | ---------------------------------------------- |
-| `GOVCLOUD`                      | AWS GovCloud deployment mode                   |
-| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy |
-| `LOCATIONSERVICES`              | Amazon Location Service enabled                |
-| `ALBDEPLOY`                     | Application Load Balancer deployment mode      |
-| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode              |
-| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                     |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider         |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation            |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider               |
+| Feature Flag                    | Description                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments) |
+| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                       |
+| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                      |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                            |
+| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                    |
+| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 
 ## Nested Stack Dependency Chain
 

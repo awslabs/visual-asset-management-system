@@ -97,7 +97,7 @@ Security is enforced at every layer. The custom Lambda authorizer validates JWT 
 
 ### Multi-Partition Support
 
-VAMS is designed to run on commercial AWS and AWS GovCloud partitions. A partition-aware service helper generates correct ARNs, endpoints, and service principals for any target partition. No AWS partition strings, service endpoints, or regional URLs are hardcoded anywhere in the codebase.
+VAMS is designed to run on the commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud partitions. A partition-aware service helper generates correct ARNs, endpoints, and service principals for any target partition. No AWS partition strings, service endpoints, or regional URLs are hardcoded anywhere in the codebase.
 
 ### Configuration-Driven Deployment
 
@@ -105,20 +105,21 @@ A centralized configuration system (`config.json`) controls which features, pipe
 
 ## Deployment Modes
 
-VAMS supports two deployment modes to accommodate different compliance and network isolation requirements.
+VAMS supports three deployment modes to accommodate different compliance and network isolation requirements.
 
-| Deployment Mode       | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                    |
-| --------------------- | ------------------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**    | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                   |
-| **AWS GovCloud (US)** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| Deployment Mode                  | Web Distribution                      | API Access    | VPC      | Notes                                                                                                                                                    |
+| -------------------------------- | ------------------------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | REST API (v1) | Optional | Default mode. Regional or private endpoint. Supports optional Amazon Location Service.                                                                   |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | REST API (v1) | Required | No Amazon CloudFront. Regional or private endpoint. FIPS endpoints. No Amazon Location Service. Supports full VPC isolation for restricted environments. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | REST API (v1) | Required | Deploys with the GovCloud guardrails. No Amazon CloudFront. No Amazon Location Service. Region exposes two Availability Zones.                           |
 
-:::note[GovCloud Requirements]
-When deploying to AWS GovCloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
+:::note[GovCloud and EU Sovereign Cloud Requirements]
+When deploying to AWS GovCloud (US) or the AWS European Sovereign Cloud, the VPC must be enabled, Amazon CloudFront must be disabled, and Amazon Location Service must be disabled.
 :::
 
 ## Architecture Diagram
 
-The following diagram provides a visual overview of the VAMS architecture across both commercial and GovCloud deployments.
+The following diagram provides a visual overview of the VAMS architecture across commercial and GovCloud/EU Sovereign Cloud deployments.
 
 ![VAMS Architecture Diagram](/img/Commercial-GovCloud-VAMS_Architecture.png)
 
