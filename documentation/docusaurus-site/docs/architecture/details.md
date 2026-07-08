@@ -271,17 +271,17 @@ Configuration values resolve through a four-tier fallback chain:
 
 ### Feature Flags
 
-| Feature Flag                    | Description                                    |
-| ------------------------------- | ---------------------------------------------- |
-| `GOVCLOUD`                      | AWS GovCloud deployment mode                   |
-| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy |
-| `LOCATIONSERVICES`              | Amazon Location Service enabled                |
-| `ALBDEPLOY`                     | Application Load Balancer deployment mode      |
-| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode              |
-| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                     |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider         |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation            |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider               |
+| Feature Flag                    | Description                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments) |
+| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                       |
+| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                      |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                            |
+| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                    |
+| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 
 ## Nested Stack Dependency Chain
 
@@ -322,7 +322,7 @@ At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_
 3. **SSM GetParametersByPath** — one paginated call fetching all parameters under the prefix on first access
 
 :::tip[Lambda Builder Pattern]
-Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`, `COGNITO_AUTH_ENABLED`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.
+Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.
 :::
 
 ## Next Steps

@@ -344,16 +344,16 @@ Output includes total count, list of enabled feature names, and last updated tim
 
 ### Available feature switches
 
-| Feature                         | Description                                     |
-| ------------------------------- | ----------------------------------------------- |
-| `GOVCLOUD`                      | GovCloud-specific functionality                 |
-| `ALLOWUNSAFEEVAL`               | Allow unsafe eval operations                    |
-| `LOCATIONSERVICES`              | Location-based services and mapping             |
-| `ALBDEPLOY`                     | Application Load Balancer deployment mode       |
-| `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider          |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito SAML authentication provider     |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                |
+| Feature                         | Description                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | GovCloud-specific functionality (also set for EU Sovereign Cloud deployments) |
+| `ALLOWUNSAFEEVAL`               | Allow unsafe eval operations                                                  |
+| `LOCATIONSERVICES`              | Location-based services and mapping                                           |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
+| `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito SAML authentication provider                                   |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
 
 ---
 

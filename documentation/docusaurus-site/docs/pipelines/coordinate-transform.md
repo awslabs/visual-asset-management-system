@@ -74,7 +74,7 @@ Enable this pipeline in `infra/config/config.json`:
 | Option                                | Default | Description                                                                                                                             |
 | :------------------------------------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                             | `false` | Deploy the coordinate transform pipeline infrastructure. Enables the global VPC.                                                        |
-| `useCodeBuild`                        | `true`  | Build the container image via AWS CodeBuild during deployment. When enabled, CodeBuild runs outside the VPC to pull public base images. |
+| `useCodeBuild`                        | `false` | Build the container image via AWS CodeBuild during deployment. When enabled, CodeBuild runs outside the VPC to pull public base images. |
 | `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow in the global VAMS database during CDK deployment.                                     |
 | `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when E57, LAS, LAZ, or PLY files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.        |
 

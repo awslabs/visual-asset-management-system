@@ -150,9 +150,9 @@ The web application file selector for asset uploads supports folder selection in
 
 ## Deployment Limitations
 
-### AWS GovCloud Restrictions
+### AWS GovCloud and EU Sovereign Cloud Restrictions
 
-When deploying to AWS GovCloud (US) regions, the following services are not available:
+When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available:
 
 | Feature                          | Restriction                                 |
 | -------------------------------- | ------------------------------------------- |

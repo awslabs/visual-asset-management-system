@@ -409,12 +409,16 @@ export function getConfig(app: cdk.App): Config {
             apiBaseEndpoint: "https://app-api.physna.com/v3/",
             authTokenEndpoint: "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token",
             authType: "cognito",
+            credentialsSecretArn: "",
             clientId: "",
             clientSecret: "",
         };
     }
     if (config.app.addons.usePhysnaSync.enabled == undefined) {
         config.app.addons.usePhysnaSync.enabled = false;
+    }
+    if (config.app.addons.usePhysnaSync.credentialsSecretArn == undefined) {
+        config.app.addons.usePhysnaSync.credentialsSecretArn = "";
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
@@ -587,6 +591,28 @@ export function getConfig(app: cdk.App): Config {
         config.s3AdditionalBucketPolicyJSON = JSON.parse(s3AdditionalBucketPolicyFile);
     } else {
         config.s3AdditionalBucketPolicyJSON = undefined;
+    }
+
+    //Load WAF policy JSON. An empty or absent file preserves the legacy WAF behavior
+    //(a single AWS Common Rule Set in count-only mode); a populated file applies the
+    //best-practice managed rule groups + rate-based rule it defines.
+    config.wafPolicyJSON = undefined;
+    if (config.app.useWaf) {
+        try {
+            const wafPolicyFile: string = readFileSync(
+                join(__dirname, "policy", "wafPolicyConfig.json"),
+                {
+                    encoding: "utf8",
+                    flag: "r",
+                }
+            );
+            if (wafPolicyFile && wafPolicyFile.trim().length > 0) {
+                config.wafPolicyJSON = JSON.parse(wafPolicyFile);
+            }
+        } catch (e) {
+            //Missing file is not an error — fall back to the legacy default rules.
+            config.wafPolicyJSON = undefined;
+        }
     }
 
     //Load IAM role customization mappings JSON (only when a custom-roles flag is enabled)
@@ -1309,6 +1335,21 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //SAML federation requires the Cognito hosted UI, which is only available in the
+    //commercial partition (not GovCloud, EU Sovereign Cloud, or ISO).
+    if (config.app.authProvider.useCognito.useSaml) {
+        if (!config.app.authProvider.useCognito.enabled) {
+            throw new Error(
+                "Configuration Error: useCognito.useSaml requires useCognito.enabled to be true!"
+            );
+        }
+        if (config.env.partition !== "aws") {
+            throw new Error(
+                `Configuration Error: useCognito.useSaml is not supported in the '${config.env.partition}' partition. The Amazon Cognito hosted UI used for SAML federation is unavailable there.`
+            );
+        }
+    }
+
     if (
         config.app.authProvider.useExternalOAuthIdp.enabled &&
         (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
@@ -1576,16 +1617,38 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        // clientId and clientSecret must be non-empty
-        if (!physna.clientId || physna.clientId === "UNDEFINED" || physna.clientId === "") {
-            throw new Error("Configuration Error: Physna Sync requires clientId when enabled");
-        }
-        if (
-            !physna.clientSecret ||
-            physna.clientSecret === "UNDEFINED" ||
-            physna.clientSecret === ""
-        ) {
-            throw new Error("Configuration Error: Physna Sync requires clientSecret when enabled");
+        // Credentials must be supplied via credentialsSecretArn (preferred) OR inline
+        // clientId + clientSecret (legacy). credentialsSecretArn keeps the secret value
+        // out of the CloudFormation template.
+        const hasSecretArn =
+            physna.credentialsSecretArn &&
+            physna.credentialsSecretArn !== "UNDEFINED" &&
+            physna.credentialsSecretArn !== "";
+        const hasInlineCreds =
+            physna.clientId &&
+            physna.clientId !== "UNDEFINED" &&
+            physna.clientId !== "" &&
+            physna.clientSecret &&
+            physna.clientSecret !== "UNDEFINED" &&
+            physna.clientSecret !== "";
+
+        // Default path: inline clientId/clientSecret. VAMS creates the Secrets Manager
+        // secret and populates it at deploy time via a custom resource that carries the
+        // values in its Lambda code asset, so the value never enters the CloudFormation
+        // template. Alternatively, credentialsSecretArn references an operator-managed
+        // secret by ARN (clientId/clientSecret then ignored).
+        if (hasSecretArn) {
+            // Validate it is a Secrets Manager secret ARN in a supported partition.
+            if (!/^arn:aws[a-z-]*:secretsmanager:/.test(physna.credentialsSecretArn)) {
+                throw new Error(
+                    "Configuration Error: Physna Sync credentialsSecretArn must be a valid AWS Secrets Manager secret ARN"
+                );
+            }
+        } else if (!hasInlineCreds) {
+            throw new Error(
+                "Configuration Error: Physna Sync requires credentials when enabled. Set " +
+                    "both clientId and clientSecret, or credentialsSecretArn."
+            );
         }
     }
 
@@ -2047,6 +2110,7 @@ export interface ConfigPublic {
                 apiBaseEndpoint: string;
                 authTokenEndpoint: string;
                 authType: string;
+                credentialsSecretArn: string;
                 clientId: string;
                 clientSecret: string;
             };
@@ -2104,6 +2168,7 @@ export interface Config extends ConfigPublic {
     dockerDefaultPlatform: string;
     s3AdditionalBucketPolicyJSON: any | undefined;
     iamRoleCustomizationJSON: any | undefined; // Loaded from policy/iamRoleConfig.json
+    wafPolicyJSON: any | undefined; // Loaded from policy/wafPolicyConfig.json (undefined = legacy default rules)
     openSearchAssetIndexName: string; // Asset index name
     openSearchFileIndexName: string; // File index name
     openSearchAssetIndexNameSSMParam: string;

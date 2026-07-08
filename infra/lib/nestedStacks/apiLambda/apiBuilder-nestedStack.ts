@@ -1002,21 +1002,21 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}",
             method: apigateway.HttpMethod.DELETE,
-            api: api,
+            registry: registry,
         });
 
         // Execution detail/traceability view (cross-fetched names, inputs, outputs).
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}/details",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         // Execution logs (truncated stored log, or full live CloudWatch search).
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}/logs",
             method: apigateway.HttpMethod.GET,
-            api: api,
+            registry: registry,
         });
 
         const processWorkflowExecutionOutputFunction = buildProcessWorkflowExecutionOutputFunction(

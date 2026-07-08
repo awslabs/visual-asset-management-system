@@ -50,21 +50,25 @@ If it fails, report the error output focusing on:
 -   Invalid construct configurations
 -   CloudFormation validation errors
 
-#### 3. CDK Lint Check
+#### 3. Lint Check
+
+Always run lint from the **repo root** (the root `package.json` scripts target `web/src`, `infra/lib`, `infra/bin`, and `infra/test`):
 
 ```bash
-cd infra && npm run lint 2>&1
+npm run lint 2>&1
 ```
 
 Report any ESLint errors. Warnings are acceptable but errors must be fixed.
 
-#### 4. CDK Prettier Check
+#### 4. Prettier Check
+
+Always run prettier from the **repo root**:
 
 ```bash
-cd infra && npm run prettier-check 2>&1
+npm run prettier-check 2>&1
 ```
 
-Report any formatting violations. These should be fixed with `npm run prettier-fix`.
+Report any formatting violations. These should be fixed with `npm run prettier-fix` (also from the repo root).
 
 #### 5. Backend Python Tests
 
@@ -92,16 +96,16 @@ Report same metrics as backend tests.
 #### 7. Frontend Build
 
 ```bash
-cd web && yarn build 2>&1
+cd web && npm run build 2>&1
 ```
 
-This validates that the React/TypeScript frontend compiles without errors. Check for:
+This validates that the React/TypeScript frontend compiles (Vite build) without errors. Check for:
 
 -   TypeScript type errors
 -   Missing imports
 -   Build warnings (report but don't fail)
 
-If yarn is not installed, try `npm run build` as fallback.
+If the build runs out of memory, use `npm run build.lowmem`.
 
 #### 8. Cross-Reference Validation
 
@@ -109,9 +113,11 @@ Perform these static checks without running commands:
 
 **Handler-to-CDK mapping**: For each Python handler file in `backend/backend/handlers/`, verify there is a corresponding Lambda builder function in `infra/lib/lambdaBuilder/` that references it.
 
-**API route completeness**: Verify that routes defined in `apiBuilder-nestedStack.ts` reference Lambda functions that exist.
+**API route completeness**: Verify that routes registered via `attachFunctionToApi` in `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` reference Lambda functions that exist, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array).
 
-**Environment variable consistency**: Spot-check that environment variables set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
+**Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
+
+**Config template consistency**: Verify any config fields present in `config.json` also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
 
 ### Report Format
 
@@ -150,8 +156,8 @@ For each failure:
 
 Common fixes:
 
--   **Lint errors**: `cd infra && npm run lint -- --fix`
--   **Prettier errors**: `cd infra && npm run prettier-fix`
+-   **Lint errors**: `npm run lint-fix` (from repo root)
+-   **Prettier errors**: `npm run prettier-fix` (from repo root)
 -   **Type errors**: Show the file and line that needs fixing
 -   **Test failures**: Show the failing test and traceback
 
@@ -161,9 +167,9 @@ Execute checks sequentially since some depend on others (e.g., CDK synth will ca
 
 If a check cannot be run (e.g., tool not installed), report it as SKIP with instructions for setup:
 
--   Python: `pip install -r backend/requirements.txt`
+-   Python: `pip install -r backend/requirements.txt` (plus `backend/requirements-dev.txt` for tests)
 -   Node: `cd infra && npm install`
--   Frontend: `cd web && yarn install`
+-   Frontend: `cd web && npm install`
 
 ## Workflow
 

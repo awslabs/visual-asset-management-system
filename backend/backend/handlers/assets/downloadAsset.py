@@ -559,12 +559,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return validation_error(body={'message': "Asset not found"}, event=event)
         
         asset["object__type"] = "asset"
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "GET") and casbin_enforcer.enforceAPI(event)):
-                return authorization_error()
-        
+
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than fall through to presigned-URL generation.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not (casbin_enforcer.enforce(asset, "GET") and casbin_enforcer.enforceAPI(event)):
+            return authorization_error()
+
         # Process download request based on type
         try:
             if request_model.downloadType == "assetFile":

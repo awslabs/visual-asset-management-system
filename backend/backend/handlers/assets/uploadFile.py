@@ -2397,11 +2397,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             asset["object__type"] = "asset"
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the upload.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = initialize_upload(request_model, claims_and_roles)
             
@@ -2440,11 +2444,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             asset["object__type"] = "asset"
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the upload.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = complete_external_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)
@@ -2470,11 +2478,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             asset["object__type"] = "asset"
             
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
+            # Fail closed: with no authenticated identity no authorization can be
+            # evaluated, so deny rather than fall through to the upload.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+
             # Process request
             response = complete_upload(uploadId, request_model, event)
             # Check if response is already an APIGatewayProxyResponseV2 (error case)

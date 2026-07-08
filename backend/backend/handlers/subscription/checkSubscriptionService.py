@@ -1,6 +1,7 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 
@@ -17,7 +18,7 @@ claims_and_roles = {}
 logger = safeLogger(service="CheckSubscriptionService")
 dynamodb = boto3.resource('dynamodb')
 
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
     subscription_table_name = get_table_name(ResourceKeys.SUBSCRIPTIONS_STORAGE_TABLE)
@@ -29,7 +30,7 @@ except Exception as e:
 
 
 def check_subscriptions(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     # TODO: Read this from constants.
     event_name = "Asset Version Change"
     entity_name = "Asset"
@@ -61,7 +62,7 @@ def check_subscriptions(body):
 
 def lambda_handler(event, context):
     normalize_event(event)
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
     # Parse request body
     if not event.get('body'):
@@ -71,8 +72,14 @@ def lambda_handler(event, context):
         logger.error(response)
         return response
 
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+    try:
+        if isinstance(event['body'], str):
+            event['body'] = json.loads(event['body'])
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+        return response
 
     try:
         httpMethod = event['requestContext']['http']['method']

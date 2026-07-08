@@ -113,6 +113,15 @@ cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 When bootstrapping an AWS GovCloud account, you must set the `AWS_REGION` environment variable so the AWS SDK resolves to GovCloud endpoints. Without this variable, the SDK defaults to commercial endpoints and the bootstrap operation will fail.
 :::
 
+**AWS European Sovereign Cloud Regions:**
+
+```bash
+export AWS_REGION=eusc-de-east-1
+cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+```
+
+As with GovCloud, set the `AWS_REGION` environment variable so the AWS SDK resolves to the European Sovereign Cloud partition endpoints.
+
 ### FIPS endpoint configuration
 
 If your organization requires Federal Information Processing Standards (FIPS) 140-2 validated cryptographic modules, enable the FIPS environment variable before any AWS CLI or CDK operations:

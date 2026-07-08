@@ -36,6 +36,10 @@ The `env.partition` field is automatically derived from the Region and should no
 
 Controls how Amazon S3 asset storage buckets are provisioned.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` (`StorageResourcesBuilderNestedStack`) — Amazon S3 asset buckets plus a DynamoDB bucket registry populated by the custom resource `customResources/populateS3AssetBucketsTable.ts`.
+:::
+
 | Field                                              | Type    | Default                                     | Description                                                                                                                                                                                                                                                                            |
 | -------------------------------------------------- | ------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.assetBuckets.createNewBucket`                 | boolean | `true`                                      | When `true`, VAMS creates a new Amazon S3 bucket for asset storage. When `false`, you must define at least one external asset bucket.                                                                                                                                                  |
@@ -93,13 +97,60 @@ External buckets can be added incrementally across deployments. Each bucket requ
 
 ### WAF and FIPS (`app`)
 
-| Field                        | Type    | Default | Description                                                                                                                           |
-| ---------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.useWaf`                 | boolean | `true`  | Enables AWS WAF for Amazon CloudFront or ALB and Amazon API Gateway attachment points. Disabling this generates a deployment warning. |
-| `app.useFips`                | boolean | `false` | Enables FIPS-compliant AWS partition endpoints. Must be combined with the `AWS_USE_FIPS_ENDPOINT=true` environment variable.          |
-| `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                  |
+| Field                        | Type    | Default | Description                                                                                                                                                                                    |
+| ---------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.useWaf`                 | boolean | `true`  | Enables AWS WAF. Always protects the Amazon API Gateway API and, when present, the Amazon CloudFront distribution or Application Load Balancer. Disabling this generates a deployment warning. |
+| `app.useFips`                | boolean | `false` | Enables FIPS-compliant AWS partition endpoints. Must be combined with the `AWS_USE_FIPS_ENDPOINT=true` environment variable.                                                                   |
+| `app.addStackCloudTrailLogs` | boolean | `true`  | Creates a dedicated Amazon CloudWatch Logs group and associated AWS CloudTrail trail for this stack.                                                                                           |
+
+:::info[Implemented by]
+These three keys do **not** map to a single nested stack:
+
+-   `app.useWaf` — standalone WAF stack(s) `infra/lib/cf-waf-stack.ts` (`CfWafStack`), gated in `infra/bin/infra.ts`. The regional web ACL attaches to the API Gateway stage in `apiLambda/constructs/rest-api-gateway-construct.ts` and to the ALB in `staticWebApp/staticWebBuilder-nestedStack.ts`; the CloudFront web ACL attaches to the distribution in `staticWebApp/constructs/cloudfront-s3-website-construct.ts`.
+-   `app.useFips` — global endpoint resolution in `infra/lib/helper/service-helper.ts` (no stack of its own).
+-   `app.addStackCloudTrailLogs` — created inline in the root stack `infra/lib/core-stack.ts` (`CoreVAMSStack`).
+    :::
+
+#### How many web ACLs are created
+
+When `app.useWaf` is enabled, VAMS always creates a **regional-scoped** web ACL in the deployment Region and associates it with the API Gateway API stage — for both `REGIONAL` and `PRIVATE` endpoint types, and regardless of whether a CloudFront distribution or ALB fronts the application. This protects the API's `execute-api` endpoint, which remains directly reachable in every fronting configuration.
+
+The number of web ACLs depends on the front-end distribution:
+
+| Front-end (`app.useCloudFront` / `app.useAlb`) | Web ACLs created                                                                  | Attached to                                |
+| ---------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------ |
+| CloudFront enabled                             | **2** — a regional ACL (deployment Region) **and** a CloudFront ACL (`us-east-1`) | API Gateway stage; CloudFront distribution |
+| ALB enabled                                    | 1 — a regional ACL (deployment Region)                                            | API Gateway stage; ALB                     |
+| Neither                                        | 1 — a regional ACL (deployment Region)                                            | API Gateway stage                          |
+
+AWS WAF scopes are not interchangeable, so a **CloudFront deployment requires two web ACLs**. A web ACL associated with a CloudFront distribution is `CLOUDFRONT`-scoped, lives in `us-east-1`, and — per AWS WAF — cannot be associated with any other resource type. API Gateway and ALB require a `REGIONAL`-scoped web ACL in the deployment Region. This holds even when the deployment Region is `us-east-1`: the CloudFront ACL and the regional ACL are different scopes, so a single ACL cannot cover both the distribution and the API Gateway. Both web ACLs are built from the same `wafPolicyConfig.json` policy, so their rule sets are identical.
+
+The two web ACLs are created as separate CloudFormation stacks. The regional stack is named `{name}-waf-{baseStackName}` when CloudFront is disabled, or `{name}-waf-regional-{baseStackName}` when CloudFront is enabled; the CloudFront stack (when present) is named `{name}-waf-{baseStackName}` and deployed to `us-east-1`.
+
+#### WAF rule policy (`config/policy/wafPolicyConfig.json`)
+
+When `app.useWaf` is enabled, the rules attached to the web ACL(s) are defined by the file `infra/config/policy/wafPolicyConfig.json`. This keeps the firewall posture in a dedicated policy file, separate from the main `config.json`, alongside the S3 bucket-policy and IAM-role customization files. The same policy file is applied to both the regional and CloudFront web ACLs.
+
+The file has two sections:
+
+| Section             | Purpose                                                                                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `managedRuleGroups` | AWS or third-party managed rule groups to attach. Each entry sets `name`, `vendorName`, `managedRuleGroupName`, `priority`, and `block` (`true` applies the group's own block actions; `false` runs the group in count-only mode). |
+| `rateBasedRules`    | Rate-based rules for L7 DDoS and brute-force throttling. Each entry sets `name`, `priority`, `limit` (requests per 5-minute window per aggregate key), and `aggregateKeyType` (`IP` or `FORWARDED_IP`).                            |
+
+The shipped file applies the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a 2,000-request-per-IP rate limit. The web ACL default action remains `allow`, so only requests matching a rule are blocked or counted.
+
+If the file is empty or absent, VAMS applies its baseline rule set: a single AWS Common Rule Set in count-only mode. Populate the file to enable enforced protection.
+
+:::tip[Validate before enabling block mode]
+Managed rule groups can match legitimate traffic (for example, large multipart uploads or presigned-URL flows). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives.
+:::
 
 ### KMS encryption (`app.useKmsCmkEncryption`)
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts` (`StorageResourcesBuilderNestedStack`) — provisions (or imports) the AWS KMS CMK and applies it to all Amazon S3, DynamoDB, SQS, SNS, and OpenSearch resources.
+:::
 
 | Field                                            | Type    | Default | Description                                                                                                                                                                                |
 | ------------------------------------------------ | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -121,6 +172,10 @@ kms:CreateGrant
 :::
 
 ### GovCloud (`app.govCloud`)
+
+:::info[Implemented by]
+GovCloud is a cross-cutting switch, not a dedicated nested stack. It is validated in `getConfig()` (`infra/config/config.ts`) and applied as feature flags and partition selection in the root stack `infra/lib/core-stack.ts` (`CoreVAMSStack`), which in turn constrains the VPC, web distribution, and Location Service stacks.
+:::
 
 | Field                       | Type    | Default | Description                                                                                                                                        |
 | --------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -146,6 +201,10 @@ Letting VAMS manage IAM roles is the recommended default — grants stay automat
 
 ## VPC (`app.useGlobalVpc`)
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` (`VPCBuilderNestedStack`) — Amazon VPC, subnets, VPC interface/gateway endpoints, and the shared security group.
+:::
+
 | Field                                                | Type    | Default       | Description                                                                                                                                                                    |
 | ---------------------------------------------------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `app.useGlobalVpc.enabled`                           | boolean | `false`       | Creates or imports a VPC for VAMS resources. Automatically set to `true` when ALB, OpenSearch Provisioned, or any container-based pipeline is enabled.                         |
@@ -169,19 +228,19 @@ The following table shows which VPC resources are created based on enabled featu
 
 VAMS provisions every subnet type across a fixed Availability Zone count (a baseline of 2) so that toggling individual features does not add or remove subnets between deployments. Amazon OpenSearch Service (Provisioned) sets the count from `availabilityZoneCount` (2 or 3).
 
-| Feature / Pipeline                                   | Private Subnets            | Public Subnets | Min AZs                          | Notes                           |
-| ---------------------------------------------------- | -------------------------- | -------------- | -------------------------------- | ------------------------------- |
-| ALB (`useAlb.enabled`)                               | Yes (if `usePublicSubnet`) | Yes            | 2                                | Public subnets for ALB          |
-| RapidPipeline ECS (`useRapidPipeline.useEcs`)        | Yes                        | Yes            | 2                                | Batch compute                   |
-| RapidPipeline EKS (`useRapidPipeline.useEks`)        | Yes                        | Yes            | 2                                | EKS cluster                     |
-| ModelOps (`useModelOps`)                             | Yes                        | Yes            | 2                                | Batch compute                   |
-| Gaussian Splatting (`useSplatToolbox`)               | Yes                        | Yes            | 2                                | Batch compute                   |
-| Coordinate Transform (`useConversionCoordinateTransform`) | Yes                   | Yes            | 2                                | Batch compute                   |
-| Isaac Lab Training (`useIsaacLabTraining`)           | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
-| NVIDIA Cosmos (`useNvidiaCosmos`)                    | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
-| NVIDIA Gr00t (`useNvidiaGr00t`)                      | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
-| OpenSearch Provisioned (`openSearch.useProvisioned`) | No                         | No             | `availabilityZoneCount` (2 or 3) | Zone-aware Multi-AZ domain      |
-| All other features                                   | Isolated only              | No             | 2                                | Lambda VPC endpoints            |
+| Feature / Pipeline                                        | Private Subnets            | Public Subnets | Min AZs                          | Notes                           |
+| --------------------------------------------------------- | -------------------------- | -------------- | -------------------------------- | ------------------------------- |
+| ALB (`useAlb.enabled`)                                    | Yes (if `usePublicSubnet`) | Yes            | 2                                | Public subnets for ALB          |
+| RapidPipeline ECS (`useRapidPipeline.useEcs`)             | Yes                        | Yes            | 2                                | Batch compute                   |
+| RapidPipeline EKS (`useRapidPipeline.useEks`)             | Yes                        | Yes            | 2                                | EKS cluster                     |
+| ModelOps (`useModelOps`)                                  | Yes                        | Yes            | 2                                | Batch compute                   |
+| Gaussian Splatting (`useSplatToolbox`)                    | Yes                        | Yes            | 2                                | Batch compute                   |
+| Coordinate Transform (`useConversionCoordinateTransform`) | Yes                        | Yes            | 2                                | Batch compute                   |
+| Isaac Lab Training (`useIsaacLabTraining`)                | Yes                        | Yes            | 2                                | Batch compute + CodeBuild       |
+| NVIDIA Cosmos (`useNvidiaCosmos`)                         | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| NVIDIA Gr00t (`useNvidiaGr00t`)                           | Yes                        | Yes            | 2                                | Batch compute + EFS + CodeBuild |
+| OpenSearch Provisioned (`openSearch.useProvisioned`)      | No                         | No             | `availabilityZoneCount` (2 or 3) | Zone-aware Multi-AZ domain      |
+| All other features                                        | Isolated only              | No             | 2                                | Lambda VPC endpoints            |
 
 #### VPC Interface Endpoints
 
@@ -226,6 +285,10 @@ When `addVpcEndpoints=false` (you create the VPC endpoints by hand, for example 
 :::
 
 ## Amazon OpenSearch Service (`app.openSearch`)
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts` (`SearchBuilderNestedStack`) — Amazon OpenSearch Serverless collection or a provisioned OpenSearch Service domain.
+:::
 
 | Field                                                    | Type    | Default            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------------------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -283,11 +346,19 @@ If you do not have a specific requirement that mandates Provisioned, prefer `app
 
 ## Amazon Location Service (`app.useLocationService`)
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/locationService/location-service-nestedStack.ts` (`LocationServiceNestedStack`) — Amazon Location Service map resources (commercial partitions only).
+:::
+
 | Field                            | Type    | Default | Description                                                                                                                                                                     |
 | -------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.useLocationService.enabled` | boolean | `true`  | Enables Amazon Location Service for map visualization of asset metadata with geographic coordinates. Not available in AWS GovCloud. Map views require OpenSearch to be enabled. |
 
 ## Web distribution
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` (`StaticWebBuilderNestedStack`) — an Amazon S3 web bucket fronted by either Amazon CloudFront (`useCloudFront`) or an Application Load Balancer (`useAlb`). These two options are mutually exclusive.
+:::
 
 ### Application Load Balancer (`app.useAlb`)
 
@@ -315,6 +386,10 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 :::
 
 ## Authentication (`app.authProvider`)
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/auth/authBuilder-nestedStack.ts` (`AuthBuilderNestedStack`) — Amazon Cognito user and identity pools, SAML federation, and external OAuth IdP wiring. IP-range restrictions (`authorizerOptions.allowedIpRanges`) are enforced by the custom Lambda authorizer in `apiLambda/apigatewayv2-amplify-nestedStack.ts`.
+:::
 
 ### General authentication settings
 
@@ -368,6 +443,10 @@ When external OAuth IdP is enabled, **all** fields in this section are required.
 
 ## API configuration (`app.api`)
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/apiLambda/api-nestedStack.ts` (`ApiNestedStack`) — builds the Amazon API Gateway REST API through `RestApiGatewayConstruct`, including the endpoint type (`REGIONAL`/`PRIVATE`) and stage throttling (rate and burst limits).
+:::
+
 | Field                                                      | Type   | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ---------------------------------------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.api.apiType`                                          | string | `"APIGATEWAY_REST"` | Backend API implementation type. Only `"APIGATEWAY_REST"` (an Amazon API Gateway REST API) is supported; any other value fails configuration validation.                                                                                                                                                                                                                                                                           |
@@ -392,6 +471,10 @@ Amazon API Gateway itself does **not** remove a previously-set resource policy w
 
 ## Web UI (`app.webUi`)
 
+:::note[Implemented by]
+Consumed by the static web hosting stack `infra/lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` (`StaticWebBuilderNestedStack`). `allowUnsafeEvalFeatures` feeds Content Security Policy generation in `infra/lib/helper/security.ts`.
+:::
+
 | Field                                 | Type    | Default | Description                                                                                                                                                                                                          |
 | ------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                   |
@@ -400,6 +483,10 @@ Amazon API Gateway itself does **not** remove a previously-set resource policy w
 ## Metadata schema (`app.metadataSchema`)
 
 Controls auto-loading of default metadata schemas during deployment.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`ApiBuilderNestedStack`) — a default-schema seeding custom resource that writes to the metadata-schema DynamoDB table.
+:::
 
 | Field                                                | Type    | Default | Description                                                                                                                                                                         |
 | ---------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -410,9 +497,17 @@ Controls auto-loading of default metadata schemas during deployment.
 
 ## Processing pipelines (`app.pipelines`)
 
+:::note[Implemented by]
+All pipelines are orchestrated by `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` (`PipelineBuilderNestedStack`). Each enabled pipeline below is conditionally instantiated as its own child nested stack (named in each section).
+:::
+
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
 
 Converts between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ formats. Does not require a VPC.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/conversion/3dBasic/conversion3dBasicBuilder-nestedStack.ts` (`Conversion3dBasicNestedStack`) — AWS Batch on Fargate.
+:::
 
 | Field                                                     | Type    | Default | Description                                                                               |
 | --------------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------- |
@@ -423,26 +518,34 @@ Converts between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ format
 
 Extracts metadata from CAD and mesh file formats. Does not require a VPC.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack.ts` (`ConversionMeshCadMetadataExtractionNestedStack`).
+:::
+
 | Field                                                                                      | Type    | Default | Description                                                                        |
 | ------------------------------------------------------------------------------------------ | ------- | ------- | ---------------------------------------------------------------------------------- |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.enabled`                             | boolean | `false` | Enables the CAD/mesh metadata extraction pipeline.                                 |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                            |
 | `app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported file types. |
 
-### Coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
+### Point cloud coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
 
-Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems using PDAL and pyproj. **Requires VPC** (AWS Batch on Fargate).
+Reprojects E57, LAS, LAZ, and PLY point cloud files between coordinate reference systems using PDAL and pyproj. Runs on AWS Batch with AWS Fargate compute. **Requires VPC.** See the [Coordinate Transform pipeline](../pipelines/coordinate-transform.md) page for input parameters and per-asset metadata overrides.
 
-| Field                                                                                | Type    | Default | Description                                                                        |
-| ------------------------------------------------------------------------------------ | ------- | ------- | ---------------------------------------------------------------------------------- |
-| `app.pipelines.useConversionCoordinateTransform.enabled`                             | boolean | `false` | Enables the coordinate transform pipeline.                                         |
-| `app.pipelines.useConversionCoordinateTransform.useCodeBuild`                        | boolean | `false` | Builds the pipeline container with AWS CodeBuild instead of local Docker.          |
-| `app.pipelines.useConversionCoordinateTransform.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                            |
-| `app.pipelines.useConversionCoordinateTransform.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Automatically triggers the pipeline on file uploads matching supported file types. |
+| Field                                                                                | Type    | Default | Description                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useConversionCoordinateTransform.enabled`                             | boolean | `false` | Enables the point cloud coordinate transform pipeline.                                                                                                                                 |
+| `app.pipelines.useConversionCoordinateTransform.useCodeBuild`                        | boolean | `false` | Builds the container image with AWS CodeBuild and Amazon ECR during deployment instead of a local Docker build. The CodeBuild project runs outside the VPC to pull public base images. |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                                                              |
+| `app.pipelines.useConversionCoordinateTransform.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Automatically triggers the pipeline when supported point cloud files are uploaded. Requires `autoRegisterWithVAMS` to be enabled.                                                      |
 
 ### Point cloud Potree viewer (`app.pipelines.usePreviewPcPotreeViewer`)
 
 Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires VPC.** Uses a GPL-licensed library.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack.ts` (`PcPotreeViewerBuilderNestedStack`).
+:::
 
 | Field                                                                        | Type    | Default | Description                                                               |
 | ---------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
@@ -455,6 +558,10 @@ Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires
 
 Generates animated GIF and static PNG preview thumbnails from 3D mesh, point cloud, CAD, and USD files. **Requires VPC.** Uses LGPL-licensed libraries. Supports input files up to 100 GB.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack.ts` (`Preview3dThumbnailBuilderNestedStack`).
+:::
+
 | Field                                                                     | Type    | Default | Description                                                                           |
 | ------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------- |
 | `app.pipelines.usePreview3dThumbnail.enabled`                             | boolean | `false` | Enables the 3D preview thumbnail pipeline.                                            |
@@ -464,6 +571,10 @@ Generates animated GIF and static PNG preview thumbnails from 3D mesh, point clo
 ### GenAI metadata labeling (`app.pipelines.useGenAiMetadata3dLabeling`)
 
 Uses Amazon Bedrock to generate descriptive metadata labels for GLB, FBX, and OBJ files. **Requires VPC.**
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack.ts` (`Metadata3dLabelingNestedStack`) — AWS Batch with Amazon Bedrock inference.
+:::
 
 | Field                                                                          | Type    | Default                   | Description                                                                                              |
 | ------------------------------------------------------------------------------ | ------- | ------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -476,6 +587,10 @@ Uses Amazon Bedrock to generate descriptive metadata labels for GLB, FBX, and OB
 
 Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/splatToolboxBuilder-nestedStack.ts` (`SplatToolboxBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
+
 | Field                                                     | Type    | Default | Description                                                               |
 | --------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
 | `app.pipelines.useSplatToolbox.enabled`                   | boolean | `false` | Enables the Gaussian splatting pipeline.                                  |
@@ -485,6 +600,10 @@ Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 ### Mesh to Gaussian Splat (`app.pipelines.useMesh2Splat`)
 
 Converts GLB mesh files to 3D Gaussian Splat PLY files using GPU-accelerated conversion. **Requires VPC.**
+
+:::warning[Implemented by]
+No `useMesh2Splat` configuration key or nested stack currently exists in the infrastructure code (`infra/config/config.ts`, `infra/lib/nestedStacks/pipelines/`). This section documents a planned pipeline that is not yet implemented.
+:::
 
 | Field                                                             | Type    | Default | Description                                                         |
 | ----------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------- |
@@ -496,6 +615,10 @@ Converts GLB mesh files to 3D Gaussian Splat PLY files using GPU-accelerated con
 
 Third-party spatial data optimization. **Requires VPC and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi).**
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipeline/rapidPipeline-nestedStack.ts` (`RapidPipelineNestedStack`) — Amazon ECS.
+:::
+
 | Field                                                        | Type    | Default                   | Description                                                     |
 | ------------------------------------------------------------ | ------- | ------------------------- | --------------------------------------------------------------- |
 | `app.pipelines.useRapidPipeline.useEcs.enabled`              | boolean | `false`                   | Enables RapidPipeline on Amazon ECS.                            |
@@ -505,6 +628,10 @@ Third-party spatial data optimization. **Requires VPC and an [AWS Marketplace su
 ### RapidPipeline on Amazon EKS (`app.pipelines.useRapidPipeline.useEks`)
 
 Third-party spatial data optimization on Amazon EKS. **Requires VPC with 2+ Availability Zones and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi).**
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack.ts` (`RapidPipelineEKSNestedStack`) — Amazon EKS.
+:::
 
 | Field                                                                         | Type    | Default                   | Description                                                                            |
 | ----------------------------------------------------------------------------- | ------- | ------------------------- | -------------------------------------------------------------------------------------- |
@@ -528,6 +655,10 @@ Third-party spatial data optimization on Amazon EKS. **Requires VPC with 2+ Avai
 
 Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketplace subscription](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).**
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/multi/modelOps/modelOps-nestedStack.ts` (`ModelOpsNestedStack`) — AWS Batch.
+:::
+
 | Field                                            | Type    | Default                   | Description                                                |
 | ------------------------------------------------ | ------- | ------------------------- | ---------------------------------------------------------- |
 | `app.pipelines.useModelOps.enabled`              | boolean | `false`                   | Enables the ModelOps pipeline.                             |
@@ -537,6 +668,10 @@ Third-party 3D model optimization by VNTANA. **Requires VPC and an [AWS Marketpl
 ### Isaac Lab training (`app.pipelines.useIsaacLabTraining`)
 
 NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Requires VPC.**
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack.ts` (`IsaacLabTrainingBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
 
 | Field                                                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -549,6 +684,10 @@ NVIDIA Isaac Lab reinforcement learning training pipeline on GPU instances. **Re
 ### NVIDIA Cosmos Predict (`app.pipelines.useNvidiaCosmos`)
 
 NVIDIA Cosmos world foundation models for generating videos from text prompts (Text2World) and from images/videos (Video2World). **Requires VPC** and internet access for HuggingFace model downloads.
+
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/cosmos/cosmosBuilder-nestedStack.ts` (`CosmosBuilderNestedStack`) — AWS Batch on GPU instances. This single stack implements all NVIDIA Cosmos models: Predict, Reason, and Transfer.
+:::
 
 | Field                                                                                             | Type    | Default                                          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -609,6 +748,10 @@ NVIDIA Cosmos Transfer model for video transformation with control signal condit
 
 NVIDIA Gr00t (GR00T-N1.5-3B) fine-tuning pipeline for embodied AI robot training. Uses LeRobot v2.1 datasets stored as VAMS assets. Operates at the asset level -- downloads the entire asset, looks for training data in a `dataset/` subfolder (configurable), and outputs model checkpoints. **Requires VPC** and internet access for HuggingFace model downloads.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/gr00t/gr00tBuilder-nestedStack.ts` (`Gr00tBuilderNestedStack`) — AWS Batch on GPU instances.
+:::
+
 | Setting                                                                         | Type    | Default                                          | Description                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------- | ------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.pipelines.useNvidiaGr00t.enabled`                                          | boolean | `false`                                          | Enables the NVIDIA Gr00t fine-tuning pipeline.                                                                                                                                                                                  |
@@ -627,6 +770,10 @@ NVIDIA Gr00t (GR00T-N1.5-3B) fine-tuning pipeline for embodied AI robot training
 
 Integration with the Garnet Framework external knowledge graph for NGSI-LD data synchronization.
 
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts` (`AddonBuilderNestedStack`), which instantiates `addon/garnetFramework/garnetFrameworkBuilder-nestedStack.ts` (`GarnetFrameworkBuilderNestedStack`).
+:::
+
 | Field                                                      | Type    | Default                   | Description                                                                                                              |
 | ---------------------------------------------------------- | ------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `app.addons.useGarnetFramework.enabled`                    | boolean | `false`                   | Enables Garnet Framework integration for automatic NGSI-LD indexing of all VAMS data changes.                            |
@@ -638,17 +785,35 @@ Integration with the Garnet Framework external knowledge graph for NGSI-LD data 
 
 One-way synchronization of supported VAMS files and metadata to a Physna tenant for geometric and semantic 3D search.
 
-| Field                                        | Type    | Default                                                            | Description                                                           |
-| -------------------------------------------- | ------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| `app.addons.usePhysnaSync.enabled`           | boolean | `false`                                                            | Enables the Physna Sync add-on.                                       |
-| `app.addons.usePhysnaSync.tenantId`          | string  | _(required when enabled)_                                          | Physna tenant UUID.                                                   |
-| `app.addons.usePhysnaSync.apiBaseEndpoint`   | string  | `https://app-api.physna.com/v3/`                                   | Physna REST API base URL. Must end with `/`.                          |
-| `app.addons.usePhysnaSync.authTokenEndpoint` | string  | `https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token` | OAuth2 token endpoint for Physna's Cognito user pool.                 |
-| `app.addons.usePhysnaSync.authType`          | string  | `cognito`                                                          | Authentication mode. Only `cognito` is supported in phase 1.          |
-| `app.addons.usePhysnaSync.clientId`          | string  | _(required when enabled)_                                          | Cognito client ID. Written to AWS Secrets Manager at deploy time.     |
-| `app.addons.usePhysnaSync.clientSecret`      | string  | _(required when enabled)_                                          | Cognito client secret. Written to AWS Secrets Manager at deploy time. |
+| Field                                           | Type    | Default                                                            | Description                                                                                                                                                                             |
+| ----------------------------------------------- | ------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.addons.usePhysnaSync.enabled`              | boolean | `false`                                                            | Enables the Physna Sync add-on.                                                                                                                                                         |
+| `app.addons.usePhysnaSync.tenantId`             | string  | _(required when enabled)_                                          | Physna tenant UUID.                                                                                                                                                                     |
+| `app.addons.usePhysnaSync.apiBaseEndpoint`      | string  | `https://app-api.physna.com/v3/`                                   | Physna REST API base URL. Must end with `/`.                                                                                                                                            |
+| `app.addons.usePhysnaSync.authTokenEndpoint`    | string  | `https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token` | OAuth2 token endpoint for Physna's Cognito user pool.                                                                                                                                   |
+| `app.addons.usePhysnaSync.authType`             | string  | `cognito`                                                          | Authentication mode. Only `cognito` is supported in phase 1.                                                                                                                            |
+| `app.addons.usePhysnaSync.clientId`             | string  | _(required when enabled)_                                          | Cognito client ID. VAMS creates the credentials secret and populates it at deploy time.                                                                                                 |
+| `app.addons.usePhysnaSync.clientSecret`         | string  | _(required when enabled)_                                          | Cognito client secret. VAMS creates the credentials secret and populates it at deploy time without writing the value into the CloudFormation template.                                  |
+| `app.addons.usePhysnaSync.credentialsSecretArn` | string  | `""`                                                               | Optional. ARN of an operator-managed AWS Secrets Manager secret holding `{ "clientId", "clientSecret" }`. When set, VAMS imports that secret and `clientId`/`clientSecret` are ignored. |
+
+Provide the OAuth2 client credentials in one of two ways:
+
+-   **Inline `clientId` + `clientSecret` (default).** Put the credentials directly in the configuration. VAMS creates the Secrets Manager secret during deployment and populates it via a custom resource whose Lambda carries the values in its code asset. Because CDK references code assets by content hash (uploaded to the CDK assets bucket), the credential value never appears in the synthesized CloudFormation template or its resource properties — and no secret has to be created ahead of deployment.
+
+-   **`credentialsSecretArn` (operator-managed).** Create the secret yourself with a JSON value of `{ "clientId": "...", "clientSecret": "..." }` and reference it by ARN. VAMS imports the secret by ARN and ignores the inline `clientId`/`clientSecret`. Use this when secret provisioning is centralized or must be managed outside the VAMS deployment.
+
+    ```bash
+    aws secretsmanager create-secret \
+        --name my-vams-physna-credentials \
+        --secret-string '{"clientId":"...","clientSecret":"..."}'
+    # then set app.addons.usePhysnaSync.credentialsSecretArn to the returned ARN
+    ```
 
 Enabling the Physna Sync add-on also enables the in-app Physna add-on frontend features (currently the Physna Viewer plugin; more Physna-powered UI surfaces are planned). The backend emits a `PHYSNA_ADDON` feature flag in `/api/secure-config` whenever `app.addons.usePhysnaSync.enabled` is `true`, and the frontend consumes that flag to decide whether to surface Physna add-on features for supported file types. No separate configuration is required.
+
+:::warning[Physna Viewer tokens grant tenant-wide reach]
+The Physna Viewer plugin (`GET /addon/physna/viewer`) enforces VAMS two-tier authorization on the requested asset, then returns a Physna viewer token to the browser. Physna issues this token at **tenant** scope rather than per-asset (Physna does not currently support asset-scoped viewer tokens), so a user authorized to view one synced asset holds a token whose reach spans the Physna tenant for its lifetime. Treat access to the Physna Viewer feature as granting visibility into the connected Physna tenant, and scope the `api` and `asset` permissions for the viewer route accordingly.
+:::
 
 ## Example configurations
 

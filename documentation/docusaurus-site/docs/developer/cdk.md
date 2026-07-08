@@ -135,7 +135,7 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `kmsKeyLambdaPermissionAddToResourcePolicy`        | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases                                                                                      |
 | `setupSecurityAndLoggingEnvironmentAndPermissions` | Adds env vars for auth tables and 9 audit log groups. Grants DynamoDB read on auth, constraints, userRoles, roles tables. Grants Amazon CloudWatch PutLogEvents on audit log groups. |
-| `globalLambdaEnvironmentsAndPermissions`           | Sets `COGNITO_AUTH_ENABLED` based on Amazon Cognito and VPC configuration                                                                                                            |
+| `globalLambdaEnvironmentsAndPermissions`           | Injects `VAMS_RESOURCE_PARAM_PREFIX` and grants AWS Systems Manager parameter read access for resource-name resolution                                                               |
 | `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards                                                                                                                    |
 
 ## API Route Wiring
@@ -237,11 +237,11 @@ if (config.app.myNewFeature.enabled && !config.app.myNewFeature.someOption) {
 }
 ```
 
-Also update both template files: `config.template.commercial.json` and `config.template.govcloud.json`.
+Also update all three template files: `config.template.commercial.json`, `config.template.govcloud.json`, and `config.template.eusovereign.json`.
 
 ## Service Helper
 
-The service helper provides partition-aware ARN and endpoint generation. It supports four AWS partitions: `aws` (commercial), `aws-us-gov` (GovCloud), `aws-cn` (China), and `aws-iso` (isolated).
+The service helper provides partition-aware ARN and endpoint generation. It supports the `aws` (commercial), `aws-us-gov` (GovCloud), `aws-eusc` (European Sovereign Cloud), `aws-cn` (China), and `aws-iso` (isolated) partitions.
 
 ### Initialization
 

@@ -1,6 +1,7 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 
@@ -24,7 +25,7 @@ dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
 sns_client = boto3.client('sns')
 
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 # Hard-coded allowed values for subscription fields
 ALLOWED_EVENT_NAMES = [
@@ -90,7 +91,7 @@ def get_name_for_asset_ids(asset_ids):
 
 
 def get_subscriptions(query_params):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
 
@@ -294,7 +295,7 @@ def get_userProfile_Email(userId):
 
 
 def create_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     
     # Validate subscription fields against allowed values
@@ -358,7 +359,7 @@ def create_subscription(body):
 
 
 def update_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     
     # Validate subscription fields against allowed values
@@ -422,7 +423,7 @@ def update_subscription(body):
 
 
 def delete_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     try:
         subscription_table.delete_item(
@@ -452,7 +453,7 @@ def delete_subscription(body):
 
 def lambda_handler(event, context):
     normalize_event(event)
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     try:
         httpMethod = event['requestContext']['http']['method']
 

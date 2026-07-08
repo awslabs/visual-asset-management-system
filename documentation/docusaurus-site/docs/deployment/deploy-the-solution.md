@@ -68,8 +68,15 @@ export AWS_REGION=us-gov-west-1
 cdk bootstrap aws://ACCOUNT_ID/us-gov-west-1
 ```
 
-:::warning[GovCloud endpoint resolution]
-You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud accounts. The AWS SDK requires this to resolve GovCloud service endpoints correctly.
+**AWS European Sovereign Cloud:**
+
+```bash
+export AWS_REGION=eusc-de-east-1
+cdk bootstrap aws://ACCOUNT_ID/eusc-de-east-1
+```
+
+:::warning[GovCloud and EU Sovereign Cloud endpoint resolution]
+You must set the `AWS_REGION` environment variable when bootstrapping AWS GovCloud or AWS European Sovereign Cloud accounts. The AWS SDK requires this to resolve the partition's service endpoints correctly.
 :::
 
 Replace `ACCOUNT_ID` with your 12-digit AWS account ID and `REGION` with your target deployment Region.
@@ -86,12 +93,19 @@ See [Step 7](#step-7-import-an-external-vpc-conditional) for the two-phase deplo
 
 ## Step 5: Configure the deployment
 
-Edit the configuration file at `infra/config/config.json` to set your deployment parameters. Template files are provided as starting points:
+Edit the configuration file at `infra/config/config.json` to set your deployment parameters.
 
-| Template       | File                                           |
-| -------------- | ---------------------------------------------- |
-| Commercial AWS | `infra/config/config.template.commercial.json` |
-| AWS GovCloud   | `infra/config/config.template.govcloud.json`   |
+:::tip[Use the interactive configuration builder]
+The easiest way to assemble a valid `config.json` is the interactive [Configuration builder](config-builder.mdx). Choose a Commercial, GovCloud, or EU Sovereign Cloud starting template, fill in the fields you need, and download a ready-to-use `config.json` — it validates cross-field rules (such as the GovCloud and authentication constraints) as you go, before you ever run `cdk synth`. Place the downloaded file at `infra/config/config.json`.
+:::
+
+If you prefer to edit by hand, template files are provided as starting points:
+
+| Template                     | File                                            |
+| ---------------------------- | ----------------------------------------------- |
+| Commercial AWS               | `infra/config/config.template.commercial.json`  |
+| AWS GovCloud                 | `infra/config/config.template.govcloud.json`    |
+| AWS European Sovereign Cloud | `infra/config/config.template.eusovereign.json` |
 
 Copy the appropriate template to `config.json` and customize it:
 
@@ -108,7 +122,7 @@ cp config/config.template.commercial.json config/config.json
 | `app.adminUserId`       | Username for the initial admin account                            | `administrator`     |
 | `app.baseStackName`     | Stack environment name (appended to resource names)               | `prod`              |
 
-For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md).
+For a complete list of configuration options, see the [Configuration Reference](configuration-reference.md). To build the file interactively, use the [Configuration builder](config-builder.mdx).
 
 :::note[Configuration templates]
 The GovCloud template pre-configures settings required for AWS GovCloud: VPC enabled, CloudFront disabled, ALB enabled, Location Service disabled, FIPS enabled, and KMS CMK encryption enabled.

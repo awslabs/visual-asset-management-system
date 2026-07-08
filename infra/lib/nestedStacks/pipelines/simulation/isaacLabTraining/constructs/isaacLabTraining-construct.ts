@@ -23,7 +23,6 @@ import * as Config from "../../../../../../config/config";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
-import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { NagSuppressions } from "cdk-nag";
 import * as path from "path";
 

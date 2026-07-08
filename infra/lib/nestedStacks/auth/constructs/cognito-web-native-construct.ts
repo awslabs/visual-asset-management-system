@@ -118,7 +118,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
 
         //(Non-GovCloud) Add pretokengen lambda trigger (V2) - this will generate claims for both Access and ID token claims
-        //(GovCloud) Add pretokengen lambda trigger (V1) - this will generate claims for only Access token claims (ID token will not have claims and can't be used)
+        //(GovCloud) Add pretokengen lambda trigger (V1) - this will generate claims for only ID token claims (access token will not have claims and can't be used)
         cfnUserPool.lambdaConfig = {
             preTokenGenerationConfig: {
                 lambdaArn: fun.functionArn,
@@ -259,9 +259,9 @@ export class CognitoWebNativeConstructStack extends Construct {
 
         if (props.config.app.authProvider.useCognito.useSaml && props.samlSettings) {
             const samlIdpResponseUrl = new cdk.CfnOutput(this, "AuthCognito_SAML_IdpResponseUrl", {
-                value: `https://${props.samlSettings!.cognitoDomainPrefix}.auth.${
-                    props.config.env.region
-                }.amazoncognito.com/saml2/idpresponse`,
+                value: `https://${props.samlSettings!.cognitoDomainPrefix}.${
+                    Service("COGNITO_HOSTED_UI").Endpoint
+                }/saml2/idpresponse`,
                 description: "SAML IdP Response URL",
             });
         }

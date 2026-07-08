@@ -306,18 +306,19 @@ def test_request_to_claims_without_requestContext(mock_custom_override, event_wi
 
 @patch('backend.backend.handlers.auth.customAuthClaimsCheckOverride')
 def test_request_to_claims_with_custom_override_exception(mock_custom_override, event_with_vams_claims):
-    """Test request_to_claims with custom override exception"""
+    """A throwing custom claims override must fail closed: roles are dropped so a broken
+    claims-restriction hook cannot grant more access than intended."""
     # Setup mocks
     mock_custom_override.side_effect = Exception("Test exception")
-    
+
     # Execute
     result = request_to_claims(event_with_vams_claims)
-    
-    # Assert
+
+    # Assert — tokens/attributes/mfa preserved, but roles cleared (fail closed)
     assert result["tokens"] == ["test-user-id"]
-    assert result["roles"] == ["admin", "user"]
+    assert result["roles"] == []
     assert result["externalAttributes"] == ["attr1", "attr2"]
     assert result["mfaEnabled"] == False
-    
+
     # Verify the correct methods were called
     mock_custom_override.assert_called_once()

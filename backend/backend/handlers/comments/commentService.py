@@ -1,10 +1,11 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 from boto3.dynamodb.conditions import Key
-from boto3.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.auth import request_to_claims
@@ -21,7 +22,7 @@ logger = safeLogger(service="CommentService")
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
     comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
@@ -193,23 +194,34 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, e
         logger.info("Deleting comment")
         item["assetId"] = assetId + "#deleted"
 
-        # Delete the old comment from the table
+        # Soft-delete atomically: write the #deleted copy and remove the original in
+        # a single TransactWriteItems so a partial failure cannot lose the comment
+        # (previously a delete-then-put could delete the record and then fail the put,
+        # leaving no recoverable copy).
         try:
-            table.delete_item(
-                Key={
-                    "assetId": assetId,
-                    "assetVersionId:commentId": assetVersionIdAndCommentId,
-                }
+            serializer = TypeSerializer()
+            serialized_item = {k: serializer.serialize(v) for k, v in item.items()}
+            dynamodb_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Put": {
+                            "TableName": comment_database,
+                            "Item": serialized_item,
+                        }
+                    },
+                    {
+                        "Delete": {
+                            "TableName": comment_database,
+                            "Key": {
+                                "assetId": {"S": assetId},
+                                "assetVersionId:commentId": {
+                                    "S": assetVersionIdAndCommentId
+                                },
+                            },
+                        }
+                    },
+                ]
             )
-        except Exception as e:
-            logger.exception(e)
-            response["statusCode"] = 500
-            response["message"] = "Internal Server Error"
-            return response
-
-        # Create a new comment with #deleted appended to the assetId
-        try:
-            table.put_item(Item=item)
         except Exception as e:
             logger.exception(e)
             response["statusCode"] = 500
@@ -429,7 +441,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :returns: Http response object (statusCode, headers, body)
     """
     normalize_event(event)
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     logger.info(event)
     pathParameters = event.get("pathParameters", {})
     queryParameters = event.get("queryStringParameters", {})

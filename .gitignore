@@ -353,3 +353,10 @@ Combined.pem
 .claude/settings.local.*
 docs/superpowers/*
 docs/*
+.claude.json
+.superpower/
+.playwright-mcp/
+
+.codegraph/
+*.bak*
+

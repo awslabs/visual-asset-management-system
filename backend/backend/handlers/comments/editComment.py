@@ -1,6 +1,7 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 import datetime
@@ -21,7 +22,7 @@ logger = safeLogger(service="EditComment")
 dynamodb = boto3.resource("dynamodb")
 s3c = boto3.client("s3")
 
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
 try:
     comment_database = get_table_name(ResourceKeys.COMMENT_STORAGE_TABLE)
@@ -74,7 +75,7 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, eve
         except Exception as e:
             logger.exception(e)
             response["statusCode"] = 500
-            response["body"] = {"message": "Internal Server Error"}
+            response["message"] = "Internal Server Error"
             return response
 
         response["statusCode"] = 200
@@ -89,7 +90,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
     """
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
     # This handler reads pathParameters before request_to_claims, so normalize the REST
     # event first (coerces null pathParameters to {} for the reads below).

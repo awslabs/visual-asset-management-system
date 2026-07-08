@@ -54,6 +54,7 @@ const sidebars: SidebarsConfig = {
                 "deployment/plan-your-deployment",
                 "deployment/deploy-the-solution",
                 "deployment/configuration-reference",
+                "deployment/config-builder",
                 "deployment/external-s3-setup",
                 "deployment/update-the-solution",
                 "deployment/uninstall",

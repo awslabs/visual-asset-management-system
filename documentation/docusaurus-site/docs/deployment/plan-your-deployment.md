@@ -6,13 +6,14 @@ Before deploying Visual Asset Management System (VAMS), review the decisions on 
 
 VAMS supports three deployment modes. Your choice depends on the AWS partition, network isolation requirements, and organizational security policies.
 
-| Mode           | Web distribution                      | Partition    | VPC required | Description                                                                                                                                                                                                   |
-| -------------- | ------------------------------------- | ------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial** | Amazon CloudFront + Amazon S3         | `aws`        | Optional     | Default mode. Uses Amazon CloudFront for global edge caching and static website hosting.                                                                                                                      |
-| **GovCloud**   | Application Load Balancer + Amazon S3 | `aws-us-gov` | Yes          | For AWS GovCloud (US) Regions. Amazon CloudFront is not available; an Application Load Balancer (ALB) serves the web application. Supports full VPC isolation with VPC endpoints for restricted environments. |
+| Mode                   | Web distribution                      | Partition    | VPC required | Description                                                                                                                                                                                                                       |
+| ---------------------- | ------------------------------------- | ------------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial**         | Amazon CloudFront + Amazon S3         | `aws`        | Optional     | Default mode. Uses Amazon CloudFront for global edge caching and static website hosting.                                                                                                                                          |
+| **GovCloud**           | Application Load Balancer + Amazon S3 | `aws-us-gov` | Yes          | For AWS GovCloud (US) Regions. Amazon CloudFront is not available; an Application Load Balancer (ALB) serves the web application. Supports full VPC isolation with VPC endpoints for restricted environments.                     |
+| **EU Sovereign Cloud** | Application Load Balancer + Amazon S3 | `aws-eusc`   | Yes          | For the AWS European Sovereign Cloud (Region `eusc-de-east-1`). Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service. The Region exposes two Availability Zones. |
 
-:::info[GovCloud constraints]
-When deploying to AWS GovCloud, the following services are unavailable or restricted:
+:::info[GovCloud and EU Sovereign Cloud constraints]
+When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the following services are unavailable or restricted:
 
 -   Amazon CloudFront is not supported. Use the ALB deployment mode.
 -   Amazon Location Service is not supported. Disable `app.useLocationService.enabled`.
@@ -33,12 +34,12 @@ VAMS supports three authentication approaches. You must choose exactly one.
 
 ### Web distribution
 
-| Option                                   | When to use                                                                                                                          | Configuration                                                   |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| **Amazon CloudFront**                    | Commercial AWS. Provides global edge caching, AWS-managed TLS, and a generated domain URL.                                           | `useCloudFront.enabled: true`                                   |
-| **Amazon CloudFront with custom domain** | Commercial AWS with organizational branding requirements. Requires an AWS Certificate Manager (ACM) certificate in `us-east-1`.      | `useCloudFront.customDomain.enabled: true`                      |
-| **Application Load Balancer**            | AWS GovCloud or when CloudFront is not permitted. Requires a registered domain name and an ACM certificate in the deployment Region. | `useAlb.enabled: true`                                          |
-| **API only (no web UI)**                 | Headless deployments driven entirely through API or CLI.                                                                             | Both `useCloudFront.enabled: false` and `useAlb.enabled: false` |
+| Option                                   | When to use                                                                                                                                                             | Configuration                                                   |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Amazon CloudFront**                    | Commercial AWS. Provides global edge caching, AWS-managed TLS, and a generated domain URL.                                                                              | `useCloudFront.enabled: true`                                   |
+| **Amazon CloudFront with custom domain** | Commercial AWS with organizational branding requirements. Requires an AWS Certificate Manager (ACM) certificate in `us-east-1`.                                         | `useCloudFront.customDomain.enabled: true`                      |
+| **Application Load Balancer**            | AWS GovCloud, the AWS European Sovereign Cloud, or when CloudFront is not permitted. Requires a registered domain name and an ACM certificate in the deployment Region. | `useAlb.enabled: true`                                          |
+| **API only (no web UI)**                 | Headless deployments driven entirely through API or CLI.                                                                                                                | Both `useCloudFront.enabled: false` and `useAlb.enabled: false` |
 
 :::danger[Mutual exclusion]
 You cannot enable both Amazon CloudFront and ALB simultaneously. The deployment will fail validation if both are set to `true`.

@@ -6,6 +6,10 @@ on:
     pull_request:
         branches: [main]
 
+# Least-privilege token: the build job only checks out code and uploads artifacts
+permissions:
+    contents: read
+
 jobs:
     build:
         runs-on: ubuntu-latest
@@ -104,6 +108,10 @@ jobs:
             - name: Npm install infrastructure directory
               working-directory: vams/infra
               run: npm install
+
+            - name: Infra tests
+              working-directory: vams/infra
+              run: npm test
 
             # - name: Npm audit infrastructure directory
             #   working-directory: vams/infra

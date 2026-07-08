@@ -20,7 +20,7 @@ _VAMS is categorized as an AWS Spatial Data Plane solution._
 
 Organizations working with 3D data face a common set of challenges: spatial assets are large and diverse in format, siloed across local systems and specialized tools, difficult to version or track lineage, and inaccessible to non-engineering teams that need them. VAMS solves the challenge of **spatial data sovereignty and access democratization** by providing a single pane of glass for an organization's spatial data source of truth.
 
-Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account as a serverless CDK stack, ensuring full data sovereignty while supporting both commercial AWS and AWS GovCloud regions.
+Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account as a serverless CDK stack, ensuring full data sovereignty while supporting commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud regions.
 
 VAMS can store, manage, and version **any file type**. Out of the box, it includes built-in viewer and pipeline support for 3D meshes (glTF, OBJ, STL, FBX), CAD models (STEP, BREP), point clouds (E57, LAS, LAZ), USD scenes, gaussian splats, documents, images, video, and audio. Because the platform is extensible through custom viewer plugins and processing pipelines, this represents the current set of native integrations — not a limitation. Associated data such as textures, bills of materials, quality analysis data, and temporal (4D) change tracking can be managed as files or captured through the metadata system.
 
@@ -47,7 +47,7 @@ _Use cases include:_
 -   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
--   **Multi-region deployment** — Deploy to AWS commercial regions or AWS GovCloud (US)
+-   **Multi-region deployment** — Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud
 
 ## Screenshots
 
@@ -147,6 +147,7 @@ See the [Configuration Reference](https://awslabs.github.io/visual-asset-managem
 
 -   `infra/config/config.template.commercial.json` — AWS commercial regions
 -   `infra/config/config.template.govcloud.json` — AWS GovCloud (US)
+-   `infra/config/config.template.eusovereign.json` — AWS European Sovereign Cloud
 
 ## Uninstall
 

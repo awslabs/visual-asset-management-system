@@ -1,6 +1,7 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
+import copy
 import boto3
 import json
 
@@ -16,7 +17,7 @@ from customLogging.logger import safeLogger
 
 claims_and_roles = {}
 logger = safeLogger(service="UnsubscriptionService")
-main_rest_response = STANDARD_JSON_RESPONSE
+main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
 sns_client = boto3.client('sns')
@@ -98,7 +99,7 @@ def get_subscription_obj(event_name, entity_name, entity_id):
 
 
 def delete_subscription(body):
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
@@ -131,7 +132,7 @@ def delete_subscription(body):
 
 def lambda_handler(event, context):
     normalize_event(event)
-    response = STANDARD_JSON_RESPONSE
+    response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     try:
         httpMethod = event['requestContext']['http']['method']
 

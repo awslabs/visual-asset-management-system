@@ -3,6 +3,9 @@
 import json
 from customConfigCommon.customAuthClaimsCheck import customAuthClaimsCheckOverride
 from common.auth.apiEvent import normalize_event
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service="RequestToClaims")
 
 def request_to_claims(request):
     normalize_event(request)
@@ -62,6 +65,13 @@ def request_to_claims(request):
     if 'vams:externalAttributes' in claims:
         externalAttributes = json.loads(claims['vams:externalAttributes'])
 
+    #MFA sign-in status is resolved at authorization time by the API Gateway authorizer
+    #(common/auth/authorizerCore.py via the customMFATokenScopeCheckOverride hook) and
+    #passed through the authorizer context as vams:mfaEnabled
+    if 'vams:mfaEnabled' in claims:
+        mfaValue = claims['vams:mfaEnabled']
+        mfaEnabled = mfaValue == 'true' if isinstance(mfaValue, str) else bool(mfaValue)
+
     claims_and_roles = {
             "tokens": tokens,
             "roles": roles,
@@ -69,10 +79,13 @@ def request_to_claims(request):
             "mfaEnabled": mfaEnabled
         }
 
-    #Conduct custom claims check, including MFA sign-in
+    #Conduct custom claims check. If a customer-supplied hook raises, fail closed by
+    #dropping roles (rather than silently passing the un-filtered claims through) so a
+    #broken claims-restriction hook cannot grant more access than intended.
     try:
         claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
-    except:
-        pass
+    except Exception as e:
+        logger.exception(f"customAuthClaimsCheckOverride failed; denying roles: {e}")
+        claims_and_roles["roles"] = []
 
     return claims_and_roles

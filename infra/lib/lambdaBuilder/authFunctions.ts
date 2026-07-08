@@ -21,6 +21,7 @@ import {
     suppressCdkNagLambda,
     kmsKeyPolicyStatementGenerator,
     setupSecurityAndLoggingEnvironmentAndPermissions,
+    isCognitoMfaCheckEnabled,
 } from "../helper/security";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
@@ -371,6 +372,10 @@ export function buildApiGatewayAuthorizerRestFunction(
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
         environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP").Endpoint}`;
     }
+
+    // MFA-preference check reachability (partition/VPC-aware; the authorizer resolves the
+    // user's MFA status once and passes it to handlers via the authorizer context)
+    environment.COGNITO_AUTH_ENABLED = isCognitoMfaCheckEnabled(config) ? "TRUE" : "FALSE";
 
     // Add External IDP-specific environment variables
     if (config.app.authProvider.useExternalOAuthIdp.enabled) {

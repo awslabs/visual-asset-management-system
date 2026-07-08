@@ -77,6 +77,7 @@ export type SERVICE =
     | "CODESTAR"
     | "CODESTAR_CONNECTIONS"
     | "CODESTAR_NOTIFICATIONS"
+    | "COGNITO_HOSTED_UI"
     | "COGNITO_IDENTITY"
     | "COGNITO_IDP"
     | "COGNITO_SYNC"
@@ -414,6 +415,7 @@ export const TYPE_SERVICE_LOOKUP = {
     CODESTAR: "codestar",
     CODESTAR_CONNECTIONS: "codestar-connections",
     CODESTAR_NOTIFICATIONS: "codestar-notifications",
+    COGNITO_HOSTED_UI: "cognito-hosted-ui",
     COGNITO_IDENTITY: "cognito-identity",
     COGNITO_IDP: "cognito-idp",
     COGNITO_SYNC: "cognito-sync",
@@ -2392,6 +2394,14 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "cognito-identity.amazonaws.com",
             hostname: "cognito-identity.{region}.amazonaws.eu",
             fipsHostname: "cognito-identity-fips.{region}.amazonaws.eu",
+        },
+    },
+    "cognito-hosted-ui": {
+        aws: {
+            arn: "",
+            principal: "",
+            hostname: "auth.{region}.amazoncognito.com",
+            fipsHostname: "auth.{region}.amazoncognito.com",
         },
     },
     "cognito-idp": {

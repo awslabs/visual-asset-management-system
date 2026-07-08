@@ -71,7 +71,7 @@ One folder per domain. The current domains:
 -   `tagTypes/` — Tag type management
 -   `userRoles/` — User-role assignment
 -   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
--   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer)
+-   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
 
 #### **Workflow Execution Storage**
 
@@ -603,10 +603,14 @@ def handle_get_request(event):
         # Check authorization
         if resource:
             resource.update({"object__type": "[objectType]"})
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not casbin_enforcer.enforce(resource, "GET"):
-                    return authorization_error()
+            # Fail closed: an empty token list means no authenticated identity, so deny
+            # rather than fall through to returning the resource. Never gate the enforce
+            # inside `if len(tokens) > 0` without an else that denies.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(resource, "GET"):
+                return authorization_error()
 
             # Convert to response model
             try:
@@ -940,6 +944,7 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 
 -   **New or changed API endpoint (incl. path renames)** → Update **both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md`) — two separate sources of truth that must stay in sync — plus the CLI command reference if applicable
 -   **New config option** → Update `deployment/configuration-reference.md`
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, update `overview/features.md`, update `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
 -   **Permission changes** → Update `concepts/permissions-model.md`, `user-guide/permissions.md`
@@ -952,6 +957,7 @@ When making changes that affect development standards, architecture patterns, or
 2. Update the `.kiro/steering/` version of this file
 3. If the change affects frontend patterns, also update `WEB_DEVELOPMENT_WORKFLOW.md` and `WEB_FRONTEND.md`
 4. If the change affects documentation standards, also update `DOCUMENTATION_WORKFLOW.md`
+5. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping) — a stale skill actively scaffolds outdated code
 
 ### **Rule 10: Tests MUST Follow Comprehensive Patterns**
 
@@ -1182,10 +1188,14 @@ def create_[domain]([domain]_data, claims_and_roles):
     try:
         # Check authorization
         [domain]_data.update({"object__type": "[domain]"})
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce([domain]_data, "POST"):
-                return authorization_error()
+        # Fail closed: an empty token list means no authenticated identity, so deny
+        # rather than fall through to the mutation. Never gate the enforce inside
+        # `if len(tokens) > 0` without an else that denies.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce([domain]_data, "POST"):
+            return authorization_error()
 
         # Create the [domain]
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
@@ -1274,10 +1284,14 @@ def handle_get_request(event):
             # Check if [domain] exists and user has permission
             if [domain]:
                 [domain].update({"object__type": "[domain]"})
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce([domain], "GET"):
-                        return authorization_error()
+                # Fail closed: an empty token list means no authenticated identity, so
+                # deny rather than fall through to returning the resource. Never gate the
+                # enforce inside `if len(tokens) > 0` without an else that denies.
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not casbin_enforcer.enforce([domain], "GET"):
+                    return authorization_error()
 
                 # Convert to response model
                 try:
@@ -2067,13 +2081,19 @@ sns = boto3.client('sns', config=retry_config)
 ### **Authorization Check Pattern**
 
 ```python
-# Standard authorization check pattern
+# Standard authorization check pattern (single resource)
 if resource:
     resource.update({"object__type": "[objectType]"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(resource, "[ACTION]"):
-            return authorization_error()
+    # Fail closed: an empty token list means no authenticated identity, so deny rather
+    # than fall through. Never gate the enforce inside `if len(tokens) > 0` without an
+    # else that denies — that silently skips authorization when tokens are empty.
+    # (List-filtering handlers are the exception: they append only when enforce passes,
+    # so an empty token list yields an empty result set, which is already fail-closed.)
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforce(resource, "[ACTION]"):
+        return authorization_error()
 ```
 
 ### **Response Model Conversion Pattern**

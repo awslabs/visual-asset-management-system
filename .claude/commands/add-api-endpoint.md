@@ -1,16 +1,20 @@
 # Add VAMS API Endpoint
 
-Scaffold a new VAMS backend API endpoint with all required files following the established gold standard patterns. This skill creates a complete, working endpoint with handler, models, CDK infrastructure, API routing, and tests.
+Scaffold a new VAMS backend API endpoint with all required files following the established gold standard patterns. This skill creates a complete, working endpoint with master route definition, handler, models, CDK infrastructure, API routing, tests, and documentation updates.
 
 ## Instructions
 
-You are scaffolding a new VAMS API endpoint. The VAMS system follows a strict layered architecture:
+You are scaffolding a new VAMS API endpoint. Follow root `CLAUDE.md` "Pattern 1: Adding a New API Endpoint" — the authoritative checklist. The required layers are:
 
-1. **Backend handler** (Python Lambda) - Business logic
-2. **Pydantic models** - Request/response validation
-3. **CDK Lambda builder** (TypeScript) - Infrastructure definition
-4. **API route binding** - API Gateway integration
-5. **Tests** - Unit tests for the handler
+1. **Master route** (`backend/backend/common/apiRoutes.py`) - `ApiRoute` constant + category group
+2. **Backend handler** (Python Lambda) - Business logic with two-tier Casbin auth
+3. **Pydantic models** - Request/response validation (Pydantic v1)
+4. **CDK Lambda builder** (TypeScript) - Infrastructure definition
+5. **API route binding** - Route registry registration (prefer `apiBuilder2-nestedStack.ts`)
+6. **Frontend service** (`web/src/services/APIService.ts`) - API call method (if exposed to web UI)
+7. **CLI command** (`tools/VamsCLI/vamscli/`) - Endpoint constant + command (if applicable)
+8. **Documentation** - `documentation/VAMS_API.yaml` AND `documentation/docusaurus-site/docs/api/{domain}.md` (both must be updated together)
+9. **Tests** - Unit tests for the handler
 
 ### Step 1: Gather Requirements
 
@@ -23,10 +27,26 @@ Ask the user for:
 -   **Description**: What the endpoint does
 -   **DynamoDB tables needed**: Which existing storage tables it needs access to, or if new tables are needed
 -   **Authorization**: What object type for Casbin enforcement (e.g., `asset`, `database`, `pipeline`, or a new type)
+-   **Exposure**: Should the endpoint be exposed in the web frontend and/or the VamsCLI?
 
-### Step 2: Create Backend Handler
+### Step 2: Define the Master Route
 
-Create `backend/backend/handlers/{domain}/{handlerName}.py` following the assetService.py pattern:
+Add the route to `backend/backend/common/apiRoutes.py` — the single source of truth for the backend API surface:
+
+1. Define an `ApiRoute` constant with the path template, allowed methods, and category.
+2. Add the constant to the appropriate category group array (e.g., `ASSET_ROUTES`, `AUTH_ROUTES`) so it is included in `ALL_API_ROUTES` and served by the `GET /auth/routes/api` listing.
+
+```python
+API_MY_RESOURCE = ApiRoute("/myResource/{resourceId}", (GET, PUT), "myDomain")
+
+MY_DOMAIN_ROUTES: Tuple[ApiRoute, ...] = (API_MY_RESOURCE, ...)
+```
+
+A route missing from the group arrays is invisible to constraint authoring and the CLI. Route templates MUST match the routes attached in the CDK api builder stacks.
+
+### Step 3: Create Backend Handler
+
+Create `backend/backend/handlers/{domain}/{handlerName}.py` following the gold standard `backend/backend/handlers/assets/assetService.py` (see `backend/CLAUDE.md` for the full pattern and copy-paste template):
 
 ```python
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -35,11 +55,10 @@ Create `backend/backend/handlers/{domain}/{handlerName}.py` following the assetS
 import os
 import boto3
 import json
-from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from common.constants import STANDARD_JSON_RESPONSE
+from common.apiRoutes import API_MY_RESOURCE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -54,13 +73,7 @@ from models.{domain} import (
 )
 
 # Configure AWS clients with retry configuration
-region = os.environ.get('AWS_REGION', 'us-east-1')
-retry_config = Config(
-    retries={
-        'max_attempts': 5,
-        'mode': 'adaptive'
-    }
-)
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
@@ -69,25 +82,26 @@ logger = safeLogger(service_name="{HandlerName}")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables
+# Load resource names and environment variables
 try:
-    # table_name = os.environ["TABLE_NAME"]
-    pass
+    from common.resourceNames import ResourceKeys, get_table_name
+    my_table_name = get_table_name(ResourceKeys.MY_STORAGE_TABLE)
+    # Handler-specific env vars (direct from os.environ) go here too
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading resource names and environment variables")
     raise e
 
 # Initialize DynamoDB tables
-# table = dynamodb.Table(table_name)
+my_table = dynamodb.Table(my_table_name)
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for {description}"""
     global claims_and_roles
-    claims_and_roles = request_to_claims(event)
+    claims_and_roles = request_to_claims(event)  # normalizes the REST event internally
 
     try:
-        # Parse request
+        # Safe to read only AFTER request_to_claims (or normalize_event) has run
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
 
@@ -101,17 +115,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
 
-        # Route to appropriate handler
-        if method == 'GET':
-            return handle_get_request(event)
-        elif method == 'POST':
-            return handle_post_request(event)
-        elif method == 'PUT':
-            return handle_put_request(event)
-        elif method == 'DELETE':
-            return handle_delete_request(event)
-        else:
-            return validation_error(body={'message': "Method not allowed"}, event=event)
+        # Dispatch via the master route constants -- never hard-coded path fragments
+        if API_MY_RESOURCE.matches(path):
+            if method == 'GET':
+                return handle_get_request(event)
+            elif method == 'PUT':
+                return handle_put_request(event)
+
+        return validation_error(body={'message': "Method not allowed"}, event=event)
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -122,57 +133,32 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
-
-
-def handle_get_request(event):
-    """Handle GET requests"""
-    path_parameters = event.get('pathParameters', {})
-    query_parameters = event.get('queryStringParameters', {}) or {}
-
-    try:
-        # Validate path parameters
-        # (valid, message) = validate({...})
-
-        # Fetch data from DynamoDB
-
-        # Check object-level authorization (Tier 2)
-        # item.update({"object__type": "{objectType}"})
-        # if len(claims_and_roles["tokens"]) > 0:
-        #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        #     if not casbin_enforcer.enforce(item, "GET"):
-        #         return authorization_error()
-
-        # Return response
-        return success(body={"message": "OK"})
-
-    except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
-    except Exception as e:
-        logger.exception(f"Error handling GET request: {e}")
-        return internal_error(event=event)
 ```
 
 **Key patterns to follow:**
 
--   Module-level setup: imports, retry config, boto3 clients, logger, env vars, table init
--   `lambda_handler` with `request_to_claims`, `enforceAPI` (Tier 1), method routing
--   Method handlers with path parameter validation using `validate()`, Pydantic parsing, business logic, object-level auth (Tier 2) using `CasbinEnforcer.enforce()`
+-   Module-level setup: imports, retry config, boto3 clients, logger, resource name resolution, table init
+-   **Resource names resolve via SSM**: `get_table_name(ResourceKeys.*)` / `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in a try/except. Never `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers.
+-   `lambda_handler` calls `request_to_claims(event)` FIRST — it normalizes the REST API (v1) event (injects `requestContext.http`, coerces null `pathParameters`/`queryStringParameters` to `{}`). If the handler must read the event before claims, call `normalize_event(event)` from `common.auth.apiEvent` as the first statement.
+-   Dispatch on `ApiRoute.matches(path)` from `common/apiRoutes.py`, never `path.endswith(...)`.
+-   Two-tier auth: `enforceAPI` (Tier 1) in `lambda_handler`, then `casbin_enforcer.enforce(event, item)` (Tier 2) in method handlers with `item['object__type']` set first.
 -   Error handling: catch `ValidationError`, `VAMSGeneralErrorResponse`, generic `Exception`
 -   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`
+-   Never echo request input or internal details in client error messages — log specifics, return generic messages.
 
-### Step 3: Create Pydantic Models
+### Step 4: Create Pydantic Models
 
-Create `backend/backend/models/{domain}.py` following assetsV3.py patterns:
+Create `backend/backend/models/{domain}.py` following `backend/backend/models/assetsV3.py` patterns:
 
 ```python
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from customLogging.logger import safeLogger
-from common.validators import validate, id_pattern, object_name_pattern
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator, ValidationError
+from customLogging.logger import safeLogger
+from common.validators import validate, id_pattern, object_name_pattern
 
 logger = safeLogger(service_name="{Domain}Models")
 
@@ -183,7 +169,7 @@ class CreateResourceRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        # Custom validation logic
+        # Use the validate() dispatcher for complex validation
         return values
 
 class ResourceResponseModel(BaseModel, extra='ignore'):
@@ -195,15 +181,16 @@ class ResourceResponseModel(BaseModel, extra='ignore'):
 
 **Key patterns:**
 
+-   **Pydantic v1 only** (1.10.13): `@root_validator`, `@validator`, never `model_validator`/`ConfigDict`
+-   Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from pydantic directly
 -   Always use `extra='ignore'` on BaseModel
 -   Use `Field()` with min_length, max_length, pattern validators
--   Use `@root_validator` for cross-field validation
 -   Import validators from `common.validators`: `id_pattern`, `object_name_pattern`, `filename_pattern`, `relative_file_path_pattern`
 -   Separate Request and Response models
 
-### Step 4: Create Lambda Builder Function
+### Step 5: Create Lambda Builder Function
 
-Create or update `infra/lib/lambdaBuilder/{domain}Functions.ts` following assetFunctions.ts:
+Create or update `infra/lib/lambdaBuilder/{domain}Functions.ts` following `assetFunctions.ts`:
 
 ```typescript
 /*
@@ -217,6 +204,7 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import {
     suppressCdkNagErrorsByGrantReadWrite,
+    suppressCdkNagLambda,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     setupSecurityAndLoggingEnvironmentAndPermissions,
@@ -252,18 +240,20 @@ export function buildMyFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // Add required table names from storageResources.dynamo
+            // Handler-specific env vars only -- resource names are resolved from SSM
+            // (globalLambdaEnvironmentsAndPermissions injects VAMS_RESOURCE_PARAM_PREFIX)
         },
     });
 
     // Grant DynamoDB permissions
-    // storageResources.dynamo.tableStorageTable.grantReadWriteData(fun);
+    // storageResources.dynamo.myStorageTable.grantReadWriteData(fun);
 
-    // 4 required security helper calls
+    // Required security helper calls
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope); // only if the function uses grantRead/grantReadWrite
 
     return fun;
 }
@@ -275,19 +265,21 @@ export function buildMyFunction(
 -   Code path: `path.join(__dirname, '../../../backend/backend')`
 -   Handler convention: `handlers.{domain}.${name}.lambda_handler`
 -   VPC conditional based on `config.app.useGlobalVpc`
--   **4 required security helper calls** at the end of every function:
+-   Do NOT inject table-name environment variables — non-pipeline handlers resolve resource names from SSM Parameter Store (`globalLambdaEnvironmentsAndPermissions` supplies the prefix + SSM grants)
+-   **Required security helper calls** at the end of every function:
     1. `kmsKeyLambdaPermissionAddToResourcePolicy`
     2. `setupSecurityAndLoggingEnvironmentAndPermissions`
     3. `globalLambdaEnvironmentsAndPermissions`
-    4. `suppressCdkNagErrorsByGrantReadWrite`
+    4. `suppressCdkNagLambda` (required on every authored Lambda)
+    5. `suppressCdkNagErrorsByGrantReadWrite` (only if the function uses S3/table `grantRead`/`grantReadWrite`)
 
-### Step 5: Add API Route Binding
+### Step 6: Add API Route Binding
 
-Update `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`:
+**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — the primary `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit. Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there.
 
 1. Add import for the new builder function at the top
 2. Build the Lambda function in the constructor
-3. Call `attachFunctionToApi()` for each route+method combination
+3. Call `attachFunctionToApi()` for each route+method combination, passing the route `registry`
 
 ```typescript
 // Import at top
@@ -303,20 +295,41 @@ const myFunction = buildMyFunction(
     subnets
 );
 
-// Attach to API routes
+// Register routes in the cross-stack route registry
 attachFunctionToApi(this, myFunction, {
     routePath: "/myResource",
     method: apigateway.HttpMethod.GET,
-    api: api,
+    registry: registry,
 });
 attachFunctionToApi(this, myFunction, {
     routePath: "/myResource/{resourceId}",
     method: apigateway.HttpMethod.GET,
-    api: api,
+    registry: registry,
+    // allowAnonymous: true, // only for routes served by the IP-only anonymous authorizer
 });
 ```
 
-### Step 6: Create Test File
+The REST API builder renders all registered descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`. Route paths registered here MUST match the `ApiRoute` templates from Step 2.
+
+### Step 7: Add Frontend Service Method (if web-exposed)
+
+Add an API call method to `web/src/services/APIService.ts` following the existing apiClient call patterns in that file.
+
+### Step 8: Add CLI Command (if applicable)
+
+1. Define the endpoint path constant in `tools/VamsCLI/vamscli/constants.py` (Rule 7: never hardcode endpoint paths in command files or API client methods)
+2. Add the command in `tools/VamsCLI/vamscli/commands/{group}.py` following `roleUserConstraints.py` patterns (Click decorators, profile support, `--json-output`, error handling)
+
+### Step 9: Update Documentation (both sources)
+
+API documentation lives in **two places that must be updated together**:
+
+1. **`documentation/VAMS_API.yaml`** — add/update the path and its component schemas
+2. **`documentation/docusaurus-site/docs/api/{domain}.md`** — add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)
+
+If a CLI command was added, also update the relevant `documentation/docusaurus-site/docs/cli/commands/{group}.md` page.
+
+### Step 10: Create Test File
 
 Create `backend/tests/handlers/{domain}/test_{handlerName}.py`:
 
@@ -326,35 +339,25 @@ Create `backend/tests/handlers/{domain}/test_{handlerName}.py`:
 
 import pytest
 import json
-import os
 from unittest.mock import patch, MagicMock
 
-# Set environment variables before importing handler
-os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
-# os.environ["TABLE_NAME"] = "test-table"
 
+@pytest.mark.unit
 class TestHandlerName:
     """Tests for {handlerName} Lambda handler"""
 
     def _make_event(self, method="GET", path="/myResource", path_params=None, body=None, query_params=None):
-        """Helper to create API Gateway v2 event"""
+        """Helper to create API Gateway event"""
         event = {
             "requestContext": {
                 "http": {
                     "method": method,
                     "path": path,
                 },
-                "authorizer": {
-                    "jwt": {
-                        "claims": {
-                            "sub": "test-user-id",
-                            "cognito:groups": "test-group",
-                        }
-                    }
-                }
             },
             "pathParameters": path_params or {},
             "queryStringParameters": query_params or {},
+            "headers": {"authorization": "Bearer test-token"},
         }
         if body:
             event["body"] = json.dumps(body) if isinstance(body, dict) else body
@@ -369,28 +372,38 @@ class TestHandlerName:
         """Test unauthorized request returns 403"""
         # Implement test
         pass
+
+    def test_rest_shaped_event_with_null_params(self):
+        """Test REST API v1 event shape (top-level path/httpMethod, null pathParameters)"""
+        # Cover the REST-shaped event including explicit null pathParameters/queryStringParameters
+        pass
 ```
 
-Also create `backend/tests/handlers/{domain}/__init__.py` if it does not exist.
+Also create `backend/tests/handlers/{domain}/__init__.py` if it does not exist. Include at least one test with the REST API (v1) event shape (top-level `path`/`httpMethod`, explicit `null` `pathParameters`) — v2-shaped-only tests miss event-normalization regressions.
 
-### Step 7: Validate Cross-References
+### Step 11: Validate Cross-References
 
 After creating all files, verify:
 
+-   [ ] `ApiRoute` constant defined in `apiRoutes.py` AND added to a category group array
+-   [ ] Route templates in `apiRoutes.py` match the paths registered via `attachFunctionToApi`
+-   [ ] Handler dispatches via `ApiRoute.matches()`, not hard-coded path fragments
 -   [ ] Handler imports match model file names and class names
 -   [ ] CDK handler path matches Python module path: `handlers.{domain}.{handlerName}.lambda_handler`
--   [ ] Environment variable names in CDK match `os.environ` keys in handler
--   [ ] API route paths in `attachFunctionToApi` match what the handler expects
+-   [ ] Resource names resolved via `get_table_name(ResourceKeys.*)` — no table-name env vars in CDK or handler
 -   [ ] DynamoDB table grants in CDK match tables used in handler
--   [ ] Import statement in apiBuilder-nestedStack.ts matches the export in the lambdaBuilder file
+-   [ ] All required security helper calls present, including `suppressCdkNagLambda(fun)`
+-   [ ] Import statement in the api builder stack matches the export in the lambdaBuilder file
+-   [ ] `VAMS_API.yaml` AND `docs/api/{domain}.md` both updated
+-   [ ] CLI endpoint constant in `constants.py` (if CLI-exposed)
 
 ## Workflow
 
 1. Gather requirements from the user (or parse from $ARGUMENTS)
 2. Check if a similar domain/handler already exists to avoid conflicts
-3. Create all files in order: models -> handler -> CDK builder -> API route -> tests
+3. Create all files in order: master route -> models -> handler -> CDK builder -> API route -> frontend/CLI -> docs -> tests
 4. Run a quick validation that all imports and references are consistent
-5. Summarize what was created and what manual steps remain (e.g., adding new DynamoDB tables to storage stack)
+5. Summarize what was created and what manual steps remain (e.g., adding new DynamoDB tables to the storage stack — see root `CLAUDE.md` "Adding a New DynamoDB Table" for the three-way constants update)
 
 ## User Request
 

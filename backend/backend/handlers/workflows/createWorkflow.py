@@ -631,7 +631,23 @@ def create_workflow(payload, claims_and_roles):
         else:
             Item['dateCreated'] = json.dumps(dtNow)
 
-        table.put_item(Item=Item)
+        # On create, guard against a concurrent create of the same (databaseId, workflowId)
+        # racing between the uniqueness check and this write. This closes the same-key
+        # clobber window; cross-database workflowId uniqueness (a non-key attribute) is
+        # still enforced by find_conflicting_database above.
+        if is_update:
+            table.put_item(Item=Item)
+        else:
+            try:
+                table.put_item(
+                    Item=Item,
+                    ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(workflowId)'
+                )
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                    logger.warning(f"Concurrent create detected for workflowId {workflow_id} in database {database_id}")
+                    raise VAMSGeneralErrorResponse("Workflow ID is already in use. Choose a different ID.")
+                raise
 
         action = "updated" if is_update else "created"
         logger.info(f"Workflow {action} by {username}: {workflow_id}")

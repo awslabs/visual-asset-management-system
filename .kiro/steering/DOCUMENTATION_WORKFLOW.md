@@ -350,10 +350,11 @@ Use standard Markdown or Docusaurus components instead of raw HTML.
 
 ### **Rule 12: Update Steering Files When Documentation Standards Change**
 
-When documentation standards, patterns, or structure change, update both locations:
+When documentation standards, patterns, or structure change, update all affected locations:
 
 1. `documentation/CLAUDE.md` -- documentation steering document
 2. `.kiro/steering/DOCUMENTATION_WORKFLOW.md` -- this file
+3. The documentation-related Claude Code skills `.claude/commands/update-docs.md` and `.claude/commands/verify-docs.md`, which restate the writing style and source-to-doc mappings (see root `CLAUDE.md` Rule 12)
 
 ---
 
@@ -362,7 +363,7 @@ When documentation standards, patterns, or structure change, update both locatio
 | Change Type                                      | Documentation to Update                                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | New or changed API endpoint (incl. path renames) | **Both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md` for `/auth/*`) -- these are two separate sources of truth and both must be kept in sync. Also `cli/command-reference.md` if the CLI changed.                                                                       |
-| New config option                                | `deployment/configuration-reference.md`                                                                                                                                                                                                                                                                                                      |
+| New config option                                | `deployment/configuration-reference.md` + the **ConfigBuilder** component (`src/components/ConfigBuilder/`, embedded in `deployment/config-builder.mdx`) -- then run `infra/test/configBuilderSync.test.ts`                                                                                                                                  |
 | New pipeline                                     | `pipelines/` new page + `pipelines/overview.md` table + `overview/features.md` + `sidebars.ts`                                                                                                                                                                                                                                               |
 | New viewer plugin                                | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`, `overview/features.md`                                                                                                                                                                                                                                                        |
 | New DynamoDB table                               | `architecture/aws-resources.md`, `architecture/data-model.md`                                                                                                                                                                                                                                                                                |
@@ -386,21 +387,22 @@ When documentation standards, patterns, or structure change, update both locatio
 
 When writing or verifying documentation, cross-reference these source files to ensure accuracy:
 
-| Documentation Topic  | Source Files                                                                  |
-| -------------------- | ----------------------------------------------------------------------------- |
-| Config options       | `infra/config/config.ts` (ConfigPublic interface)                             |
-| API endpoints        | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml` |
-| DynamoDB tables      | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                |
-| Feature flags        | `infra/common/vamsAppFeatures.ts`                                             |
-| Backend handlers     | `backend/backend/handlers/`                                                   |
-| Pydantic models      | `backend/backend/models/`                                                     |
-| CLI commands         | `tools/VamsCLI/vamscli/commands/`                                             |
-| Viewer plugins       | `web/src/visualizerPlugin/config/viewerConfig.json`                           |
-| Lambda builders      | `infra/lib/lambdaBuilder/`                                                    |
-| Pipeline configs     | `infra/lib/nestedStacks/pipelines/`                                           |
-| Frontend routes      | `web/src/routes.tsx`                                                          |
-| Synonyms             | `web/src/synonyms.tsx`                                                        |
-| Permission templates | `documentation/permissionsTemplates/`                                         |
+| Documentation Topic                                       | Source Files                                                                                                                                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config options                                            | `infra/config/config.ts` (ConfigPublic interface)                                                                                                                                  |
+| ConfigBuilder component (`src/components/ConfigBuilder/`) | `infra/config/config.ts` (`ConfigPublic` + `getConfig()`), `infra/config/config.template.{commercial,govcloud}.json` — mirror is guarded by `infra/test/configBuilderSync.test.ts` |
+| API endpoints                                             | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`, `VAMS_API.yaml`                                                                                                      |
+| DynamoDB tables                                           | `infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                                                                                                     |
+| Feature flags                                             | `infra/common/vamsAppFeatures.ts`                                                                                                                                                  |
+| Backend handlers                                          | `backend/backend/handlers/`                                                                                                                                                        |
+| Pydantic models                                           | `backend/backend/models/`                                                                                                                                                          |
+| CLI commands                                              | `tools/VamsCLI/vamscli/commands/`                                                                                                                                                  |
+| Viewer plugins                                            | `web/src/visualizerPlugin/config/viewerConfig.json`                                                                                                                                |
+| Lambda builders                                           | `infra/lib/lambdaBuilder/`                                                                                                                                                         |
+| Pipeline configs                                          | `infra/lib/nestedStacks/pipelines/`                                                                                                                                                |
+| Frontend routes                                           | `web/src/routes.tsx`                                                                                                                                                               |
+| Synonyms                                                  | `web/src/synonyms.tsx`                                                                                                                                                             |
+| Permission templates                                      | `documentation/permissionsTemplates/`                                                                                                                                              |
 
 ---
 
