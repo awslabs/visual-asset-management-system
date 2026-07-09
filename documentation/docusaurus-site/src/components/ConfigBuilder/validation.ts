@@ -99,6 +99,17 @@ function anyCosmosModelEnabled(cfg: ConfigShape): boolean {
     );
 }
 
+/** True if any Cosmos 3 model is enabled (config.ts:901-912). */
+function anyCosmos3ModelEnabled(cfg: ConfigShape): boolean {
+    const p = "app.pipelines.useNvidiaCosmos3";
+    return (
+        !!g(cfg, `${p}.modelsOmni.nano16B.enabled`) ||
+        !!g(cfg, `${p}.modelsOmni.super64B.enabled`) ||
+        !!g(cfg, `${p}.modelsOmni.superText2Image64B.enabled`) ||
+        !!g(cfg, `${p}.modelsOmni.superImage2Video64B.enabled`)
+    );
+}
+
 /** A Cosmos/Gr00t model with `enabled` true but an empty instanceTypes array. */
 function modelInstanceTypesEmpty(cfg: ConfigShape, modelPath: string): boolean {
     if (!g(cfg, `${modelPath}.enabled`)) return false;
@@ -338,6 +349,70 @@ export const RULES: Rule[] = [
             modelInstanceTypesEmpty(c, "app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B"),
         message:
             "useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes must be a non-empty array.",
+    },
+
+    // ----- NVIDIA Cosmos 3 (config.ts:901-947) -----
+    {
+        id: "cosmos3-no-model",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useNvidiaCosmos3.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") && !anyCosmos3ModelEnabled(c),
+        message:
+            "useNvidiaCosmos3 is enabled but no model is enabled. Enable at least one model in modelsOmni.",
+    },
+    {
+        id: "cosmos3-hf-token",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useNvidiaCosmos3.huggingFaceToken"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
+            isBlank(g(c, "app.pipelines.useNvidiaCosmos3.huggingFaceToken")),
+        message: "useNvidiaCosmos3 requires a huggingFaceToken for model downloads.",
+    },
+    {
+        id: "cosmos3-nano16b-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useNvidiaCosmos3.modelsOmni.nano16B.instanceTypes"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
+            modelInstanceTypesEmpty(c, "app.pipelines.useNvidiaCosmos3.modelsOmni.nano16B"),
+        message: "useNvidiaCosmos3.modelsOmni.nano16B.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "cosmos3-super64b-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useNvidiaCosmos3.modelsOmni.super64B.instanceTypes"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
+            modelInstanceTypesEmpty(c, "app.pipelines.useNvidiaCosmos3.modelsOmni.super64B"),
+        message: "useNvidiaCosmos3.modelsOmni.super64B.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "cosmos3-supertext2image64b-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useNvidiaCosmos3.modelsOmni.superText2Image64B.instanceTypes"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
+            modelInstanceTypesEmpty(
+                c,
+                "app.pipelines.useNvidiaCosmos3.modelsOmni.superText2Image64B"
+            ),
+        message:
+            "useNvidiaCosmos3.modelsOmni.superText2Image64B.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "cosmos3-superimage2video64b-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useNvidiaCosmos3.enabled") &&
+            modelInstanceTypesEmpty(
+                c,
+                "app.pipelines.useNvidiaCosmos3.modelsOmni.superImage2Video64B"
+            ),
+        message:
+            "useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array.",
     },
 
     // ----- Asset buckets (config.ts:617-633) -----

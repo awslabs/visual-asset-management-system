@@ -10,7 +10,7 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 11 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, GenAI labeling, Gaussian splatting, point cloud, 3D preview thumbnails, NVIDIA Cosmos Predict, NVIDIA Cosmos 3 (omni), and more
 
 ### **Version Info**
 
@@ -37,10 +37,14 @@ root/
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── genAi/
-│   │   ├── cosmos/predict/    # NVIDIA Cosmos Predict (Text2World, Video2World)
+│   │   ├── nvidia/
+│   │   │   └── cosmos/
+│   │   │       ├── 3/         # NVIDIA Cosmos 3 (omni generation)
+│   │   │       └── predict/   # NVIDIA Cosmos Predict (Text2World, Video2World)
 │   │   └── metadata3dLabeling/
 │   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── documentation/             # User guides, API spec, permission templates
+│   └── CLAUDE.md              # Documentation development guide
 ├── .kiro/steering/            # Detailed workflow docs (Kiro steering, supplementary)
 ├── .claude/commands/          # Claude Code skills (slash commands)
 └── infra/deploymentDataMigration/  # Data migration scripts (e.g., v2.4_to_v2.5)
@@ -291,7 +295,7 @@ Structural changes to the codebase require updating the relevant `CLAUDE.md` fil
 | New CDK nested stack or lambda builder                         | `infra/CLAUDE.md` (directory structure, stack list)                                                                                                                                                                                                                                                                                                                |
 | New frontend component/page/service                            | `web/CLAUDE.md` (directory structure, key files)                                                                                                                                                                                                                                                                                                                   |
 | New CLI command group                                          | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                                                                                                                                                                                                                                                      |
-| Configuration system (new field, switch, changed default)      | `infra/CLAUDE.md`, `documentation/docusaurus-site/docs/deployment/configuration-reference.md`, and the **ConfigBuilder** component; then run `infra/test/configBuilderSync.test.ts`                                                                                                                                                                                |
+| Configuration system (new field, switch, changed default)      | `infra/CLAUDE.md`, `documentation/docusaurus-site/docs/deployment/configuration-reference.md`, and the **ConfigBuilder** component; then run `infra/test/configBuilderSync.test.ts`. The test guards only `schema.ts` fields + `defaults.ts` presets — new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` (not test-covered)      |
 | New/changed S3 bucket, DynamoDB table, or CloudWatch log group | `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` — record removal policy (RETAIN vs DESTROY) and whether the resource has a custom/explicit name (custom-named resources can collide on redeploy). See `infra/CLAUDE.md` "Documentation Rule: Storage Resources and Log Groups" |
 | New pipeline                                                   | `backendPipelines/CLAUDE.md`, root `CLAUDE.md` (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md`                                                                                                                                                                                                                         |
 | Cross-component pattern change                                 | `CLAUDE.md` root (cross-component patterns section)                                                                                                                                                                                                                                                                                                                |
@@ -476,7 +480,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 3. Add validation in `getConfig()`
 4. Push to `enabledFeatures` array in `infra/lib/core-stack.ts`
 5. Read in frontend from `/api/secure-config` response and gate UI with a feature check
-6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`), then confirm `infra/test/configBuilderSync.test.ts` passes
+6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`), then confirm `infra/test/configBuilderSync.test.ts` passes. The sync test covers only `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so when `getConfig()` validation logic changes you must hand-port the matching rule into `validation.ts` and rely on review (not the test) to keep it in sync.
 
 ### **Adding a New DynamoDB Table**
 

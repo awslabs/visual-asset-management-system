@@ -46,6 +46,7 @@ export class CosmosCodeBuildConstruct extends Construct {
     public predictV2Repo?: PipelineEcrRepo;
     public reasonRepo?: PipelineEcrRepo;
     public transferRepo?: PipelineEcrRepo;
+    public cosmos3Repo?: PipelineEcrRepo;
 
     constructor(parent: Construct, name: string, props: CosmosCodeBuildConstructProps) {
         super(parent, name);
@@ -310,6 +311,30 @@ def handler(event, context):
                 value: this.transferRepo.codeBuildProjectName,
                 description:
                     "CodeBuild project name for Cosmos Transfer container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+            });
+        }
+
+        /**
+         * Conditional creation: cosmos3
+         * Enabled if any Cosmos 3 omni variant is enabled.
+         */
+        const cosmos3Config = props.config.app.pipelines.useNvidiaCosmos3;
+        const anyCosmos3Enabled =
+            cosmos3Config?.enabled &&
+            (cosmos3Config.modelsOmni?.nano16B?.enabled ||
+                cosmos3Config.modelsOmni?.super64B?.enabled ||
+                cosmos3Config.modelsOmni?.superText2Image64B?.enabled ||
+                cosmos3Config.modelsOmni?.superImage2Video64B?.enabled);
+
+        if (anyCosmos3Enabled) {
+            this.cosmos3Repo = createPipelineBuild(
+                "cosmos3",
+                "../../../../../../../../backendPipelines/genAi/nvidia/cosmos/3/container"
+            );
+            new cdk.CfnOutput(this, "Cosmos3CodeBuildProject", {
+                value: this.cosmos3Repo.codeBuildProjectName,
+                description:
+                    "CodeBuild project name for Cosmos 3 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
             });
         }
     }
