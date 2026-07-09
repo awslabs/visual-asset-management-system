@@ -6,13 +6,20 @@ import boto3
 import json
 import datetime
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="OpenCosmos3Pipeline")
 
 sfn = boto3.client('stepfunctions', region_name=os.environ["AWS_REGION"])
+events_client = boto3.client('events', region_name=os.environ["AWS_REGION"])
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".mp4,.mov,.jpg,.jpeg,.png,.webp")
+# Orchestration bus + state-machine log group for optional sub-process registration
+ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
+STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 # Task modes / variants that require an input file
 INPUT_FILE_MODES = ("image2video", "video2video")
@@ -28,6 +35,42 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
+    """Best-effort: report this sub-SFN execution + log group to the orchestration bus so VAMS can
+    track it, attempt sub-aborts, and pull sub-logs. Never fails the pipeline."""
+    if not ORCHESTRATION_BUS_NAME or not orchestration_event_prefix:
+        logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
+        return
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        orchestration_event_prefix)
+    if not pipeline_execution_id:
+        logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
+        return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "stateMachineArn": STATE_MACHINE_ARN,
+            "executionArn": sub_execution_arn or "",
+        },
+    }
+    if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
+            "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
+            "logStreamName": "",
+        }]
+    try:
+        events_client.put_events(Entries=[{
+            "EventBusName": ORCHESTRATION_BUS_NAME,
+            "Source": orchestration_event_prefix,
+            "DetailType": REGISTER_DETAIL_TYPE,
+            "Detail": json.dumps(detail),
+        }])
+        logger.info(f"Registered sub-execution for pipeline execution {pipeline_execution_id}")
+    except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
+        logger.warning(f"Sub-process registration failed (non-critical): {e}")
+
+
 def lambda_handler(event, context):
     """
     OpenPipeline
@@ -38,8 +81,11 @@ def lambda_handler(event, context):
 
     model_variant = event.get('modelVariant', 'nano')
     task_mode = event.get('taskMode', '')
-    input_Metadata = event.get('inputMetadata', '')
-    input_Parameters = event.get('inputParameters', '')
+    # Metadata + input-configuration S3 LOCATIONS travel onward (never the inline content); the
+    # container reads them from S3 as needed.
+    input_metadata_s3_location = event.get('inputMetadataS3Location', '')
+    input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
+    orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
     external_sfn_task_token = event.get('sfnExternalTaskToken', '')
     input_s3_asset_files_uri = event.get('inputS3AssetFilePath', '')
     output_s3_asset_files_uri = event.get('outputS3AssetFilesPath', '')
@@ -101,8 +147,8 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "assetId": asset_id,
         "databaseId": database_id,
-        "inputMetadata": input_Metadata,
-        "inputParameters": input_Parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
     }
 
@@ -111,6 +157,8 @@ def lambda_handler(event, context):
         sfn_response = sfn.start_execution(
             stateMachineArn=STATE_MACHINE_ARN, name=job_name, input=json.dumps(sfn_input)
         )
+        # Best-effort: register this sub-SFN execution with the VAMS execution.
+        register_sub_execution(orchestration_event_prefix, sfn_response.get("executionArn", ""))
         sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')
     except Exception as e:
         logger.exception(e)

@@ -73,7 +73,8 @@ the pipeline forwards inline `inputMetadata` content into a downstream hop today
 | `preview/3dThumbnail`         | Yes (openPipeline → nested SFN)      | No                               | Thread location through (done); no consumer change                    |
 | `preview/pcPotreeViewer`      | Yes (Batch command)                  | No                               | Thread location through; no consumer change                           |
 | `genAi/nvidia/gr00t`          | No — forces `inputMetadata=''`       | Lambda merges, pre-`vamsExecute` | Location-only; lambda already reads what it needs before the boundary |
-| `genAi/nvidia/cosmos/*`       | No — forces `inputMetadata=''`       | Lambda extracts prompt           | Location-only; prompt extraction stays in the lambda                  |
+| `genAi/nvidia/cosmos/predict,reason,transfer` | No — forces `inputMetadata=''` | Lambda extracts prompt   | Location-only; prompt extraction stays in the lambda                  |
+| `genAi/nvidia/cosmos/3`       | No — extracts COSMOS3_* at boundary  | Yes — container reads config     | Thread locations; container reads `inputParameters` from S3          |
 | `multi/rapidPipelineEKS`      | No                                   | No                               | Location-only                                                         |
 | `simulation/isaacLabTraining` | Yes (Batch command via openPipeline) | No                               | Thread location through; no consumer change                           |
 
@@ -255,7 +256,19 @@ The task token still comes from the payload, not the manifest.
     when `TaskToken` is missing). Initialized `external_task_token = None` at the top of each
     handler, matching the `cosmos/reason`/`splatToolbox` pattern.
 
-    All 12 use-case pipelines are now refactored. Next: remove the legacy SFN payload fields from
+5.  **`genAi/nvidia/cosmos/3` (Cosmos 3 omni)** (done). Brought to the standard when it merged in:
+    vendored `manifestHelper.py` + a container `manifest_io.py`; `vamsExecute` resolves inputs via
+    the manifest, enforces single-file, extracts the COSMOS3_* generation fields (prompt, seed,
+    guidance, control-signal fields) at the boundary from S3-read metadata (inline fallback), and
+    threads the metadata + input-configuration S3 locations + `orchestrationEventPrefix`;
+    `openPipeline` threads the locations into the nested SFN input and registers its sub-SFN;
+    `constructPipeline` carries the locations (no inline content); the container reads
+    `inputParameters` (INVALIDATE_COSMOS_MODELS / DISABLE_GUARDRAILS / GENERATE_PREVIEW_GIF /
+    TASK_MODE / MODEL_VARIANT fallbacks) from S3 via the vendored `manifest_io.py` (Dockerfile ships
+    it). CDK: the `openPipeline` builder now wires `ORCHESTRATION_BUS_NAME` /
+    `STATE_MACHINE_LOG_GROUP_NAME` / `STATE_MACHINE_LOG_GROUP_ARN` and `grantPutEventsTo` the bus.
+
+    All 13 use-case pipelines are now refactored. Next: remove the legacy SFN payload fields from
     `build_payload` and bump `ASL_SCHEMA_VERSION` / `MANIFEST_SCHEMA_VERSION` once a redeploy of all
     pipelines is confirmed.
 

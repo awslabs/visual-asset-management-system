@@ -33,8 +33,10 @@ def lambda_handler(event, context):
     inputOutput_s3_assetAuxiliary_files_path = event.get("inputOutputS3AssetAuxiliaryFilesPath", "")
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
-    input_metadata = event.get("inputMetadata", "")
-    input_parameters = event.get("inputParameters", "")
+    # Metadata + input-configuration S3 LOCATIONS travel onward (never the inline content); the
+    # container reads them from S3 as needed.
+    input_metadata_s3_location = event.get("inputMetadataS3Location", "")
+    input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     external_sfn_task_token = event.get("externalSfnTaskToken", "")
 
     job_name = f"cosmos3-{model_variant}-{str(uuid.uuid4())[:8]}"
@@ -59,8 +61,8 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "assetId": asset_id,
         "databaseId": database_id,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
     }
 
@@ -69,8 +71,8 @@ def lambda_handler(event, context):
     return {
         "jobName": job_name,
         "definition": ["python", "__main__.py", json.dumps(definition)],
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
         "status": "STARTING",
     }

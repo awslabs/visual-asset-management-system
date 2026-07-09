@@ -726,8 +726,9 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     command: [...sfn.JsonPath.listAt("$.definition")],
                     environment: {
                         AWS_REGION: region,
-                        INPUT_PARAMETERS: sfn.JsonPath.stringAt("$.inputParameters"),
-                        INPUT_METADATA: sfn.JsonPath.stringAt("$.inputMetadata"),
+                        // Input configuration + metadata are read by the container from S3 (their
+                        // locations travel in the pipeline definition / command JSON); they are no
+                        // longer injected as inline env vars.
                         S3_MODEL_BUCKET: modelCacheBucket.bucketName,
                     },
                 },
@@ -785,6 +786,8 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 props.config,
                 props.vpc,
                 props.pipelineSubnets,
+                props.storageResources.eventBridge.orchestrationBus,
+                stateMachineLogGroup,
                 props.storageResources.encryption.kmsKey,
                 modelKey // Use modelKey (unique per model, e.g., "nano16B") not variant
             );

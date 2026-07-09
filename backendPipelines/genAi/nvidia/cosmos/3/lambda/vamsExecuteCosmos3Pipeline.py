@@ -10,9 +10,11 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="VamsExecuteCosmos3Pipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
@@ -62,8 +64,19 @@ def lambda_handler(event, context):
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Register this pipeline as needing a task token callback.")
         external_task_token = data['TaskToken']
 
-        input_parameters = data.get('inputParameters', '')
-        input_metadata = data.get('inputMetadata', '')
+        # Resolve input/output locations from the workflow manifest (legacy-payload fallback).
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
+
+        # Read metadata + input-configuration CONTENT from S3 (locations travel, content does not);
+        # inline fields remain a fallback for direct/local invocations. The COSMOS3_* extraction
+        # below stays at this boundary; only the S3 locations are forwarded to the container.
+        input_metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']) \
+            or data.get('inputMetadata', '')
+        input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location']) \
+            or data.get('inputParameters', '')
 
         # Variant + task mode come from inputParameters (set at registration)
         model_variant = "nano"
@@ -119,18 +132,21 @@ def lambda_handler(event, context):
         payload = {
             "modelVariant": model_variant,
             "taskMode": task_mode,
-            "inputS3AssetFilePath": data.get('inputS3AssetFilePath', ''),
-            "outputS3AssetFilesPath": data.get('outputS3AssetFilesPath', ''),
-            "outputS3AssetPreviewPath": data.get('outputS3AssetPreviewPath', ''),
-            "outputS3AssetMetadataPath": data.get('outputS3AssetMetadataPath', ''),
-            "inputOutputS3AssetAuxiliaryFilesPath": data['inputOutputS3AssetAuxiliaryFilesPath'],
-            "inputMetadata": "",
-            "inputParameters": input_parameters,
+            "inputS3AssetFilePath": resolved['inputS3AssetFilePath'],
+            "outputS3AssetFilesPath": resolved['outputS3AssetFilesPath'],
+            "outputS3AssetPreviewPath": resolved['outputS3AssetPreviewPath'],
+            "outputS3AssetMetadataPath": resolved['outputS3AssetMetadataPath'],
+            "inputOutputS3AssetAuxiliaryFilesPath": resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            # Metadata + input-configuration S3 LOCATIONS travel onward (never the inline content);
+            # the container reads them from S3 as needed.
+            "inputMetadataS3Location": resolved['inputMetadataS3Location'],
+            "inputConfigurationS3Location": resolved['inputConfigurationS3Location'],
+            "orchestrationEventPrefix": resolved['orchestrationEventPrefix'],
             "sfnExternalTaskToken": external_task_token,
             "executingUserName": data.get('executingUserName', ''),
             "executingRequestContext": data.get('executingRequestContext', ''),
-            "assetId": data.get('assetId', ''),
-            "databaseId": data.get('databaseId', ''),
+            "assetId": resolved['assetId'],
+            "databaseId": resolved['databaseId'],
             "cosmosPrompt": cosmos_prompt,
             "cosmosNegativePrompt": cosmos_negative_prompt,
             "cosmosSeed": cosmos_seed,
