@@ -477,7 +477,10 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
 
         extra_args = {
             'MetadataDirective': 'REPLACE',
-            'Metadata': metadata
+            'Metadata': metadata,
+            # Grant the bucket owner full control so the finalized object written into a
+            # cross-account asset bucket is owned/readable by that account.
+            'ACL': 'bucket-owner-full-control'
         }
 
         s3_resource.meta.client.copy(
@@ -786,6 +789,9 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
             Key=key,
             Body=b'',  # Empty content for zero-byte file
             ContentType='application/octet-stream',
+            # Grant the bucket owner full control so a zero-byte file written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control',
             Metadata={
                 DATABASE_ID_METADATA_KEY: database_id,
                 ASSET_ID_METADATA_KEY: asset_id,
@@ -1090,6 +1096,10 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 Bucket=bucket_name,
                 Key=temp_s3_key,
                 ContentType='application/octet-stream',
+                # Grant the bucket owner full control so an object uploaded into a
+                # cross-account asset bucket is owned/readable by that account. The
+                # ACL is set on the multipart upload; completed parts inherit it.
+                ACL='bucket-owner-full-control',
                 Metadata={
                     DATABASE_ID_METADATA_KEY: databaseId,
                     ASSET_ID_METADATA_KEY: assetId,

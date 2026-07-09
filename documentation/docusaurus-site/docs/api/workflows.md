@@ -20,8 +20,8 @@ GET /workflows
 
 | Parameter       | Type   | Required | Default | Description                             |
 | --------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`      | number | No       | `30000` | Maximum number of items to return       |
-| `pageSize`      | number | No       | `3000`  | Number of items per page                |
+| `maxItems`      | number | No       | `10000` | Maximum number of items to return       |
+| `pageSize`      | number | No       | `10000` | Number of items per page                |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
 | `showDeleted`   | string | No       | `false` | Include soft-deleted workflows          |
 
@@ -142,18 +142,18 @@ PUT /workflows
 
 Each entry in `specifiedPipelines.functions` must include:
 
-| Field                   | Type   | Required | Description                                   |
-| ----------------------- | ------ | -------- | --------------------------------------------- |
-| `name`                  | string | Yes      | Pipeline ID to reference                      |
-| `databaseId`            | string | Yes      | Database ID of the pipeline                   |
-| `pipelineType`          | string | Yes      | `standardFile` or `previewFile`               |
-| `pipelineExecutionType` | string | Yes      | `Lambda`, `SQS`, or `EventBridge`             |
-| `outputType`            | string | Yes      | Output file extension                         |
-| `waitForCallback`       | string | Yes      | `Enabled` or `Disabled`                       |
-| `userProvidedResource`  | string | Yes      | JSON string of the pipeline resource config   |
-| `taskTimeout`           | string | No       | Timeout in seconds (when callback is enabled) |
-| `taskHeartbeatTimeout`  | string | No       | Heartbeat timeout in seconds                  |
-| `inputParameters`       | string | No       | JSON string of additional parameters          |
+| Field                   | Type   | Required | Description                                          |
+| ----------------------- | ------ | -------- | ---------------------------------------------------- |
+| `name`                  | string | Yes      | Pipeline ID to reference                             |
+| `databaseId`            | string | Yes      | Database ID of the pipeline                          |
+| `pipelineType`          | string | Yes      | `standardFile` or `previewFile`                      |
+| `outputType`            | string | Yes      | Output file extension                                |
+| `pipelineExecutionType` | string | No       | `Lambda`, `SQS`, or `EventBridge` (default `Lambda`) |
+| `waitForCallback`       | string | No       | `Enabled` or `Disabled` (default `Disabled`)         |
+| `userProvidedResource`  | string | No       | JSON string of the pipeline resource config          |
+| `taskTimeout`           | string | No       | Timeout in seconds (when callback is enabled)        |
+| `taskHeartbeatTimeout`  | string | No       | Heartbeat timeout in seconds                         |
+| `inputParameters`       | string | No       | JSON string of additional parameters                 |
 
 :::note[Pipeline scoping rules]
 
@@ -291,12 +291,13 @@ The response body contains the Step Functions execution ID.
 
 ### Error responses
 
-| Status | Description                                                                                 |
-| ------ | ------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, asset/workflow not found, pipeline disabled, or execution already running |
-| `403`  | Not authorized (API, asset, workflow, or pipeline level)                                    |
-| `429`  | Throttling -- too many requests                                                             |
-| `500`  | Internal server error or execution limit exceeded                                           |
+| Status | Description                                                       |
+| ------ | ----------------------------------------------------------------- |
+| `400`  | Validation error, pipeline disabled, or execution already running |
+| `403`  | Not authorized (API, asset, workflow, or pipeline level)          |
+| `404`  | Asset or workflow not found                                       |
+| `429`  | Throttling -- too many requests                                   |
+| `500`  | Internal server error or execution limit exceeded                 |
 
 ---
 
@@ -340,8 +341,10 @@ The applied lower bound is echoed back as `filterStartDate`.
                 "workflowDatabaseId": "GLOBAL",
                 "workflowId": "convert-and-preview",
                 "executionId": "a1b2c3d4-e5f6-7890",
-                "executionStatus": "RUNNING",
-                "startDate": "03/15/2026, 10:30:00"
+                "executionStatus": "SUCCEEDED",
+                "startDate": "03/15/2026, 10:30:00",
+                "stopDate": "03/15/2026, 10:32:15",
+                "inputAssetFileKey": "models/building.fbx"
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z"
@@ -350,7 +353,7 @@ The applied lower bound is echoed back as `filterStartDate`.
 ```
 
 :::note
-Only currently running executions (without a stop date) are returned. Completed executions are not included.
+All executions are returned, both completed and running. Completed executions use the stored `startDate`, `stopDate`, and `executionStatus`; executions without a stored stop date are refreshed from AWS Step Functions, and once found to have stopped their status and dates are persisted.
 :::
 
 ### Error responses

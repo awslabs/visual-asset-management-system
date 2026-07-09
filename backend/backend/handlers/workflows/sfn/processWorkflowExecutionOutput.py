@@ -194,7 +194,10 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
             ExtraArgs={
                 'ContentType': content_type,
                 'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         

@@ -20,8 +20,8 @@ GET /subscriptions
 
 | Parameter       | Type   | Required | Default | Description                             |
 | --------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`      | number | No       | `100`   | Maximum number of items to return       |
-| `pageSize`      | number | No       | `100`   | Number of items per page                |
+| `maxItems`      | number | No       | `10000` | Maximum number of items to return       |
+| `pageSize`      | number | No       | `10000` | Number of items per page                |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
 
 ### Response
@@ -246,12 +246,12 @@ DELETE /unsubscribe
 
 ### Request body
 
-| Field         | Type   | Required | Description                            |
-| ------------- | ------ | -------- | -------------------------------------- |
-| `eventName`   | string | Yes      | Event type                             |
-| `entityName`  | string | Yes      | Entity type                            |
-| `entityId`    | string | Yes      | Asset ID                               |
-| `subscribers` | array  | Yes      | Array of subscriber user IDs to remove |
+| Field         | Type   | Required | Description                                                                        |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
+| `eventName`   | string | Yes      | Event type                                                                         |
+| `entityName`  | string | Yes      | Entity type                                                                        |
+| `entityId`    | string | Yes      | Asset ID                                                                           |
+| `subscribers` | array  | Yes      | Array of subscriber user IDs. Only the first user ID in the array is unsubscribed. |
 
 ### Request body example
 

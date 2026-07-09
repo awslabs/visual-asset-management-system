@@ -22,8 +22,8 @@ GET /pipelines
 
 | Parameter       | Type   | Required | Default | Description                                     |
 | --------------- | ------ | -------- | ------- | ----------------------------------------------- |
-| `maxItems`      | number | No       | `30000` | Maximum number of items to return               |
-| `pageSize`      | number | No       | `3000`  | Number of items per page                        |
+| `maxItems`      | number | No       | `10000` | Maximum number of items to return               |
+| `pageSize`      | number | No       | `10000` | Number of items per page                        |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response         |
 | `showDeleted`   | string | No       | `false` | Include soft-deleted pipelines (`true`/`false`) |
 
@@ -87,8 +87,8 @@ GET /database/{databaseId}/pipelines
 
 | Parameter       | Type   | Required | Default | Description                             |
 | --------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`      | number | No       | `30000` | Maximum number of items to return       |
-| `pageSize`      | number | No       | `3000`  | Number of items per page                |
+| `maxItems`      | number | No       | `10000` | Maximum number of items to return       |
+| `pageSize`      | number | No       | `10000` | Number of items per page                |
 | `startingToken` | string | No       | `null`  | Pagination token from previous response |
 | `showDeleted`   | string | No       | `false` | Include soft-deleted pipelines          |
 
@@ -174,26 +174,26 @@ The `pipelineExecutionType` cannot be changed after a pipeline is created. To ch
 
 ### Request body
 
-| Field                       | Type    | Required | Description                                                                                                                               |
-| --------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipelineId`                | string  | Yes      | Unique pipeline identifier (4-64 chars, alphanumeric, hyphens, underscores)                                                               |
-| `databaseId`                | string  | Yes      | Database to associate with (or `GLOBAL` for cross-database pipelines)                                                                     |
-| `pipelineType`              | string  | Yes      | `standardFile` or `previewFile`                                                                                                           |
-| `pipelineExecutionType`     | string  | Yes      | `Lambda`, `SQS`, or `EventBridge`                                                                                                         |
-| `description`               | string  | Yes      | Pipeline description (4-256 chars)                                                                                                        |
-| `assetType`                 | string  | Yes      | Input file extension (e.g., `.fbx`)                                                                                                       |
-| `outputType`                | string  | Yes      | Output file extension (e.g., `.gltf`)                                                                                                     |
-| `waitForCallback`           | string  | No       | `Enabled` or `Disabled` (default). When enabled, Step Functions waits for a task token callback.                                          |
-| `taskTimeout`               | string  | No       | Timeout in seconds for callback (max 604800 = 1 week). Required when `waitForCallback` is `Enabled`.                                      |
-| `taskHeartbeatTimeout`      | string  | No       | Heartbeat timeout in seconds. Must be smaller than `taskTimeout`.                                                                         |
-| `lambdaName`                | string  | No       | Lambda function name. Required for `Lambda` execution type if providing your own function. If omitted, VAMS auto-creates a sample Lambda. |
-| `sqsQueueUrl`               | string  | No       | SQS queue URL. **Required** when `pipelineExecutionType` is `SQS`.                                                                        |
-| `eventBridgeBusArn`         | string  | No       | EventBridge bus ARN. Optional for `EventBridge` type (defaults to the default bus).                                                       |
-| `eventBridgeSource`         | string  | No       | EventBridge event source string. Optional for `EventBridge` type.                                                                         |
-| `eventBridgeDetailType`     | string  | No       | EventBridge detail type string. Optional for `EventBridge` type.                                                                          |
-| `inputParameters`           | string  | No       | JSON string of additional parameters passed to the pipeline.                                                                              |
-| `updateAssociatedWorkflows` | boolean | No       | When `true`, updates all workflows that reference this pipeline.                                                                          |
-| `enabled`                   | boolean | No       | Whether the pipeline is enabled (default `true`).                                                                                         |
+| Field                       | Type    | Required | Description                                                                                                                                 |
+| --------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipelineId`                | string  | Yes      | Unique pipeline identifier (4-64 chars, alphanumeric, hyphens, underscores)                                                                 |
+| `databaseId`                | string  | Yes      | Database to associate with (or `GLOBAL` for cross-database pipelines)                                                                       |
+| `pipelineType`              | string  | Yes      | `standardFile` or `previewFile`                                                                                                             |
+| `pipelineExecutionType`     | string  | Yes      | `Lambda`, `SQS`, or `EventBridge`                                                                                                           |
+| `description`               | string  | Yes      | Pipeline description (4-256 chars)                                                                                                          |
+| `assetType`                 | string  | Yes      | Input file extension (e.g., `.fbx`)                                                                                                         |
+| `outputType`                | string  | Yes      | Output file extension (e.g., `.gltf`)                                                                                                       |
+| `waitForCallback`           | string  | No       | `Enabled` or `Disabled` (default). When enabled, Step Functions waits for a task token callback.                                            |
+| `taskTimeout`               | string  | No       | Timeout in seconds for callback (max 604800 = 1 week). Applies when `waitForCallback` is `Enabled`; defaults to `86400` (1 day) if omitted. |
+| `taskHeartbeatTimeout`      | string  | No       | Heartbeat timeout in seconds. Must be smaller than `taskTimeout`.                                                                           |
+| `lambdaName`                | string  | No       | Lambda function name. Required for `Lambda` execution type if providing your own function. If omitted, VAMS auto-creates a sample Lambda.   |
+| `sqsQueueUrl`               | string  | No       | SQS queue URL. **Required** when `pipelineExecutionType` is `SQS`.                                                                          |
+| `eventBridgeBusArn`         | string  | No       | EventBridge bus ARN. Optional for `EventBridge` type (defaults to the default bus).                                                         |
+| `eventBridgeSource`         | string  | No       | EventBridge event source string. Optional for `EventBridge` type.                                                                           |
+| `eventBridgeDetailType`     | string  | No       | EventBridge detail type string. Optional for `EventBridge` type.                                                                            |
+| `inputParameters`           | string  | No       | JSON string of additional parameters passed to the pipeline.                                                                                |
+| `updateAssociatedWorkflows` | boolean | No       | When `true`, updates all workflows that reference this pipeline.                                                                            |
+| `enabled`                   | boolean | No       | Whether the pipeline is enabled (default `true`).                                                                                           |
 
 ### Request body example (Lambda)
 

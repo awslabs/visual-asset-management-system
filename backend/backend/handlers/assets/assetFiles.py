@@ -475,7 +475,10 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Key=dest_key,
                 ExtraArgs={
                     'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE'
+                    'MetadataDirective': 'REPLACE',
+                    # Grant the destination bucket owner full control so an object written
+                    # into a cross-account asset bucket is owned/readable by that account.
+                    'ACL': 'bucket-owner-full-control'
                 }
             )
         else:
@@ -483,7 +486,10 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
-                Key=dest_key
+                Key=dest_key,
+                # Grant the destination bucket owner full control so an object written
+                # into a cross-account asset bucket is owned/readable by that account.
+                ExtraArgs={'ACL': 'bucket-owner-full-control'}
             )
         return True
     except Exception as e:
@@ -905,7 +911,10 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Key=dest_key,
                 ExtraArgs={
                     'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE'
+                    'MetadataDirective': 'REPLACE',
+                    # Grant the destination bucket owner full control so an object written
+                    # into a cross-account asset bucket is owned/readable by that account.
+                    'ACL': 'bucket-owner-full-control'
                 }
             )
         else:
@@ -913,7 +922,10 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
-                Key=dest_key
+                Key=dest_key,
+                # Grant the destination bucket owner full control so an object written
+                # into a cross-account asset bucket is owned/readable by that account.
+                ExtraArgs={'ACL': 'bucket-owner-full-control'}
             )
 
         # Delete the original object
@@ -2369,7 +2381,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             },
             ExtraArgs={
                 'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         
@@ -2427,7 +2442,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                                 'VersionId': preview_latest_version['VersionId']
                             },
                             ExtraArgs={
-                                'MetadataDirective': 'COPY'
+                                'MetadataDirective': 'COPY',
+                                # Grant the bucket owner full control so a version written into a
+                                # cross-account asset bucket is owned/readable by that account.
+                                'ACL': 'bucket-owner-full-control'
                             }
                         )
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
@@ -2797,7 +2815,10 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
             },
             ExtraArgs={
                 'Metadata': new_metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
 
@@ -3041,9 +3062,12 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
         s3_client.put_object(
             Bucket=asset_bucket,
             Key=normalized_key_path,
-            Body=''
+            Body='',
+            # Grant the bucket owner full control so a folder marker written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control'
         )
-        
+
         logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
         
         return CreateFolderResponseModel(
@@ -3127,7 +3151,10 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             ExtraArgs={
                 'Metadata': new_metadata,
                 'MetadataDirective': 'REPLACE',
-                'ContentType': current_object.get('ContentType', 'binary/octet-stream')
+                'ContentType': current_object.get('ContentType', 'binary/octet-stream'),
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         

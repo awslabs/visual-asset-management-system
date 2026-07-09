@@ -111,7 +111,10 @@ export class PipelineBuilderNestedStack extends NestedStack {
             );
         }
 
-        if (props.config.app.pipelines.useNvidiaCosmos.enabled) {
+        if (
+            props.config.app.pipelines.useNvidiaCosmos.enabled ||
+            props.config.app.pipelines.useNvidiaCosmos3.enabled
+        ) {
             const cosmosBuilderNestedStack = new CosmosBuilderNestedStack(
                 this,
                 "CosmosBuilderNestedStack",
@@ -185,6 +188,40 @@ export class PipelineBuilderNestedStack extends NestedStack {
             ) {
                 this.pipelineVamsLambdaFunctionNames.push(
                     cosmosBuilderNestedStack.pipelineReason8BVamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos3.modelsOmni?.nano16B?.enabled &&
+                cosmosBuilderNestedStack.pipelineCosmos3Nano16BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineCosmos3Nano16BVamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos3.modelsOmni?.super64B?.enabled &&
+                cosmosBuilderNestedStack.pipelineCosmos3Super64BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineCosmos3Super64BVamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B
+                    ?.enabled &&
+                cosmosBuilderNestedStack.pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineCosmos3SuperText2Image64BVamsLambdaFunctionName
+                );
+            }
+            if (
+                props.config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B
+                    ?.enabled &&
+                cosmosBuilderNestedStack.pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName
+            ) {
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cosmosBuilderNestedStack.pipelineCosmos3SuperImage2Video64BVamsLambdaFunctionName
                 );
             }
         }

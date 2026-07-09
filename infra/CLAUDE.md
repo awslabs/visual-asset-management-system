@@ -79,7 +79,7 @@ infra/
         constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline, securitygroup-gateway-pipeline
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/metadata3dLabeling/
+        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/cosmos/{3,predict}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -315,7 +315,7 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 4. Update **ALL** config template files: `config.template.{commercial,govcloud,eusovereign}.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 5. Update `config.json` for the active deployment
 6. Document the option in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
-7. Mirror the change into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — see its `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`)
+7. Mirror the change into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — see its `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`). **The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does NOT cover `validation.ts`. When you add or change `getConfig()` validation logic, hand-port the matching rule into `validation.ts`; nothing but review will catch validation drift.**
 
 ### 2. Adding a New Lambda Function
 

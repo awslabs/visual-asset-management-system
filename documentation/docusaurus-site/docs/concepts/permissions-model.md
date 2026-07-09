@@ -260,6 +260,8 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | `/api/version`                  | GET       | No auth checks                                                    |
 | `/secure-config`                | GET       | No Tier 2 checks (requires authentication header)                 |
 | `/auth/routes`                  | POST      | No Tier 1 checks (POST is non-mutating, retrieves allowed routes) |
+| `/auth/routes/api`              | GET       | API-level only                                                    |
+| `/auth/routes/api/allowed`      | GET       | API-level only                                                    |
 | `/auth/loginProfile/\{userId\}` | GET, POST | API-level only                                                    |
 
 ### Database routes
@@ -285,6 +287,7 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | `/database/\{databaseId\}/assets/\{assetId\}/unarchiveAsset` | PUT                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/\{databaseId\}/assets/\{assetId\}/metadata`       | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/\{databaseId\}/assets/\{assetId\}/metadata/file`  | GET, POST, PUT, DELETE | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/\{databaseId\}/assets/\{assetId\}/assetHistory`   | GET                    | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset file routes
 
@@ -371,9 +374,10 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 
 ### Search route
 
-| Route     | Methods   | Tier 2 Object Type | Tier 2 Fields                                                                                  |
-| --------- | --------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-| `/search` | GET, POST | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (both GET and POST are non-mutating) |
+| Route            | Methods   | Tier 2 Object Type | Tier 2 Fields                                                                                  |
+| ---------------- | --------- | ------------------ | ---------------------------------------------------------------------------------------------- |
+| `/search`        | GET, POST | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (both GET and POST are non-mutating) |
+| `/search/simple` | POST      | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` (POST is non-mutating)               |
 
 ### Subscription routes
 
@@ -406,12 +410,21 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 | ---------------------------------------- | ---------------------- | ------------------ |
 | `/auth/constraints`                      | GET                    | API-level only     |
 | `/auth/constraints/\{constraintId\}`     | GET, PUT, POST, DELETE | API-level only     |
+| `/auth/constraints/permissionObjects`    | GET                    | API-level only     |
 | `/auth/constraintsTemplateImport`        | POST                   | API-level only     |
 | `/auth/api-keys`                         | GET, POST              | API-level only     |
 | `/auth/api-keys/\{apiKeyId\}`            | GET, PUT, DELETE       | API-level only     |
+| `/auth/user/api-keys`                    | GET, POST              | API-level only     |
+| `/auth/user/api-keys/\{apiKeyId\}`       | GET, PUT, DELETE       | API-level only     |
 | `/user/cognito`                          | GET, POST              | API-level only     |
 | `/user/cognito/\{userId\}`               | PUT, DELETE            | API-level only     |
 | `/user/cognito/\{userId\}/resetPassword` | POST                   | API-level only     |
+
+### Add-on routes
+
+| Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                             |
+| ---------------------- | ------- | ------------------ | --------------------------------------------------------- |
+| `/addon/physna/viewer` | GET     | `asset`            | `assetId`, `assetName`, `databaseId`, `assetType`, `tags` |
 
 ## Performance considerations
 

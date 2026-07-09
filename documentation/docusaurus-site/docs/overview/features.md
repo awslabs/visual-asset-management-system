@@ -185,7 +185,7 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes thirteen built-in processing pipelines, each deployable through configuration flags:
+VAMS includes fourteen built-in processing pipelines, each deployable through configuration flags:
 
 | Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
 | ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
@@ -199,6 +199,7 @@ VAMS includes thirteen built-in processing pipelines, each deployable through co
 | NVIDIA Cosmos Predict        | `useNvidiaCosmos.modelsPredict`          | GPU-accelerated video generation from text or image/video using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes | Disabled |
 | NVIDIA Cosmos Reason         | `useNvidiaCosmos.modelsReason`           | Vision Language Model for video/image analysis generating text-based captions, descriptions, and reasoning with Cosmos-Reason2 (2B, 8B) models                                                | Disabled |
 | NVIDIA Cosmos Transfer       | `useNvidiaCosmos.modelsTransfer`         | Video transformation with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and content transformation                                                               | Disabled |
+| NVIDIA Cosmos 3              | `useNvidiaCosmos3`                       | Omnimodal world-model generation using Cosmos3-Nano (16B) and Cosmos3-Super (64B) models for text2image, text2video, and image2video                                                          | Disabled |
 | RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization                                                                                                                                                            | Disabled |
 | VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                                                                                                                                                                | Disabled |
 | NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation                                                                                                                                                | Disabled |

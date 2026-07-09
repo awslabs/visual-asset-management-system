@@ -117,6 +117,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/nvidia-cosmos-predict",
                         "pipelines/nvidia-cosmos-reason",
                         "pipelines/nvidia-cosmos-transfer",
+                        "pipelines/nvidia-cosmos-3",
                         "pipelines/nvidia-gr00t-finetune",
                         "pipelines/rapidpipeline",
                         "pipelines/model-ops",

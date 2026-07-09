@@ -4097,7 +4097,7 @@ paths:
         post:
             summary: "Execute a workflow using an asset as the input source."
             requestBody:
-                required: false
+                required: true
                 content:
                     application/json:
                         schema:
@@ -4118,6 +4118,8 @@ paths:
                                     type: string
                                     pattern: "^\\/.*$"
                                     description: "Optional asset-relative path segment (leading /) inserted between the output asset location key and each output file's relative path. Defaults to / (no extra segment)."
+                            required:
+                                - workflowDatabaseId
             responses:
                 "200":
                     description: Workflow execution started.
@@ -4158,14 +4160,48 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions:
+    /database/{databaseId}/assets/{assetId}/workflows/executions:
         get:
-            summary: "List all executions for a workflow."
+            summary: "List all workflow executions for an asset."
             responses:
                 "200":
                     description: OK.
                 "404":
-                    description: Database OR Asset OR Workflow not found.
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}:
+        get:
+            summary: "List executions for a specific workflow on an asset."
+            responses:
+                "200":
+                    description: OK.
+                "404":
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -4248,7 +4284,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Database OR Pipeline not found.
+                    description: Not authorized.
                     content:
                         application/json:
                             schema:
@@ -4272,12 +4308,6 @@ paths:
               - name: pipelineId
                 in: path
                 description: Pipeline ID.
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "value"
-                in: "query"
-                description: "Pipeline ID."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -5664,9 +5694,9 @@ paths:
                     $ref: "#/components/schemas/object_name_pattern_regex"
             security:
               - DefaultCognitoAuthorizer: []
-    /subscriptions: 
+    /subscriptions:
         get:
-            summary: "List all tags."
+            summary: "List all subscriptions."
             responses:
                 "200":
                     description: OK
@@ -7706,6 +7736,7 @@ components:
             properties:
                 databaseId:
                     #example: vr-models-training
+                    description: "Unique database identifier. Cannot be GLOBAL or a reserved S3 keyword (pipeline(s), preview(s), temp-upload(s), workspace(s)), matched case-insensitively."
                     $ref: '#/components/schemas/id_regex'
                 description:
                     #example: 3d models used in training programs.
@@ -8089,20 +8120,35 @@ components:
                 - SQS
                 - EventBridge
             default: Lambda
+        PipelineType:
+            type: string
+            description: "The pipeline type classification"
+            enum:
+                - standardFile
+                - previewFile
+        WaitForCallback:
+            type: string
+            description: "Whether Step Functions waits for a task token callback"
+            enum:
+                - Enabled
+                - Disabled
+            default: Disabled
 
         UserProvidedResource:
             type: object
-            description: "Describes a user-provided resource (e.g., SQS queue or EventBridge bus) used by a pipeline"
+            description: "Describes a user-provided resource (Lambda function, SQS queue, or EventBridge bus) used by a pipeline"
             properties:
                 resourceId:
                     type: string
-                    description: "The resource identifier (e.g., SQS queue URL or EventBridge bus ARN)"
+                    description: "The resource identifier (Lambda name, SQS queue URL, or EventBridge bus ARN)"
                 resourceType:
                     type: string
                     description: "The type of the resource"
+                    default: Lambda
                     enum:
-                        - SQS_QUEUE
-                        - EVENTBRIDGE_BUS
+                        - Lambda
+                        - SQS
+                        - EventBridge
                 isProvided:
                     type: boolean
                     description: "Whether the resource is user-provided (true) or managed by VAMS (false)"
@@ -8131,8 +8177,21 @@ components:
                 outputType:
                     #example: gltf
                     $ref: "#/components/schemas/file_type_regex"
+                pipelineType:
+                    $ref: "#/components/schemas/PipelineType"
                 pipelineExecutionType:
                     $ref: "#/components/schemas/PipelineExecutionType"
+                waitForCallback:
+                    $ref: "#/components/schemas/WaitForCallback"
+                taskTimeout:
+                    type: string
+                    description: "Timeout in seconds for callback (max 604800 = 1 week). Defaults to '86400' when waitForCallback is Enabled and omitted."
+                taskHeartbeatTimeout:
+                    type: string
+                    description: "Heartbeat timeout in seconds. Must be smaller than taskTimeout."
+                lambdaName:
+                    type: string
+                    description: "Lambda function name (Lambda execution type). If omitted, VAMS auto-creates a sample Lambda."
                 sqsQueueUrl:
                     type: string
                     description: "SQS queue URL (required when pipelineExecutionType is SQS)"
@@ -8145,11 +8204,24 @@ components:
                 eventBridgeDetailType:
                     type: string
                     description: "EventBridge event detail-type (optional; defaults to the pipelineId)"
+                inputParameters:
+                    type: string
+                    description: "JSON string of additional parameters passed to the pipeline"
+                updateAssociatedWorkflows:
+                    type: boolean
+                    description: "When true, updates all workflows that reference this pipeline"
+                    default: false
+                enabled:
+                    type: boolean
+                    description: "Whether the pipeline is enabled"
+                    default: true
                 userProvidedResource:
                     $ref: "#/components/schemas/UserProvidedResource"
             required:
                 - pipelineId
                 - databaseId
+                - pipelineType
+                - pipelineExecutionType
                 - description
                 - assetType
                 - outputType
@@ -9606,28 +9678,83 @@ components:
                     description: "Whether to include archived versions in the results"
                     default: false
         
+        WorkflowPipelineFunction:
+            type: object
+            description: "A pipeline function within a workflow's specifiedPipelines list"
+            properties:
+                name:
+                    #example: convert-to-gltf
+                    $ref: '#/components/schemas/id_regex'
+                databaseId:
+                    #example: GLOBAL
+                    $ref: '#/components/schemas/id_regex'
+                pipelineType:
+                    $ref: '#/components/schemas/PipelineType'
+                outputType:
+                    #example: .gltf
+                    $ref: '#/components/schemas/file_type_regex'
+                pipelineExecutionType:
+                    $ref: '#/components/schemas/PipelineExecutionType'
+                waitForCallback:
+                    $ref: '#/components/schemas/WaitForCallback'
+                taskTimeout:
+                    type: string
+                    description: "Timeout in seconds (used when waitForCallback is Enabled)"
+                taskHeartbeatTimeout:
+                    type: string
+                    description: "Heartbeat timeout in seconds"
+                userProvidedResource:
+                    type: string
+                    description: "JSON string describing the pipeline resource configuration"
+                inputParameters:
+                    type: string
+                    description: "JSON string of additional parameters passed to the pipeline"
+            required:
+                - name
+                - databaseId
+                - pipelineType
+                - outputType
+        specifiedPipelines:
+            type: object
+            description: "Container for the list of pipeline functions in a workflow"
+            properties:
+                functions:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/WorkflowPipelineFunction'
+            required:
+                - functions
         workflow:
             type: object
             properties:
-                databaseId:
-                    #example: vr-models-training
-                    $ref: '#/components/schemas/id_regex'
-                pipelineId:
-                    #example: ["convert-to-gltf", "reduce-polygons"]
-                    type: array
-                    items: 
-                        $ref: '#/components/schemas/id_regex'
                 workflowId:
                     #example: to-gltf-and-reduce
+                    $ref: '#/components/schemas/id_regex'
+                databaseId:
+                    #example: vr-models-training
                     $ref: '#/components/schemas/id_regex'
                 description:
                     #example: Converts models to GLTF format then reduces polygons.
                     $ref: '#/components/schemas/string256Param'
+                specifiedPipelines:
+                    $ref: '#/components/schemas/specifiedPipelines'
+                autoTriggerOnFileExtensionsUpload:
+                    type: string
+                    description: "Comma-delimited file extensions to auto-trigger on upload (e.g., 'jpg,png,pdf'), or 'all' for all extensions"
+                workflow_arn:
+                    type: string
+                    description: "ARN of the underlying Step Functions state machine"
+                dateCreated:
+                    type: string
+                    description: "Creation timestamp"
+                dateModified:
+                    type: string
+                    description: "Last modification timestamp"
             required:
-                - databaseId
-                - pipelineId
                 - workflowId
+                - databaseId
                 - description
+                - specifiedPipelines
         bucket:
             type: object
             properties:

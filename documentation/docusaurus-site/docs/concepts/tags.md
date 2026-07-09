@@ -6,10 +6,11 @@ Tags provide a flexible classification system for organizing and filtering asset
 
 A tag type defines a named category that groups related tags together. Tag types provide organizational structure and can enforce tagging requirements on assets.
 
-| Field         | Description                                                                              |
-| ------------- | ---------------------------------------------------------------------------------------- |
-| `tagTypeName` | Unique name for the tag type (for example, `Project Phase`, `Classification`, `Region`). |
-| `required`    | When set to `true`, every asset must have at least one tag from this tag type.           |
+| Field         | Description                                                                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tagTypeName` | Unique name for the tag type (for example, `Project Phase`, `Classification`, `Region`).                                                             |
+| `description` | Description of the tag type's purpose. Required when creating or updating a tag type.                                                                |
+| `required`    | When set to `"True"`, every asset must have at least one tag from this tag type. Stored as the string `"True"` or `"False"` (defaults to `"False"`). |
 
 :::tip[Required tag types]
 Marking a tag type as required is useful for enforcing organizational standards. For example, a `Classification` tag type marked as required ensures that every asset is classified before it can be considered complete.
@@ -22,6 +23,7 @@ A tag is an individual label associated with a tag type. Tags are assigned to as
 | Field         | Description                                                                      |
 | ------------- | -------------------------------------------------------------------------------- |
 | `tagName`     | The display name of the tag (for example, `Design`, `Construction`, `As-Built`). |
+| `description` | Description of the tag's purpose. Required when creating or updating a tag.      |
 | `tagTypeName` | The tag type this tag belongs to.                                                |
 
 ## How tags are assigned

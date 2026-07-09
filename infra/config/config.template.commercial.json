@@ -220,6 +220,42 @@
                     }
                 }
             },
+            "useNvidiaCosmos3": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsOmni": {
+                    "nano16B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "super64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "superText2Image64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "superImage2Video64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
+            },
             "useNvidiaGr00t": {
                 "enabled": false,
                 "huggingFaceToken": "",
