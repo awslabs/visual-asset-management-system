@@ -368,6 +368,49 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaCosmos.enabled = false;
     }
 
+    // Cosmos 3 (omni) defaults
+    if (config.app.pipelines.useNvidiaCosmos3 == undefined) {
+        config.app.pipelines.useNvidiaCosmos3 = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: false,
+            useWarmInstances: false,
+            warmInstanceCount: 1,
+            modelsOmni: {
+                nano16B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
+                    maxVCpus: 192,
+                },
+                super64B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                    maxVCpus: 192,
+                },
+                superText2Image64B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    instanceTypes: ["p5.48xlarge", "p5e.48xlarge"],
+                    maxVCpus: 192,
+                },
+                superImage2Video64B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                    maxVCpus: 192,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useNvidiaCosmos3.enabled == undefined) {
+        config.app.pipelines.useNvidiaCosmos3.enabled = false;
+    }
+
     // Gr00t Fine-Tuning defaults
     if (config.app.pipelines.useNvidiaGr00t == undefined) {
         config.app.pipelines.useNvidiaGr00t = {
@@ -737,6 +780,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
     if (config.app.pipelines.useNvidiaCosmos.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");
+    if (config.app.pipelines.useNvidiaCosmos3.enabled)
+        vpcRequiringFeatures.push("pipelines.useNvidiaCosmos3");
     if (config.app.pipelines.useNvidiaGr00t.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
@@ -849,6 +894,63 @@ export function getConfig(app: cdk.App): Config {
         ) {
             throw new Error(
                 "Configuration Error: useNvidiaCosmos.modelsReason.reason8B.instanceTypes must be a non-empty array."
+            );
+        }
+    }
+
+    if (config.app.pipelines.useNvidiaCosmos3.enabled) {
+        const c3 = config.app.pipelines.useNvidiaCosmos3.modelsOmni;
+        const anyC3Enabled =
+            c3?.nano16B?.enabled ||
+            c3?.super64B?.enabled ||
+            c3?.superText2Image64B?.enabled ||
+            c3?.superImage2Video64B?.enabled;
+        if (!anyC3Enabled) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3 is enabled but no model variants are enabled. " +
+                    "Enable at least one model in useNvidiaCosmos3.modelsOmni."
+            );
+        }
+        if (
+            !config.app.pipelines.useNvidiaCosmos3.huggingFaceToken ||
+            config.app.pipelines.useNvidiaCosmos3.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3 requires huggingFaceToken when enabled."
+            );
+        }
+        if (
+            c3?.nano16B?.enabled &&
+            (!c3.nano16B.instanceTypes || c3.nano16B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.nano16B.instanceTypes must be a non-empty array."
+            );
+        }
+        if (
+            c3?.super64B?.enabled &&
+            (!c3.super64B.instanceTypes || c3.super64B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.super64B.instanceTypes must be a non-empty array."
+            );
+        }
+        if (
+            c3?.superText2Image64B?.enabled &&
+            (!c3.superText2Image64B.instanceTypes ||
+                c3.superText2Image64B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.superText2Image64B.instanceTypes must be a non-empty array."
+            );
+        }
+        if (
+            c3?.superImage2Video64B?.enabled &&
+            (!c3.superImage2Video64B.instanceTypes ||
+                c3.superImage2Video64B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array."
             );
         }
     }
@@ -2073,6 +2175,42 @@ export interface ConfigPublic {
                         maxVCpus: number;
                     };
                     reason8B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                };
+            };
+            useNvidiaCosmos3: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                useWarmInstances: boolean;
+                warmInstanceCount: number;
+                modelsOmni: {
+                    nano16B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    super64B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    superText2Image64B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    superImage2Video64B: {
                         enabled: boolean;
                         autoRegisterWithVAMS: boolean;
                         autoTriggerOnFileExtensionsUpload: string;

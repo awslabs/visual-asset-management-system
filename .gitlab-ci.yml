@@ -1,6 +1,17 @@
 stages:
     - build
     - deploy
+    - index
+
+variables:
+    # Badges on (default). Set to "true" to skip the README badge commit —
+    # indexing, score, security and interfaces still run.
+    SKIP_README_UPDATE: "true"
+
+include:
+    - project: "envision-engineering-amer/namer/automation-tools/agentic-pace"
+      ref: main
+      file: "/monticello/templates/indexer.yml"
 
 # Documentation build and deploy to GitLab Pages
 # Builds only the current branch's docs

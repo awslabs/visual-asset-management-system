@@ -316,13 +316,32 @@ All rights reserved.
 | boto3                     | latest  | Apache-2.0                | AWS SDK for Python                                            |
 | huggingface_hub           | latest  | Apache-2.0                | Model download from HuggingFace Hub                           |
 
+### NVIDIA Cosmos 3 Pipeline (omni)
+
+| Name                      | Version | License                   | Purpose                                                |
+| :------------------------ | :------ | :------------------------ | :----------------------------------------------------- |
+| NVIDIA cosmos-framework   | 3.0     | Apache-2.0                | Cosmos 3 omni framework (inference code + entrypoint)  |
+| Cosmos3-Nano              | 3.0     | OpenMDW-1.1               | 16B omnimodal world model, single-GPU (~35GB)          |
+| Cosmos3-Super             | 3.0     | OpenMDW-1.1               | 64B omnimodal world model, multi-GPU (~133GB)          |
+| Cosmos3-Super-Text2Image  | 3.0     | OpenMDW-1.1               | 64B text-to-image model, multi-GPU (~133GB)            |
+| Cosmos3-Super-Image2Video | 3.0     | OpenMDW-1.1               | 64B image-to-video model, multi-GPU (~133GB)           |
+| NVIDIA Cosmos-Guardrail1  | 1.0     | NVIDIA Open Model License | Content safety blocklist and face filter (gated, ~1GB) |
+| NVIDIA Transformer Engine | 2.12.0  | Apache-2.0                | Optimized transformer computation (CUDA 12.8 build)    |
+| flash-attn                | 2.7.4   | BSD-3-Clause              | Flash attention (CUDA 12.8 build)                      |
+| torch                     | 2.10.0  | BSD-3-Clause              | Deep learning framework (CUDA 12.8 build)              |
+| iopath                    | 0.1.10  | MIT                       | File I/O abstraction used by the framework             |
+| boto3                     | latest  | Apache-2.0                | AWS SDK for Python                                     |
+| huggingface_hub           | latest  | Apache-2.0                | Model download from HuggingFace Hub                    |
+
+The Cosmos 3 pipeline container uses the NVIDIA CUDA 12.8.1 base image with cuDNN (`nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`). Cosmos 3 models are licensed under the [OpenMDW-1.1 License](https://openmdw.ai/license/1-1/); the gated `Cosmos-Guardrail1` model remains under the NVIDIA Open Model License.
+
 **Container Base Image**
 
 The Cosmos Predict Pipeline uses the NVIDIA NGC PyTorch container image (`nvcr.io/nvidia/pytorch:24.10-py3`) which is subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license).
 
 **NVIDIA Cosmos Attribution Requirement**
 
-Per the NVIDIA Open Model License, applications using NVIDIA Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. See the [NVIDIA Cosmos License](https://developer.nvidia.com/cosmos-license) for full terms.
+Applications using NVIDIA Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"**. This requirement applies under the [NVIDIA Open Model License](https://developer.nvidia.com/cosmos-license) for the Cosmos Predict, Reason, and Transfer models, and under the [OpenMDW-1.1 License](https://openmdw.ai/license/1-1/) for the Cosmos 3 models.
 
 **HuggingFace Model Access**
 

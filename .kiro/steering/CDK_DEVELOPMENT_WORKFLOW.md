@@ -592,10 +592,17 @@ backendPipelines/
 │       ├── container/          # Container code (if needed)
 │       └── README.md           # Pipeline documentation
 ├── genAi/                      # Generative AI pipelines
-│   └── metadata3dLabeling/     # 3D metadata labeling
-│       ├── lambda/
-│       ├── container/
-│       └── blender/            # Pipeline-specific tools
+│   ├── metadata3dLabeling/     # 3D metadata labeling
+│   │   ├── lambda/
+│   │   ├── container/
+│   │   └── blender/            # Pipeline-specific tools
+│   └── nvidia/cosmos/          # NVIDIA Cosmos pipelines
+│       ├── 3/                  # Cosmos 3 (omni generation)
+│       │   ├── lambda/
+│       │   └── container/
+│       └── predict/            # Cosmos Predict (Text2World, Video2World)
+│           ├── lambda/
+│           └── container/
 ├── preview/                    # Preview generation pipelines
 │   └── pcPotreeViewer/         # Point cloud preview
 │       ├── lambda/
@@ -2035,7 +2042,7 @@ When making CDK infrastructure changes, update the corresponding documentation a
 #### **Docusaurus Documentation Updates:**
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
--   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes. The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts`, so new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` and kept in sync by review, not by the test.
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
 -   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
@@ -2129,7 +2136,7 @@ The docs-site config generator is a hand-maintained mirror of `config.ts` — it
     - `schema.ts` — add a `FIELDS` entry (path + label + input kind + section).
     - `defaults.ts` — add the default (kept deep-equal to `config.template.commercial.json` / `config.template.govcloud.json`).
     - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`.
-3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field.
+3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field. **Note:** the test covers only `schema.ts` (fields) and `defaults.ts` (presets); it does **not** validate `validation.ts` against `getConfig()`. Keeping the `validation.ts` rules in step with `getConfig()`'s `throw`/`warn` logic is a manual, review-enforced task — a stale or missing rule will not be caught by any test.
 
 ### **Creating New Nested Stacks**
 

@@ -161,6 +161,7 @@ function makeModelFields(
 }
 
 const COSMOS = "app.pipelines.useNvidiaCosmos";
+const COSMOS3 = "app.pipelines.useNvidiaCosmos3";
 const GR00T = "app.pipelines.useNvidiaGr00t";
 
 const cosmosModelFields: FieldMeta[] = [
@@ -185,6 +186,29 @@ const cosmosModelFields: FieldMeta[] = [
     ...makeModelFields(`${COSMOS}.modelsReason.reason8B`, "Cosmos Reason 8B", {
         hasAutoTrigger: true,
     }),
+];
+
+const cosmos3ModelFields: FieldMeta[] = [
+    ...makeModelFields(`${COSMOS3}.modelsOmni.nano16B`, "Cosmos 3 Nano 16B", {
+        hasAutoTrigger: true,
+    }),
+    ...makeModelFields(`${COSMOS3}.modelsOmni.super64B`, "Cosmos 3 Super 64B", {
+        hasAutoTrigger: true,
+    }),
+    ...makeModelFields(
+        `${COSMOS3}.modelsOmni.superText2Image64B`,
+        "Cosmos 3 Super Text2Image 64B",
+        {
+            hasAutoTrigger: false,
+        }
+    ),
+    ...makeModelFields(
+        `${COSMOS3}.modelsOmni.superImage2Video64B`,
+        "Cosmos 3 Super Image2Video 64B",
+        {
+            hasAutoTrigger: true,
+        }
+    ),
 ];
 
 export const FIELDS: FieldMeta[] = [
@@ -1323,6 +1347,55 @@ export const FIELDS: FieldMeta[] = [
     }).map((f) => ({
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${GR00T}.enabled`),
+    })),
+
+    // NVIDIA Cosmos 3 shared settings + models
+    {
+        path: `${COSMOS3}.enabled`,
+        label: "NVIDIA Cosmos 3",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Omnimodal world-model generation (Nano 16B, Super 64B). Requires VPC + GPU + internet.",
+    },
+    {
+        path: `${COSMOS3}.huggingFaceToken`,
+        label: "Cosmos 3 — HuggingFace token",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Required when Cosmos 3 is enabled. Stored in Secrets Manager at deploy.",
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    {
+        path: `${COSMOS3}.useCodeBuild`,
+        label: "Cosmos 3 — build with CodeBuild",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Build via AWS CodeBuild + ECR. Recommended for large GPU images.",
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    {
+        path: `${COSMOS3}.useWarmInstances`,
+        label: "Cosmos 3 — keep warm instances",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    {
+        path: `${COSMOS3}.warmInstanceCount`,
+        label: "Cosmos 3 — warm instance count",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 0,
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    ...cosmos3ModelFields.map((f) => ({
+        ...f,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
 
     // ===== Add-ons (Garnet) =====
