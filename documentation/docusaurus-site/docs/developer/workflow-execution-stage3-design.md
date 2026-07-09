@@ -73,7 +73,7 @@ flat resolved-files list with a grouped envelope:
     },
     "auxBucket": "aux-bucket",
     "auxTempPrefix": "pipelines/{pipelineName}/{execId}/",
-    "auxPreviewPipelinePrefix": "",
+    "auxPreviewPipelineSuffix": "",
     "systemConfig": {
         "orchestrationBusArn": "arn:...:event-bus/...-orchestration",
         "orchestrationEventPrefix": "vams.prod.execution.{execId}.pipeline.{pipelineExecutionId}"
@@ -99,12 +99,12 @@ Design points:
     asset-bucket key — the asset location key plus the relative file path, so a custom asset base
     prefix is preserved), regardless of pipeline type — a pipeline that writes preview/viewer data
     resolves it against `auxBucket`.
-    The top-level `auxPreviewPipelinePrefix` is a per-pipeline viewer subfolder (e.g.
+    The top-level `auxPreviewPipelineSuffix` is a per-pipeline viewer subfolder (e.g.
     `/PotreeViewer`) appended to that per-file prefix; it is empty until sourced from the pipeline
     configuration, replacing hardcoded viewer paths in pipeline code.
 -   **No `previewMode` field.** A redundant boolean is not carried; a pipeline resolves its aux
     preview location itself from `auxBucket` + the input file's `auxPreviewPrefix` (+ the
-    per-pipeline `auxPreviewPipelinePrefix`).
+    per-pipeline `auxPreviewPipelineSuffix`).
 -   **`outputTarget`** identifies where the execution's outputs are written: `locationType`
     (`asset` today), and the `assetId` / `databaseId` of the output asset. The target equals the
     input asset today but is carried explicitly so the end-state process-output step writes to the

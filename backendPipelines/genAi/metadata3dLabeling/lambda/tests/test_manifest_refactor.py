@@ -81,7 +81,7 @@ class TestVamsExecute:
                         "metadata": "pipelines/p1/MJOB/output/E1/metadata/"},
             "auxBucket": "aux",
             "auxTempPrefix": "pipelines/metadata3dLabeling/E1/",
-            "auxPreviewPipelinePrefix": "",
+            "auxPreviewPipelineSuffix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},

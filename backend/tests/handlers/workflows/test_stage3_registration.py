@@ -55,7 +55,7 @@ class TestManifestEnvelopeAndHelpers:
             outputs=er.build_manifest_outputs(bucket="bkt", files="o/files/"),
             aux_bucket="aux",
             aux_temp_prefix="pipelines/p/E/",
-            aux_preview_pipeline_prefix="",
+            aux_preview_pipeline_suffix="",
             system_config=er.build_manifest_system_config(
                 orchestration_bus_arn="arn:bus", orchestration_event_prefix="vams.p.execution.E.pipeline.P"))
         assert env["schemaVersion"] == er.MANIFEST_SCHEMA_VERSION

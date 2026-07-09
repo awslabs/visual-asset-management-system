@@ -90,7 +90,7 @@ class TestResolveInputs:
             },
             "auxBucket": "aux",
             "auxTempPrefix": "pipelines/p1/E1/",
-            "auxPreviewPipelinePrefix": "",
+            "auxPreviewPipelineSuffix": "",
             "systemConfig": {
                 "orchestrationBusArn": "arn:bus",
                 "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1",
@@ -258,7 +258,7 @@ class TestVamsExecuteUsesManifest:
             "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
             "auxBucket": "aux",
             "auxTempPrefix": "pipelines/p1/E1/",
-            "auxPreviewPipelinePrefix": "",
+            "auxPreviewPipelineSuffix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {
                 "orchestrationBusArn": "arn:bus",

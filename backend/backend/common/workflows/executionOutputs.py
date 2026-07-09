@@ -191,7 +191,7 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
 
     envelope_context: {inputMetadataS3Location, outputs{bucket,files,previews,metadata,results},
         outputTarget{locationType,assetId,databaseId}, auxBucket, auxTempPrefix,
-        auxPreviewPipelinePrefix, systemConfig}. When omitted (legacy callers/tests), returns an
+        auxPreviewPipelineSuffix, systemConfig}. When omitted (legacy callers/tests), returns an
         envelope with empty location/config fields. Per-input-file aux preview prefixes live on
         each resolved input file entry (carried through from the original inputs)."""
     ctx = envelope_context or {}
@@ -203,7 +203,7 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
         outputs=ctx.get("outputs", {}),
         aux_bucket=ctx.get("auxBucket", ""),
         aux_temp_prefix=ctx.get("auxTempPrefix", ""),
-        aux_preview_pipeline_prefix=ctx.get("auxPreviewPipelinePrefix", ""),
+        aux_preview_pipeline_suffix=ctx.get("auxPreviewPipelineSuffix", ""),
         system_config=ctx.get("systemConfig", {}),
         output_target=ctx.get("outputTarget"),
     )

@@ -16,6 +16,7 @@ from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from urllib.parse import unquote_plus
 from common.workflows import executionRecords as er
+from common.workflows import templateRender as tr
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -166,6 +167,38 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         resolved_path = asset_base_key + file_path
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
+
+
+def input_exists_in_s3(bucket, key):
+    """Whether a workflow input key exists in S3. Handles both a specific file and a folder/prefix
+    (multi-file-ready — the caller checks each selected input):
+
+      - A folder/prefix key (ends with '/') exists when at least one object lives under it.
+      - A specific file key exists when head_object succeeds (a live object; a delete-marker'd or
+        missing key does not count).
+
+    Returns True/False; a permission/other error re-raises so the launch fails loudly rather than
+    silently skipping the guard."""
+    if not key:
+        return False
+    if key.endswith('/'):
+        resp = s3c.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+        return resp.get('KeyCount', 0) > 0 or len(resp.get('Contents', [])) > 0
+    try:
+        s3c.head_object(Bucket=bucket, Key=key)
+        return True
+    except botocore.exceptions.ClientError as e:
+        code = e.response.get('Error', {}).get('Code')
+        if code in ('404', 'NoSuchKey', 'NotFound'):
+            return False
+        raise
+
+
+def verify_inputs_exist_in_s3(bucket, input_keys):
+    """Verify every selected workflow input (file or folder/prefix) exists in S3. Returns the list
+    of missing keys (empty when all exist). Today the caller passes a single key; the list shape is
+    ready for multi-file/folder inputs."""
+    return [k for k in input_keys if not input_exists_in_s3(bucket, k)]
 
 
 def get_asset_metadata(databaseId, assetId, event):
@@ -358,25 +391,36 @@ def _parse_pipeline_resource(pipeline):
 
 
 def _pipeline_input_configuration(pipeline):
-    """The pipeline definition's inputParameters JSON string, or empty string when absent or
-    not valid JSON."""
+    """The pipeline definition's inputParameters string, or empty string when absent.
+
+    The value is normally JSON, but it may contain ``{{tag}}`` template placeholders (see
+    templateRender) that are not valid JSON until rendered (an unquoted array/object tag such as
+    ``{{assetFileKeyArray}}`` in particular). Such templated text is passed through as-is — it is
+    validated after rendering, not here. Only non-templated text is JSON-validated (and dropped if
+    invalid) to preserve the prior guard for plain-JSON configs."""
     raw = pipeline.get('inputParameters', '') or ''
-    if raw and raw != '':
-        try:
-            json.loads(raw)
-            return raw
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Pipeline inputParameters is not valid JSON; storing empty input configuration")
-            return ''
-    return ''
+    if not raw or raw == '':
+        return ''
+    if tr.uses_template_tags(raw):
+        return raw
+    try:
+        json.loads(raw)
+        return raw
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Pipeline inputParameters is not valid JSON; storing empty input configuration")
+        return ''
 
 
 def write_execution_input_files(execution_id, asset_bucket, pipelines, input_metadata,
-                                original_input_manifest):
+                                original_input_manifest, pipeline_config_bodies):
     """Write an execution's input-definition files to the asset bucket (per-execution input
     folder keyed on execution id): the shared metadata file, one config.json per pipeline, and
     pipeline 1's manifest. Returns
-    { metadataFileS3Key, configKeys: [perPipeline...], firstManifestS3Key } as asset-bucket keys."""
+    { metadataFileS3Key, configKeys: [perPipeline...], firstManifestS3Key } as asset-bucket keys.
+
+    ``pipeline_config_bodies`` is the per-pipeline configuration text already rendered (template
+    tags substituted) by the caller — pipeline 1's is rendered at launch here; pipelines 2+ carry
+    their raw text (they are re-written with rendered text by the interim lambda per task)."""
     locations = {"metadataFileS3Key": "", "configKeys": [], "firstManifestS3Key": ""}
     if not pipelines:
         return locations
@@ -397,9 +441,9 @@ def write_execution_input_files(execution_id, asset_bucket, pipelines, input_met
     locations["metadataFileS3Key"] = metadata_key
 
     # Per-pipeline input configuration files (1-indexed folders pipeline1..N).
-    for idx, pipeline in enumerate(pipelines):
+    for idx, _pipeline in enumerate(pipelines):
         cfg_key = er.pipeline_input_config_key(execution_id, idx + 1)
-        cfg_body = _pipeline_input_configuration(pipeline)
+        cfg_body = pipeline_config_bodies[idx] if idx < len(pipeline_config_bodies) else ""
         s3c.put_object(Bucket=asset_bucket, Key=cfg_key,
                        Body=(cfg_body or "").encode('utf-8'), ContentType='application/json')
         locations["configKeys"].append(cfg_key)
@@ -604,7 +648,7 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
         aux_temp_prefix=first_aux_temp_prefix,
         # Per-pipeline viewer subfolder appended to each input file's aux preview prefix; empty
         # until sourced from the pipeline configuration.
-        aux_preview_pipeline_prefix="",
+        aux_preview_pipeline_suffix="",
         system_config=er.build_manifest_system_config(
             orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=first_event_prefix),
@@ -614,11 +658,64 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
             file_base_execution_path_extension=output_file_base_execution_path_extension),
     )
 
+    # --- Template-tag rendering (pipeline 1 at launch; pipelines 2+ render in the interim lambda) ---
+    # A pipeline's input configuration (and the output base-execution path extension) may contain
+    # {{tag}} placeholders substituted per pipeline task from that task's manifest + execution
+    # context. Pipeline 1's manifest is the one built above. inputMetadata is in memory at launch,
+    # so the metadata loader returns it directly (no S3 read needed here).
+    def _launch_metadata_payload():
+        if isinstance(inputMetadata, str):
+            try:
+                return json.loads(inputMetadata) if inputMetadata else {}
+            except (json.JSONDecodeError, ValueError):
+                return {}
+        return inputMetadata or {}
+
+    execution_start_ts = er.iso_now()
+    first_pexec_id = pipeline_execution_ids[0] if pipeline_execution_ids else ""
+    first_config_location = f"s3://{inputAssetBucket}/{er.pipeline_input_config_key(executionId, 1)}" \
+        if pipelines else ""
+    first_exec_context = {
+        "executionId": executionId,
+        "workflowId": workflow_id,
+        "workflowDatabaseId": workflow_database_id,
+        "pipelineExecutionId": first_pexec_id,
+        "pipelineId": first_pipeline_name,
+        "pipelineDatabaseId": pipelines[0].get('databaseId', '') if pipelines else "",
+        "jobName": first_job_name,
+        "triggerType": triggerType,
+        "executingUserName": executingUserName,
+        "executionStartTimestamp": execution_start_ts,
+        "inputConfigurationS3Location": first_config_location,
+    }
+
+    # Render the output base-execution path extension (e.g. '/{{executionId}}/'), then reflect the
+    # rendered value into the manifest's outputTarget and the SFN input so all consumers agree.
+    output_file_base_execution_path_extension = tr.render_config(
+        output_file_base_execution_path_extension, original_input_manifest, first_exec_context,
+        metadata_loader=_launch_metadata_payload)
+    original_input_manifest["outputTarget"]["fileBaseExecutionPathExtension"] = \
+        output_file_base_execution_path_extension
+
+    # Per-pipeline configuration bodies: pipeline 1 is rendered now against its manifest; pipelines
+    # 2+ keep their raw text (the interim lambda re-renders + re-writes each against its own task
+    # manifest before that pipeline runs).
+    pipeline_config_bodies = []
+    for idx, pipeline in enumerate(pipelines):
+        raw_cfg = _pipeline_input_configuration(pipeline)
+        if idx == 0:
+            pipeline_config_bodies.append(tr.render_config(
+                raw_cfg, original_input_manifest, first_exec_context,
+                metadata_loader=_launch_metadata_payload))
+        else:
+            pipeline_config_bodies.append(raw_cfg)
+
     # Write the input-definition files to the asset bucket execution input folder.
     input_locations = write_execution_input_files(
         execution_id=executionId, asset_bucket=inputAssetBucket,
         pipelines=pipelines, input_metadata=inputMetadata,
-        original_input_manifest=original_input_manifest)
+        original_input_manifest=original_input_manifest,
+        pipeline_config_bodies=pipeline_config_bodies)
 
     # The SFN execution input carries only what the ASL ($.X) references: identity, the
     # workflow-execution + auxiliary buckets, the output target, the per-pipeline execution ids,
@@ -937,6 +1034,19 @@ def execute_workflow(event, databaseId, assetId, workflowId, request_model):
         logger.info(f"Using file key from request: {file_key}, relative path: {relative_file_path}")
     else:
         logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
+
+    # Verify every selected input exists in S3 before launching. Today this is a single key: a
+    # specific requested file (head_object) or, when no file is requested, the asset's base prefix
+    # treated as a folder (at least one object under it). Soon this becomes the multi-file/folder
+    # input set; verify_inputs_exist_in_s3 already takes a list so that extension is mechanical.
+    existence_check_key = file_key if request_file_key else (asset_file_key.rstrip('/') + '/')
+    missing_inputs = verify_inputs_exist_in_s3(asset_bucket, [existence_check_key])
+    if missing_inputs:
+        logger.error(f"Workflow input(s) not found in S3: {missing_inputs}")
+        return validation_error(
+            status_code=404,
+            body={'message': 'Workflow input file(s) do not exist: ' + ', '.join(missing_inputs)},
+            event=event)
 
     # Block duplicate concurrent runs of this workflow on the same file.
     executionResults = get_workflow_executions(databaseId, assetId, workflow_database_id, workflowId, file_key)

@@ -144,6 +144,7 @@ class TestExecuteWorkflowHandler:
                           "workflow_arn": "arn:sm", "specifiedPipelines": {"functions": [{"name": "p1"}]}}]), \
              patch.object(ew, "validate_pipelines", return_value=(True, "")), \
              patch.object(ew, "get_default_bucket_details", return_value={"bucketName": "bkt", "baseAssetsPrefix": "", "bucketId": "b1"}), \
+             patch.object(ew, "verify_inputs_exist_in_s3", return_value=[]), \
              patch.object(ew, "get_workflow_executions", return_value={"Items": []}), \
              patch.object(ew, "build_pipeline_input_metadata", return_value={"VAMS": {}}), \
              patch.object(ew, "launchWorkflow", return_value="EXEC123") as mock_launch:
@@ -165,6 +166,7 @@ class TestExecuteWorkflowHandler:
                           "workflow_arn": "arn:sm", "specifiedPipelines": {"functions": [{"name": "p1"}]}}]), \
              patch.object(ew, "validate_pipelines", return_value=(True, "")), \
              patch.object(ew, "get_default_bucket_details", return_value={"bucketName": "bkt", "baseAssetsPrefix": "", "bucketId": "b1"}), \
+             patch.object(ew, "verify_inputs_exist_in_s3", return_value=[]), \
              patch.object(ew, "get_workflow_executions", return_value={"Items": [{"workflowExecutionId": "running"}]}):
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = True

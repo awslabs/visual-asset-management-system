@@ -70,7 +70,7 @@ One folder per domain. The current domains:
 -   `tags/` — Tag CRUD
 -   `tagTypes/` — Tag type management
 -   `userRoles/` — User-role assignment
--   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
+-   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation: Lambda/SQS/EventBridge/DeadlineCloud task states; `sfn/deadlineCloudJobCallback` resolves Deadline Cloud job task tokens from default-bus events)
 -   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
 
 #### **Workflow Execution Storage**

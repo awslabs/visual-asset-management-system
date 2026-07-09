@@ -390,6 +390,12 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    // Deadline Cloud pipeline execution-type support (workflow createJob task states +
+    // job-callback lambda). Off by default.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
+        config.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
+    }
+
     if (config.app.addons.useGarnetFramework == undefined) {
         config.app.addons.useGarnetFramework = {
             enabled: false,
@@ -681,6 +687,13 @@ export function getConfig(app: cdk.App): Config {
         if (config.app.useLocationService.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
+            );
+        }
+
+        if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+            throw new Error(
+                "Configuration Error: AWS Deadline Cloud is not available in GovCloud. " +
+                    "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
             );
         }
 
@@ -1946,6 +1959,7 @@ export interface ConfigPublic {
             };
         };
         pipelines: {
+            deadlineCloudExecutionTypeEnabled: boolean;
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;

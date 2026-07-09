@@ -417,6 +417,54 @@ Set `autoRegisterAutoTriggerOnFileUpload` to `true` and specify the file extensi
 }
 ```
 
+## Input-configuration template tags
+
+A pipeline's input configuration (the input parameters supplied when the pipeline is registered or overridden at execute time) may contain `{{tagName}}` template tags. VAMS substitutes these tags with values from the running execution before the pipeline receives its configuration, so a pipeline can ship a fixed configuration file with placeholders instead of building it field-by-field. Tags are replaced **per pipeline run**, and — in a multi-pipeline workflow — **per pipeline step**, so each step's tags reflect its own inputs.
+
+Substitution operates on the raw configuration text regardless of format, and comes in two forms:
+
+-   **Scalar tags** replace a value inside quotes: `"databaseId": "{{firstAssetFileDatabaseId}}"`.
+-   **Array / object tags** replace a JSON value without quotes: `"files": {{assetFileKeyArray}}`.
+
+```json
+{
+    "databaseId": "{{firstAssetFileDatabaseId}}",
+    "assetId": "{{firstAssetFileAssetId}}",
+    "inputFile": "{{firstAssetFileS3Uri}}",
+    "allInputKeys": {{assetFileKeyArray}},
+    "outputLocation": "{{outputFilesS3Uri}}",
+    "runId": "{{executionId}}"
+}
+```
+
+:::info
+An unrecognized tag causes the execution to fail, so a typo is caught rather than silently passed through. A recognized tag whose value is not available for a given run (for example a `{{firstAssetFile...}}` tag on a run with no input files) resolves to an empty value rather than failing.
+:::
+
+### Available tags
+
+**Execution and pipeline identity:** `{{executionId}}`, `{{workflowId}}`, `{{workflowDatabaseId}}`, `{{triggerType}}`, `{{executingUserName}}`, `{{pipelineExecutionId}}`, `{{pipelineId}}` / `{{pipelineName}}`, `{{pipelineDatabaseId}}`, `{{jobName}}`.
+
+**Timestamps:** `{{jobStartTimestamp}}`, `{{jobStartTimestampUnix}}`, `{{jobStartDate}}`, `{{executionStartTimestamp}}`.
+
+**First input file** (`{{firstAssetFile...}}`): `DatabaseId`, `AssetId`, `AssetBucket`, `AssetRootS3Key`, `RelativePath`, `Key`, `VersionId`, `AuxPreviewPrefix`, `S3Uri`, `AuxPreviewS3Uri`, `FileName`, `FileNameNoExt`, `FileExtension`.
+
+**All input files (arrays):** `{{assetFileKeyArray}}`, `{{assetFileRelativePathArray}}`, `{{assetFileS3UriArray}}`, `{{assetFileVersionIdArray}}`, `{{assetFileObjectArray}}`, `{{assetFileAssetIdArray}}`, `{{assetFileUniqueAssetIdArray}}`, `{{assetFileDatabaseIdArray}}`, `{{assetFileUniqueDatabaseIdArray}}`, `{{assetFileCount}}`.
+
+**Output and auxiliary locations:** `{{outputBucket}}`, `{{outputFilesPrefix}}` / `{{outputFilesS3Uri}}`, `{{outputPreviewsPrefix}}` / `{{outputPreviewsS3Uri}}`, `{{outputMetadataPrefix}}` / `{{outputMetadataS3Uri}}`, `{{outputResultsPrefix}}` / `{{outputResultsS3Uri}}`, `{{outputTargetAssetId}}`, `{{outputTargetDatabaseId}}`, `{{outputTargetLocationType}}`, `{{outputTargetAssetRootS3Key}}`, `{{outputFileBaseExecutionPathExtension}}`, `{{auxBucket}}`, `{{auxTempPrefix}}` / `{{auxTempS3Uri}}`, `{{auxPreviewPipelineSuffix}}`.
+
+**Metadata and configuration locations:** `{{inputMetadataS3Location}}`, `{{inputConfigurationS3Location}}`, `{{orchestrationBusArn}}`, `{{orchestrationEventPrefix}}`.
+
+**Metadata content** (inject the asset/file metadata directly, as JSON objects): `{{inputMetadataObject}}`, `{{assetMetadataObject}}`, `{{fileMetadataObject}}`, `{{fileAttributesObject}}`, `{{assetDataObject}}`.
+
+**Deadline Cloud** (`{{deadlineFarmId}}`, `{{deadlineQueueId}}`, `{{deadlineStorageProfileId}}`): recognized so a Deadline Cloud job template can reference them today, but they resolve to empty values until a future pipeline configuration supplies the pipeline's farm, queue, and storage profile.
+
+The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request can request a per-run output sub-folder such as `/{{executionId}}/` or `/{{jobStartDate}}/`.
+
+:::note
+Two dynamic tag families are planned but not yet available: `{{metadata_<key>}}` for looking up an individual metadata field by name, and user-defined per-pipeline tags declared on the pipeline definition. Using either today fails the execution as an unrecognized tag.
+:::
+
 ## Testing pipelines locally
 
 ### Container testing

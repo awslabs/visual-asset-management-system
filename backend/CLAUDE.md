@@ -46,7 +46,7 @@ backend/
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
 │   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
-│   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge)
+│   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
 │   │   └── logger.py                               # safeLogger with sensitive-data redaction
@@ -64,7 +64,8 @@ backend/
 │   │   │                                           #   (writes per-pipeline manifest envelope),
 │   │   │                                           #   workflowService. sfn/ (SFN/EventBridge-invoked):
 │   │   │                                           #   interimPipelineTracking, handleExecutionError,
-│   │   │                                           #   processWorkflowExecutionOutput, registerPipelineExecution
+│   │   │                                           #   processWorkflowExecutionOutput, registerPipelineExecution,
+│   │   │                                           #   deadlineCloudJobCallback
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,

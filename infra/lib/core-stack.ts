@@ -307,6 +307,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
             }
 
+            // Deadline Cloud pipeline execution-type support (createJob workflow task
+            // states + the job-callback lambda deployed in the API builder stack).
+            if (props.config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.DEADLINECLOUD_PIPELINES);
+            }
+
             // Build the API stack last (after all registrars have contributed routes).
             const apiNestedStack = new ApiNestedStack(this, "RestApi", {
                 ...props,

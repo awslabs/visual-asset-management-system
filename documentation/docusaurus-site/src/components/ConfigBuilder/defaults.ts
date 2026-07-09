@@ -186,6 +186,7 @@ const COMMERCIAL: ConfigShape = {
             },
         },
         pipelines: {
+            deadlineCloudExecutionTypeEnabled: false,
             useConversion3dBasic: {
                 enabled: true,
                 autoRegisterWithVAMS: true,

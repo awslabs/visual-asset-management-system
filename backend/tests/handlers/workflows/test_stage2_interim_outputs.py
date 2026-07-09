@@ -202,6 +202,42 @@ class TestInterimPipelineTracking:
         assert by_rel["/test/pump.e57"]["assetId"] == "a1"
         assert result["inputManifestS3Location"].endswith("pipeline2/manifest.json")
 
+    def test_next_pipeline_config_template_tags_rendered(self):
+        # The interim lambda reads the next pipeline's raw config from S3, renders its template tags
+        # against the next-pipeline manifest + execution context, and re-writes it in place.
+        inputs_table = MagicMock(query=MagicMock(return_value={"Items": [
+            {"inputAssetFileKey": "/a1xyz/scan.e57", "databaseId": "db", "assetId": "a1xyz",
+             "s3Bucket": "abkt", "assetRootS3Key": "a1xyz/"},
+        ]}))
+        raw_cfg = ('{"asset": "{{firstAssetFileAssetId}}", "uri": "{{firstAssetFileS3Uri}}", '
+                   '"keys": {{assetFileKeyArray}}, "pipe": "{{pipelineId}}", "run": "{{executionId}}"}')
+        cfg_key = "pipelines/workflowExecutionInputs/EXEC1/pipeline2/config.json"
+        body = {
+            "workflowExecutionId": "EXEC1",
+            "workflowId": "wf1", "workflowDatabaseId": "wdb1", "executingUserName": "user@x",
+            "workflowExecutionS3InputOutputBucket": "abkt",
+            "outputFilesPrefix": "pipelines/wei/EXEC1/files/",
+            "nextPipelineManifestS3Key": "pipelines/workflowExecutionInputs/EXEC1/pipeline2/manifest.json",
+            "nextPipelineConfigS3Key": cfg_key,
+            "nextPipelineExecutionId": "P2", "nextPipelineId": "convertPipe",
+            "nextPipelineDatabaseId": "pdb", "nextPipelineJobName": "job-2",
+        }
+        captured = {}
+        put_object = MagicMock(side_effect=lambda **kw: captured.update({kw["Key"]: kw["Body"]}))
+        get_object = MagicMock(return_value={
+            "Body": MagicMock(read=lambda: raw_cfg.encode("utf-8"))})
+        with patch.object(ipt.dynamodb, "Table", return_value=inputs_table), \
+             patch.object(ipt.s3c, "put_object", put_object), \
+             patch.object(ipt.s3c, "get_object", get_object), \
+             patch.object(ipt.eo, "list_current_output_files", return_value=[]):
+            ipt.prepare_next_pipeline(body)
+        rendered = json.loads(captured[cfg_key].decode("utf-8"))
+        assert rendered["asset"] == "a1xyz"
+        assert rendered["uri"] == "s3://abkt/a1xyz/scan.e57"
+        assert rendered["keys"] == ["a1xyz/scan.e57"]
+        assert rendered["pipe"] == "convertPipe"   # next pipeline identity from the interim payload
+        assert rendered["run"] == "EXEC1"
+
 
 # ============================ error handler ============================
 

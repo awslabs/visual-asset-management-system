@@ -12,7 +12,7 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
-import { Service, IAMArn } from "../helper/service-helper";
+import { Service, IAMArn, Partition } from "../helper/service-helper";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
@@ -580,6 +580,100 @@ export function buildRegisterPipelineExecutionFunction(
     return fun;
 }
 
+export function buildDeadlineCloudJobCallbackFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "deadlineCloudJobCallback";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        // SFN-adjacent execution handler (EventBridge-invoked) under handlers/workflows/sfn/.
+        handler: `handlers.workflows.sfn.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            // Orchestration bus + event source prefix for registering the Deadline job as
+            // the pipeline execution's sub-process (same registration contract pipelines use).
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
+        },
+    });
+
+    // Deadline Cloud publishes job status events to the account DEFAULT bus only. Two rules
+    // route job endings to the callback: terminal combined task-run statuses, and lifecycle
+    // failure states (a job that fails at CREATE/UPLOAD never reaches a task-run status, so
+    // its task token would otherwise only resolve by timing out). The lambda additionally
+    // ignores jobs without the reserved VamsTaskToken job parameter.
+    const deadlineJobStatusRule = new events.Rule(scope, "DeadlineCloudJobStatusRule", {
+        eventPattern: {
+            source: ["aws.deadline"],
+            detailType: ["Job Run Status Change"],
+            detail: {
+                taskRunStatus: ["SUCCEEDED", "FAILED", "CANCELED", "NOT_COMPATIBLE"],
+            },
+        },
+    });
+    deadlineJobStatusRule.addTarget(new eventsTargets.LambdaFunction(fun));
+
+    const deadlineJobLifecycleRule = new events.Rule(scope, "DeadlineCloudJobLifecycleRule", {
+        eventPattern: {
+            source: ["aws.deadline"],
+            detailType: ["Job Lifecycle Status Change"],
+            detail: {
+                lifecycleStatus: ["CREATE_FAILED", "UPLOAD_FAILED"],
+            },
+        },
+    });
+    deadlineJobLifecycleRule.addTarget(new eventsTargets.LambdaFunction(fun));
+
+    const deadlineArnBase = `arn:${Partition()}:deadline:${config.env.region}:${
+        config.env.account
+    }`;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["deadline:GetJob"],
+            resources: [
+                `${deadlineArnBase}:farm/*/queue/*`,
+                `${deadlineArnBase}:farm/*/queue/*/job/*`,
+            ],
+        })
+    );
+    // Task tokens are opaque (not resource-scoped), so SendTask* uses the same
+    // account/region-wide states resource the pipeline callback lambdas use.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [`arn:${Partition()}:states:${config.env.region}:${config.env.account}:*`],
+        })
+    );
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    // Covers the IAM5 wildcards above: SendTask* task tokens are opaque (account-scoped
+    // states resource) and GetJob targets operator-owned farms/queues unknown at deploy.
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
+}
+
 export function buildWorkflowRole(
     scope: Construct,
     processWorkflowExecutionOutputFunction: lambda.Function,
@@ -691,6 +785,25 @@ export function buildWorkflowRole(
             }),
         ],
     });
+
+    // Deadline Cloud CreateJob permission for DeadlineCloud pipeline types. Job submission
+    // targets operator-owned farms/queues whose IDs live in pipeline records, so the resource
+    // covers any farm/queue (and job under it) in this account/region rather than named ARNs.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+        const deadlineArnBase = `arn:${Partition()}:deadline:${config.env.region}:${
+            config.env.account
+        }`;
+        runWorkflowPolicy.addStatements(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["deadline:CreateJob"],
+                resources: [
+                    `${deadlineArnBase}:farm/*/queue/*`,
+                    `${deadlineArnBase}:farm/*/queue/*/job/*`,
+                ],
+            })
+        );
+    }
 
     //Add KMS key use if provided
     if (kmsKey) {

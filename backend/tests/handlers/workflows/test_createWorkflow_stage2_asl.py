@@ -235,16 +235,21 @@ class TestCreateWorkflowStage2ASL:
         assert "orchestrationBusArn.$" not in body
         assert "orchestrationEventSourcePrefix.$" not in body
 
-    def test_interim_omits_unused_workflow_identity(self):
-        # The interim lambda never reads workflowDatabaseId/workflowId, so they are not threaded.
+    def test_interim_threads_next_pipeline_identity_for_template_rendering(self):
+        # The interim lambda renders the next pipeline's input-configuration template tags, so the
+        # next-pipeline identity + workflow ids + executing user are threaded for the tag context.
         definition, _jobs = cw.generate_workflow_asl(_pipelines(2), "db", "wf")
         states = definition["States"]
         interim = [s for k, s in states.items() if k.startswith("interim-")][0]
         body = interim["Parameters"]["Payload"]["body"]
-        assert "workflowDatabaseId.$" not in body
-        assert "workflowId.$" not in body
+        assert body["workflowDatabaseId.$"] == "$.workflowDatabaseId"
+        assert body["workflowId.$"] == "$.workflowId"
+        assert body["executingUserName.$"] == "$.executingUserName"
+        # Next-pipeline identity (name/db/job) is known at ASL-build time and threaded literally.
+        assert body["nextPipelineId"] and body["nextPipelineJobName"]
+        assert "nextPipelineDatabaseId" in body
         # inputAssetLocationKey is no longer threaded: each input file is self-locating in the
-        # manifest (per-file assetFilesS3Root), so the interim derives relative paths per file.
+        # manifest (per-file assetRootS3Key), so the interim derives relative paths per file.
         assert "inputAssetLocationKey.$" not in body
         # The execution id the interim lambda does read remains.
         assert body["workflowExecutionId.$"] == "$.workflowExecutionId"

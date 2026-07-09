@@ -30,6 +30,7 @@ from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import templateRender as tr
 
 logger = safeLogger(service="InterimPipelineTracking")
 
@@ -183,7 +184,7 @@ def prepare_next_pipeline(body):
         "auxBucket": aux_bucket,
         "auxTempPrefix": next_aux_temp_prefix,
         # Per-pipeline viewer subfolder; empty until sourced from pipeline configuration.
-        "auxPreviewPipelinePrefix": "",
+        "auxPreviewPipelineSuffix": "",
         "systemConfig": er.build_manifest_system_config(
             orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=next_event_prefix),
@@ -198,12 +199,72 @@ def prepare_next_pipeline(body):
         s3c.put_object(Bucket=wf_exec_bucket, Key=next_manifest_key,
                        Body=json.dumps(manifest).encode('utf-8'), ContentType='application/json')
 
+    # Render the NEXT pipeline's input configuration template tags against ITS manifest + execution
+    # context, then re-write it in place. The raw (unrendered) config was written at launch by
+    # executeWorkflow; this renders it per task (so tags reflect this task's shadowed inputs). The
+    # metadata payload is read lazily (only when a metadata-content tag is present).
+    _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key)
+
     return {
         "inputManifestS3Location": f"s3://{wf_exec_bucket}/{next_manifest_key}" if next_manifest_key else "",
         "inputConfigurationS3Location": f"s3://{wf_exec_bucket}/{next_config_key}" if next_config_key else "",
         "nextPipelineManifestS3Key": next_manifest_key,
         "nextPipelineConfigS3Key": next_config_key,
     }
+
+
+def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key):
+    """Read the next pipeline's raw input configuration from S3, substitute its template tags
+    against the next-pipeline manifest + execution context, and re-write it in place. No-op when
+    there is no config key or the config has no tags. Never raises on a missing config object (an
+    absent config is simply left as-is); a bad/unknown tag DOES raise (strict) so the failure is
+    caught by the interim state's Catch and reconciled as a workflow failure."""
+    if not next_config_key:
+        return
+    try:
+        resp = s3c.get_object(Bucket=wf_exec_bucket, Key=next_config_key)
+        raw_cfg = resp["Body"].read().decode("utf-8")
+    except Exception as e:  # nosec B110 - a missing/empty config file is valid; nothing to render
+        logger.info(f"No input configuration to render for next pipeline (non-critical): {e}")
+        return
+    if not tr.uses_template_tags(raw_cfg):
+        return
+
+    workflow_execution_id = body.get('workflowExecutionId', '')
+    next_config_location = f"s3://{wf_exec_bucket}/{next_config_key}"
+    exec_context = {
+        "executionId": workflow_execution_id,
+        "workflowId": body.get('workflowId', ''),
+        "workflowDatabaseId": body.get('workflowDatabaseId', ''),
+        "pipelineExecutionId": body.get('nextPipelineExecutionId', ''),
+        "pipelineId": body.get('nextPipelineId', ''),
+        "pipelineDatabaseId": body.get('nextPipelineDatabaseId', ''),
+        "jobName": body.get('nextPipelineJobName', ''),
+        "executingUserName": body.get('executingUserName', ''),
+        "inputConfigurationS3Location": next_config_location,
+    }
+
+    def _metadata_payload():
+        # The shared metadata file is loaded from its manifest location only if a metadata-content
+        # tag is actually used; unwrap the {schemaVersion, metadata} envelope to the inner payload.
+        location = manifest.get("inputMetadataS3Location", "")
+        if not location or not location.startswith("s3://"):
+            return {}
+        bkt, _, key = location[len("s3://"):].partition("/")
+        if not bkt or not key:
+            return {}
+        try:
+            resp = s3c.get_object(Bucket=bkt, Key=key)
+            payload = json.loads(resp["Body"].read().decode("utf-8"))
+        except Exception:  # nosec B110 - best-effort; an unreadable metadata file yields {}
+            return {}
+        if isinstance(payload, dict) and "metadata" in payload and "schemaVersion" in payload:
+            return payload.get("metadata") or {}
+        return payload if isinstance(payload, dict) else {}
+
+    rendered = tr.render_config(raw_cfg, manifest, exec_context, metadata_loader=_metadata_payload)
+    s3c.put_object(Bucket=wf_exec_bucket, Key=next_config_key,
+                   Body=rendered.encode("utf-8"), ContentType="application/json")
 
 
 def lambda_handler(event, context):

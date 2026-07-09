@@ -199,7 +199,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     """
     Generate the ASL workflow definition for a workflow.
     Uses the builder pattern from stepfunctions_builder to dispatch
-    Lambda, SQS, and EventBridge task states.
+    Lambda, SQS, EventBridge, and DeadlineCloud task states.
 
     Args:
         pipelines: List of pipeline configurations
@@ -285,10 +285,13 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
 
         # Build path context for the builder. The pipeline reads its resolved inputs/outputs from
         # the manifest; only the manifest + per-pipeline config S3 locations travel in the body
-        # (asset bucket execution input folder; 1-indexed pipeline folders).
+        # (asset bucket execution input folder; 1-indexed pipeline folders). The step's
+        # pipelineExecutionId reference is supplied for builders whose completion callback
+        # must locate the pipeline-execution row (DeadlineCloud); other builders ignore it.
         path_context = {
             "inputManifestS3Location": _pipeline_input_uri(i + 1, "manifest.json"),
             "inputConfigurationS3Location": _pipeline_input_uri(i + 1, "config.json"),
+            "pipelineExecutionIdRef": f"$.pipelineExecutionIds[{i}]",
         }
 
         # Get the appropriate builder (partition-aware service-integration ARNs)
@@ -348,6 +351,15 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
                         f"States.Format('{input_folder_template}pipeline{i + 2}/config.json', "
                         f"$$.Execution.Name)"),
                     "nextPipelineAuxTempPrefix.$": next_aux_temp_prefix_uri,
+                    # Next pipeline identity for template-tag rendering of its input configuration
+                    # (name + database id + job name are known at ASL-build time; the workflow ids
+                    # and executing-user context come from the SFN input).
+                    "nextPipelineId": next_pipeline['name'],
+                    "nextPipelineDatabaseId": next_pipeline.get('databaseId', ''),
+                    "nextPipelineJobName": job_names[i + 1],
+                    "workflowId.$": "$.workflowId",
+                    "workflowDatabaseId.$": "$.workflowDatabaseId",
+                    "executingUserName.$": "$.executingUserName",
 
                     # --- Envelope context written into the NEXT pipeline's manifest. Output
                     #     prefixes are asset-bucket-RELATIVE (no s3://); the output bucket is the
@@ -497,6 +509,13 @@ def create_step_function_new(pipelines, databaseId, workflowId):
         logger.info(f"State machine created successfully: {workflow_arn}")
         return workflow_arn, job_names
 
+    except ValueError as e:
+        # Builder-level validation (e.g. a DeadlineCloud pipeline missing required
+        # resource fields or callback) — surface the specific message to the caller.
+        logger.exception(f"Invalid pipeline configuration for workflow {workflowId}: {e}")
+        raise VAMSGeneralErrorResponse(str(e))
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error creating state machine for workflow {workflowId}: {e}")
         raise VAMSGeneralErrorResponse("Error creating workflow state machine")
@@ -536,6 +555,12 @@ def update_step_function_existing(existing_arn, pipelines, databaseId, workflowI
         logger.info(f"State machine updated successfully: {existing_arn}")
         return existing_arn, job_names
 
+    except ValueError as e:
+        # Builder-level validation — surface the specific message to the caller.
+        logger.exception(f"Invalid pipeline configuration for workflow {workflowId}: {e}")
+        raise VAMSGeneralErrorResponse(str(e))
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error updating state machine {existing_arn}: {e}")
         raise VAMSGeneralErrorResponse("Error updating workflow state machine")

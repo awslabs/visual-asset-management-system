@@ -21,6 +21,7 @@ import {
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
 import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
+import { buildDeadlineCloudJobCallbackFunction } from "../../lambdaBuilder/workflowFunctions";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 import * as Config from "../../../config/config";
 
@@ -193,6 +194,21 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.GET,
             registry: registry,
         });
+
+        // Deadline Cloud job-callback lambda + its rules on the DEFAULT bus (Deadline
+        // publishes job status events there). Resolves workflow task tokens for
+        // DeadlineCloud pipeline task states and registers the job as the pipeline
+        // execution's sub-process. EventBridge-invoked; no API route.
+        if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+            buildDeadlineCloudJobCallbackFunction(
+                this,
+                lambdaCommonBaseLayer,
+                storageResources,
+                config,
+                vpc,
+                subnets
+            );
+        }
 
         //Nag Supressions
         NagSuppressions.addResourceSuppressions(

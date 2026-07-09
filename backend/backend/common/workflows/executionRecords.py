@@ -120,7 +120,7 @@ def aux_preview_file_prefix(database_id: str, asset_file_key: str) -> str:
     any custom asset base prefix carried by the asset location key is preserved rather than assuming
     the key is prefixed by the asset id. Every input file gets its own unique aux preview location
     regardless of pipeline type. A pipeline that writes preview/viewer data appends the manifest's
-    auxPreviewPipelinePrefix (e.g. '/PotreeViewer') to target a viewer-specific subfolder here."""
+    auxPreviewPipelineSuffix (e.g. '/PotreeViewer') to target a viewer-specific subfolder here."""
     fk = (asset_file_key or "").strip("/")
     base = database_id or ""
     preview_segment = _AUXILIARY_PREVIEW_PREFIX.rstrip("/")
@@ -212,7 +212,7 @@ def build_manifest_outputs(bucket="", files="", previews="", metadata="", result
 def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
                             aux_bucket, aux_temp_prefix,
                             system_config=None, output_target=None,
-                            aux_preview_pipeline_prefix=""):
+                            aux_preview_pipeline_suffix=""):
     """The per-pipeline manifest envelope (schemaVersion-stamped): resolved input files plus
     the metadata, output, and auxiliary-bucket locations, the output-target identity, and the
     systemConfig block.
@@ -220,7 +220,7 @@ def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
     Locations avoid pre-built s3:// URIs: `outputs` carries a bucket + bucket-relative prefixes,
     `auxBucket` is the auxiliary bucket NAME only, and `auxTempPrefix` is a bucket-relative
     temporary working prefix. Per-input-file aux preview locations live on each input file entry
-    (`auxPreviewPrefix`); `auxPreviewPipelinePrefix` is a per-pipeline viewer subfolder (e.g.
+    (`auxPreviewPrefix`); `auxPreviewPipelineSuffix` is a per-pipeline viewer subfolder (e.g.
     '/PotreeViewer', empty by default) a pipeline appends to its input file's preview prefix."""
     return {
         "schemaVersion": MANIFEST_SCHEMA_VERSION,
@@ -236,7 +236,7 @@ def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
         "outputTarget": output_target or build_manifest_output_target(),
         "auxBucket": aux_bucket or "",
         "auxTempPrefix": aux_temp_prefix or "",
-        "auxPreviewPipelinePrefix": aux_preview_pipeline_prefix or "",
+        "auxPreviewPipelineSuffix": aux_preview_pipeline_suffix or "",
         "systemConfig": system_config or {},
     }
 

@@ -85,7 +85,7 @@ CDK config (infra/config/config.json)
 
 ### **Pipeline Architecture**
 
-Three execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event). SQS and EventBridge are async-only with optional Step Functions Task Token callback.
+Three creatable execution types: **Lambda** (sync/async invoke), **SQS** (async queue), **EventBridge** (async event). SQS and EventBridge are async-only with optional Step Functions Task Token callback. A fourth type, **DeadlineCloud** (async-only, callback mandatory), is supported at the execution layer (`DeadlineCloudTaskBuilder` + `deadlineCloudJobCallback` lambda, gated by `app.pipelines.deadlineCloudExecutionTypeEnabled`); pipeline creation with this type lands with the pipeline/workflow table overhaul.
 
 ```
 S3 event / API trigger → Lambda → Step Functions → Lambda / SQS / EventBridge → AWS Batch containers (optional)

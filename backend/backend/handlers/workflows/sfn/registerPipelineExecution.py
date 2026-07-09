@@ -66,9 +66,11 @@ _SUB_EXECUTION_LOCATOR_VALIDATORS = {
     "stateMachineArn": "ARN",   # Step Functions state machine (definition)
     "executionArn": "ARN",      # Step Functions execution (running instance) — abortable today
     "jobArn": "ARN",            # AWS Batch job
-    "jobId": "ID",              # AWS Batch job id (not an ARN)
+    "jobId": "ID",              # AWS Batch / Deadline Cloud job id (not an ARN)
     "taskArn": "ARN",           # ECS/Fargate task
     "clusterArn": "ARN",        # ECS cluster (needed to stop a task)
+    "farmId": "ID",             # Deadline Cloud farm (with queueId+jobId locates a job)
+    "queueId": "ID",            # Deadline Cloud queue
     "arn": "ARN",               # generic fallback ARN for any other resource type
 }
 

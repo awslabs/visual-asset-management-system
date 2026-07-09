@@ -91,8 +91,9 @@ Pipeline **scratch/temp** working files use the **aux** bucket execution temp pr
 ## 4. Per-pipeline SFN input envelope (exec-type-agnostic)
 
 `stepfunctions_builder.build_payload` is the single shared envelope for all task types
-(Lambda/SQS/EventBridge today; **DeadlineCloud** later — direct step or lambda-wrapper —
-inherits the same fields with no per-type divergence). Each pipeline state receives:
+(Lambda/SQS/EventBridge/DeadlineCloud — DeadlineCloud flattens the same fields into
+reserved `Vams*` OpenJD job parameters with no per-type divergence). Each pipeline state
+receives:
 
 ```
 # identity / context (top level)
@@ -210,4 +211,10 @@ versioning on the asset bucket (already enabled for versioned outputs).
   in a later task). All VAMS pipelines will need redeployment after this stage.
 - No generic-output execute API yet (output asset = path asset today); the recorded
   `output*`/`inputMetadata*` fields + POST check lay the groundwork.
-- No DeadlineCloud task builder yet; the envelope is designed so it slots in later.
+- The DeadlineCloud task builder exists at the execution layer (`DeadlineCloudTaskBuilder`
+  emits `aws-sdk:deadline:createJob.waitForTaskToken` task states; the job-callback lambda
+  resolves task tokens from the default-bus `aws.deadline` job status events and registers
+  the job as the pipeline execution's sub-process). Pipeline **creation** with
+  `pipelineExecutionType: DeadlineCloud` is not yet possible — the request model, storage
+  shape, and UI land with the pipeline/workflow table overhaul (see the pipeline refactor
+  plan's "Deadline Cloud creation enablement" section).

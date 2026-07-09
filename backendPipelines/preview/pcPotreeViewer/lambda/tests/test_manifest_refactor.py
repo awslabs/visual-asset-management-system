@@ -72,7 +72,7 @@ class TestVamsExecute:
             "auxBucket": "aux-bkt",
             # Empty until sourced from pipeline configuration; a value like "/PotreeViewer" would
             # append a viewer subfolder to the per-file aux preview prefix.
-            "auxPreviewPipelinePrefix": "",
+            "auxPreviewPipelineSuffix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},
@@ -89,7 +89,7 @@ class TestVamsExecute:
         payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
         assert payload["inputS3AssetFilePath"] == "s3://abkt/xidM/scan.e57"
         # Potree writes to the per-input-file aux preview location: auxBucket + the file's own
-        # aux preview prefix + the per-pipeline viewer subfolder. auxPreviewPipelinePrefix is empty
+        # aux preview prefix + the per-pipeline viewer subfolder. auxPreviewPipelineSuffix is empty
         # here, so the pipeline falls back to the hardcoded "PotreeViewer" subfolder to stay intact.
         assert payload["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux-bkt/dbM/xidM/scan.e57/preview/PotreeViewer"
 
@@ -98,7 +98,7 @@ class TestVamsExecute:
         # fallback.
         mod = self._load()
         manifest = self._manifest()
-        manifest["auxPreviewPipelinePrefix"] = "/CustomViewer"
+        manifest["auxPreviewPipelineSuffix"] = "/CustomViewer"
         s3 = MagicMock()
         s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
         invoke = MagicMock(return_value={"StatusCode": 200})

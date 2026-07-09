@@ -251,7 +251,7 @@ class TestOutputBuilders:
     def test_manifest_envelope_includes_output_target(self):
         env = er.build_manifest_envelope(
             input_files=[], input_metadata_s3_location="", outputs={},
-            aux_bucket="", aux_temp_prefix="", aux_preview_pipeline_prefix="",
+            aux_bucket="", aux_temp_prefix="", aux_preview_pipeline_suffix="",
             output_target=er.build_manifest_output_target(asset_id="a1", database_id="db"))
         assert env["outputTarget"]["assetId"] == "a1"
         assert env["outputTarget"]["fileBaseExecutionPathExtension"] == "/"
@@ -263,9 +263,9 @@ class TestOutputBuilders:
             outputs=er.build_manifest_outputs(bucket="abkt", files="f/", previews="p/",
                                               metadata="m/", results="r/"),
             aux_bucket="auxbkt", aux_temp_prefix="pipelines/pipe/EXEC1/",
-            aux_preview_pipeline_prefix="")
+            aux_preview_pipeline_suffix="")
         assert env["outputs"]["bucket"] == "abkt" and env["outputs"]["files"] == "f/"
         assert env["auxBucket"] == "auxbkt"
         assert env["auxTempPrefix"] == "pipelines/pipe/EXEC1/"
-        assert env["auxPreviewPipelinePrefix"] == ""
+        assert env["auxPreviewPipelineSuffix"] == ""
         assert "auxPreviewPrefix" not in env and "auxBucketS3Root" not in env

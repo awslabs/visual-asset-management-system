@@ -402,7 +402,9 @@ class TaskStateBuilder(ABC):
         pass
 
     def build_payload(self, pipeline: Dict[str, Any], path_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Shared payload construction — identical JSON body for all task types.
+        """Shared payload construction — identical JSON body for all task types
+        (DeadlineCloud additionally appends the step's pipelineExecutionId, which its
+        completion callback needs to locate the pipeline-execution row).
 
         The body carries the manifest + input-configuration S3 LOCATIONS plus the fields that are
         only available at the workflow-execution level (the asset/aux bucket names and asset keys,
@@ -587,6 +589,151 @@ class EventBridgeTaskBuilder(TaskStateBuilder):
         return state
 
 
+# Reserved OpenJD job-parameter names the Deadline Cloud task state injects on createJob.
+# Derived from the shared body envelope as "Vams" + capitalized field name; the job-callback
+# lambda reads these back from GetJob, and a registered job template must declare every
+# injected parameter (all STRING type).
+DEADLINE_PARAMETER_PREFIX = "Vams"
+DEADLINE_TASK_TOKEN_PARAMETER = "VamsTaskToken"
+DEADLINE_PIPELINE_EXECUTION_ID_PARAMETER = "VamsPipelineExecutionId"
+DEADLINE_WORKFLOW_EXECUTION_ID_PARAMETER = "VamsWorkflowExecutionId"
+
+
+class DeadlineCloudTaskBuilder(TaskStateBuilder):
+    """Builder for AWS Deadline Cloud createJob task states.
+
+    Uses the Step Functions AWS SDK integration
+    (aws-sdk:deadline:createJob.waitForTaskToken) to submit an OpenJD job to the
+    pipeline's farm/queue. Deadline Cloud is async-only: createJob returns when the
+    job is queued, not when it completes, so the task always waits on a task token.
+    The deployment's Deadline job-callback lambda resolves the token from the
+    job's EventBridge status events (default bus, source aws.deadline).
+
+    The shared body envelope is flattened into reserved OpenJD job parameters
+    (``Vams``-prefixed, string-typed). The registered job template must declare
+    every one of these parameters. ``executingRequestContext`` is excluded: it is a
+    multi-KB JSON object and Deadline caps a string job parameter at 1024 characters;
+    it stays in the Step Functions state for the process-output step. The job reads
+    everything else (resolved input files, output prefixes, aux locations) from the
+    manifest at VamsInputManifestS3Location.
+
+    The parsed userProvidedResource carries the Deadline-specific fields:
+    deadlineFarmId, deadlineQueueId, deadlineTemplate (the template TEXT — callers
+    resolve an S3-stored template to text before ASL generation), deadlineTemplateType
+    (JSON|YAML), and optional deadlinePriority, deadlineMaxRetriesPerTask,
+    deadlineMaxFailedTasksCount, deadlineStorageProfileId.
+    """
+
+    # Body fields not forwarded as job parameters (too large for the 1024-char
+    # Deadline string-parameter cap; remain available in the SFN state).
+    EXCLUDED_BODY_FIELDS = {"executingRequestContext"}
+
+    DEFAULT_PRIORITY = 50
+
+    def build_payload(self, pipeline: Dict[str, Any], path_context: Dict[str, Any]) -> Dict[str, Any]:
+        payload = super().build_payload(pipeline, path_context)
+        # The job-callback lambda registers the Deadline job against this pipeline's
+        # execution row and builds its orchestration event source from this id, so it
+        # rides as a job parameter (only the Deadline body carries it).
+        ref = path_context.get("pipelineExecutionIdRef")
+        if ref:
+            payload["body"]["pipelineExecutionId.$"] = ref
+        return payload
+
+    def _body_to_job_parameters(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Flatten the shared body envelope into the createJob Parameters map. Each body
+        field becomes a string-typed OpenJD job parameter named Vams{FieldName}. The
+        JobParameter union member is 'String' (Step Functions SDK integrations PascalCase
+        every shape member name)."""
+        job_parameters = {}
+        for key, ref in body.items():
+            name = key[:-2] if key.endswith(".$") else key
+            if name in self.EXCLUDED_BODY_FIELDS:
+                continue
+            param = DEADLINE_PARAMETER_PREFIX + name[0].upper() + name[1:]
+            if key.endswith(".$"):
+                job_parameters[param] = {"String.$": ref}
+            else:
+                job_parameters[param] = {"String": str(ref)}
+        return job_parameters
+
+    @staticmethod
+    def _int_setting(field_name: str, value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"DeadlineCloud pipeline setting {field_name} must be an integer")
+
+    def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        user_resource = self._parse_user_resource(pipeline)
+
+        # createJob only reports that the job was QUEUED; completion arrives via the
+        # job-callback lambda resolving the task token. A fire-and-forget Deadline task
+        # would let the workflow proceed before any work ran, so callback is mandatory.
+        if pipeline.get('waitForCallback') != 'Enabled':
+            raise ValueError(
+                "DeadlineCloud pipelines require waitForCallback=Enabled: createJob only "
+                "queues the job; completion is reported via the task-token callback.")
+
+        farm_id = user_resource.get('deadlineFarmId', '')
+        queue_id = user_resource.get('deadlineQueueId', '')
+        template = user_resource.get('deadlineTemplate', '')
+        template_type = user_resource.get('deadlineTemplateType', 'YAML') or 'YAML'
+        if not farm_id or not queue_id or not template:
+            raise ValueError(
+                "DeadlineCloud pipelines require deadlineFarmId, deadlineQueueId, and "
+                "deadlineTemplate on the pipeline resource.")
+
+        priority = user_resource.get('deadlinePriority')
+        parameters = {
+            "FarmId": farm_id,
+            "QueueId": queue_id,
+            "Template": template,
+            "TemplateType": template_type,
+            # 0 is a valid (lowest) priority — only fall back when unset/blank.
+            "Priority": (self._int_setting('deadlinePriority', priority)
+                         if priority not in (None, '') else self.DEFAULT_PRIORITY),
+            # Identifies the VAMS pipeline step in the Deadline monitor.
+            "NameOverride": state_name,
+            # Execution-scoped idempotency token so a retried createJob call cannot
+            # submit a duplicate job (64-char limit: 32-hex execution name + the state
+            # name's unique 5-char prefix).
+            "ClientToken.$": f"States.Format('{{}}-{state_name[:13]}', $$.Execution.Name)",
+            "Parameters": self._body_to_job_parameters(payload.get("body", {})),
+        }
+        if user_resource.get('deadlineStorageProfileId'):
+            parameters["StorageProfileId"] = user_resource['deadlineStorageProfileId']
+        if user_resource.get('deadlineMaxRetriesPerTask') not in (None, ''):
+            parameters["MaxRetriesPerTask"] = self._int_setting(
+                'deadlineMaxRetriesPerTask', user_resource['deadlineMaxRetriesPerTask'])
+        if user_resource.get('deadlineMaxFailedTasksCount') not in (None, ''):
+            parameters["MaxFailedTasksCount"] = self._int_setting(
+                'deadlineMaxFailedTasksCount', user_resource['deadlineMaxFailedTasksCount'])
+
+        state = {
+            "Type": "Task",
+            "Resource": states_integration_arn(
+                "aws-sdk:deadline:createJob.waitForTaskToken", self.partition),
+            "ResultPath": f"$.{state_name}.output",
+            "Parameters": parameters,
+            # Retry only transient createJob API errors. A broad States.ALL retry would
+            # also re-enter after a job-level failure or callback timeout — the retried
+            # call replays the same ClientToken against an already-created job, whose
+            # stored VamsTaskToken no longer matches the retry attempt's fresh token,
+            # so that attempt could never be completed.
+            "Retry": [create_retry_config(
+                error_equals=["Deadline.ThrottlingException",
+                              "Deadline.InternalServerErrorException"])],
+            "Catch": [create_catch_config(
+                error_equals=["States.ALL"],
+                next_state="WorkflowProcessingJobFailed"
+            )]
+        }
+
+        state = self._apply_callback_timeout(state, pipeline)
+        return state
+
+
 # ---------------------------------------------------------------------------
 # Builder registry
 # ---------------------------------------------------------------------------
@@ -597,6 +744,7 @@ TASK_BUILDER_CLASSES: Dict[str, type] = {
     "Lambda": LambdaTaskBuilder,
     "SQS": SqsTaskBuilder,
     "EventBridge": EventBridgeTaskBuilder,
+    "DeadlineCloud": DeadlineCloudTaskBuilder,
 }
 
 
@@ -605,7 +753,7 @@ def get_task_builder(pipeline_execution_type: str,
     """Return the appropriate TaskStateBuilder for the given execution type.
 
     Args:
-        pipeline_execution_type: One of "Lambda", "SQS", or "EventBridge".
+        pipeline_execution_type: One of "Lambda", "SQS", "EventBridge", or "DeadlineCloud".
         partition: AWS partition for the service-integration ARNs (default "aws"). Pass the
             deployment partition (e.g. "aws-us-gov") so generated ASL is valid in that partition.
 

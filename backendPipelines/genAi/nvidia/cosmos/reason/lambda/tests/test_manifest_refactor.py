@@ -81,7 +81,7 @@ class TestVamsExecuteCosmosReasonPipeline:
             "outputs": {"bucket": "abkt", "files": "pipelines/p1/MJOB/output/E1/files/"},
             "auxBucket": "aux",
             "auxTempPrefix": "pipelines/cosmosReason/E1/",
-            "auxPreviewPipelinePrefix": "",
+            "auxPreviewPipelineSuffix": "",
             "inputMetadataS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/metadata.json",
             "systemConfig": {"orchestrationBusArn": "arn:bus",
                              "orchestrationEventPrefix": "vams.prod.execution.E1.pipeline.P1"},

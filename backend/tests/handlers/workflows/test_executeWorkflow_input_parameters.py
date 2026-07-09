@@ -58,6 +58,7 @@ def _run_execute_call(body):
          patch.object(ew, "get_default_bucket_details",
                       return_value={"bucketName": "bkt", "baseAssetsPrefix": "", "bucketId": "b1"}), \
          patch.object(ew, "get_workflow_executions", return_value={"Items": []}), \
+         patch.object(ew, "verify_inputs_exist_in_s3", return_value=[]), \
          patch.object(ew, "build_pipeline_input_metadata", return_value={"VAMS": {}}), \
          patch.object(ew, "launchWorkflow", return_value="EXEC123") as mock_launch:
         MockEnf.return_value.enforceAPI.return_value = True

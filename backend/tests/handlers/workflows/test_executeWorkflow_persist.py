@@ -300,7 +300,7 @@ class TestLaunchWorkflow:
         aux_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
         assert manifest["auxBucket"] == aux_bucket
         assert manifest["auxTempPrefix"] == f"pipelines/p1/{eid}/"
-        assert manifest["auxPreviewPipelinePrefix"] == ""
+        assert manifest["auxPreviewPipelineSuffix"] == ""
         assert "auxPreviewPrefix" not in manifest
         # The per-input-file aux preview prefix keyed on the full asset file key:
         # {databaseId}/{assetFileKey}/preview.
@@ -321,3 +321,44 @@ class TestLaunchWorkflow:
         assert "/zz999-p1/" in manifest["outputs"]["previews"]
         assert "/zz999-p1/" in manifest["outputs"]["metadata"]
         assert "/zz999-p1/" in manifest["outputs"]["results"]
+
+    def test_pipeline1_config_template_tags_rendered_at_launch(self):
+        # Pipeline 1's input configuration template tags are substituted at launch against its
+        # manifest + execution context, and the rendered config.json is written to the asset bucket.
+        # Raw template text: scalar tags sit inside quotes; the array tag sits unquoted.
+        cfg = ('{"db": "{{firstAssetFileDatabaseId}}", "asset": "{{firstAssetFileAssetId}}", '
+               '"inputUri": "{{firstAssetFileS3Uri}}", "keys": {{assetFileKeyArray}}, '
+               '"runId": "{{executionId}}"}')
+        pipelines = [{"name": "p1", "databaseId": "db", "pipelineType": "standardFile",
+                      "pipelineExecutionType": "Lambda", "waitForCallback": "Disabled",
+                      "inputParameters": cfg,
+                      "userProvidedResource": json.dumps({"resourceId": "arn:fn1", "resourceType": "Lambda"})}]
+        eid, put_object = self._run_launch(pipelines)
+        rendered = self._written(put_object, "pipeline1/config.json")
+        assert rendered["db"] == "db"
+        assert rendered["asset"] == "a1"
+        assert rendered["inputUri"] == "s3://abkt/folder/x.glb"
+        assert rendered["keys"] == ["folder/x.glb"]
+        assert rendered["runId"] == eid
+
+    def test_output_path_extension_template_rendered_into_manifest(self):
+        # outputFileBaseExecutionPathExtension is template-rendered; the rendered value lands on the
+        # manifest outputTarget.
+        pipelines = [{"name": "p1", "databaseId": "db", "pipelineType": "standardFile",
+                      "pipelineExecutionType": "Lambda", "waitForCallback": "Disabled",
+                      "userProvidedResource": json.dumps({"resourceId": "arn:fn1", "resourceType": "Lambda"})}]
+        from unittest.mock import patch
+        dynamo, _puts = self._tables()
+        start_exec = MagicMock(return_value={"executionArn": "arn:aws:states:us-east-1:1:execution:vams-wf:N"})
+        put_object = MagicMock()
+        with patch.object(ew.sfn_client, "start_execution", start_exec), \
+                patch.object(ew.s3c, "put_object", put_object), \
+                patch.object(ew, "dynamodb", dynamo):
+            eid = ew.launchWorkflow(
+                "abkt", "a1/", "folder/x.glb",
+                "arn:aws:states:us-east-1:1:stateMachine:vams-wf",
+                "db", "a1", "wdb", "wf", "user@x", {"requestContext": {}},
+                pipelines, {"VAMS": {}}, "Manual",
+                outputFileBaseExecutionPathExtension="/{{executionId}}/")
+        manifest = self._written(put_object, "manifest.json")
+        assert manifest["outputTarget"]["fileBaseExecutionPathExtension"] == f"/{eid}/"

@@ -341,9 +341,46 @@ custom asset base prefix is preserved). `manifestHelper.resolve_inputs`
 reconstructs the flat `s3://` fields the pipelines forward (`outputS3AssetFilesPath`,
 `inputOutputS3AssetAuxiliaryFilesPath`, and — for preview/viewer pipelines — `auxPreviewS3Path`,
 which combines `auxBucket` + the input file's `auxPreviewPrefix` + the per-pipeline
-`auxPreviewPipelinePrefix`). Pipelines that hardcoded a viewer aux path (e.g. `pcPotreeViewer`'s
+`auxPreviewPipelineSuffix`). Pipelines that hardcoded a viewer aux path (e.g. `pcPotreeViewer`'s
 `/PotreeViewer`) now read `auxPreviewS3Path`; the viewer subfolder will come from the pipeline
-configuration via `auxPreviewPipelinePrefix` (empty for now).
+configuration via `auxPreviewPipelineSuffix` (empty for now).
+
+### Per-pipeline aux preview suffix (future workflow/pipeline overhaul)
+
+`auxPreviewPipelineSuffix` is the manifest field that lets a pipeline write its preview/viewer data
+into a viewer-specific subfolder of the per-input-file aux preview location. It is **appended** to
+each input file's `auxPreviewPrefix`, so the resolved `auxPreviewS3Path` a pipeline receives is
+`s3://{auxBucket}/{databaseId}/{assetFileKey}/preview/{auxPreviewPipelineSuffix}` (e.g. a suffix of
+`/PotreeViewer` yields `.../preview/PotreeViewer`). It is a **per-pipeline-task** value: each
+pipeline task in a workflow carries its own suffix drawn from that pipeline's configuration, so two
+viewer pipelines writing into the same asset's aux preview area do not collide.
+
+**Current state (execution side, implemented now).** The field exists end to end and defaults to
+empty:
+
+-   The manifest envelope carries `auxPreviewPipelineSuffix` (`build_manifest_envelope`), written
+    empty by `executeWorkflow` for pipeline 1 and by the interim lambda for pipelines 2+.
+-   `manifestHelper.resolve_inputs` reads it and builds `auxPreviewS3Path` = `auxBucket` +
+    the input file's `auxPreviewPrefix` + the suffix.
+-   `pcPotreeViewer`'s `vamsExecute` reads the resolved suffix and, **when it is empty, falls back
+    to a hardcoded `/PotreeViewer`** so the viewer keeps working until the field is populated. Once
+    the configuration supplies a non-empty suffix, the manifest value wins and the fallback is
+    inert.
+
+**What the workflow/pipeline overhaul must add (future).** The suffix is currently always empty
+because the pipeline/workflow definitions do not yet carry it. When those are overhauled:
+
+1.  Add a per-pipeline `auxPreviewPipelineSuffix` (name TBD) to the pipeline definition /
+    configuration model (pipelines table + workflow/pipeline models + registration custom
+    resources), so each pipeline declares its viewer subfolder (e.g. `pcPotreeViewer` →
+    `/PotreeViewer`).
+2.  **Back-integrate it into the execution side:** `executeWorkflow` populates the pipeline-1
+    manifest's `auxPreviewPipelineSuffix` from that pipeline's configuration, and the interim
+    lambda populates each pipeline N+1 manifest's suffix from pipeline N+1's configuration (the
+    suffix updates per pipeline task, matching how the manifest is rebuilt per pipeline). Both
+    currently pass an empty string at the single call site each, so this is a localized change.
+3.  Remove the hardcoded `/PotreeViewer` fallback in `pcPotreeViewer`'s `vamsExecute` once every
+    deployed pipeline definition supplies the suffix.
 
 ### Single-file guard (multi-file-ready SFN, single-file pipelines)
 
@@ -358,6 +395,152 @@ Use-case pipelines read their inputs from the manifest and translate to whatever
 layer needs. `conversion/meshCadMetadataExtraction` (which had no manifest helper) was migrated to
 read the input file + output-metadata locations from the manifest, with the legacy body fields as
 the fallback for direct/local invocations.
+
+## Input-configuration template tags
+
+A pipeline's input configuration (today the `inputParameters` JSON string; later the upgraded
+pipeline input-configuration field — see [future changes](#future-changes-list)) may contain
+`{{tagName}}` template tags that the execution layer substitutes, **per pipeline task**, with values
+drawn from that task's resolved manifest + execution context. This lets a pipeline ship a ready-made
+configuration file with placeholders instead of reconstructing it field-by-field in its
+`vamsExecute` lambda — useful for pipelines that load a fixed config file (e.g. an OpenJD template
+for a future Deadline Cloud integration).
+
+### Mechanism
+
+-   **Format-agnostic text substitution.** Rendering operates on the raw configuration TEXT, so it
+    works regardless of format (JSON today; YAML / OpenJD later). The shared renderer lives in
+    `common/workflows/templateRender.py` (`render_config`); the recognized tag NAMES are defined as
+    constants in `common/workflows/templateTags.py` (the single source of truth — call sites import
+    the constants rather than hard-coding tag strings).
+-   **Where it runs (both wired now).** Pipeline 1's configuration + the templated
+    `outputFileBaseExecutionPathExtension` are rendered in `executeWorkflow` at launch (against
+    pipeline 1's manifest). Pipelines 2+ are rendered in the **interim tracking lambda**: the raw
+    config written at launch is read, rendered against that pipeline task's own manifest (with
+    shadowed inputs), and re-written in place before the pipeline runs. So each task's tags reflect
+    _its_ manifest.
+-   **Two substitution kinds.** A **scalar** tag substitutes a JSON-string-escaped bare value meant
+    to sit inside existing quotes (`"databaseId": "{{firstAssetFileDatabaseId}}"`); an **array/object**
+    tag substitutes a JSON literal meant to sit WITHOUT surrounding quotes
+    (`"files": {{assetFileKeyArray}}`). Each tag's kind is fixed (documented below).
+-   **Strict.** An unknown `{{tag}}` (one not in the catalog) raises an error rather than being left
+    in place or blanked — this surfaces typos and reserves the namespace for the future dynamic tags
+    (below). At the execution layer the interim render error is caught by the interim state's `Catch`
+    and reconciled as a workflow failure.
+-   **Absent source → empty, never error.** A _defined_ tag whose underlying value is absent (e.g.
+    `{{firstAssetFileAssetId}}` on a no-input-files execution) resolves to an empty string / `[]` /
+    `0`. This is what makes no-input-files executions render cleanly.
+-   **Metadata content is read lazily.** Metadata-content tags trigger a single metadata-file read
+    only when such a tag is actually present in the configuration text.
+
+### Tag catalog
+
+Scalar tags (substitute inside quotes):
+
+| Tag | Value |
+| --- | --- |
+| `{{executionId}}` | Workflow execution id |
+| `{{workflowId}}` / `{{workflowDatabaseId}}` | Workflow id / its database id |
+| `{{triggerType}}` | `Manual` / `File-Upload` |
+| `{{executingUserName}}` | Launching user (or `SYSTEM_USER`) |
+| `{{pipelineExecutionId}}` | This pipeline task's execution id |
+| `{{pipelineId}}` / `{{pipelineName}}` | Pipeline definition name (aliases) |
+| `{{pipelineDatabaseId}}` | Pipeline's database id |
+| `{{jobName}}` | ASL-generated per-pipeline job name |
+| `{{jobStartTimestamp}}` / `{{jobStartTimestampUnix}}` / `{{jobStartDate}}` | Render-time UTC timestamp (ISO-8601 / epoch seconds / `YYYY-MM-DD`) |
+| `{{executionStartTimestamp}}` | Workflow execution start (ISO-8601 UTC) |
+| `{{firstAssetFileDatabaseId}}` | First input file's database id |
+| `{{firstAssetFileAssetId}}` | First input file's asset id |
+| `{{firstAssetFileAssetBucket}}` | First input file's bucket |
+| `{{firstAssetFileAssetRootS3Key}}` | First input file's bucket-relative asset root key |
+| `{{firstAssetFileRelativePath}}` | First input file's asset-relative path |
+| `{{firstAssetFileKey}}` | First input file's full asset-bucket key |
+| `{{firstAssetFileVersionId}}` | First input file's S3 version id |
+| `{{firstAssetFileAuxPreviewPrefix}}` | First input file's bucket-relative aux preview prefix |
+| `{{firstAssetFileS3Uri}}` | `s3://{bucket}/{key}` of the first input file |
+| `{{firstAssetFileAuxPreviewS3Uri}}` | `s3://{auxBucket}/{auxPreviewPrefix}[/{suffix}]` of the first input file |
+| `{{firstAssetFileFileName}}` / `{{firstAssetFileFileNameNoExt}}` / `{{firstAssetFileFileExtension}}` | First input file's basename / stem / extension |
+| `{{outputBucket}}` | Output bucket name |
+| `{{outputFilesPrefix}}` / `{{outputFilesS3Uri}}` | Output files relative prefix / full s3:// |
+| `{{outputPreviewsPrefix}}` / `{{outputPreviewsS3Uri}}` | Output previews relative prefix / s3:// |
+| `{{outputMetadataPrefix}}` / `{{outputMetadataS3Uri}}` | Output metadata relative prefix / s3:// |
+| `{{outputResultsPrefix}}` / `{{outputResultsS3Uri}}` | Output results relative prefix / s3:// |
+| `{{outputTargetAssetId}}` / `{{outputTargetDatabaseId}}` | Output-target asset id / database id (the identity basis when there are no input files) |
+| `{{outputTargetLocationType}}` | Output-target location type (`asset`) |
+| `{{outputTargetAssetRootS3Key}}` | Output-target asset root key |
+| `{{outputFileBaseExecutionPathExtension}}` | Output base-execution path extension |
+| `{{auxBucket}}` | Auxiliary bucket name |
+| `{{auxTempPrefix}}` / `{{auxTempS3Uri}}` | Execution-scoped aux temp working prefix / s3:// |
+| `{{auxPreviewPipelineSuffix}}` | Per-pipeline aux preview viewer suffix |
+| `{{inputMetadataS3Location}}` | Shared input-metadata file s3:// |
+| `{{inputConfigurationS3Location}}` | This task's input-configuration file s3:// |
+| `{{orchestrationBusArn}}` / `{{orchestrationEventPrefix}}` | Orchestration bus ARN / per-execution+pipeline event prefix |
+
+Array / object tags (substitute a JSON literal, unquoted). All array tags reflect **every** input
+file in order; `Unique` variants de-duplicate:
+
+| Tag | Value |
+| --- | --- |
+| `{{assetFileKeyArray}}` | Full asset-bucket keys |
+| `{{assetFileRelativePathArray}}` | Asset-relative paths |
+| `{{assetFileS3UriArray}}` | `s3://bucket/key` per file |
+| `{{assetFileVersionIdArray}}` | Version ids per file |
+| `{{assetFileObjectArray}}` | Full manifest entry objects |
+| `{{assetFileAssetIdArray}}` / `{{assetFileUniqueAssetIdArray}}` | Asset ids per file / de-duplicated |
+| `{{assetFileDatabaseIdArray}}` / `{{assetFileUniqueDatabaseIdArray}}` | Database ids per file / de-duplicated |
+| `{{assetFileCount}}` | Integer count of input files |
+
+Metadata-content tags (JSON object literals; trigger a lazy metadata read; empty object when
+absent):
+
+| Tag | Value |
+| --- | --- |
+| `{{inputMetadataObject}}` | Full metadata payload (envelope unwrapped) |
+| `{{assetMetadataObject}}` | Asset-level metadata k/v map |
+| `{{fileMetadataObject}}` | File-level metadata k/v map |
+| `{{fileAttributesObject}}` | File-attributes k/v map |
+| `{{assetDataObject}}` | Asset data block (assetName / description / tags) |
+
+Deadline Cloud tags (scalar) — **defined now, empty until the pipeline configuration supplies
+them.** These are reserved so a Deadline Cloud OpenJD template can be authored against them today
+(they do not trip the strict unknown-tag check); a future pipeline system-configuration overhaul
+populates the pipeline's farm / queue / storage profile and the renderer fills these from that
+configuration:
+
+| Tag | Value |
+| --- | --- |
+| `{{deadlineFarmId}}` | Deadline Cloud farm id (empty until configured) |
+| `{{deadlineQueueId}}` | Deadline Cloud queue id (empty until configured) |
+| `{{deadlineStorageProfileId}}` | Deadline Cloud storage profile id (empty until configured) |
+
+### Fields rendered today
+
+The renderer runs on the pipeline input configuration content **and** the output-path field
+`outputFileBaseExecutionPathExtension` (so `/{{executionId}}/` or `/{{jobStartTimestamp}}/` sub-folder
+layouts are possible). The rendered extension is reflected into the manifest `outputTarget` and the
+SFN input so all consumers agree.
+
+### No-input-files executions
+
+The execution system supports an execution with **zero input files** — the input configuration
+and/or metadata is the only input (there may still be output files). In that case the manifest
+carries `inputFiles: []`; every `{{firstAssetFile*}}` tag resolves to an empty string, every array
+tag to `[]`, and `{{assetFileCount}}` to `0`. Identity-based key lookups pivot to the **output
+target** (`{{outputTargetAssetId}}` / `{{outputTargetDatabaseId}}`) rather than the inputs, since
+those are always present. Use-case pipelines still enforce their own input-arity requirement via the
+manifest-helper gate (today `enforce_single_input_file`); a no-input pipeline skips that gate.
+
+### Future dynamic tags (documented, not yet implemented)
+
+Two dynamic-tag families are reserved and **error today** (strict unknown-tag check), to be added
+when the pipeline/workflow configuration system is overhauled:
+
+-   **`{{metadata_<key>}}`** — a scalar lookup into the flattened metadata payload (e.g.
+    `{{metadata_location}}` → the `location` metadata value), so a config can pull an individual
+    metadata field without embedding the whole object.
+-   **User-defined per-pipeline tags** — arbitrary `{{...}}` names declared on the pipeline
+    definition and swapped at runtime, enabling per-pipeline dynamic configuration (e.g. an OpenJD
+    template whose parameters are pipeline-declared).
 
 ## Output-target identity in the manifest + SFN
 
@@ -387,7 +570,7 @@ future feature that writes an execution's outputs under a per-execution sub-fold
 
 The auxiliary-bucket preview layout changed. Preview/viewer data is now written per input file at
 `{databaseId}/{assetId}/{relativeAssetFileKey}/preview` (with an optional per-pipeline viewer
-subfolder appended from `auxPreviewPipelinePrefix`, e.g. `/PotreeViewer`), keyed on database +
+subfolder appended from `auxPreviewPipelineSuffix`, e.g. `/PotreeViewer`), keyed on database +
 asset + the file's asset-relative path. Existing deployments wrote preview data under the older
 file-key-based layout (e.g. `{inputAssetFileKey}/preview/PotreeViewer`).
 
@@ -398,20 +581,93 @@ refactor deploys. The migration belongs under `infra/deploymentDataMigration/` a
 version-to-version migrations and must be paired with the frontend viewer's aux-path resolution
 (the viewer read path is out of scope for the execution-side refactor and moves with the overhaul).
 
+## Deadline Cloud creation enablement (with the pipeline/workflow table overhaul)
+
+The execution layer already supports a fourth pipeline execution type, **DeadlineCloud**
+(async-only): `DeadlineCloudTaskBuilder` in `stepfunctions_builder.py` emits an
+`aws-sdk:deadline:createJob.waitForTaskToken` task state that flattens the shared SFN body
+envelope into reserved string-typed OpenJD job parameters, and the `deadlineCloudJobCallback`
+lambda (rule on the **default** bus, `source aws.deadline` / `Job Run Status Change`,
+terminal `taskRunStatus` values) resolves the task token via `GetJob` →
+`SendTaskSuccess`/`SendTaskFailure` and registers the job on the orchestration bus as the
+pipeline execution's sub-process (`resourceType: deadlineCloudJob`, farmId/queueId/jobId).
+Deployment is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled`
+(feature switch `DEADLINECLOUD_PIPELINES`; rejected in GovCloud). The reserved job-parameter
+contract a registered template must declare (all `STRING` type):
+
+| OpenJD job parameter                                                    | Source                                               |
+| ----------------------------------------------------------------------- | ---------------------------------------------------- |
+| `VamsWorkflowDatabaseId` / `VamsWorkflowId` / `VamsWorkflowExecutionId` | workflow-execution identity                          |
+| `VamsWorkflowExecutionS3InputOutputBucket`                              | execution I/O bucket                                 |
+| `VamsExecutingUserName` / `VamsExecutingRequestContext`                 | executing-user context (context is serialized JSON)  |
+| `VamsInputManifestS3Location` / `VamsInputConfigurationS3Location`      | per-pipeline manifest + config                       |
+| `VamsTaskToken`                                                         | Step Functions task token (job must NOT alter it)    |
+| `VamsPipelineExecutionId`                                               | pipeline-execution row id (sub-process registration) |
+
+What remains — **creation-side enablement**, to land with the pipeline/workflow table
+overhaul (there is intentionally no way to create a `DeadlineCloud` pipeline until then):
+
+-   Extend `PipelineExecutionType` (`models/pipelines.py`) with `"DeadlineCloud"` and the
+    create-request fields: `deadlineFarmId`, `deadlineQueueId`, template reference,
+    `deadlineTemplateType` (`JSON`|`YAML`), optional `deadlinePriority`,
+    `deadlineMaxRetriesPerTask`, `deadlineMaxFailedTasksCount`, `deadlineStorageProfileId`.
+    The root validator must force `waitForCallback = "Enabled"` for this type (the builder
+    also rejects non-callback Deadline pipelines). Add `DEADLINE_FARM_ID` / `DEADLINE_QUEUE_ID`
+    validators (`farm-[0-9a-f]{32}` / `queue-[0-9a-f]{32}`) next to the SQS/EventBridge ones.
+-   The overhauled pipeline record's typed per-type execution configuration must adopt the
+    field shape the builder already parses from the user resource: `resourceType:
+"DeadlineCloud"`, `deadlineFarmId`, `deadlineQueueId`, `deadlineTemplate` (template
+    **text** — the create path resolves an S3-stored template to text before ASL generation),
+    `deadlineTemplateType`, plus the optional job settings above.
+-   Store OpenJD templates **by reference** (S3 location + content hash on the pipeline
+    record; small inline templates allowed with size validation — CreateJob caps the template
+    at 1,000,000 characters) and validate at pipeline-create time that the template declares
+    every reserved `Vams*` parameter.
+-   Formalize generic external-job fields on pipeline-execution records
+    (`externalJobType/Id/Arn/consoleDeepLink`) — the callback lambda's registration event
+    already carries farmId/queueId/jobId through `registeredSubExecutions`.
+-   Deep abort: `deadline:UpdateJob` (`targetTaskRunStatus=CANCELED`) using the registered
+    farmId/queueId/jobId when an execution with a Deadline step is aborted.
+-   `PipelineResponseModel`/`pipelineService` field extraction, web UI
+    (`pipelineExecutionTypeOptions` + `appearsWhen` fields), `VAMS_API.yaml` +
+    `api/pipelines.md`, configuration reference entry for
+    `app.pipelines.deadlineCloudExecutionTypeEnabled`.
+-   Operator documentation for the queue-role policy: the customer-owned Deadline queue role
+    needs read on the execution input locations (manifest/config/metadata + asset files) and
+    write on the execution output prefixes in the KMS-encrypted asset bucket. The default-bus
+    events only arrive in the farm's own account/region, so the farm must live in the VAMS
+    deployment account/region.
+
 ## Future changes list
 
 -   Drop the legacy `inputMetadata` / `inputParameters` / `outputType` fallbacks once all pipelines
     are redeploy-confirmed, and bump `ASL_SCHEMA_VERSION` / `MANIFEST_SCHEMA_VERSION` (see above).
--   Source `auxPreviewPipelinePrefix` from the pipeline table/configuration (currently always empty)
-    so viewer pipelines like `pcPotreeViewer` get their `/PotreeViewer` subfolder without hardcoding
-    it in pipeline code.
--   Relax the `enforce_single_input_file` guard per pipeline once multi-file input becomes a
-    workflow/pipeline configuration flag (the SFN + manifest layer is already multi-file-ready).
+-   Source the per-pipeline `auxPreviewPipelineSuffix` from the pipeline configuration (see
+    [Per-pipeline aux preview suffix](#per-pipeline-aux-preview-suffix-future-workflowpipeline-overhaul)
+    below) so viewer pipelines like `pcPotreeViewer` get their `/PotreeViewer` subfolder without
+    hardcoding it in pipeline code.
+-   Introduce a per-pipeline / per-workflow **input-arity + asset-scope setting** that drives which
+    manifest-helper gate each `vamsExecute` applies. Input arity: `none` (input configuration and/or
+    metadata only — no input files) / `one` (today's single-file pipelines) / `multi`. Asset scope
+    (for `multi`): `cross-asset` / `single-asset` (all files from one asset — the first file's
+    databaseId + bucket then apply to all, and configs use `{{assetFileKeyArray}}`) /
+    `whole-asset` (every file of an asset) / `folder` (a folder within an asset). The execution +
+    manifest layer already supports zero/one/many input files and the output-target identity pivot;
+    this setting formalizes per-pipeline validation (relaxing / replacing the current
+    `enforce_single_input_file` gate) once the pipeline/workflow tables are overhauled.
+-   Move template-tag rendering onto the upgraded pipeline **input-configuration** field (below) —
+    the renderer (`common/workflows/templateRender.py`) already runs on the per-pipeline config
+    text and the templated `outputFileBaseExecutionPathExtension`; it only needs to point at the
+    renamed field. Then add the two reserved dynamic-tag families the renderer errors on today:
+    `{{metadata_<key>}}` scalar lookups and user-defined per-pipeline tags (see
+    [Input-configuration template tags](#input-configuration-template-tags)). User-defined tags pair
+    with the OpenJD/Deadline Cloud template use case (pipeline-declared parameters swapped at runtime).
 -   Rename the pipeline definition's `inputParameters` field to `inputConfiguration` (pipelines
     table + workflow/pipeline models, registration custom resources, and the execute-time override
     `pipelineInputParameters`). The execution layer already treats this value as the per-pipeline
-    "input configuration" (written to `config.json`, delivered via `inputConfigurationS3Location`);
-    the field name on the pipeline/workflow level is the remaining inconsistency to reconcile.
+    "input configuration" (written to `config.json`, delivered via `inputConfigurationS3Location`,
+    template-tag-rendered per task); the field name on the pipeline/workflow level is the remaining
+    inconsistency to reconcile.
 -   Support a divergent output target (an output asset different from the input asset). The plumbing
     is in place (`outputTarget` in the manifest, `outputAssetId`/`outputDatabaseId`/
     `outputLocationType` through the SFN, honored by the end-state lambda); what remains is to let

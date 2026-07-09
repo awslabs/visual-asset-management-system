@@ -145,6 +145,15 @@ export const RULES: Rule[] = [
         appliesWhen: (c) => g(c, "app.govCloud.enabled") && g(c, "app.useLocationService.enabled"),
         message: "GovCloud must have app.useLocationService.enabled set to false.",
     },
+    {
+        id: "govcloud-no-deadline-cloud",
+        severity: "error",
+        fieldPaths: ["app.govCloud.enabled", "app.pipelines.deadlineCloudExecutionTypeEnabled"],
+        appliesWhen: (c) =>
+            g(c, "app.govCloud.enabled") && g(c, "app.pipelines.deadlineCloudExecutionTypeEnabled"),
+        message:
+            "AWS Deadline Cloud is not available in GovCloud. Set app.pipelines.deadlineCloudExecutionTypeEnabled to false.",
+    },
 
     // ----- EU Sovereign Cloud availability zones (config.ts:1273-1282) -----
     {

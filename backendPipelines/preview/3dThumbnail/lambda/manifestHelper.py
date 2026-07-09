@@ -19,7 +19,7 @@ everything static a pipeline needs:
       "outputs": { "bucket", "files", "previews", "metadata", "results" },  # bucket + relative keys
       "auxBucket": "aux-bucket-name",
       "auxTempPrefix": "pipelines/{pipelineName}/{executionId}/",
-      "auxPreviewPipelinePrefix": "",
+      "auxPreviewPipelineSuffix": "",
       "systemConfig": { "orchestrationBusArn", "orchestrationEventPrefix" }
     }
 
@@ -180,13 +180,13 @@ def resolve_inputs(data, manifest=None):
         "databaseId": "",
         "inputFiles": [],
         # Reconstructed s3:// aux preview location for the first input file (auxBucket +
-        # per-file auxPreviewPrefix + the per-pipeline auxPreviewPipelinePrefix). No legacy
+        # per-file auxPreviewPrefix + the per-pipeline auxPreviewPipelineSuffix). No legacy
         # fallback: aux preview locations are manifest-only.
         "auxPreviewS3Path": "",
         # The per-pipeline viewer subfolder from the manifest (empty until sourced from the
         # pipeline configuration). Exposed so a viewer pipeline can detect the empty case and
         # apply its own hardcoded fallback subfolder so it does not break in the interim.
-        "auxPreviewPipelinePrefix": "",
+        "auxPreviewPipelineSuffix": "",
         "orchestrationBusArn": "",
         "orchestrationEventPrefix": "",
         "manifestUsed": False,
@@ -229,16 +229,16 @@ def resolve_inputs(data, manifest=None):
 
     # The per-pipeline viewer subfolder from the manifest (empty until sourced from the pipeline
     # configuration); exposed so a viewer pipeline can apply its own fallback when empty.
-    resolved["auxPreviewPipelinePrefix"] = manifest.get("auxPreviewPipelinePrefix", "") or ""
+    resolved["auxPreviewPipelineSuffix"] = manifest.get("auxPreviewPipelineSuffix", "") or ""
 
     # The aux PREVIEW path is per-input-file: aux bucket + the first input file's own
-    # auxPreviewPrefix + the per-pipeline auxPreviewPipelinePrefix (viewer subfolder, e.g.
+    # auxPreviewPrefix + the per-pipeline auxPreviewPipelineSuffix (viewer subfolder, e.g.
     # "/PotreeViewer"; empty by default). Pipelines writing preview/viewer data use this.
     input_files = resolved["inputFiles"]
     if aux_bucket and input_files:
         file_preview_prefix = (input_files[0] or {}).get("auxPreviewPrefix", "")
         if file_preview_prefix:
-            pipeline_suffix = (manifest.get("auxPreviewPipelinePrefix", "") or "").strip("/")
+            pipeline_suffix = (manifest.get("auxPreviewPipelineSuffix", "") or "").strip("/")
             preview_key = file_preview_prefix.rstrip("/")
             if pipeline_suffix:
                 preview_key = f"{preview_key}/{pipeline_suffix}"

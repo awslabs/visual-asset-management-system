@@ -762,6 +762,18 @@ Nested stack: `infra/lib/nestedStacks/pipelines/genAi/nvidia/gr00t/gr00tBuilder-
 | `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes`        | array   | `["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Multiple types listed for regional capacity flexibility. g6e.4xlarge (1 GPU) for LoRA, g6e.12xlarge (4 GPU) for full fine-tuning, g5.12xlarge as fallback. |
 | `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.maxVCpus`             | number  | `192`                                            | Maximum vCPUs for the AWS Batch compute environment.                                                                                                                                                                            |
 
+### Deadline Cloud Execution Type (`app.pipelines.deadlineCloudExecutionTypeEnabled`)
+
+Support for the `DeadlineCloud` pipeline execution type: workflow task states submit OpenJD jobs to an operator-owned AWS Deadline Cloud farm/queue via `createJob`, and a job-callback Lambda resolves the workflow's task token from Deadline Cloud job status events on the account's default Amazon EventBridge bus. Deadline Cloud pipelines are asynchronous only (callback required). Not available in GovCloud. The Deadline Cloud farm must reside in the same account and Region as the VAMS deployment, and the queue's service role must have read access to the execution input locations and write access to the execution output prefixes in the asset bucket.
+
+:::note[Implemented by]
+Lambda builder: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildDeadlineCloudJobCallbackFunction`) — deployed in the API builder stack with an EventBridge rule on the default bus.
+:::
+
+| Setting                                                | Type    | Default | Description                                                                                                       |
+| ------------------------------------------------------ | ------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `app.pipelines.deadlineCloudExecutionTypeEnabled` | boolean | `false` | Deploys the Deadline Cloud job-callback Lambda + default-bus rule and grants the workflow role `deadline:CreateJob`. |
+
 ## Addons (`app.addons`)
 
 ### Garnet Framework (`app.addons.useGarnetFramework`)

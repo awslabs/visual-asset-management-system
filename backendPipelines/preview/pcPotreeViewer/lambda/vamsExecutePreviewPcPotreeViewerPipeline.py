@@ -103,11 +103,11 @@ def lambda_handler(event, context):
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Potree writes its octree viewer data to the per-input-file aux preview location. The
-        # viewer subfolder comes from the manifest's auxPreviewPipelinePrefix; until that is
+        # viewer subfolder comes from the manifest's auxPreviewPipelineSuffix; until that is
         # sourced from the pipeline configuration it is empty, so fall back to the hardcoded
         # "PotreeViewer" subfolder here to keep the viewer path intact.
         inputOutputS3AssetAuxiliaryFilesPath = resolved['auxPreviewS3Path']
-        if not resolved.get('auxPreviewPipelinePrefix') and inputOutputS3AssetAuxiliaryFilesPath:
+        if not resolved.get('auxPreviewPipelineSuffix') and inputOutputS3AssetAuxiliaryFilesPath:
             inputOutputS3AssetAuxiliaryFilesPath = inputOutputS3AssetAuxiliaryFilesPath.rstrip('/') + "/PotreeViewer"
 
         # Starts excution of pipeline

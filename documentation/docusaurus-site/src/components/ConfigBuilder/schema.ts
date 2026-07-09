@@ -1211,6 +1211,15 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useModelOps.enabled"),
     },
+    // Deadline Cloud execution type
+    {
+        path: "app.pipelines.deadlineCloudExecutionTypeEnabled",
+        label: "Deadline Cloud execution type",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Not available in GovCloud.",
+    },
     // NVIDIA Cosmos shared settings + models
     {
         path: `${COSMOS}.enabled`,
