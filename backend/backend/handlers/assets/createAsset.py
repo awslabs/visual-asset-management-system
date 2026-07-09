@@ -435,7 +435,10 @@ def create_prefix_folder(bucket, prefix):
         s3_client.put_object(
             Bucket=bucket,
             Key=prefix,
-            Body=''
+            Body='',
+            # Grant the bucket owner full control so a folder marker written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control'
         )
         logger.info(f"Created prefix folder {prefix} in bucket {bucket}")
         return True

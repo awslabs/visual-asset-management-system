@@ -77,7 +77,8 @@ test("Core stack synthesizes", () => {
             region: mockConfig.env.region,
         },
         stackName: mockConfig.app.baseStackName,
-        ssmWafArn: "",
+        ssmWafArnRegional: "",
+        ssmWafArnCloudfront: "",
         config: mockConfig,
         description: "Test stack for VAMS",
     });

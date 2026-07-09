@@ -178,6 +178,9 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
             Key=key,
             Body=b'',  # Empty content for zero-byte file
             ContentType='application/octet-stream',
+            # Grant the bucket owner full control so a zero-byte file written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control',
             Metadata={
                 DATABASE_ID_METADATA_KEY: database_id,
                 ASSET_ID_METADATA_KEY: asset_id,
@@ -256,7 +259,10 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 DATABASE_ID_METADATA_KEY: database_id,
                 ASSET_ID_METADATA_KEY: asset_id,
                 **build_upload_change_metadata(user_id)
-            }
+            },
+            # Grant the bucket owner full control so the finalized object written into a
+            # cross-account asset bucket is owned/readable by that account.
+            'ACL': 'bucket-owner-full-control'
         }
 
         s3_resource.meta.client.copy(
