@@ -502,6 +502,14 @@ export function searchBuilder(
             },
             {
                 id: "AwsSolutions-IAM5",
+                reason: "Provisioned OpenSearch data-plane access uses the es:* action set scoped to the single VAMS domain ARN and its sub-resources (<domain>/*). Index- and document-level actions are not separable from es:* for the OpenSearch HTTP API, and access is further restricted by the domain access policy to this role, so the schema-deploy/search/indexer roles use es:* against only the deployment's own domain.",
+                appliesTo: [
+                    { regex: "/^Action::es:\\*$/g" },
+                    { regex: "/^Resource::<.*OpenSearchDomain.*\\.Arn>\\/\\*$/g" },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM5",
                 reason: "The OpenSearch endpoint/index names are published to and read from SSM Parameter Store under this deployment's parameter prefix; the search/indexing roles read those parameters via a prefix wildcard scoped to the deployment name (parameter/*<config.name>*).",
                 appliesTo: [
                     { regex: "/^Action::ssm:\\*$/g" },

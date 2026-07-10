@@ -827,7 +827,9 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                             id: "AwsSolutions-IAM5",
                             reason: "Custom resource provider requires wildcard permissions to invoke the import global pipeline workflow function with version qualifiers. Scope is limited to the single import function.",
                             appliesTo: [
-                                `Resource::arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
+                                {
+                                    regex: "/^Resource::arn:.*:lambda:.*:function:<importGlobalPipelineWorkflow[A-Z0-9]+>:\\*$/g",
+                                },
                             ],
                         },
                     ],

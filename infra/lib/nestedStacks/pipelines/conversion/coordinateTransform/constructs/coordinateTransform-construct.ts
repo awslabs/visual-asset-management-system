@@ -393,6 +393,14 @@ export class CoordinateTransformConstruct extends Construct {
                     id: "AwsSolutions-IAM5",
                     reason: "Pipeline Lambda functions require access to S3 asset buckets and Step Functions for coordinate transformation.",
                 },
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "Pipeline Lambda functions use the AWS managed AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole for CloudWatch logging and VPC networking.",
+                    appliesTo: [
+                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+                    ],
+                },
             ],
             true
         );

@@ -409,7 +409,9 @@ export class SplatToolboxConstruct extends Construct {
                         id: "AwsSolutions-IAM5",
                         reason: "Custom resource provider requires wildcard permissions to invoke the import function with version qualifiers",
                         appliesTo: [
-                            `Resource::arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
+                            {
+                                regex: "/^Resource::arn:.*:lambda:.*:function:<importGlobalPipelineWorkflow[A-Z0-9]+>:\\*$/g",
+                            },
                         ],
                     },
                 ],
