@@ -40,7 +40,7 @@ infra/
     aspects/                    # iam-role-transform.aspect.ts, log-retention.aspect.ts (1-year retention)
     constructs/wafv2-basic-construct.ts
     helper/
-      const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso)
+      const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso, aws-eusc)
       iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring
       lambda.ts                 # Layer bundling commands
       s3AssetBuckets.ts         # Global asset bucket registry
@@ -259,7 +259,7 @@ IAMArn(name: string): { role, policy, statemachine, statemachineExecution,
 Partition(): string  // Returns current partition
 ```
 
-**Partition lookup** (`lib/helper/const.ts`): a lookup table supporting 4 partitions — `aws` (commercial), `aws-us-gov` (GovCloud), `aws-cn` (China), `aws-iso` (isolated). Each entry contains `arn`, `hostname`, `fipsHostname`, `principal`.
+**Partition lookup** (`lib/helper/const.ts`): a lookup table supporting 5 partitions — `aws` (commercial), `aws-us-gov` (GovCloud), `aws-cn` (China), `aws-iso` (isolated), `aws-eusc` (EU Sovereign Cloud; region `eusc-de-east-1`, DNS suffix `.amazonaws.eu`). Each entry contains `arn`, `hostname`, `fipsHostname`, `principal`.
 
 ---
 
@@ -367,7 +367,7 @@ Service("DYNAMODB").ARN("table/myTable");
 Service("LAMBDA").Principal;
 ```
 
-Never hardcode `arn:aws:...` — the system supports aws, aws-us-gov, aws-cn, and aws-iso.
+Never hardcode `arn:aws:...` — the system supports aws, aws-us-gov, aws-cn, aws-iso, and aws-eusc.
 
 ---
 
