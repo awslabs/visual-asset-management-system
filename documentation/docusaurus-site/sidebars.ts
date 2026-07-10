@@ -95,6 +95,16 @@ const sidebars: SidebarsConfig = {
                 "developer/permissions",
                 {
                     type: "category",
+                    label: "Data Syncing",
+                    collapsed: true,
+                    items: [
+                        "developer/data-syncing/overview",
+                        "developer/data-syncing/sync-out",
+                        "developer/data-syncing/sync-in",
+                    ],
+                },
+                {
+                    type: "category",
                     label: "Addons",
                     collapsed: true,
                     items: ["developer/garnet-framework", "developer/physna-integration"],

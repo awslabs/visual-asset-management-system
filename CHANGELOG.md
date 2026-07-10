@@ -196,6 +196,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Bumped Vite `build.target` and `optimizeDeps.esbuildOptions.target` from `es2020` to `es2022`.
 -   **Web** Updated the PlayCanvas Gaussian Splat viewer's bundled PlayCanvas engine (`customInstalls/playcanvas`) from `2.17.2` to `2.19.6`.
 -   Documentation updated to inventory the named Amazon CloudWatch log groups (`/aws/vendedlogs/...`) VAMS creates and the Amazon S3 web access logs bucket, and the uninstall procedure now covers deleting retained, deterministically named log groups (including conditional ones such as AWS CloudTrail and VPC flow logs) that must be removed before redeploying the CDK stack with the same configuration name and account.
+-   Bumped backend and base Lambda layer `boto3`/`botocore` from `1.34.x` to `1.43.45` to support the new `aws-eusc` (EU Sovereign Cloud, region `eusc-de-east-1`) partition.
 -   Update documentation to point to new physical-ai blog locations (AWS spatial blogs migrated to physical-ai tag)
 -   Updated root README to now point all documentation to the documentation website and not the source markdown files
 -   Update various package dependencies across the solution
