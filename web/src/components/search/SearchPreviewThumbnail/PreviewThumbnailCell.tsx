@@ -40,7 +40,28 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                 const assetCacheKey = `asset:${databaseId}:${assetId}`;
 
                 // Check asset cache first BEFORE resetting state
-                const cachedAsset = cacheManager.getAsset(assetCacheKey);
+                let cachedAsset = cacheManager.getAsset(assetCacheKey);
+
+                // Invalidate a stale cache entry when the fresh search record reports a
+                // different preview key than the one that produced the cached entry. This
+                // covers a preview being added, changed, or removed on another page: the
+                // cached "no preview"/old-key entry is dropped (along with its stale preview
+                // image) so the new value re-resolves without a hard page refresh.
+                if (
+                    cachedAsset &&
+                    previewFileKey !== undefined &&
+                    cachedAsset.sourcePreviewFileKey !== undefined &&
+                    cachedAsset.sourcePreviewFileKey !== previewFileKey
+                ) {
+                    console.log(`[Cache STALE] Asset ${assetId} preview key changed; invalidating`);
+                    if (cachedAsset.previewKey) {
+                        cacheManager.deletePreview(
+                            `preview:asset:${databaseId}:${assetId}:${cachedAsset.previewKey}`
+                        );
+                    }
+                    cacheManager.deleteAsset(assetCacheKey);
+                    cachedAsset = null;
+                }
 
                 let assetPreviewKey: string;
                 let downloadType: "assetPreview" | "assetFile";
@@ -60,8 +81,10 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                         return;
                     }
 
-                    // Check preview cache
-                    const previewCacheKey = `preview:${databaseId}:${assetId}:${assetPreviewKey}`;
+                    // Check preview cache. Namespace by record type ("asset") so an asset
+                    // preview never collides with a file preview that shares the same
+                    // databaseId:assetId (files live under their parent asset's id).
+                    const previewCacheKey = `preview:asset:${databaseId}:${assetId}:${assetPreviewKey}`;
                     const cachedPreview = cacheManager.getPreview(previewCacheKey);
 
                     if (cachedPreview) {
@@ -83,6 +106,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                         cacheManager.setAsset(assetCacheKey, {
                             previewKey: "",
                             downloadType: "assetPreview",
+                            sourcePreviewFileKey: previewFileKey,
                         });
                         setError(true);
                         setLoading(false);
@@ -94,6 +118,7 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
                     cacheManager.setAsset(assetCacheKey, {
                         previewKey: assetPreviewKey,
                         downloadType: downloadType,
+                        sourcePreviewFileKey: previewFileKey,
                     });
                     setAssetPreviewKey(assetPreviewKey);
                 } else {
@@ -150,8 +175,10 @@ const PreviewThumbnailCellInner: React.FC<PreviewThumbnailCellProps> = ({
 
                 //console.log(`Loading preview for asset ${assetId} with key: ${assetPreviewKey}`);
 
-                // Check preview cache before downloading
-                const previewCacheKey = `preview:${databaseId}:${assetId}:${assetPreviewKey}`;
+                // Check preview cache before downloading. Namespace by record type
+                // ("asset") so an asset preview never collides with a file preview that
+                // shares the same databaseId:assetId.
+                const previewCacheKey = `preview:asset:${databaseId}:${assetId}:${assetPreviewKey}`;
                 const cachedPreview = cacheManager.getPreview(previewCacheKey);
 
                 if (cachedPreview) {
@@ -260,7 +287,8 @@ export const PreviewThumbnailCell = React.memo(
         return (
             prevProps.assetId === nextProps.assetId &&
             prevProps.databaseId === nextProps.databaseId &&
-            prevProps.assetName === nextProps.assetName
+            prevProps.assetName === nextProps.assetName &&
+            prevProps.previewFileKey === nextProps.previewFileKey
         );
     }
 );

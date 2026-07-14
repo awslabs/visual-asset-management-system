@@ -85,8 +85,8 @@ export const AssetHistoryTable: React.FC<AssetHistoryTableProps> = ({
                     pageSize: PAGE_SIZE,
                     startingToken,
                 });
-                if (result === false || result[0] === false) {
-                    setError(result ? result[1] : "Failed to load asset history");
+                if (!result || result[0] === false) {
+                    setError((result && result[1]) || "Failed to load asset history");
                     return;
                 }
                 const response = result[1];

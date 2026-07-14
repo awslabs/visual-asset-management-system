@@ -269,13 +269,11 @@ The execute-api interface VPC endpoint (`com.amazonaws.{region}.execute-api`) is
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint                  | Condition                                                       | Purpose                                                      |
-| ------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
-| Amazon Cognito user pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check |
-| Amazon Cognito (FIPS)     | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp`                                 |
-| AWS KMS                   | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                           |
-| AWS KMS (FIPS)            | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                           |
-| Amazon S3 (ALB web)       | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                            |
+| Endpoint            | Condition                                      | Purpose                           |
+| ------------------- | ---------------------------------------------- | --------------------------------- |
+| AWS KMS             | `useKmsCmkEncryption.enabled`                  | KMS key operations                |
+| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`      | FIPS-compliant KMS                |
+| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint` | ALB-to-S3 static web file serving |
 
 :::info[ALB Amazon S3 interface endpoint]
 In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:

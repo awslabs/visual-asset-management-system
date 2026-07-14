@@ -25,12 +25,24 @@ interface CacheEntry<T> {
 interface AssetDetails {
     previewKey: string;
     downloadType: "assetPreview" | "assetFile";
+    /**
+     * The raw search-index previewFileKey that produced this entry (undefined when the
+     * entry came from an API fallback). Used to detect a stale cache when a newer search
+     * result reports a different preview key (added / changed / removed on another page).
+     */
+    sourcePreviewFileKey?: string;
 }
 
 interface FileDetails {
     previewKey: string;
     downloadType: "assetPreview" | "assetFile";
     hasPreview: boolean;
+    /**
+     * The raw search-index previewFileKey that produced this entry (undefined when the
+     * entry came from an API fallback). Used to detect a stale cache when a newer search
+     * result reports a different preview key.
+     */
+    sourcePreviewFileKey?: string;
 }
 
 interface PreviewImage {
@@ -118,6 +130,14 @@ class SearchCacheManager {
         // );
     }
 
+    /**
+     * Remove an asset details entry (used to invalidate a stale entry when a newer
+     * search result reports a different preview key).
+     */
+    deleteAsset(key: string): void {
+        this.assetCache.delete(key);
+    }
+
     // ==================== File Cache Methods ====================
 
     /**
@@ -164,6 +184,14 @@ class SearchCacheManager {
         //console.log(`[Cache SET] File details for key: ${key}, cache size: ${this.fileCache.size}`);
     }
 
+    /**
+     * Remove a file details entry (used to invalidate a stale entry when a newer
+     * search result reports a different preview key).
+     */
+    deleteFile(key: string): void {
+        this.fileCache.delete(key);
+    }
+
     // ==================== Preview Cache Methods ====================
 
     /**
@@ -192,6 +220,20 @@ class SearchCacheManager {
         entry.lastAccessed = now;
 
         return entry.data;
+    }
+
+    /**
+     * Remove a preview image entry and reclaim its tracked size (used to invalidate a
+     * stale downloaded image when the underlying preview key changes or is removed).
+     */
+    deletePreview(key: string): void {
+        const entry = this.previewCache.get(key);
+        if (entry) {
+            this.previewCache.delete(key);
+            if (entry.size) {
+                this.previewCacheSize -= entry.size;
+            }
+        }
     }
 
     /**

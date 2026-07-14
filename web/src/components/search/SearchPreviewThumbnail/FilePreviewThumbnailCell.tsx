@@ -51,7 +51,28 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                 const fileCacheKey = `file:${databaseId}:${assetId}:${fileKey}`;
 
                 // Check file cache first BEFORE resetting state
-                const cachedFile = cacheManager.getFile(fileCacheKey);
+                let cachedFile = cacheManager.getFile(fileCacheKey);
+
+                // Invalidate a stale cache entry when the fresh search record reports a
+                // different preview key than the one that produced the cached entry. This
+                // covers a preview being added, changed, or removed on another page: the
+                // cached entry is dropped (along with its stale preview image) so the new
+                // value re-resolves without a hard page refresh.
+                if (
+                    cachedFile &&
+                    previewFileKey !== undefined &&
+                    cachedFile.sourcePreviewFileKey !== undefined &&
+                    cachedFile.sourcePreviewFileKey !== previewFileKey
+                ) {
+                    console.log(`[Cache STALE] File ${fileName} preview key changed; invalidating`);
+                    if (cachedFile.previewKey) {
+                        cacheManager.deletePreview(
+                            `preview:file:${databaseId}:${assetId}:${cachedFile.previewKey}`
+                        );
+                    }
+                    cacheManager.deleteFile(fileCacheKey);
+                    cachedFile = null;
+                }
 
                 let filePreviewKey: string;
                 let currentDownloadType: "assetPreview" | "assetFile";
@@ -74,8 +95,10 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                     currentDownloadType = cachedFile.downloadType;
                     keyToUse = filePreviewKey;
 
-                    // Check preview cache
-                    const previewCacheKey = `preview:${databaseId}:${assetId}:${filePreviewKey}`;
+                    // Check preview cache. Namespace by record type ("file") so a file
+                    // preview never collides with the parent asset's preview, which shares
+                    // the same databaseId:assetId.
+                    const previewCacheKey = `preview:file:${databaseId}:${assetId}:${filePreviewKey}`;
                     const cachedPreview = cacheManager.getPreview(previewCacheKey);
 
                     if (cachedPreview) {
@@ -108,6 +131,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                             previewKey: filePreviewKey,
                             downloadType: currentDownloadType,
                             hasPreview: true,
+                            sourcePreviewFileKey: previewFileKey,
                         });
                     } else {
                         // No preview file — check if the file itself is a previewable image
@@ -120,6 +144,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                                 previewKey: "",
                                 downloadType: "assetFile",
                                 hasPreview: false,
+                                sourcePreviewFileKey: previewFileKey,
                             });
                             setError(true);
                             setLoading(false);
@@ -133,6 +158,7 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
                             previewKey: fileKey,
                             downloadType: "assetFile",
                             hasPreview: true,
+                            sourcePreviewFileKey: previewFileKey,
                         });
                     }
                 } else {
@@ -200,8 +226,10 @@ const FilePreviewThumbnailCellInner: React.FC<FilePreviewThumbnailCellProps> = (
 
                 console.log(`Loading preview for file ${fileName} with key: ${keyToUse}`);
 
-                // Check preview cache before downloading
-                const previewCacheKey = `preview:${databaseId}:${assetId}:${keyToUse}`;
+                // Check preview cache before downloading. Namespace by record type
+                // ("file") so a file preview never collides with the parent asset's
+                // preview, which shares the same databaseId:assetId.
+                const previewCacheKey = `preview:file:${databaseId}:${assetId}:${keyToUse}`;
                 const cachedPreview = cacheManager.getPreview(previewCacheKey);
 
                 if (cachedPreview) {
