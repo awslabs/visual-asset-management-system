@@ -139,6 +139,7 @@ In addition to steering documents, Claude Code supports **slash commands** — r
 | `/update-changelog`      | `.claude/commands/update-changelog.md`      | Generate changelog entries from git commits                                                                                 |
 | `/update-docs`           | `.claude/commands/update-docs.md`           | Update Docusaurus documentation pages based on recent code changes                                                          |
 | `/verify-docs`           | `.claude/commands/verify-docs.md`           | Cross-check documentation accuracy against source code                                                                      |
+| `/vams-agent`            | `.claude/commands/vams-agent.md`            | Operate a VAMS deployment at runtime via `vamscli` (search, inspect, bulk-update, cross-link); self-discovers commands, read-only by default |
 
 These commands encode the cross-component patterns from the steering documents into executable workflows. For example, `/add-api-endpoint` automates the six-file change pattern described in Example 1 above.
 
