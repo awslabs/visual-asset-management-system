@@ -142,6 +142,13 @@ export function globalLambdaEnvironmentsAndPermissions(
     } else {
         lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");
     }
+
+    // Optional default role granted to authenticated users with no assigned role
+    // (used by the Casbin enforcer). Empty string disables the behavior.
+    lambdaFunction.addEnvironment(
+        "DEFAULT_ROLE_NAME",
+        config.app.authProvider.authorizerOptions?.defaultUserRoleName || ""
+    );
 }
 
 /**

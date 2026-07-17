@@ -235,13 +235,14 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 | --------------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------ |
 | `app.authProvider.presignedUrlTimeoutSeconds` | number | `86400` | Timeout in seconds for Amazon S3 presigned URLs used for upload and download operations (default: 24 hours). |
 
-### IP range restrictions (`app.authProvider.authorizerOptions`)
+### Authorizer options (`app.authProvider.authorizerOptions`)
 
-| Field                                                | Type  | Default | Description                                                                                                                                |
-| ---------------------------------------------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.authProvider.authorizerOptions.allowedIpRanges` | array | `[]`    | Array of IP range pairs for restricting API access. Each range is a 2-element array: `["min_ip", "max_ip"]`. Leave empty to allow all IPs. |
+| Field                                                   | Type   | Default | Description                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.authProvider.authorizerOptions.allowedIpRanges`    | array  | `[]`    | Array of IP range pairs for restricting API access. Each range is a 2-element array: `["min_ip", "max_ip"]`. Leave empty to allow all IPs.                                                                                                                           |
+| `app.authProvider.authorizerOptions.defaultUserRoleName` | string | `""`    | Optional role name automatically granted to authenticated users who have no explicitly assigned roles. Enables baseline access for external identity provider logins without manual per-user provisioning. The role must exist in the Roles table. Empty string (default) disables this feature. |
 
-**Example:**
+**IP range example:**
 
 ```json
 "allowedIpRanges": [
@@ -249,6 +250,24 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
     ["10.0.0.1", "10.0.0.255"]
 ]
 ```
+
+**Default role example:**
+
+```json
+"authorizerOptions": {
+    "allowedIpRanges": [],
+    "defaultUserRoleName": "basicReadOnly"
+}
+```
+
+:::info[Default role behavior]
+The default role is applied only when:
+- The user successfully authenticates (passes custom Lambda authorizer validation)
+- The user has no explicit role assignments in the UserRoles table
+- For non-MFA sessions, the default role does not itself require MFA
+
+This feature is primarily used with external identity providers (OIDC federation, external OAuth) where users authenticate successfully but are not provisioned in the VAMS user management system. See [OIDC federation](oidc-federation.md) for setup guidance.
+:::
 
 ### Amazon Cognito (`app.authProvider.useCognito`)
 

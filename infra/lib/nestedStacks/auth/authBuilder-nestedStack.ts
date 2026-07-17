@@ -22,6 +22,7 @@ import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { samlSettings } from "../../../config/saml-config";
+import { oidcSettings, useOidcFederation } from "../../../config/oidc-config";
 import { Service } from "../../../lib/helper/service-helper";
 import {
     AwsCustomResource,
@@ -73,6 +74,11 @@ export class AuthBuilderNestedStack extends NestedStack {
             //TODO: Migrate rest of settings to main config file
             if (props.config.app.authProvider.useCognito.useSaml) {
                 cognitoProps.samlSettings = samlSettings;
+            }
+
+            // Cognito <-> OIDC federation (Amazon Midway via Amazon Federate)
+            if (useOidcFederation) {
+                cognitoProps.oidcSettings = oidcSettings;
             }
 
             const cognitoWebNativeConstruct = new CognitoWebNativeConstructStack(

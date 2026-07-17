@@ -10,6 +10,7 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
+import { oidcSettings, useOidcFederation } from "../../../config/oidc-config";
 import { generateUniqueNameHash } from "../../helper/security";
 import {
     AmplifyConfigLambdaConstruct,
@@ -194,6 +195,8 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 
         if (props.config.app.authProvider.useCognito.useSaml) {
             authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (useOidcFederation) {
+            authDomain = `https://${oidcSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
         } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
             authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
         }
@@ -215,6 +218,11 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 // if necessary, the callback urls can be determined here and passed to the UI through the config endpoint
                 // redirectSignIn: callbackUrls[0],
                 // redirectSignOut: callbackUrls[0],
+            };
+        } else if (useOidcFederation) {
+            amplifyConfigProps.cognitoFederatedConfig = {
+                customCognitoAuthDomain: authDomain,
+                customFederatedIdentityProviderName: oidcSettings.name,
             };
         }
 

@@ -8,6 +8,7 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as cdk from "aws-cdk-lib";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { Construct } from "constructs";
 import { Duration, NestedStack } from "aws-cdk-lib";
@@ -31,11 +32,24 @@ export interface SamlSettings {
     cognitoDomainPrefix: string;
 }
 
+export interface OidcSettings {
+    name: string;
+    cognitoDomainPrefix: string;
+    clientId: string;
+    // Client secret ARN (secret is retrieved from AWS Secrets Manager at deploy time)
+    clientSecretArn: string;
+    issuerUrl: string;
+    scopes: string[];
+    attributeMapping: cognito.AttributeMapping;
+    manageDomain: boolean;
+}
+
 export interface CognitoWebNativeConstructStackProps extends cdk.StackProps {
     lambdaCommonBaseLayer: LayerVersion;
     storageResources: storageResources;
     config: Config.Config;
     samlSettings?: SamlSettings;
+    oidcSettings?: OidcSettings;
 }
 
 /**
@@ -168,6 +182,44 @@ export class CognitoWebNativeConstructStack extends Construct {
             });
         }
 
+        // OIDC federation (e.g. Amazon Midway via Amazon Federate)
+        let oidcIdentityProvider: cognito.UserPoolIdentityProviderOidc | undefined;
+        if (props.oidcSettings) {
+            // Retrieve the client secret from AWS Secrets Manager at deploy time
+            const clientSecret = cdk.SecretValue.secretsManager(
+                props.oidcSettings.clientSecretArn
+            ).unsafeUnwrap();
+
+            oidcIdentityProvider = new cognito.UserPoolIdentityProviderOidc(
+                this,
+                "MyUserPoolIdentityProviderOidc",
+                {
+                    userPool: userPool,
+                    name: props.oidcSettings.name,
+                    clientId: props.oidcSettings.clientId,
+                    clientSecret: clientSecret,
+                    issuerUrl: props.oidcSettings.issuerUrl,
+                    scopes: props.oidcSettings.scopes,
+                    attributeMapping: props.oidcSettings.attributeMapping,
+                    // Endpoints are auto-discovered from <issuerUrl>/.well-known/openid-configuration
+                    attributeRequestMethod: cognito.OidcAttributeRequestMethod.GET,
+                }
+            );
+            supportedIdentityProviders.push(
+                cognito.UserPoolClientIdentityProvider.custom(oidcIdentityProvider.providerName)
+            );
+
+            // Only create the hosted domain when we are asked to manage it. When the
+            // domain was created out-of-band, recreating it would fail the deploy.
+            if (props.oidcSettings.manageDomain) {
+                userPool.addDomain("UserPoolDomainOidc", {
+                    cognitoDomain: {
+                        domainPrefix: props.oidcSettings.cognitoDomainPrefix,
+                    },
+                });
+            }
+        }
+
         const userPoolWebClient = new cognito.UserPoolClient(this, "UserPoolWebClient", {
             generateSecret: false,
             userPool: userPool,
@@ -186,6 +238,12 @@ export class CognitoWebNativeConstructStack extends Construct {
                 userPassword: props.config.app.authProvider.useCognito.useUserPasswordAuthFlow,
             },
         });
+
+        // Ensure the web client is created after the OIDC identity provider so it
+        // can reference the provider in its supported identity providers list.
+        if (oidcIdentityProvider) {
+            userPoolWebClient.node.addDependency(oidcIdentityProvider);
+        }
 
         // Classic flow is enabled because using assume_role_with_web_identity to extend auth token timeout
         const identityPool = new cognito.CfnIdentityPool(this, "IdentityPool", {

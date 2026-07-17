@@ -9,6 +9,7 @@ import { NestedStack } from "aws-cdk-lib";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
+import { oidcSettings, useOidcFederation } from "../../../config/oidc-config";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { CloudFrontS3WebSiteConstruct } from "./constructs/cloudfront-s3-website-construct";
@@ -150,6 +151,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         if (props.config.app.authProvider.useCognito.useSaml) {
             authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (useOidcFederation) {
+            authDomain = `https://${oidcSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
         } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
             authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
         }
@@ -177,6 +180,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 csp: cspPolicy,
                 cognitoDomain: props.config.app.authProvider.useCognito.useSaml
                     ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
+                    : useOidcFederation
+                    ? `https://${oidcSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
                     : "",
             });
 
@@ -220,9 +225,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
-             * if SAML is enabled.
+             * when Cognito federation (SAML or OIDC/Midway) is enabled.
              */
-            if (props.config.app.authProvider.useCognito.useSaml) {
+            if (props.config.app.authProvider.useCognito.useSaml || useOidcFederation) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
                     this,
                     "CustomCognitoWebClientConfig",
@@ -232,7 +237,10 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                         userPoolId: props.authResources.cognito.userPoolId,
                         callbackUrls: callbackUrls,
                         logoutUrls: callbackUrls,
-                        identityProviders: ["COGNITO", samlSettings.name],
+                        identityProviders: [
+                            "COGNITO",
+                            useOidcFederation ? oidcSettings.name : samlSettings.name,
+                        ],
                     }
                 );
                 customCognitoWebClientConfig.node.addDependency(website);
@@ -316,9 +324,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
-             * if SAML is enabled.
+             * when Cognito federation (SAML or OIDC/Midway) is enabled.
              */
-            if (props.config.app.authProvider.useCognito.useSaml) {
+            if (props.config.app.authProvider.useCognito.useSaml || useOidcFederation) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
                     this,
                     "CustomCognitoWebClientConfig",
@@ -328,7 +336,10 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                         userPoolId: props.authResources.cognito.userPoolId,
                         callbackUrls: callbackUrls,
                         logoutUrls: callbackUrls,
-                        identityProviders: ["COGNITO", samlSettings.name],
+                        identityProviders: [
+                            "COGNITO",
+                            useOidcFederation ? oidcSettings.name : samlSettings.name,
+                        ],
                     }
                 );
                 customCognitoWebClientConfig.node.addDependency(website);

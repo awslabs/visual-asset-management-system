@@ -361,6 +361,15 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.authorizerOptions.allowedIpRanges = [];
     }
 
+    // Initialize default user role name (baseline access for authenticated users).
+    // Can be overridden with the DEFAULT_USER_ROLE_NAME environment variable or CDK context.
+    config.app.authProvider.authorizerOptions.defaultUserRoleName = <string>(
+        app.node.tryGetContext("defaultUserRoleName") ||
+        process.env.DEFAULT_USER_ROLE_NAME ||
+        config.app.authProvider.authorizerOptions.defaultUserRoleName ||
+        ""
+    );
+
     if (config.app.api == undefined) {
         config.app.api = { globalRateLimit: 50, globalBurstLimit: 100 };
     }
@@ -1319,6 +1328,11 @@ export interface ConfigPublic {
             presignedUrlTimeoutSeconds: number;
             authorizerOptions: {
                 allowedIpRanges: string[][];
+                // Optional role name automatically granted to every authenticated user
+                // who has no explicitly-assigned role. Primarily used with external IdP
+                // (e.g. Midway) logins so users get baseline access (e.g. "basicReadOnly")
+                // without manual per-user role assignment. Empty string disables it.
+                defaultUserRoleName?: string;
             };
             useCognito: {
                 enabled: boolean;

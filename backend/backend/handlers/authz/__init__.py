@@ -35,6 +35,13 @@ CASBIN_GET_POLICY_RETRY_DELAY_SECONDS = 1
 #
 CASBIN_NO_DICTIONARY_LOCKING = False
 
+# Optional role automatically granted to every authenticated user who has no
+# explicitly-assigned role. Enables baseline access (e.g. read-only) for external
+# IdP / Midway logins that are not provisioned into the UserRoles table. The role
+# named here must exist in the Roles table and have constraints defined. Empty
+# string (default) disables the behavior. Set via the DEFAULT_ROLE_NAME env var.
+DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
+
 # Defines a boilerplate Deny-all policy for casbin enforcer - for cases where policy_text can't be determined
 # (allowing existing enforcement call sites to continue to work without any additional changes)
 #
@@ -494,11 +501,29 @@ class CasbinEnforcerService:
         #
         if self._mfaEnabled:
             user_roles_from_table = self._read_current_user_roles_from_table()
+            # An MFA session may use any role, including one that requires MFA.
+            default_role_allowed = True
         else:
             relevant_NonMFA_roles = self._read_mfaNotRequired_roles_from_table()
             relevant_NonMFA_role_names = [role["roleName"] for role in relevant_NonMFA_roles]
             all_user_roles_from_table = self._read_current_user_roles_from_table()
             user_roles_from_table = [user_role for user_role in all_user_roles_from_table if user_role["roleName"] in relevant_NonMFA_role_names]
+            # For non-MFA sessions the default role may only be applied if that role
+            # does not itself require MFA (mirrors the filtering applied to assigned roles).
+            default_role_allowed = DEFAULT_ROLE_NAME in relevant_NonMFA_role_names
+
+        # Grant a configurable default role to users who have no assigned role.
+        # This provides baseline access (e.g. read-only) for authenticated users
+        # that are not provisioned in the UserRoles table, such as external IdP
+        # (Midway) logins. Disabled when DEFAULT_ROLE_NAME is empty. The default is
+        # applied only when the user has no other applicable roles, so it never
+        # broadens the access of users who already have explicit role assignments.
+        if DEFAULT_ROLE_NAME and default_role_allowed and len(user_roles_from_table) == 0:
+            logger.info(f"No assigned roles for user {self._user_id}; applying default role '{DEFAULT_ROLE_NAME}'")
+            user_roles_from_table.append({
+                "userId": self._user_id,
+                "roleName": DEFAULT_ROLE_NAME,
+            })
 
         policies_from_table_by_roles = []
 

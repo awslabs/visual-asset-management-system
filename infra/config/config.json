@@ -2,7 +2,7 @@
     "name": "vams",
     "env": {
         "account": null,
-        "region": null,
+        "region": "us-east-1",
         "loadContextIgnoreVPCStacks": false
     },
     "app": {
@@ -13,7 +13,7 @@
             "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
-        "adminEmailAddress": "adminEmail@example.com",
+        "adminEmailAddress": "javvajib@amazon.com",
         "useFips": false,
         "useWaf": true,
         "addStackCloudTrailLogs": true,
@@ -232,7 +232,8 @@
         "authProvider": {
             "presignedUrlTimeoutSeconds": 86400,
             "authorizerOptions": {
-                "allowedIpRanges": []
+                "allowedIpRanges": [],
+                "defaultUserRoleName": "basicReadOnly"
             },
             "useCognito": {
                 "enabled": true,

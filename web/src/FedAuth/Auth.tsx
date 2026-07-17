@@ -35,7 +35,7 @@ import LoadingScreen from "../components/loading/LoadingScreen";
 import { Alert } from "@cloudscape-design/components";
 import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
-import { Heading, useTheme } from "@aws-amplify/ui-react";
+import { Heading } from "@aws-amplify/ui-react";
 
 import {
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
@@ -190,7 +190,12 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     userPoolClientId: config.cognitoAppClientId,
                     loginWith: {
                         oauth: {
-                            domain: config.cognitoFederatedConfig?.customCognitoAuthDomain || "",
+                            // Amplify expects the hosted-UI domain as a bare hostname (no scheme).
+                            // The backend config provides it with an "https://" prefix, so strip it
+                            // to avoid a malformed "https://https//..." authorize URL.
+                            domain: (
+                                config.cognitoFederatedConfig?.customCognitoAuthDomain || ""
+                            ).replace(/^https?:\/\//, ""),
                             scopes: ["openid", "email", "profile"],
                             redirectSignIn: [window.location.origin],
                             redirectSignOut: [window.location.origin],
@@ -223,49 +228,6 @@ const cognitoAuthenticatorComponents = {
         Footer: SignInFooter,
     },
     Footer,
-};
-
-interface CognitoFederatedLoginProps {
-    onLogin: () => void;
-    logoSrc?: string;
-}
-
-const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc }) => {
-    const { tokens } = useTheme();
-
-    return (
-        <>
-            <div className={styles.container}>
-                <div className={styles.centeredBox}>
-                    <Heading level={3} padding={`${tokens.space.xl} ${tokens.space.xl} 0`}>
-                        <img
-                            style={{ width: "100%", maxWidth: "390px" }}
-                            src={logoSrc || logoDarkImageSrc}
-                            alt={`${vamsConfig.APP_NAME} Logo`}
-                        />
-                    </Heading>
-                    <button
-                        className={styles.button}
-                        onClick={onLogin}
-                        data-testid="federated-login-button"
-                    >
-                        Login with Federated Identity Provider
-                    </button>
-                </div>
-            </div>
-            <img
-                alt="background texture"
-                src={loginBgImageSrc}
-                style={{
-                    position: "fixed",
-                    top: 0,
-                    width: "100vw",
-                    left: 0,
-                    zIndex: "-100",
-                }}
-            />
-        </>
-    );
 };
 
 //External OAUTH components
@@ -468,16 +430,16 @@ const Auth: React.FC<AuthProps> = (props) => {
         getCurrentUser()
             .then((currentUser) => {
                 if (!localStorage.getItem("user")) {
-                    // No valid user session state
-                    signOut()
-                        .then(() => {
-                            console.log("User signed out - invalid session state");
-                        })
-                        .catch((error) => {
-                            console.log("User sign out error - invalid session state", error);
-                        });
-                    setisLoggedIn(false);
-                    resetSession();
+                    // getCurrentUser() succeeded, so there is a valid Cognito session,
+                    // but the local user record has not been written yet. This happens
+                    // right after a federated hosted-UI redirect (tokens already exist on
+                    // page load), where this effect would otherwise race the login-restore
+                    // effect and sign the user out. Restore the session instead of ending it.
+                    localStorage.setItem(
+                        "user",
+                        JSON.stringify({ username: currentUser.username })
+                    );
+                    setisLoggedIn(true);
                 }
             })
             .catch((error) => {});
@@ -998,7 +960,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                 </div>
             );
         } else {
-            //Federated Login
+            //Federated Login — show the native username/password form AND a
+            //"Login with Amazon Midway" button together on the same screen.
             return (
                 <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                     <LoginHeader />
@@ -1007,22 +970,46 @@ const Auth: React.FC<AuthProps> = (props) => {
                         style={{
                             flex: 1,
                             display: "flex",
+                            flexDirection: "column",
+                            justifyContent: "flex-start",
                             alignItems: "center",
-                            justifyContent: "center",
+                            paddingTop: "5vh",
                         }}
                     >
-                        <FedLoginBox
-                            logoSrc={loginLogoSrc}
-                            onLogin={() =>
-                                signInWithRedirect({
-                                    provider: {
-                                        custom:
-                                            config.cognitoFederatedConfig
-                                                ?.customFederatedIdentityProviderName || "",
-                                    },
-                                })
-                            }
+                        <Authenticator
+                            components={cognitoAuthenticatorComponents}
+                            loginMechanisms={["username"]}
+                            hideSignUp={true}
                         />
+                        <div
+                            style={{
+                                width: "100%",
+                                maxWidth: "460px",
+                                marginTop: "1rem",
+                            }}
+                        >
+                            <SpaceBetween size="xs" direction="vertical">
+                                <Box textAlign="center" color="text-body-secondary">
+                                    or
+                                </Box>
+                                <Button
+                                    variant="primary"
+                                    fullWidth={true}
+                                    data-testid="federated-login-button"
+                                    onClick={() =>
+                                        signInWithRedirect({
+                                            provider: {
+                                                custom:
+                                                    config.cognitoFederatedConfig
+                                                        ?.customFederatedIdentityProviderName || "",
+                                            },
+                                        })
+                                    }
+                                >
+                                    Login with Amazon Midway
+                                </Button>
+                            </SpaceBetween>
+                        </div>
                     </div>
                     <PageFooter />
                 </div>
