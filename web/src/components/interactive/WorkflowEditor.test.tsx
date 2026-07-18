@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render } from "@testing-library/react";
-import { act } from "react-dom/test-utils";
+import { render, act } from "@testing-library/react";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import WorkflowEditor, { workflowPipelineToElements } from "./WorkflowEditor";
 import { WorkflowContext } from "../../context/WorkflowContext";
