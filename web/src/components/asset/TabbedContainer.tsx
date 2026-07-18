@@ -20,9 +20,6 @@ interface TabbedContainerProps {
     assetName: string;
     assetId: string;
     databaseId: string;
-    onExecuteWorkflow: () => void;
-    onWorkflowExecuted?: () => void; // Callback when workflow execution is complete
-    workflowExecutedTrigger?: number; // Trigger value that changes when workflow is executed
     filePathToNavigate?: string; // Optional file path to navigate to in File Manager
     assetVersionId?: string; // Optional version ID to filter files and metadata
     /** Bubbled-up notification when the user changes the file/folder selection. */
@@ -33,28 +30,12 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
     assetName,
     assetId,
     databaseId,
-    onExecuteWorkflow,
-    onWorkflowExecuted,
-    workflowExecutedTrigger,
     filePathToNavigate,
     assetVersionId,
     onSelectedPathChange,
 }) => {
     // Set File Manager tab as active by default, especially if we have a file path to navigate to
     const [activeTabId, setActiveTabId] = useState("file-manager");
-    const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
-
-    // Watch for changes in the parent's trigger value
-    useEffect(() => {
-        if (workflowExecutedTrigger !== undefined && workflowExecutedTrigger > 0) {
-            console.log(
-                "TabbedContainer: workflowExecutedTrigger changed to",
-                workflowExecutedTrigger,
-                "- incrementing local trigger"
-            );
-            setWorkflowRefreshTrigger((prev) => prev + 1);
-        }
-    }, [workflowExecutedTrigger]);
 
     return (
         <ErrorBoundary componentName="Tabbed Container">
