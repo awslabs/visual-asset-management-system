@@ -12,7 +12,7 @@ import Synonyms from "../../synonyms";
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
 const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
-const WorkflowTab = React.lazy(() => import("./tabs/WorkflowTab"));
+const AssetExecutionsTab = React.lazy(() => import("./tabs/AssetExecutionsTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
 
@@ -107,12 +107,10 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                     <Suspense
                                         fallback={<LoadingSpinner text="Loading Workflows..." />}
                                     >
-                                        <WorkflowTab
+                                        <AssetExecutionsTab
                                             databaseId={databaseId}
                                             assetId={assetId}
                                             isActive={activeTabId === "workflows"}
-                                            onExecuteWorkflow={onExecuteWorkflow}
-                                            refreshTrigger={workflowRefreshTrigger}
                                         />
                                     </Suspense>
                                 ),
