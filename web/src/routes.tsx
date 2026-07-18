@@ -17,6 +17,7 @@ const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
 const Pipelines = React.lazy(() => import("./pages/Pipelines"));
+const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
 const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
 const Workflows = React.lazy(() => import("./pages/Workflows"));
 const CreateUpdateWorkflow = React.lazy(
@@ -91,6 +92,12 @@ export const routeTable: RouteOption[] = [
         active: "#/pipelines/",
     },
     { path: "/pipelines", Page: Pipelines, active: "#/pipelines/" },
+    { path: "/pipelines2", Page: PipelinesPage2, active: "#/pipelines2/" },
+    {
+        path: "/databases/:databaseId/pipelines2",
+        Page: PipelinesPage2,
+        active: "#/pipelines2/",
+    },
     {
         path: "/pipelines/:pipelineName",
         Page: ViewPipeline,
