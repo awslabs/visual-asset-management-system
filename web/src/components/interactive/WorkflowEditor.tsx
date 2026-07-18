@@ -6,7 +6,16 @@
 
 import { useState, useEffect, useContext, useMemo } from "react";
 
-import ReactFlow, { MiniMap, Controls, Background, Elements, Position } from "react-flow-renderer";
+import ReactFlow, {
+    MiniMap,
+    Controls,
+    Background,
+    Position,
+    Node,
+    Edge,
+    ReactFlowProvider,
+} from "reactflow";
+import "reactflow/dist/style.css";
 import { Button, Icon } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
@@ -32,95 +41,80 @@ const PipelineDetail = (props: any) => {
 
 let cacheInstance: any;
 
-const onLoad = (reactFlowInstance: any) => {
-    cacheInstance = reactFlowInstance;
-    reactFlowInstance.fitView();
-};
-
 export const workflowPipelineToElements = (
     workflowPipelines: any,
     databaseId: string | undefined
-): Elements => {
+): { nodes: Node[]; edges: Edge[] } => {
     let yPos = 0;
     let xPos = 0;
     let columnCounter = 0;
     const yOffsetIncrement = 75;
-    return workflowPipelines.reduce(
-        (arry: Elements, elem: any, idx: number) => {
-            if (yPos === 0) yPos = 75;
-            else if (idx % 4 === 0) {
-                xPos = 0;
-                columnCounter = 0;
-                yPos += 230;
-            } else {
-                xPos += 350;
-            }
 
-            columnCounter += 1;
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
 
-            console.log("reducer", elem, idx);
+    workflowPipelines.forEach((elem: any, idx: number) => {
+        if (yPos === 0) yPos = 75;
+        else if (idx % 4 === 0) {
+            xPos = 0;
+            columnCounter = 0;
+            yPos += 230;
+        } else {
+            xPos += 350;
+        }
 
-            arry.push({
-                id: `pipeline${idx}`,
-                position: { x: xPos, y: yPos },
-                data: {
-                    label: (
-                        <WorkflowPipelineSelector
-                            database={databaseId}
-                            index={idx}
-                            data-testid="create-workflow-pipeline-selector"
-                        />
-                    ),
-                },
-                sourcePosition: Position.Bottom,
-                targetPosition: idx % 4 === 0 ? Position.Top : Position.Left,
-            });
-            arry.push({
-                id: `asset${idx}-pipeline${idx}`,
-                source: `asset${idx}`,
-                target: `pipeline${idx}`,
-                type: "smoothstep",
-            });
-            arry.push({
-                id: `asset${idx + 1}`,
-                position: { x: xPos, y: yPos + yOffsetIncrement },
-                data: {
-                    label: (
-                        <>
-                            <AssetID />-
-                            <PipelineDetail index={idx} prop={"pipelineId"} />
-                            <PipelineDetail index={idx} prop={"outputType"} />
-                        </>
-                    ),
-                },
-                sourcePosition: columnCounter === 4 ? Position.Bottom : Position.Right,
-                targetPosition: Position.Top,
-            });
-            arry.push({
-                id: `pipeline${idx}-asset${idx + 1}`,
-                source: `pipeline${idx}`,
-                target: `asset${idx + 1}`,
-                type: "smoothstep",
-            });
+        columnCounter += 1;
 
-            return arry;
-        },
-        [
-            // {
-            //     id: `asset0`,
-            //     type: "input",
-            //     data: {
-            //         label: (
-            //             <>
-            //                 <AssetSelector database={databaseId} />
-            //             </>
-            //         ),
-            //     },
-            //     sourcePosition: Position.Bottom,
-            //     position: { x: 0, y: 0 },
-            // },
-        ]
-    );
+        console.log("reducer", elem, idx);
+
+        nodes.push({
+            id: `pipeline${idx}`,
+            position: { x: xPos, y: yPos },
+            data: {
+                label: (
+                    <WorkflowPipelineSelector
+                        database={databaseId}
+                        index={idx}
+                        data-testid="create-workflow-pipeline-selector"
+                    />
+                ),
+            },
+            sourcePosition: Position.Bottom,
+            targetPosition: idx % 4 === 0 ? Position.Top : Position.Left,
+        });
+
+        edges.push({
+            id: `asset${idx}-pipeline${idx}`,
+            source: `asset${idx}`,
+            target: `pipeline${idx}`,
+            type: "smoothstep",
+        });
+
+        nodes.push({
+            id: `asset${idx + 1}`,
+            position: { x: xPos, y: yPos + yOffsetIncrement },
+            data: {
+                label: (
+                    <>
+                        <AssetID />-
+                        <PipelineDetail index={idx} prop={"pipelineId"} />
+                        <PipelineDetail index={idx} prop={"outputType"} />
+                    </>
+                ),
+            },
+            sourcePosition: columnCounter === 4 ? Position.Bottom : Position.Right,
+            targetPosition: Position.Top,
+        });
+
+        edges.push({
+            id: `pipeline${idx}-asset${idx + 1}`,
+            source: `pipeline${idx}`,
+            target: `asset${idx + 1}`,
+            type: "smoothstep",
+        });
+    });
+
+    return { nodes, edges };
 };
 
 const WorkflowEditor = (props: any) => {
@@ -129,7 +123,7 @@ const WorkflowEditor = (props: any) => {
         WorkflowContext
     ) as any;
 
-    const elements = workflowPipelineToElements(workflowPipelines, databaseId);
+    const { nodes, edges } = workflowPipelineToElements(workflowPipelines, databaseId);
 
     // Detect dark mode for ReactFlow styling
     const isDark = useMemo(() => document.body.classList.contains("awsui-dark-mode"), []);
@@ -141,14 +135,19 @@ const WorkflowEditor = (props: any) => {
         setWorkflowPipelines(newPipelines);
     };
 
-    // when elements changes, center and zoom the view so that the graph fills the center of the screen
+    const onInit = (reactFlowInstance: any) => {
+        cacheInstance = reactFlowInstance;
+        reactFlowInstance.fitView();
+    };
+
+    // when nodes change, center and zoom the view so that the graph fills the center of the screen
     useEffect(() => {
         if (cacheInstance && cacheInstance.fitView) cacheInstance.fitView();
         setTimeout(() => cacheInstance && cacheInstance.fitView(), 100);
-    }, [elements]);
+    }, [nodes]);
 
     return (
-        <>
+        <ReactFlowProvider>
             <div style={{ height: "56px", position: "absolute", zIndex: "200" }}>
                 <Button variant="link" onClick={handleAddPipeline}>
                     <Icon name="add-plus" /> Pipeline
@@ -173,10 +172,12 @@ const WorkflowEditor = (props: any) => {
                 }}
             >
                 <ReactFlow
-                    elements={elements}
-                    onLoad={onLoad}
+                    nodes={nodes}
+                    edges={edges}
+                    onInit={onInit}
                     snapToGrid={true}
-                    snapGrid={[25, 25]}
+                    snapGrid={[15, 15]}
+                    fitView
                     style={{ background: isDark ? "var(--vams-bg-secondary)" : undefined }}
                 >
                     <MiniMap
@@ -207,7 +208,7 @@ const WorkflowEditor = (props: any) => {
                     <Background color={isDark ? "#354150" : "#aaa"} gap={16} />
                 </ReactFlow>
             </div>
-        </>
+        </ReactFlowProvider>
     );
 };
 
