@@ -1,0 +1,211 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { Pipeline, Template, PipelineExecutionParameters, TagSchemaField } from "../types";
+import { RESERVED_TAG_KEYS, METADATA_DYNAMIC_TAG_PREFIX } from "../reservedTagKeys";
+
+const SYSTEM_KEYS = RESERVED_TAG_KEYS;
+
+export interface ResolvePipelineParamsInput {
+    pipeline: Pipeline;
+    template?: Template;
+    templateId?: string;
+    tags: { key: string; value: any }[];
+    customTemplateOverride?: string;
+    customEditedBody?: string;
+}
+
+export interface ResolvePipelineParamsResult {
+    errors: string[];
+    params: PipelineExecutionParameters;
+    mode: 1 | 2 | 3 | 4 | 5;
+}
+
+/**
+ * Find tag placeholders {{tag}} in body that are NOT in providedKeys or systemKeys
+ * and NOT metadata_ prefixed dynamic tags.
+ */
+export function findUnmatchedTags(
+    body: string,
+    providedKeys: Set<string>,
+    systemKeys: Set<string>
+): string[] {
+    const regex = /\{\{\s*([\w]+)\s*\}\}/g;
+    const unmatched: string[] = [];
+    const seen = new Set<string>();
+
+    let match;
+    while ((match = regex.exec(body)) !== null) {
+        const tagName = match[1];
+        if (seen.has(tagName)) continue;
+        seen.add(tagName);
+
+        if (providedKeys.has(tagName) || systemKeys.has(tagName)) {
+            continue;
+        }
+        if (tagName.startsWith(METADATA_DYNAMIC_TAG_PREFIX)) {
+            continue;
+        }
+        unmatched.push(tagName);
+    }
+
+    return unmatched;
+}
+
+/**
+ * Return tagKeys of schema fields with required===true that have no provided value
+ * (missing or empty/undefined/null) and no default.
+ */
+export function missingRequiredTags(
+    schema: TagSchemaField[],
+    tags: { key: string; value: any }[]
+): string[] {
+    const tagMap = new Map<string, any>();
+    for (const tag of tags) {
+        tagMap.set(tag.key, tag.value);
+    }
+
+    const missing: string[] = [];
+    for (const field of schema) {
+        if (field.required !== true) continue;
+        if (field.default !== undefined) continue;
+
+        const value = tagMap.get(field.tagKey);
+        if (value === undefined || value === null || value === "") {
+            missing.push(field.tagKey);
+        }
+    }
+
+    return missing;
+}
+
+/**
+ * Resolve pipeline execution parameters according to the 5-case template-resolution contract.
+ */
+export function resolvePipelineParams(input: ResolvePipelineParamsInput): ResolvePipelineParamsResult {
+    const { pipeline, template, templateId, tags, customTemplateOverride, customEditedBody } = input;
+    const errors: string[] = [];
+
+    const requireTemplate = !!pipeline.systemConfig?.requireTemplate;
+    const allowOverride = !!pipeline.systemConfig?.allowCustomTemplateOverride;
+
+    // Build providedKeys set: all tag keys + schema defaults
+    const providedKeys = new Set<string>(tags.map(t => t.key));
+    if (template?.tagSchema) {
+        for (const field of template.tagSchema) {
+            if (field.default !== undefined) {
+                providedKeys.add(field.tagKey);
+            }
+        }
+    }
+
+    // Check for reserved key collisions
+    for (const tag of tags) {
+        if (SYSTEM_KEYS.has(tag.key) || tag.key.startsWith(METADATA_DYNAMIC_TAG_PREFIX)) {
+            errors.push(`Tag key "${tag.key}" is reserved and cannot be user-provided`);
+        }
+    }
+
+    // Case 5 check: customEditedBody requires allowCustomEdit
+    if (customEditedBody) {
+        if (!template?.allowCustomEdit) {
+            errors.push("This template does not allow custom editing of the final config");
+        }
+    }
+
+    // Check override early
+    if (customTemplateOverride && !allowOverride) {
+        errors.push("This pipeline does not allow a custom template override");
+    }
+
+    // Determine case
+    if (templateId) {
+        if (!template) {
+            errors.push("Template must be provided when templateId is specified");
+            return { errors, params: {}, mode: 1 };
+        }
+
+        if (customTemplateOverride) {
+            // Case 2: templateId + override
+            // Validate tags against template schema
+            const missing = missingRequiredTags(template.tagSchema || [], tags);
+            if (missing.length > 0) {
+                errors.push(`Required tags missing: ${missing.join(", ")}`);
+            }
+            // Validate unmatched tags against override body
+            const unmatched = findUnmatchedTags(customTemplateOverride, providedKeys, SYSTEM_KEYS);
+            if (unmatched.length > 0) {
+                errors.push(`Unmatched tags in override body: ${unmatched.join(", ")}`);
+            }
+
+            return {
+                errors,
+                params: { templateId, templateTags: tags, customTemplateOverride },
+                mode: 2,
+            };
+        } else {
+            // Case 1 or Case 5
+            // Validate tags against template schema
+            const missing = missingRequiredTags(template.tagSchema || [], tags);
+            if (missing.length > 0) {
+                errors.push(`Required tags missing: ${missing.join(", ")}`);
+            }
+
+            // Determine effective body for unmatched-tag validation
+            const effectiveBody = customEditedBody || template.configBody || "";
+            const unmatched = findUnmatchedTags(effectiveBody, providedKeys, SYSTEM_KEYS);
+            if (unmatched.length > 0) {
+                errors.push(`Unmatched tags in body: ${unmatched.join(", ")}`);
+            }
+
+            if (customEditedBody) {
+                // Case 5
+                return {
+                    errors,
+                    params: { templateId, templateTags: tags, customTemplateOverride: customEditedBody },
+                    mode: 5,
+                };
+            } else {
+                // Case 1
+                return {
+                    errors,
+                    params: { templateId, templateTags: tags },
+                    mode: 1,
+                };
+            }
+        }
+    } else {
+        // No templateId
+        if (customTemplateOverride) {
+            // Case 3: override without template
+            if (requireTemplate) {
+                errors.push("This pipeline requires a template; a template-less override is not allowed");
+            }
+
+            // No schema validation, but check unmatched tags
+            const unmatched = findUnmatchedTags(customTemplateOverride, providedKeys, SYSTEM_KEYS);
+            if (unmatched.length > 0) {
+                errors.push(`Unmatched tags in override body: ${unmatched.join(", ")}`);
+            }
+
+            return {
+                errors,
+                params: { templateTags: tags, customTemplateOverride },
+                mode: 3,
+            };
+        } else {
+            // Case 4: no template, no override
+            if (requireTemplate) {
+                errors.push("This pipeline requires a template (templateId) for execution");
+            }
+
+            return {
+                errors,
+                params: { templateTags: tags },
+                mode: 4,
+            };
+        }
+    }
+}
