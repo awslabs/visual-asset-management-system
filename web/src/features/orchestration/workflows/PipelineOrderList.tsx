@@ -21,13 +21,6 @@ import {
     verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import Box from "@cloudscape-design/components/box";
-import Button from "@cloudscape-design/components/button";
-import FormField from "@cloudscape-design/components/form-field";
-import Input from "@cloudscape-design/components/input";
-import Select from "@cloudscape-design/components/select";
-import SpaceBetween from "@cloudscape-design/components/space-between";
-import Icon from "@cloudscape-design/components/icon";
 import { SpecifiedPipelineRef, Pipeline, Template } from "../types";
 
 export function moveItem<T>(list: T[], from: number, to: number): T[] {
@@ -68,98 +61,98 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
         (p) => p.pipelineId === pipelineRef.pipelineId && p.databaseId === pipelineRef.pipelineDatabaseId
     );
 
-    const pipelineSelectOptions = pipelineOptions.map((p) => ({
-        label: p.pipelineName,
-        value: `${p.databaseId}:${p.pipelineId}`,
-    }));
-
-    const templateSelectOptions = templateOptions.map((t) => ({
-        label: t.templateName,
-        value: t.templateId,
-    }));
-
-    const handlePipelineChange = (detail: any) => {
-        const compositeKey = detail.selectedOption?.value || "";
+    const handlePipelineChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const compositeKey = e.target.value;
         const [databaseId, pipelineId] = compositeKey.split(":");
         onUpdate(index, {
             ...pipelineRef,
             pipelineId,
             pipelineDatabaseId: databaseId,
-            defaultTemplateId: undefined, // Reset template when pipeline changes
+            defaultTemplateId: undefined,
         });
     };
 
-    const handleTemplateChange = (detail: any) => {
+    const handleTemplateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         onUpdate(index, {
             ...pipelineRef,
-            defaultTemplateId: detail.selectedOption?.value || undefined,
+            defaultTemplateId: e.target.value || undefined,
         });
     };
 
-    const handleJobNameChange = (detail: any) => {
+    const handleJobNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         onUpdate(index, {
             ...pipelineRef,
-            jobName: detail.value || undefined,
+            jobName: e.target.value || undefined,
         });
     };
 
     return (
         <div ref={setNodeRef} style={style}>
-            <div className="tw-border tw-border-gray-300 tw-rounded tw-p-4 tw-mb-2 tw-bg-white dark:tw-bg-gray-800 dark:tw-border-gray-600">
-                <div className="tw-flex tw-items-start tw-gap-3">
-                    <div {...attributes} {...listeners} className="tw-cursor-grab tw-pt-2">
-                        <Icon name="drag-indicator" variant="subtle" />
+            <div className="border border-gray-300 dark:border-gray-600 rounded p-4 mb-2 bg-white dark:bg-gray-800">
+                <div className="flex items-start gap-3">
+                    <div {...attributes} {...listeners} className="cursor-grab pt-2 text-gray-500 dark:text-gray-400">
+                        ☰
                     </div>
-                    <div className="tw-flex-1">
-                        <SpaceBetween size="s">
-                            <FormField label="Pipeline">
-                                <Select
-                                    selectedOption={
-                                        selectedPipeline
-                                            ? {
-                                                  label: selectedPipeline.pipelineName,
-                                                  value: `${selectedPipeline.databaseId}:${selectedPipeline.pipelineId}`,
-                                              }
-                                            : null
-                                    }
-                                    onChange={({ detail }) => handlePipelineChange(detail)}
-                                    options={pipelineSelectOptions}
-                                    placeholder="Select a pipeline"
-                                    filteringType="auto"
-                                />
-                            </FormField>
-                            {templateOptions.length > 0 && (
-                                <FormField label="Default Template (optional)">
-                                    <Select
-                                        selectedOption={
-                                            pipelineRef.defaultTemplateId
-                                                ? templateSelectOptions.find(
-                                                      (t) => t.value === pipelineRef.defaultTemplateId
-                                                  ) || null
-                                                : null
-                                        }
-                                        onChange={({ detail }) => handleTemplateChange(detail)}
-                                        options={templateSelectOptions}
-                                        placeholder="Select a template"
-                                        filteringType="auto"
-                                    />
-                                </FormField>
-                            )}
-                            <FormField label="Job Name (optional)">
-                                <Input
-                                    value={pipelineRef.jobName || ""}
-                                    onChange={({ detail }) => handleJobNameChange(detail)}
-                                    placeholder="Enter job name"
-                                />
-                            </FormField>
-                        </SpaceBetween>
+                    <div className="flex-1 space-y-3">
+                        <div>
+                            <label htmlFor={`pipeline-${index}`} className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                                Pipeline
+                            </label>
+                            <select
+                                id={`pipeline-${index}`}
+                                value={selectedPipeline ? `${selectedPipeline.databaseId}:${selectedPipeline.pipelineId}` : ""}
+                                onChange={handlePipelineChange}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            >
+                                <option value="">Select a pipeline</option>
+                                {pipelineOptions.map((p) => (
+                                    <option key={`${p.databaseId}:${p.pipelineId}`} value={`${p.databaseId}:${p.pipelineId}`}>
+                                        {p.pipelineName}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {templateOptions.length > 0 && (
+                            <div>
+                                <label htmlFor={`template-${index}`} className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                                    Default Template (optional)
+                                </label>
+                                <select
+                                    id={`template-${index}`}
+                                    value={pipelineRef.defaultTemplateId || ""}
+                                    onChange={handleTemplateChange}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                >
+                                    <option value="">Select a template</option>
+                                    {templateOptions.map((t) => (
+                                        <option key={t.templateId} value={t.templateId}>
+                                            {t.templateName}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                        <div>
+                            <label htmlFor={`jobName-${index}`} className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                                Job Name (optional)
+                            </label>
+                            <input
+                                id={`jobName-${index}`}
+                                type="text"
+                                value={pipelineRef.jobName || ""}
+                                onChange={handleJobNameChange}
+                                placeholder="Enter job name"
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            />
+                        </div>
                     </div>
-                    <Button
-                        iconName="close"
-                        variant="icon"
+                    <button
                         onClick={() => onRemove(index)}
-                        ariaLabel="Remove pipeline"
-                    />
+                        aria-label="Remove pipeline"
+                        className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    >
+                        ×
+                    </button>
                 </div>
             </div>
         </div>
@@ -215,24 +208,27 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
 
     if (value.length === 0) {
         return (
-            <SpaceBetween size="m">
-                <Box textAlign="center" color="inherit" padding="xl">
-                    <SpaceBetween size="s">
-                        <Box variant="strong">No pipelines added</Box>
-                        <Box color="text-body-secondary">
+            <div className="space-y-4">
+                <div className="text-center py-8">
+                    <div className="space-y-2">
+                        <div className="font-semibold text-gray-900 dark:text-gray-100">No pipelines added</div>
+                        <div className="text-gray-600 dark:text-gray-400">
                             Add a pipeline to start building your workflow
-                        </Box>
-                        <Button iconName="add-plus" onClick={handleAdd}>
+                        </div>
+                        <button
+                            onClick={handleAdd}
+                            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                        >
                             Add Pipeline
-                        </Button>
-                    </SpaceBetween>
-                </Box>
-            </SpaceBetween>
+                        </button>
+                    </div>
+                </div>
+            </div>
         );
     }
 
     return (
-        <SpaceBetween size="m">
+        <div className="space-y-4">
             <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -256,10 +252,13 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
                     })}
                 </SortableContext>
             </DndContext>
-            <Button iconName="add-plus" onClick={handleAdd}>
+            <button
+                onClick={handleAdd}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
                 Add Pipeline
-            </Button>
-        </SpaceBetween>
+            </button>
+        </div>
     );
 };
 
