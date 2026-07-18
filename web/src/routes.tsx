@@ -36,6 +36,7 @@ const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
+const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
 
 interface RouteOption {
     path: string;
@@ -116,6 +117,7 @@ export const routeTable: RouteOption[] = [
         Page: WorkflowsPage2,
         active: "#/workflows2/",
     },
+    { path: "/executions2/:executionId", Page: ExecutionDetail, active: "#/executions2/" },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
         Page: CreateUpdateWorkflow,
