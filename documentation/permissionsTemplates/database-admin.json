@@ -43,6 +43,7 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
+                { "field": "route__path", "operator": "starts_with", "value": "/executions" },
                 { "field": "route__path", "operator": "starts_with", "value": "/upload" },
                 { "field": "route__path", "operator": "starts_with", "value": "/metadataschema" },
                 { "field": "route__path", "operator": "starts_with", "value": "/assetIngestion" },

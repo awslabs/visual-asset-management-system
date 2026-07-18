@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database User",
-        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, and execute workflows. Cannot permanently delete assets, create/delete pipelines/workflows/schemas, delete the database, or use asset ingestion. Can view and execute global pipelines and workflows.",
+        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, and execute workflows (execute, list, details, abort, re-run). Cannot permanently delete assets, view detailed execution logs, permanently delete executions, create/delete pipelines/workflows/schemas, delete the database, or use asset ingestion. Can view and execute global pipelines and workflows.",
         "version": "1.0"
     },
     "variables": [
@@ -43,6 +43,7 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
+                { "field": "route__path", "operator": "starts_with", "value": "/executions" },
                 { "field": "route__path", "operator": "starts_with", "value": "/upload" },
                 { "field": "route__path", "operator": "starts_with", "value": "/metadataschema" },
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" }
@@ -81,7 +82,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-post",
-            "description": "Allow POST API access for asset operations and workflow execution for {{ROLE_NAME}}",
+            "description": "Allow POST API access for asset operations and workflow execution (execute + re-run) for {{ROLE_NAME}}",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
@@ -97,7 +98,8 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/database" },
                 { "field": "route__path", "operator": "starts_with", "value": "/comments" },
                 { "field": "route__path", "operator": "starts_with", "value": "/asset-links" },
-                { "field": "route__path", "operator": "starts_with", "value": "/subscriptions" }
+                { "field": "route__path", "operator": "starts_with", "value": "/subscriptions" },
+                { "field": "route__path", "operator": "starts_with", "value": "/workflows" }
             ],
             "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
@@ -117,7 +119,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-delete",
-            "description": "Allow DELETE API access for archive operations only for {{ROLE_NAME}}",
+            "description": "Allow DELETE API access for archive operations and workflow-execution abort for {{ROLE_NAME}}",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
@@ -126,9 +128,28 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/unsubscribe" },
                 { "field": "route__path", "operator": "starts_with", "value": "/subscriptions" },
                 { "field": "route__path", "operator": "starts_with", "value": "/asset-links" },
-                { "field": "route__path", "operator": "starts_with", "value": "/comments" }
+                { "field": "route__path", "operator": "starts_with", "value": "/comments" },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows/executions"
+                }
             ],
             "groupPermissions": [{ "action": "DELETE", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-executions-admin-deny",
+            "description": "Withhold the admin-only execution routes (detailed logs GET and permanent-delete DELETE) from {{ROLE_NAME}}. A deny overrides the broad /workflows allow above.",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "ends_with", "value": "/logs" },
+                { "field": "route__path", "operator": "ends_with", "value": "/permanent" }
+            ],
+            "groupPermissions": [
+                { "action": "GET", "type": "deny" },
+                { "action": "DELETE", "type": "deny" }
+            ]
         },
         {
             "name": "{{ROLE_NAME}}-database",
