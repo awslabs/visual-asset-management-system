@@ -11,6 +11,7 @@ import React, { Suspense, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles/index.scss";
 import "./styles/theme.css";
+import "./styles/tailwind.css";
 import reportWebVitals from "./reportWebVitals";
 import Auth from "./FedAuth/Auth";
 import config from "./config";
