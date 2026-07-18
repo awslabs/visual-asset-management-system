@@ -16,14 +16,12 @@ const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
-const Pipelines = React.lazy(() => import("./pages/Pipelines"));
 const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
-const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
-const Workflows = React.lazy(() => import("./pages/Workflows"));
 const WorkflowsPage2 = React.lazy(() => import("./pages/WorkflowsPage2"));
-const CreateUpdateWorkflow = React.lazy(
-    () => import("./components/createupdate/CreateUpdateWorkflow")
-);
+const WorkflowBuilderPage = React.lazy(() => import("./pages/WorkflowBuilderPage"));
+const WorkflowTriggersPage = React.lazy(() => import("./pages/WorkflowTriggersPage"));
+const ExecutionsPage = React.lazy(() => import("./pages/ExecutionsPage"));
+const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
 const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
 const Tags = React.lazy(() => import("./pages/Tag/Tags"));
 const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
@@ -36,7 +34,6 @@ const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
-const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
 
 interface RouteOption {
     path: string;
@@ -90,47 +87,36 @@ export const routeTable: RouteOption[] = [
     //{ path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets"},
     {
         path: "/databases/:databaseId/pipelines",
-        Page: Pipelines,
-        active: "#/pipelines/",
-    },
-    { path: "/pipelines", Page: Pipelines, active: "#/pipelines/" },
-    { path: "/pipelines2", Page: PipelinesPage2, active: "#/pipelines2/" },
-    {
-        path: "/databases/:databaseId/pipelines2",
         Page: PipelinesPage2,
-        active: "#/pipelines2/",
-    },
-    {
-        path: "/pipelines/:pipelineName",
-        Page: ViewPipeline,
         active: "#/pipelines/",
     },
+    { path: "/pipelines", Page: PipelinesPage2, active: "#/pipelines/" },
     {
         path: "/databases/:databaseId/workflows",
-        Page: Workflows,
+        Page: WorkflowsPage2,
         active: "#/workflows/",
     },
-    { path: "/workflows", Page: Workflows, active: "#/workflows/" },
-    { path: "/workflows2", Page: WorkflowsPage2, active: "#/workflows2/" },
+    { path: "/workflows", Page: WorkflowsPage2, active: "#/workflows/" },
+    { path: "/executions", Page: ExecutionsPage, active: "#/executions/" },
+    { path: "/executions/:executionId", Page: ExecutionDetail, active: "#/executions/" },
     {
-        path: "/databases/:databaseId/workflows2",
-        Page: WorkflowsPage2,
-        active: "#/workflows2/",
+        path: "/databases/:databaseId/workflows/:workflowId/triggers",
+        Page: WorkflowTriggersPage,
+        active: "#/workflows/",
     },
-    { path: "/executions2/:executionId", Page: ExecutionDetail, active: "#/executions2/" },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {
         path: "/workflows/create",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {
         path: "/databases/:databaseId/workflows/create",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {

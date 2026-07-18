@@ -132,6 +132,7 @@ export function Navigation({
             items: [
                 { type: "link", text: "Pipelines", href: "#/pipelines/" },
                 { type: "link", text: "Workflows", href: "#/workflows/" },
+                { type: "link", text: "Executions", href: "#/executions/" },
             ],
         },
         { type: "divider" },
