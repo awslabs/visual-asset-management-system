@@ -8,7 +8,7 @@
  * configures amplify and initialized react app.
  */
 import React, { Suspense, useEffect } from "react";
-import ReactDOM from "react-dom";
+import { createRoot } from "react-dom/client";
 import "./styles/index.scss";
 import "./styles/theme.css";
 import reportWebVitals from "./reportWebVitals";
@@ -21,15 +21,16 @@ import config from "./config";
 document.title = config.APP_TITLE;
 
 const App = React.lazy(() => import("./App"));
-ReactDOM.render(
+const container = document.getElementById("root");
+const root = createRoot(container!);
+root.render(
     <React.StrictMode>
         <Auth>
             <Suspense fallback={<div />}>
                 <App />
             </Suspense>
         </Auth>
-    </React.StrictMode>,
-    document.getElementById("root")
+    </React.StrictMode>
 );
 
 reportWebVitals();
