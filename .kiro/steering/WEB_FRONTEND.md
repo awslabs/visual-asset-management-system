@@ -6,7 +6,7 @@ This is the Kiro front-end steering document for the VAMS (Visual Asset Manageme
 
 ## 1. Architecture Overview
 
-VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application built with Vite. All source files in `src/` have been converted to `.ts`/`.tsx` (the only remaining `.js` files are Jest mocks in `src/__mocks__/`).
+VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application built with Vite. All source files in `src/` have been converted to `.ts`/`.tsx` (the only remaining `.js` files are Jest mocks in `src/__mocks__/`).
 
 **Primary UI library:** AWS Cloudscape Design System (`@cloudscape-design/components ^3.0.196`).
 
@@ -48,9 +48,16 @@ web/
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     config.json             # Build-time config
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
-    index.tsx               # Entry point, ReactDOM.render
+    index.tsx               # Entry point, createRoot
     reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
+
+    features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
+      api/                  # Services + TanStack Query hooks + qk key factory
+      permissions/useAllowedRoutes.ts  # Tier-1 permission gating
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu, ...)
+      pipelines/ workflows/ executions/ wizard/
+      types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2

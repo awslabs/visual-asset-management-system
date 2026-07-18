@@ -6,7 +6,7 @@ This is the frontend-specific Claude Code steering document for the VAMS (Visual
 
 ## 1. Architecture Overview
 
-VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application built with Vite. All source files in `src/` are `.ts`/`.tsx` (only remaining `.js` files are Jest mocks in `src/__mocks__/`).
+VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application built with Vite. All source files in `src/` are `.ts`/`.tsx` (only remaining `.js` files are Jest mocks in `src/__mocks__/`).
 
 **Primary UI library:** AWS Cloudscape Design System (`@cloudscape-design/components ^3.0.196`).
 
@@ -37,9 +37,16 @@ web/
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     config.json             # Build-time config
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
-    index.tsx               # Entry point, ReactDOM.render
+    index.tsx               # Entry point, createRoot
     reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
+
+    features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
+      api/                  # Services + TanStack Query hooks + qk key factory
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu, ...)
+      pipelines/ workflows/ executions/ wizard/
+      types.ts reservedTagKeys.ts
 
     FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
@@ -131,21 +138,31 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 NEVER remove or modify these headers. Use the `2026` year for new files.
 
-### Rule 2: Use Cloudscape Components
+### Rule 2: Use Cloudscape Components (with orchestration exception)
 
-All UI components MUST use AWS Cloudscape Design System. Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library.
+The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** (the seed of the future design system) and is Cloudscape-free. This boundary is intentional:
+
+- **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+- **`features/orchestration/**`** (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+- **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+
+Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
 
 ```typescript
-// CORRECT
+// CORRECT (Cloudscape pages)
 import Button from "@cloudscape-design/components/button";
 import Table from "@cloudscape-design/components/table";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 
 // INCORRECT (barrel import — bundles entire library)
 import { Button, Table } from "@cloudscape-design/components";
+
+// CORRECT (orchestration module)
+import { Button } from "@radix-ui/themes";
+<div className="flex gap-2">...</div>
 ```
 
-**Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size.
+**Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -161,7 +178,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -169,8 +186,9 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
 
 ### Rule 4: npm Only
 
@@ -221,7 +239,7 @@ import MyNewPage from "./pages/MyNewPage";
 
 ### 4.1 The Return Tuple Pattern
 
-Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
+Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. The new orchestration services (`features/orchestration/api/*.ts`) also use this pattern, wrapping raw API responses via a `toTuple` helper. TanStack Query hooks consume these tuples and expose the data to components:
 
 ```typescript
 // CORRECT - follow the established return pattern
@@ -382,6 +400,7 @@ This codebase uses NO global state library. State is managed through:
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
 5. **URL params** via React Router v6 `useParams()`
+6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
 
 ### 6.2 Context Pattern
 
@@ -418,6 +437,18 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 | `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
 | `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
 | `WorkflowContext`    | `context/WorkflowContext.ts`    | Workflow state                   |
+
+### 6.4 Permission Graying (Orchestration Module)
+
+The orchestration module (`features/orchestration/`) implements **Tier-1 permission graying** via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly:
+
+```typescript
+const { can } = useAllowedRoutes();
+const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
+<Button disabled={!canDelete}>Permanent Delete</Button>
+```
+
+**Admin-only actions** (Logs, Permanent-Delete) are hidden when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
 
 ---
 
@@ -862,23 +893,33 @@ See section 9.4 for the full Synonyms rules.
 
 ## 14. Key Dependencies
 
-| Package                         | Version              | Purpose                     |
-| ------------------------------- | -------------------- | --------------------------- |
-| `react`                         | 17.0.2               | UI framework (NOT React 18) |
-| `typescript`                    | 4.4.4                | Type system                 |
-| `vite`                          | ^6.0.0               | Build tooling               |
-| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)       |
-| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI           |
-| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow   |
-| `react-router-dom`              | ^6.0.0               | Client-side routing         |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
-| `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^5.8.0               | Map rendering               |
-| `react-pdf`                     | ^10.1.0              | PDF viewing                 |
-| `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^3.4.11              | HTML sanitization           |
-| `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
-| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
+| Package                         | Version              | Purpose                              |
+| ------------------------------- | -------------------- | ------------------------------------ |
+| `react`                         | 18.3                 | UI framework (upgraded from 17.0.2)  |
+| `typescript`                    | ^5.0.0               | Type system (upgraded from 4.4.4)    |
+| `vite`                          | ^8.0.0               | Build tooling (upgraded from ^6)     |
+| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)                |
+| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI (existing pages)   |
+| `@tanstack/react-query`         | v5                   | Server-state (orchestration module)  |
+| `@tanstack/react-table`         | v8                   | Headless tables (orchestration)      |
+| `tailwindcss`                   | latest               | Utility-first CSS (orchestration)    |
+| `@radix-ui/*`                   | latest               | Headless primitives (orchestration)  |
+| `@rjsf/core`                    | v5                   | Dynamic tag forms (orchestration)    |
+| `@monaco-editor/react`          | latest               | Config editor (lazy-loaded)          |
+| `react-hook-form`               | v7                   | Form validation                      |
+| `zod`                           | latest               | Schema validation                    |
+| `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
+| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
+| `react-router-dom`              | ^6.0.0               | Client-side routing                  |
+| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
+| `three`                         | (via customInstalls) | 3D rendering engine                  |
+| `maplibre-gl`                   | ^5.8.0               | Map rendering                        |
+| `react-pdf`                     | ^10.1.0              | PDF viewing                          |
+| `papaparse`                     | ^5.4.1               | CSV parsing                          |
+| `dompurify`                     | ^3.4.11              | HTML sanitization                    |
+| `sanitize-html`                 | ^2.11.0              | HTML sanitization                    |
+| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop                        |
+| `@testing-library/react`        | 14                   | Testing utilities (upgraded from 11) |
 
 ### 14.1 Key Service Files
 
@@ -1018,12 +1059,4 @@ Development targets: Latest Chrome, Firefox, Safari.
 
 ### 18.6 React Version
 
-This project uses **React 17**, not React 18. Do NOT use:
-
--   `createRoot` (React 18)
--   `useId` (React 18)
--   `useSyncExternalStore` (React 18)
--   `useTransition` / `useDeferredValue` (React 18)
--   Automatic batching assumptions (React 18)
-
-The app uses `ReactDOM.render` (React 17 style).
+This project uses **React 18.3** (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot` (React 18 style). React 18 APIs (`useId`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.

@@ -37,6 +37,8 @@ Tier 1 determines whether the user's role is allowed to call the specific API en
 
 :::info[Web routes control visibility only]
 Web route constraints control which pages appear in the navigation menu. They do not enforce data access -- a user who knows the API endpoint could still call it if the `api` constraint allows. Always pair `web` constraints with matching `api` constraints.
+
+The orchestration UI (Pipelines, Workflows, Executions pages) additionally implements **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions on executions are hidden unless the user's role allows the corresponding API routes.
 :::
 
 ### Tier 2 -- Object-level authorization
@@ -101,19 +103,19 @@ The matchers component evaluates whether the requesting user belongs to the poli
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
 
-| Object Type      | Constraint Fields                                                   | Description                                         |
-| ---------------- | ------------------------------------------------------------------- | --------------------------------------------------- |
-| `api`            | `route__path`                                                       | Backend API route paths.                            |
-| `web`            | `route__path`                                                       | Frontend UI page routes.                            |
-| `database`       | `databaseId`                                                        | Database entity operations.                         |
-| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                      | Asset entity operations (includes file operations). |
-| `pipeline`       | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType` | Pipeline management and execution.                  |
-| `workflow`       | `databaseId`, `workflowId`                                          | Workflow management and execution.                  |
-| `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`      | Metadata schema management.                         |
-| `tag`            | `tagName`                                                           | Tag CRUD operations.                                |
-| `tagType`        | `tagTypeName`                                                       | Tag type CRUD operations.                           |
-| `role`           | `roleName`                                                          | Role management.                                    |
-| `userRole`       | `roleName`, `userId`                                                | User-to-role assignment management.                 |
+| Object Type      | Constraint Fields                                                                       | Description                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `api`            | `route__path`                                                                           | Backend API route paths.                                                         |
+| `web`            | `route__path`                                                                           | Frontend UI page routes.                                                         |
+| `database`       | `databaseId`                                                                            | Database entity operations.                                                      |
+| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                                          | Asset entity operations (includes file operations).                              |
+| `pipeline`       | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
+| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                                          | Workflow management, triggers, and execution.                                    |
+| `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`                          | Metadata schema management.                                                      |
+| `tag`            | `tagName`                                                                               | Tag CRUD operations.                                                             |
+| `tagType`        | `tagTypeName`                                                                           | Tag type CRUD operations.                                                        |
+| `role`           | `roleName`                                                                              | Role management.                                                                 |
+| `userRole`       | `roleName`, `userId`                                                                    | User-to-role assignment management.                                              |
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
 
@@ -233,6 +235,8 @@ The following web routes can be checked via the `web` object type with the `rout
 | `/databases/:databaseId/workflows`                | Database workflows                    |
 | `/databases/:databaseId/workflows/:workflowId`    | Workflow detail                       |
 | `/databases/:databaseId/workflows/create`         | Create workflow                       |
+| `/executions`                                     | Executions listing                    |
+| `/executions/:executionId`                        | Execution detail                      |
 | `/metadataschema`                                 | Metadata schema listing               |
 | `/metadataschema/:databaseId`                     | Database metadata schemas             |
 | `/pipelines`                                      | Pipeline listing                      |
@@ -351,19 +355,27 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 
 ### Pipeline and workflow routes
 
-| Route                                                                             | Methods     | Tier 2 Object Type              | Tier 2 Fields                                                       |
-| --------------------------------------------------------------------------------- | ----------- | ------------------------------- | ------------------------------------------------------------------- |
-| `/pipelines`                                                                      | GET         | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType` |
-| `/pipelines`                                                                      | PUT         | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType` |
-| `/database/\{databaseId\}/pipelines`                                              | GET         | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType` |
-| `/database/\{databaseId\}/pipelines/\{pipelineId\}`                               | GET, DELETE | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType` |
-| `/workflows`                                                                      | GET         | `workflow`                      | `databaseId`, `workflowId`                                          |
-| `/workflows`                                                                      | PUT         | `workflow`                      | `databaseId`, `workflowId`                                          |
-| `/database/\{databaseId\}/workflows`                                              | GET         | `workflow`                      | `databaseId`, `workflowId`                                          |
-| `/database/\{databaseId\}/workflows/\{workflowId\}`                               | GET, DELETE | `workflow`                      | `databaseId`, `workflowId`                                          |
-| `/database/\{databaseId\}/assets/\{assetId\}/workflows/\{workflowId\}`            | POST        | `asset`, `workflow`, `pipeline` | (checks all three entity types)                                     |
-| `/database/\{databaseId\}/assets/\{assetId\}/workflows/executions`                | GET         | `asset`, `workflow`             | (checks both entity types)                                          |
-| `/database/\{databaseId\}/assets/\{assetId\}/workflows/executions/\{workflowId\}` | GET         | `asset`, `workflow`             | (checks both entity types)                                          |
+| Route                                                                                                                 | Methods                | Tier 2 Object Type              | Tier 2 Fields                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `/pipelines`                                                                                                          | GET, PUT               | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name`                                       |
+| `/database/\{databaseId\}/pipelines`                                                                                  | GET, POST              | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name`                                       |
+| `/database/\{databaseId\}/pipelines/\{pipelineId\}`                                                                   | GET, PUT, DELETE       | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name`                                       |
+| `/database/\{databaseId\}/pipelines/\{pipelineId\}/templates` and `.../templates/\{templateId\}` (incl. `/tagSchema`) | GET, POST, PUT, DELETE | `pipeline`                      | Enforced against the **owning pipeline** (templates + tag schemas have no separate object type).                              |
+| `/workflows`                                                                                                          | GET, PUT               | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                |
+| `/database/\{databaseId\}/workflows`                                                                                  | GET, POST              | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                |
+| `/database/\{databaseId\}/workflows/\{workflowId\}`                                                                   | GET, PUT, DELETE       | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                |
+| `/database/\{databaseId\}/workflows/\{workflowId\}/triggers` and `.../triggers/\{triggerType\}`                       | GET, PUT, DELETE       | `workflow`                      | Enforced against the **owning workflow**.                                                                                     |
+| `/workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`                                                            | POST                   | `workflow`, `pipeline`, `asset` | Workflow POST + each referenced pipeline GET + each input asset GET + the output asset POST.                                  |
+| `/workflows/executions`                                                                                               | GET                    | `workflow`, `asset`             | Global list; each execution is visible only when the caller can GET its workflow and at least one of its input/output assets. |
+| `/workflows/executions/\{executionId\}/details`                                                                       | GET                    | `workflow`, `asset`             | Same per-execution visibility check as the global list.                                                                       |
+| `/workflows/executions/\{executionId\}/logs`                                                                          | GET                    | `workflow`, `asset`             | Detailed execution logs — scope to administrative / operator roles.                                                           |
+| `/workflows/executions/\{executionId\}`                                                                               | DELETE                 | `workflow`, `asset`             | Abort. Optional `?groupId=` aborts every active execution in the group.                                                       |
+| `/workflows/executions/\{executionId\}/rerun`                                                                         | POST                   | `workflow`, `asset`             | Re-run (re-launches with the caller's own permissions).                                                                       |
+| `/workflows/executions/\{executionId\}/permanent`                                                                     | DELETE                 | `workflow`, `asset`             | Permanent delete of the execution's DynamoDB records — **admin-only**; blocked while in progress.                             |
+
+:::warning[Scope detailed logs and permanent delete to administrators]
+The execution **logs** route (`/workflows/executions/\{executionId\}/logs`) exposes full CloudWatch execution logs, and the **permanent delete** route (`/workflows/executions/\{executionId\}/permanent`) removes execution records irreversibly. Grant these two routes only to administrative or operator roles. The shipped non-admin templates authorize the everyday execution routes (execute, list, details, abort, re-run) but withhold `.../logs` and `.../permanent`; only the Database Admin template grants them.
+:::
 
 ### Metadata schema routes
 

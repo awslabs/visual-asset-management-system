@@ -10,9 +10,9 @@ This document provides comprehensive guidelines for developing and extending the
 
 | Technology       | Version/Details                                                |
 | ---------------- | -------------------------------------------------------------- |
-| React            | 17.0.2 (NOT React 18)                                          |
-| TypeScript       | 4.4.4                                                          |
-| Vite             | ^6.0.0                                                         |
+| React            | 18.3 (upgraded from 17.0.2)                                    |
+| TypeScript       | ^5.0.0 (upgraded from 4.4.4)                                   |
+| Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
 | Routing          | React Router v6 with HashRouter                                |
@@ -31,7 +31,14 @@ web/
     routes.tsx              # Centralized route table, React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
-    index.tsx               # Entry point, ReactDOM.render
+    index.tsx               # Entry point, createRoot
+
+    features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
+      api/                  # Services + TanStack Query hooks + qk key factory
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu, ...)
+      pipelines/ workflows/ executions/ wizard/
+      types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
@@ -151,7 +158,7 @@ web/
 -   [ ] **Synonyms compliance**: No hardcoded "Asset"/"Database"/"Comment" in user-visible text
 -   [ ] **HashRouter compliance**: No `BrowserRouter` usage
 -   [ ] **Lazy loading compliance**: All pages lazy-loaded in `routes.tsx`
--   [ ] **React 17 compliance**: No React 18 APIs (`createRoot`, `useId`, etc.)
+-   [ ] **React 18 migration**: Entry point uses `createRoot`; React 18 APIs (`useId`, `useTransition`) allowed in orchestration module
 
 #### **Step 5: Documentation Updates**
 
@@ -181,9 +188,15 @@ const response = await fetch("/api/databases");
 
 When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
 
-### **Rule 2: Use Cloudscape Components with Subpath Imports**
+### **Rule 2: Use Cloudscape Components (with orchestration exception)**
 
-All UI components MUST use AWS Cloudscape Design System. Import from individual subpaths, NEVER from the barrel export.
+The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** (the seed of the future design system) and is Cloudscape-free. This boundary is intentional:
+
+- **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+- **`features/orchestration/**`** (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+- **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+
+Import Cloudscape from individual subpaths, NEVER from the barrel export.
 
 ```typescript
 // CORRECT -- tree-shakeable individual imports
@@ -223,9 +236,9 @@ const MyPage = React.lazy(() => import("./pages/MyPage"));
 import MyPage from "./pages/MyPage";
 ```
 
-### **Rule 5: No Global State Libraries**
+### **Rule 5: No Global State Libraries (TanStack Query for orchestration server state)**
 
-This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state.
+This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The orchestration module (`features/orchestration/`) uses **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible).
 
 ```typescript
 // CORRECT
@@ -285,13 +298,9 @@ npm run build
 yarn install
 ```
 
-### **Rule 10: React 17 Compatibility**
+### **Rule 10: React 18 (Upgraded)**
 
-This project uses React 17.0.2. Do NOT use React 18 APIs:
-
--   No `createRoot` (use `ReactDOM.render`)
--   No `useId`, `useSyncExternalStore`, `useTransition`, `useDeferredValue`
--   No automatic batching assumptions
+This project uses React 18.3 (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot`. React 18 APIs (`useId`, `useTransition`, `useDeferredValue`) are allowed in the orchestration module but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.
 
 ### **Rule 11: Use appCache, Not Amplify Cache**
 
@@ -303,6 +312,16 @@ appCache.setItem("config", data);
 // INCORRECT
 import { Cache } from "aws-amplify";
 Cache.setItem("config", data);
+```
+
+### **Rule 12: Permission Graying (Orchestration Module)**
+
+The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden when the route is not allowed. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+
+```typescript
+const { can } = useAllowedRoutes();
+const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
+<Button disabled={!canDelete}>Permanent Delete</Button>
 ```
 
 ### **Rule 12: Use Dual-Mode Auth Token Utilities**
