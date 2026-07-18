@@ -20,6 +20,7 @@ const Pipelines = React.lazy(() => import("./pages/Pipelines"));
 const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
 const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
 const Workflows = React.lazy(() => import("./pages/Workflows"));
+const WorkflowsPage2 = React.lazy(() => import("./pages/WorkflowsPage2"));
 const CreateUpdateWorkflow = React.lazy(
     () => import("./components/createupdate/CreateUpdateWorkflow")
 );
@@ -109,6 +110,12 @@ export const routeTable: RouteOption[] = [
         active: "#/workflows/",
     },
     { path: "/workflows", Page: Workflows, active: "#/workflows/" },
+    { path: "/workflows2", Page: WorkflowsPage2, active: "#/workflows2/" },
+    {
+        path: "/databases/:databaseId/workflows2",
+        Page: WorkflowsPage2,
+        active: "#/workflows2/",
+    },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
         Page: CreateUpdateWorkflow,
