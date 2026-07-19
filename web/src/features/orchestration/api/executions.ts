@@ -5,13 +5,13 @@
 
 import { apiClient } from "../../../services/apiClient";
 import { toTuple } from "./client";
-import type { ExecuteRequest, Execution, ExecutionDetail } from "../types";
+import type { ExecuteRequest, Execution, ExecutionDetail, ExecuteResponse } from "../types";
 
 export async function executeWorkflow(
     workflowDatabaseId: string,
     workflowId: string,
     body: ExecuteRequest
-): Promise<[boolean, any]> {
+): Promise<[boolean, ExecuteResponse | string]> {
     return toTuple(() =>
         apiClient.post(`workflows/${workflowDatabaseId}/${workflowId}/execute`, { body })
     );

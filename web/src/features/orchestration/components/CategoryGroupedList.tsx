@@ -3,31 +3,36 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 
 interface CategoryGroupedListProps<T> {
     items: T[];
     groupBy: (item: T) => string;
     renderItem: (item: T) => React.ReactNode;
+    getKey?: (item: T) => string;
 }
 
-function CategoryGroupedList<T>({ items, groupBy, renderItem }: CategoryGroupedListProps<T>) {
+function CategoryGroupedList<T>({ items, groupBy, renderItem, getKey }: CategoryGroupedListProps<T>) {
     const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-    // Group items by category
-    const grouped = items.reduce(
-        (acc, item) => {
-            const category = groupBy(item);
-            if (!acc[category]) {
-                acc[category] = [];
-            }
-            acc[category].push(item);
-            return acc;
-        },
-        {} as Record<string, T[]>
-    );
+    // Group items by category and sort
+    const { grouped, categories } = useMemo(() => {
+        const groupedItems = items.reduce(
+            (acc, item) => {
+                const category = groupBy(item);
+                if (!acc[category]) {
+                    acc[category] = [];
+                }
+                acc[category].push(item);
+                return acc;
+            },
+            {} as Record<string, T[]>
+        );
 
-    const categories = Object.keys(grouped).sort();
+        const sortedCategories = Object.keys(groupedItems).sort();
+
+        return { grouped: groupedItems, categories: sortedCategories };
+    }, [items, groupBy]);
 
     const toggleCategory = (category: string) => {
         setCollapsed((prev) => ({
@@ -52,7 +57,7 @@ function CategoryGroupedList<T>({ items, groupBy, renderItem }: CategoryGroupedL
                     {!collapsed[category] && (
                         <div className="p-2 space-y-1">
                             {grouped[category].map((item, index) => (
-                                <div key={index}>{renderItem(item)}</div>
+                                <div key={getKey ? getKey(item) : index}>{renderItem(item)}</div>
                             ))}
                         </div>
                     )}

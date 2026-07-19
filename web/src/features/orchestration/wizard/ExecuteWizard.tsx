@@ -110,16 +110,17 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         const errors: Record<string, string[]> = {};
 
         effectiveWorkflow.specifiedPipelines.forEach((ref) => {
-            const data = pipelineData[ref.pipelineId];
+            const compositeKey = `${ref.pipelineDatabaseId || databaseId}:${ref.pipelineId}`;
+            const data = pipelineData[compositeKey];
             if (data && data.errors) {
-                errors[ref.pipelineId] = data.errors;
+                errors[compositeKey] = data.errors;
             } else {
-                errors[ref.pipelineId] = data?.templateId ? [] : ["Template not selected"];
+                errors[compositeKey] = data?.templateId ? [] : ["Template not selected"];
             }
         });
 
         return errors;
-    }, [effectiveWorkflow.specifiedPipelines, pipelineData]);
+    }, [effectiveWorkflow.specifiedPipelines, pipelineData, databaseId]);
 
     const hasValidationErrors = Object.values(validationErrors).some((errs) => errs.length > 0) || offendingPipelines.length > 0;
 
@@ -140,7 +141,8 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         const pipelineExecutionParameters: Record<string, PipelineExecutionParameters> = {};
 
         effectiveWorkflow.specifiedPipelines.forEach((ref, idx) => {
-            const data = pipelineData[ref.pipelineId] || {
+            const compositeKey = `${ref.pipelineDatabaseId || databaseId}:${ref.pipelineId}`;
+            const data = pipelineData[compositeKey] || {
                 pipelineId: ref.pipelineId,
                 tags: [],
                 errors: [],
@@ -148,6 +150,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             };
 
             // Use resolved params from the stage (already handles customEditedBody -> customTemplateOverride for mode 5)
+            // Backend keys by pipelineId only, so map composite key to pipelineId for API payload
             pipelineExecutionParameters[ref.pipelineId] = data.params;
         });
 
@@ -167,7 +170,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             });
 
             // Surface warnings if any
-            if (result.warnings && result.warnings.length > 0) {
+            if (result && typeof result === "object" && "warnings" in result && result.warnings && result.warnings.length > 0) {
                 console.log("Execution warnings:", result.warnings);
             }
 
@@ -232,16 +235,18 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             return <div className="text-red-600">Pipeline not found</div>;
         }
 
+        const compositeKey = `${ref.pipelineDatabaseId || databaseId}:${ref.pipelineId}`;
+
         return (
             <WizardPipelineStage
                 workflow={effectiveWorkflow}
                 pipeline={pipeline}
                 pipelineRef={ref}
-                data={pipelineData[ref.pipelineId]}
+                data={pipelineData[compositeKey]}
                 onChange={(data) => {
                     setPipelineData((prev) => ({
                         ...prev,
-                        [ref.pipelineId]: data,
+                        [compositeKey]: data,
                     }));
                 }}
             />

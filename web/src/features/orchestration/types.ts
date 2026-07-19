@@ -89,3 +89,9 @@ export interface ExecutionDetail extends Execution {
     pipelines?: any[]; inputFiles?: any[]; outputs?: { files?: any[]; metadata?: any[]; results?: any[] };
     truncatedCollections?: string[];
 }
+
+export interface ExecuteResponse {
+    executionId?: string;
+    executionGroupId?: string;
+    warnings?: string[];
+}

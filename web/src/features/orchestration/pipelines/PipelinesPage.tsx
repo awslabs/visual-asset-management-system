@@ -189,7 +189,9 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                                 { label: "Lambda", value: "Lambda" },
                                 { label: "SQS", value: "SQS" },
                                 { label: "EventBridge", value: "EventBridge" },
-                                { label: "DeadlineCloud", value: "DeadlineCloud" },
+                                ...(showDeadlineCloud || pipelines.some(p => p.executionConfig.executionType === "DeadlineCloud")
+                                    ? [{ label: "DeadlineCloud", value: "DeadlineCloud" }]
+                                    : []),
                             ],
                         },
                         {
@@ -223,6 +225,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                     items={filteredPipelines}
                     groupBy={(p) => p.category || "Uncategorized"}
                     renderItem={renderPipelineCard}
+                    getKey={(p) => `${p.databaseId}:${p.pipelineId}`}
                 />
             )}
 

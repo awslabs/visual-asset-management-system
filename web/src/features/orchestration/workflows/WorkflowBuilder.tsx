@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePipelines, useWorkflow, useWorkflowMutations, useTemplates } from "../api/queries";
 import PipelineOrderList from "./PipelineOrderList";
-import DagPreview from "./DagPreview";
 import { validateWorkflow } from "./workflowValidation";
 import type { Workflow, SpecifiedPipelineRef, InputFileArity, ConcurrencyRestriction, OutputLocationType, Template } from "../types";
+
+const DagPreview = React.lazy(() => import("./DagPreview"));
 
 interface WorkflowBuilderProps {
     mode: "create" | "edit";
@@ -457,7 +458,11 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         templatesByPipeline={templatesByPipeline}
                         onChange={setSpecifiedPipelines}
                     />
-                    <DagPreview refs={specifiedPipelines} />
+                    {specifiedPipelines.length > 0 && (
+                        <Suspense fallback={<div className="text-sm text-gray-500 dark:text-gray-400">Loading preview...</div>}>
+                            <DagPreview refs={specifiedPipelines} />
+                        </Suspense>
+                    )}
                 </div>
             </div>
 

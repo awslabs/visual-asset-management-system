@@ -27,6 +27,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         isGroup: boolean;
     } | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+    const [deleteTypedValue, setDeleteTypedValue] = useState("");
     const [includeArchived, setIncludeArchived] = useState(false);
 
     const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useExecutions(
@@ -89,6 +90,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         try {
             await permanentDeleteExecution.mutateAsync(executionId);
             setDeleteConfirm(null);
+            setDeleteTypedValue("");
         } catch (err) {
             console.error("Failed to delete execution:", err);
         }
@@ -121,7 +123,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         }
     };
 
-    const columns: ColumnDef<Execution>[] = [
+    const columns: ColumnDef<Execution>[] = useMemo(() => [
         {
             accessorKey: "executionStatus",
             header: "Status",
@@ -218,15 +220,14 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         )
                     }
                     onLogs={() => {
-                        // Simple logs view - can be enhanced
-                        alert(`Logs for ${row.original.workflowExecutionId} (admin only)`);
+                        navigate(`/executions/${row.original.workflowExecutionId}`);
                     }}
                     onPermanentDelete={() => setDeleteConfirm(row.original.workflowExecutionId)}
                     onOpenDetails={() => navigate(`/executions/${row.original.workflowExecutionId}`)}
                 />
             ),
         },
-    ];
+    ], [can, navigate, handleRerun, setQuickViewExecutionId, setAbortConfirm, setDeleteConfirm]);
 
     return (
         <div className="p-6 space-y-4 bg-white dark:bg-gray-900">
@@ -323,7 +324,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {deleteConfirm && (
                 <Dialog
                     open={!!deleteConfirm}
-                    onOpenChange={(open) => !open && setDeleteConfirm(null)}
+                    onOpenChange={(open) => {
+                        if (!open) {
+                            setDeleteConfirm(null);
+                            setDeleteTypedValue("");
+                        }
+                    }}
                     title="Permanent Delete"
                     footer={
                         <>
@@ -335,7 +341,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             </button>
                             <button
                                 onClick={() => handlePermanentDelete(deleteConfirm)}
-                                className="px-4 py-2 bg-red-600 text-white rounded"
+                                disabled={deleteTypedValue !== "CONFIRM"}
+                                className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Permanent Delete
                             </button>
@@ -353,9 +360,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <input
                         type="text"
                         placeholder="CONFIRM"
+                        value={deleteTypedValue}
+                        onChange={(e) => setDeleteTypedValue(e.target.value)}
                         className="mt-2 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                         onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                            if (e.key === "Enter" && e.currentTarget.value === "CONFIRM") {
+                            if (e.key === "Enter" && deleteTypedValue === "CONFIRM") {
                                 handlePermanentDelete(deleteConfirm);
                             }
                         }}

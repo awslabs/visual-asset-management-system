@@ -58,7 +58,6 @@
         "react-error-boundary": "^4.0.9",
         "react-hook-form": "^7.53.0",
         "reactflow": "^11.11.4",
-        "react-folder-tree": "^5.1.1",
         "react-loading-icons": "^1.1.0",
         "react-map-gl": "^8.1.0",
         "react-papaparse": "^3.18.1",
