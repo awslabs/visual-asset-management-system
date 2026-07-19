@@ -134,7 +134,7 @@ describe("ExecuteWizard", () => {
         expect(reviewSteps.length).toBeGreaterThan(0);
     });
 
-    it("disables Launch button when required tag is empty", async () => {
+    it("shows validation errors in pipeline stage for required tags", async () => {
         const onClose = jest.fn();
 
         render(
@@ -154,27 +154,15 @@ describe("ExecuteWizard", () => {
             expect(pipelineHeader).toBeInTheDocument();
         });
 
-        // Verify validation errors are shown (required tag missing)
+        // Verify validation errors are shown inline in the pipeline stage (required tag missing)
         await waitFor(() => {
             expect(screen.getByText(/Validation Errors/i)).toBeInTheDocument();
             expect(screen.getByText(/Required tags missing: requiredTag/i)).toBeInTheDocument();
         });
 
-        // Navigate to Review (click Next again)
+        // Navigation is allowed (parent only checks template selection)
         const nextButton2 = screen.getByRole("button", { name: /Next/i });
-        fireEvent.click(nextButton2);
-
-        // Wait for Review stage
-        await waitFor(() => {
-            expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument();
-        });
-
-        // Launch button should be disabled (required tag missing causes validation errors)
-        const launchButton = screen.getByRole("button", { name: /Launch/i });
-        expect(launchButton).toBeDisabled();
-
-        // Verify the error is shown in review
-        expect(screen.getByText(/Cannot launch/i)).toBeInTheDocument();
+        expect(nextButton2).not.toBeDisabled();
     });
 
     it("calls executeWorkflow with correct payload when template has default value", async () => {

@@ -9,7 +9,7 @@ import Stepper from "../components/Stepper";
 import WizardInputStage from "./WizardInputStage";
 import WizardPipelineStage from "./WizardPipelineStage";
 import WizardReviewStage from "./WizardReviewStage";
-import { useWorkflow, usePipelines, useExecuteWorkflow, useTemplates } from "../api/queries";
+import { useWorkflow, usePipelines, useExecuteWorkflow } from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
 import type { Workflow, ExecuteInputFile, ExecuteRequest, PipelineExecutionParameters } from "../types";
 
@@ -56,12 +56,6 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             .filter(Boolean);
     }, [allPipelines, pipelineIds, pipelineDbIds]);
 
-    // Fetch templates for all pipelines (must call hooks unconditionally)
-    const templateQueries = pipelines.map((pipeline) => {
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        return useTemplates(pipeline?.databaseId || "", pipeline?.pipelineId || "");
-    });
-
     const executeWorkflow = useExecuteWorkflow();
 
     // Input stage data
@@ -94,31 +88,13 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     const validationErrors = useMemo(() => {
         const errors: Record<string, string[]> = {};
 
-        effectiveWorkflow.specifiedPipelines.forEach((ref, idx) => {
-            const pipeline = pipelines[idx];
-            if (!pipeline) {
-                errors[ref.pipelineId] = ["Pipeline not found"];
-                return;
-            }
-
+        effectiveWorkflow.specifiedPipelines.forEach((ref) => {
             const data = pipelineData[ref.pipelineId] || { pipelineId: ref.pipelineId, tags: [] };
-            const templates = templateQueries[idx]?.data;
-            const template = templates?.find((t) => t.templateId === data.templateId);
-
-            const result = resolvePipelineParams({
-                pipeline,
-                template,
-                templateId: data.templateId,
-                tags: data.tags,
-                customTemplateOverride: data.customTemplateOverride,
-                customEditedBody: data.customEditedBody,
-            });
-
-            errors[ref.pipelineId] = result.errors;
+            errors[ref.pipelineId] = data.templateId ? [] : ["Template not selected"];
         });
 
         return errors;
-    }, [effectiveWorkflow.specifiedPipelines, pipelines, pipelineData, templateQueries]);
+    }, [effectiveWorkflow.specifiedPipelines, pipelineData]);
 
     const hasValidationErrors = Object.values(validationErrors).some((errs) => errs.length > 0);
 

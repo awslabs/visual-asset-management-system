@@ -71,7 +71,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
             {
                 label: "Edit",
                 onSelect: () =>
-                    navigate(`/databases/${workflow.databaseId}/workflows2/${workflow.workflowId}/edit`),
+                    navigate(`/databases/${workflow.databaseId}/workflows/${workflow.workflowId}`),
                 hidden: !can("PUT", "/database/{databaseId}/workflows/{workflowId}"),
             },
             {
@@ -167,7 +167,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Workflows</h1>
                 {canCreateWorkflow && databaseId && (
                     <button
-                        onClick={() => navigate(`/databases/${databaseId}/workflows2/create`)}
+                        onClick={() => navigate(`/databases/${databaseId}/workflows/create`)}
                         className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"
                     >
                         Create Workflow
