@@ -27,6 +27,9 @@ export interface PipelineStageData {
     tags: { key: string; value: any }[];
     customTemplateOverride?: string;
     customEditedBody?: string;
+    errors: string[];
+    params: any;
+    mode?: 1 | 2 | 3 | 4 | 5;
 }
 
 const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
@@ -89,8 +92,12 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         const errors: Record<string, string[]> = {};
 
         effectiveWorkflow.specifiedPipelines.forEach((ref) => {
-            const data = pipelineData[ref.pipelineId] || { pipelineId: ref.pipelineId, tags: [] };
-            errors[ref.pipelineId] = data.templateId ? [] : ["Template not selected"];
+            const data = pipelineData[ref.pipelineId];
+            if (data && data.errors) {
+                errors[ref.pipelineId] = data.errors;
+            } else {
+                errors[ref.pipelineId] = data?.templateId ? [] : ["Template not selected"];
+            }
         });
 
         return errors;
@@ -118,18 +125,12 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             const data = pipelineData[ref.pipelineId] || {
                 pipelineId: ref.pipelineId,
                 tags: [],
+                errors: [],
+                params: {},
             };
 
-            const params: PipelineExecutionParameters = {
-                templateId: data.templateId,
-                templateTags: data.tags,
-            };
-
-            if (data.customTemplateOverride) {
-                params.customTemplateOverride = data.customTemplateOverride;
-            }
-
-            pipelineExecutionParameters[ref.pipelineId] = params;
+            // Use resolved params from the stage (already handles customEditedBody -> customTemplateOverride for mode 5)
+            pipelineExecutionParameters[ref.pipelineId] = data.params;
         });
 
         const body: ExecuteRequest = {

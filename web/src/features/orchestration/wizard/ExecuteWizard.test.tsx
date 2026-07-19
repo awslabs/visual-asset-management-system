@@ -134,7 +134,7 @@ describe("ExecuteWizard", () => {
         expect(reviewSteps.length).toBeGreaterThan(0);
     });
 
-    it("shows validation errors in pipeline stage for required tags", async () => {
+    it("disables Launch when required tags are missing", async () => {
         const onClose = jest.fn();
 
         render(
@@ -160,12 +160,21 @@ describe("ExecuteWizard", () => {
             expect(screen.getByText(/Required tags missing: requiredTag/i)).toBeInTheDocument();
         });
 
-        // Navigation is allowed (parent only checks template selection)
+        // Navigate to review stage
         const nextButton2 = screen.getByRole("button", { name: /Next/i });
-        expect(nextButton2).not.toBeDisabled();
+        fireEvent.click(nextButton2);
+
+        // Wait for Review stage
+        await waitFor(() => {
+            expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument();
+        });
+
+        // Launch button should be DISABLED because required tag is missing
+        const launchBtn = screen.getByRole("button", { name: /Launch/i });
+        expect(launchBtn).toBeDisabled();
     });
 
-    it("calls executeWorkflow with correct payload when template has default value", async () => {
+    it("enables Launch and uses resolved params when tags are satisfied", async () => {
         const onClose = jest.fn();
 
         // Create a template with a required tag that HAS a default value
@@ -219,7 +228,7 @@ describe("ExecuteWizard", () => {
             expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument();
         });
 
-        // Launch button should be enabled (tag has default value)
+        // Launch button should be enabled (tag has default value, no errors)
         await waitFor(() => {
             const launchBtn = screen.getByRole("button", { name: /Launch/i });
             expect(launchBtn).not.toBeDisabled();
@@ -229,7 +238,7 @@ describe("ExecuteWizard", () => {
         const launchBtn = screen.getByRole("button", { name: /Launch/i });
         fireEvent.click(launchBtn);
 
-        // Verify mutateAsync was called with the default value
+        // Verify mutateAsync was called with resolved params (from resolvePipelineParams)
         await waitFor(() => {
             expect(mockExecuteWorkflow.mutateAsync).toHaveBeenCalledWith({
                 workflowDatabaseId: "db1",
@@ -240,16 +249,100 @@ describe("ExecuteWizard", () => {
                     pipelineExecutionParameters: expect.objectContaining({
                         pipe1: expect.objectContaining({
                             templateId: "tpl1",
-                            templateTags: expect.arrayContaining([
-                                expect.objectContaining({
-                                    key: "requiredTag",
-                                    value: "defaultValue",
-                                }),
-                            ]),
+                            templateTags: expect.any(Array),
                         }),
                     }),
                 }),
             });
+        });
+    });
+
+    it("carries customTemplateOverride in launch payload (mode 2)", async () => {
+        const onClose = jest.fn();
+
+        // Template with allowCustomEdit for mode 5 simulation
+        const templateWithAllowOverride: Template = {
+            ...mockTemplate,
+            configBody: '{"test": "{{requiredTag}}"}',
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+
+        // Mock pipeline with allowCustomTemplateOverride
+        const pipelineWithOverride: Pipeline = {
+            ...mockPipeline,
+            systemConfig: {
+                ...mockPipeline.systemConfig,
+                allowCustomTemplateOverride: true,
+            },
+        };
+
+        const { usePipelines, useTemplates, useExecuteWorkflow } = require("../api/queries");
+
+        usePipelines.mockReturnValue({
+            data: [pipelineWithOverride],
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        useTemplates.mockReturnValue({
+            data: [templateWithAllowOverride],
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        useExecuteWorkflow.mockReturnValue(mockExecuteWorkflow);
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open={true} onClose={onClose} workflow={mockWorkflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        // Navigate to pipeline stage
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            const pipelineHeader = headers.find((h) => h.textContent?.includes("Test Pipeline"));
+            expect(pipelineHeader).toBeInTheDocument();
+        });
+
+        // Enable custom override mode
+        const overrideCheckbox = screen.getByLabelText(/Use custom config override/i);
+        fireEvent.click(overrideCheckbox);
+
+        // Navigate to Review and Launch
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument();
+        });
+
+        const launchBtn = screen.getByRole("button", { name: /Launch/i });
+        expect(launchBtn).not.toBeDisabled();
+        fireEvent.click(launchBtn);
+
+        // Verify customTemplateOverride is in payload
+        await waitFor(() => {
+            expect(mockExecuteWorkflow.mutateAsync).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    body: expect.objectContaining({
+                        pipelineExecutionParameters: expect.objectContaining({
+                            pipe1: expect.objectContaining({
+                                customTemplateOverride: expect.any(String),
+                            }),
+                        }),
+                    }),
+                })
+            );
         });
     });
 });

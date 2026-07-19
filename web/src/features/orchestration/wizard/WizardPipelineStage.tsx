@@ -70,29 +70,6 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedTemplateId, selectedTemplate]);
 
-    // Update parent whenever local state changes
-    useEffect(() => {
-        const tags = formDataToTags(tagFormData);
-        const newData: PipelineStageData = {
-            pipelineId: pipeline.pipelineId,
-            templateId: selectedTemplateId,
-            tags,
-            customTemplateOverride: customOverrideMode ? customOverrideBody : undefined,
-            customEditedBody: customEditMode ? customEditedBody : undefined,
-        };
-        onChange(newData);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [
-        selectedTemplateId,
-        tagFormData,
-        customOverrideMode,
-        customOverrideBody,
-        customEditMode,
-        customEditedBody,
-        pipeline.pipelineId,
-        // Intentionally omit onChange to avoid infinite loop
-    ]);
-
     const handleTemplateChange = (templateId: string) => {
         setSelectedTemplateId(templateId);
         setTagFormData({});
@@ -120,7 +97,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         return "";
     }, [selectedTemplate, customOverrideMode, customOverrideBody, customEditMode, customEditedBody]);
 
-    // Run resolvePipelineParams to show errors
+    // Run resolvePipelineParams to compute validation errors and resolved params
     const validationResult = useMemo(() => {
         if (!selectedTemplate && !selectedTemplateId) {
             return { errors: [], params: {}, mode: 4 as const };
@@ -144,6 +121,33 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         customOverrideBody,
         customEditMode,
         customEditedBody,
+    ]);
+
+    // Update parent whenever local state changes
+    useEffect(() => {
+        const tags = formDataToTags(tagFormData);
+        const newData: PipelineStageData = {
+            pipelineId: pipeline.pipelineId,
+            templateId: selectedTemplateId,
+            tags,
+            customTemplateOverride: customOverrideMode ? customOverrideBody : undefined,
+            customEditedBody: customEditMode ? customEditedBody : undefined,
+            errors: validationResult.errors,
+            params: validationResult.params,
+            mode: validationResult.mode,
+        };
+        onChange(newData);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        selectedTemplateId,
+        tagFormData,
+        customOverrideMode,
+        customOverrideBody,
+        customEditMode,
+        customEditedBody,
+        pipeline.pipelineId,
+        validationResult,
+        // Intentionally omit onChange to avoid infinite loop
     ]);
 
     const allowOverride = !!pipeline.systemConfig?.allowCustomTemplateOverride;
