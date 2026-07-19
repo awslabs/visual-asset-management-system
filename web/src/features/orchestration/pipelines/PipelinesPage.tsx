@@ -13,6 +13,7 @@ import Dialog from "../components/Dialog";
 import PipelineForm from "./PipelineForm";
 import TemplateEditor from "./TemplateEditor";
 import type { Pipeline, ExecutionType } from "../types";
+import { appCache } from "../../../services/appCache";
 
 interface PipelinesPageProps {
     databaseId?: string;
@@ -32,6 +33,11 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const { data: pipelines = [], isLoading, error } = usePipelines(databaseId, includeArchived);
     const { loading: permissionsLoading, can } = useAllowedRoutes();
     const archiveMutation = useArchivePipeline();
+
+    const config = appCache.getItem("config");
+    const featuresEnabled = config?.featuresEnabled || [];
+    const showDeadlineCloud =
+        featuresEnabled.includes("DEADLINECLOUD_PIPELINES") && !featuresEnabled.includes("GOVCLOUD");
 
     // Filter pipelines
     const filteredPipelines = pipelines.filter((p) => {
@@ -87,11 +93,15 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
             );
         };
 
+        const isDeadlineCloudDisabled =
+            pipeline.executionConfig.executionType === "DeadlineCloud" && !showDeadlineCloud;
+
         const contextMenuItems: ContextMenuItem[] = [
             {
                 label: "Edit",
                 onSelect: () => setEditPipeline(pipeline),
-                hidden: !can("PUT", "/database/{databaseId}/pipelines/{pipelineId}"),
+                hidden:
+                    !can("PUT", "/database/{databaseId}/pipelines/{pipelineId}") || isDeadlineCloudDisabled,
             },
             {
                 label: "Templates",

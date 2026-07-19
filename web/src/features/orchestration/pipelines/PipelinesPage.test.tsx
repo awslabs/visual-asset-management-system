@@ -22,6 +22,15 @@ jest.mock("../permissions/useAllowedRoutes", () => ({
     useAllowedRoutes: jest.fn(),
 }));
 
+// Mock appCache
+jest.mock("../../../services/appCache", () => ({
+    appCache: {
+        getItem: jest.fn(() => ({
+            featuresEnabled: [],
+        })),
+    },
+}));
+
 const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
@@ -126,5 +135,85 @@ describe("PipelinesPage", () => {
 
         // Assert the Create button is absent
         expect(screen.queryByText(/create/i)).not.toBeInTheDocument();
+    });
+
+    it("hides Edit action for DeadlineCloud pipeline when flag is off, but shows Archive", () => {
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({
+            featuresEnabled: [],
+        });
+
+        const dcPipeline = {
+            databaseId: "db1",
+            pipelineId: "dc1",
+            pipelineName: "DC Pipeline",
+            category: "conversion",
+            enabled: true,
+            archived: false,
+            executionConfig: {
+                executionType: "DeadlineCloud" as const,
+            },
+        };
+
+        (queries.usePipelines as jest.Mock).mockReturnValue({
+            data: [dcPipeline],
+            isLoading: false,
+            error: null,
+        });
+
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("DC Pipeline")).toBeInTheDocument();
+    });
+
+    it("shows Edit action for DeadlineCloud pipeline when flag is on", () => {
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({
+            featuresEnabled: ["DEADLINECLOUD_PIPELINES"],
+        });
+
+        const dcPipeline = {
+            databaseId: "db1",
+            pipelineId: "dc1",
+            pipelineName: "DC Pipeline",
+            category: "conversion",
+            enabled: true,
+            archived: false,
+            executionConfig: {
+                executionType: "DeadlineCloud" as const,
+            },
+        };
+
+        (queries.usePipelines as jest.Mock).mockReturnValue({
+            data: [dcPipeline],
+            isLoading: false,
+            error: null,
+        });
+
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("DC Pipeline")).toBeInTheDocument();
     });
 });

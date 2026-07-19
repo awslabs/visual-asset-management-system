@@ -163,4 +163,88 @@ describe("PipelineForm", () => {
             expect(screen.getByLabelText(/Detail Type/)).toBeInTheDocument();
         });
     });
+
+    it("shows DeadlineCloud option in edit mode even when flag is off, but makes form read-only", () => {
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({
+            featuresEnabled: [],
+        });
+
+        const dcPipeline = {
+            pipelineId: "dc1",
+            pipelineName: "DC Pipeline",
+            databaseId: "db1",
+            executionConfig: {
+                executionType: "DeadlineCloud" as const,
+                waitForCallback: "Enabled" as const,
+                deadlineCloud: {
+                    farmId: "farm-123",
+                    queueId: "queue-456",
+                },
+            },
+            systemConfig: {
+                inputFileArity: "one" as const,
+                assetScope: {},
+                metadataInputs: {},
+                requireTemplate: false,
+                allowCustomTemplateOverride: false,
+                inputFileFilters: { allow: [], exclude: [] },
+            },
+        };
+
+        render(<PipelineForm mode="edit" databaseId="db1" initial={dcPipeline} onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        const select = screen.getByLabelText(/Execution Type/);
+        const options = Array.from((select as HTMLSelectElement).options).map((opt) => opt.value);
+        expect(options).toContain("DeadlineCloud");
+
+        expect(select).toBeDisabled();
+
+        expect(screen.getByText(/Read-only:/)).toBeInTheDocument();
+        expect(screen.getByText(/DeadlineCloud feature is disabled/)).toBeInTheDocument();
+
+        expect(screen.queryByText(/Update/i)).not.toBeInTheDocument();
+    });
+
+    it("allows editing a DeadlineCloud pipeline when flag is on", () => {
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({
+            featuresEnabled: ["DEADLINECLOUD_PIPELINES"],
+        });
+
+        const dcPipeline = {
+            pipelineId: "dc1",
+            pipelineName: "DC Pipeline",
+            databaseId: "db1",
+            executionConfig: {
+                executionType: "DeadlineCloud" as const,
+                waitForCallback: "Enabled" as const,
+                deadlineCloud: {
+                    farmId: "farm-123",
+                    queueId: "queue-456",
+                },
+            },
+            systemConfig: {
+                inputFileArity: "one" as const,
+                assetScope: {},
+                metadataInputs: {},
+                requireTemplate: false,
+                allowCustomTemplateOverride: false,
+                inputFileFilters: { allow: [], exclude: [] },
+            },
+        };
+
+        render(<PipelineForm mode="edit" databaseId="db1" initial={dcPipeline} onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        const select = screen.getByLabelText(/Execution Type/);
+        expect(select).not.toBeDisabled();
+
+        expect(screen.queryByText(/Read-only:/)).not.toBeInTheDocument();
+
+        expect(screen.getByText(/Update/)).toBeInTheDocument();
+    });
 });

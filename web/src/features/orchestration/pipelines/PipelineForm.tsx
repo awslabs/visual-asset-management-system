@@ -29,6 +29,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
     const showDeadlineCloud =
         featuresEnabled.includes("DEADLINECLOUD_PIPELINES") && !featuresEnabled.includes("GOVCLOUD");
 
+    const isDeadlineCloudDisabled =
+        mode === "edit" &&
+        initial?.executionConfig?.executionType === "DeadlineCloud" &&
+        !showDeadlineCloud;
+
     const {
         register,
         handleSubmit,
@@ -122,18 +127,27 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     >
                         Cancel
                     </button>
-                    <button
-                        type="submit"
-                        form="pipeline-form"
-                        disabled={isSubmitting}
-                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                    >
-                        {isSubmitting ? "Saving..." : mode === "create" ? "Create" : "Update"}
-                    </button>
+                    {!isDeadlineCloudDisabled && (
+                        <button
+                            type="submit"
+                            form="pipeline-form"
+                            disabled={isSubmitting}
+                            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                        >
+                            {isSubmitting ? "Saving..." : mode === "create" ? "Create" : "Update"}
+                        </button>
+                    )}
                 </>
             }
         >
             <form id="pipeline-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                {isDeadlineCloudDisabled && (
+                    <div className="p-3 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 rounded">
+                        <strong>Read-only:</strong> This DeadlineCloud pipeline cannot be edited because the
+                        DeadlineCloud feature is disabled on this system. You may delete it or remove it from
+                        workflows.
+                    </div>
+                )}
                 {validationErrors._form && (
                     <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded">
                         {validationErrors._form}
@@ -146,7 +160,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                         <input
                             id="pipelineId"
                             {...register("pipelineId")}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            disabled={isDeadlineCloudDisabled}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             placeholder="Auto-generated if left blank"
                         />
                         {validationErrors.pipelineId && (
@@ -162,7 +177,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <input
                         id="pipelineName"
                         {...register("pipelineName")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="Pipeline name"
                     />
                     {validationErrors.pipelineName && (
@@ -177,7 +193,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <input
                         id="category"
                         {...register("category")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="e.g. 3D, GenAI"
                     />
                 </div>
@@ -187,14 +204,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <textarea
                         id="description"
                         {...register("description")}
+                        disabled={isDeadlineCloudDisabled}
                         rows={3}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="Pipeline description"
                     />
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <input {...register("enabled")} type="checkbox" id="enabled" />
+                    <input {...register("enabled")} type="checkbox" id="enabled" disabled={isDeadlineCloudDisabled} />
                     <label htmlFor="enabled" className="text-sm font-medium">
                         Enabled
                     </label>
@@ -208,12 +226,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <select
                         id="executionType"
                         {...register("executionConfig.executionType")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                     >
                         <option value="Lambda">Lambda</option>
                         <option value="SQS">SQS</option>
                         <option value="EventBridge">EventBridge</option>
-                        {showDeadlineCloud && <option value="DeadlineCloud">DeadlineCloud</option>}
+                        {(showDeadlineCloud || initial?.executionConfig?.executionType === "DeadlineCloud") && (
+                            <option value="DeadlineCloud">DeadlineCloud</option>
+                        )}
                     </select>
                     {validationErrors["executionConfig.executionType"] && (
                         <p className="text-red-600 dark:text-red-400 text-sm mt-1">
@@ -228,7 +249,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                         <input
                             id="lambdaResourceId"
                             {...register("executionConfig.lambda.resourceId")}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            disabled={isDeadlineCloudDisabled}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             placeholder="Lambda function ARN or name"
                         />
                         {!watch("executionConfig.lambda.resourceId") && (
@@ -245,7 +267,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                         <input
                             id="queueUrl"
                             {...register("executionConfig.sqs.queueUrl")}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            disabled={isDeadlineCloudDisabled}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             placeholder="https://sqs.region.amazonaws.com/account/queue"
                         />
                         {validationErrors["executionConfig.sqs.queueUrl"] && (
@@ -263,7 +286,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <input
                                 id="busArn"
                                 {...register("executionConfig.eventBridge.busArn")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                 placeholder="arn:aws:events:region:account:event-bus/name"
                             />
                             {validationErrors["executionConfig.eventBridge.busArn"] && (
@@ -277,7 +301,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <input
                                 id="source"
                                 {...register("executionConfig.eventBridge.source")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                 placeholder="e.g. vams.pipeline"
                             />
                             {validationErrors["executionConfig.eventBridge.source"] && (
@@ -291,7 +316,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <input
                                 id="detailType"
                                 {...register("executionConfig.eventBridge.detailType")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                 placeholder="e.g. PipelineExecution"
                             />
                             {validationErrors["executionConfig.eventBridge.detailType"] && (
@@ -310,7 +336,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <input
                                 id="farmId"
                                 {...register("executionConfig.deadlineCloud.farmId")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                 placeholder="farm-..."
                             />
                             {validationErrors["executionConfig.deadlineCloud.farmId"] && (
@@ -324,7 +351,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <input
                                 id="queueId"
                                 {...register("executionConfig.deadlineCloud.queueId")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                 placeholder="queue-..."
                             />
                             {validationErrors["executionConfig.deadlineCloud.queueId"] && (
@@ -337,7 +365,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <label className="block text-sm font-medium mb-1">Storage Profile ID</label>
                             <input
                                 {...register("executionConfig.deadlineCloud.storageProfileId")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -345,7 +374,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                             <input
                                 {...register("executionConfig.deadlineCloud.priority", { valueAsNumber: true })}
                                 type="number"
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -355,7 +385,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                                     valueAsNumber: true,
                                 })}
                                 type="number"
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -365,14 +396,16 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                                     valueAsNumber: true,
                                 })}
                                 type="number"
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             />
                         </div>
                         <div>
                             <label className="block text-sm font-medium mb-1">Template Type</label>
                             <input
                                 {...register("executionConfig.deadlineCloud.templateType")}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                disabled={isDeadlineCloudDisabled}
+                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                             />
                         </div>
                     </>
@@ -383,7 +416,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <select
                         id="waitForCallback"
                         {...register("executionConfig.waitForCallback")}
-                        disabled={executionType === "DeadlineCloud"}
+                        disabled={executionType === "DeadlineCloud" || isDeadlineCloudDisabled}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                     >
                         <option value="Enabled">Enabled</option>
@@ -405,7 +438,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-1">Task Timeout (seconds)</label>
                     <input
                         {...register("executionConfig.taskTimeout")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="1-604800 (max 1 week)"
                     />
                     {validationErrors["executionConfig.taskTimeout"] && (
@@ -419,7 +453,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-1">Task Heartbeat Timeout (seconds)</label>
                     <input
                         {...register("executionConfig.taskHeartbeatTimeout")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="1-604800 (max 1 week)"
                     />
                     {validationErrors["executionConfig.taskHeartbeatTimeout"] && (
@@ -436,7 +471,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-1">Input File Arity</label>
                     <select
                         {...register("systemConfig.inputFileArity")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                     >
                         <option value="none">None</option>
                         <option value="one">One</option>
@@ -448,15 +484,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-2">Asset Scope</label>
                     <div className="space-y-2">
                         <label className="flex items-center gap-2">
-                            <input {...register("systemConfig.assetScope.metadata")} type="checkbox" />
+                            <input {...register("systemConfig.assetScope.metadata")} type="checkbox" disabled={isDeadlineCloudDisabled} />
                             <span className="text-sm">Metadata</span>
                         </label>
                         <label className="flex items-center gap-2">
-                            <input {...register("systemConfig.assetScope.visualization")} type="checkbox" />
+                            <input {...register("systemConfig.assetScope.visualization")} type="checkbox" disabled={isDeadlineCloudDisabled} />
                             <span className="text-sm">Visualization</span>
                         </label>
                         <label className="flex items-center gap-2">
-                            <input {...register("systemConfig.assetScope.preview")} type="checkbox" />
+                            <input {...register("systemConfig.assetScope.preview")} type="checkbox" disabled={isDeadlineCloudDisabled} />
                             <span className="text-sm">Preview</span>
                         </label>
                     </div>
@@ -466,18 +502,18 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-2">Metadata Inputs</label>
                     <div className="space-y-2">
                         <label className="flex items-center gap-2">
-                            <input {...register("systemConfig.metadataInputs.core")} type="checkbox" />
+                            <input {...register("systemConfig.metadataInputs.core")} type="checkbox" disabled={isDeadlineCloudDisabled} />
                             <span className="text-sm">Core</span>
                         </label>
                         <label className="flex items-center gap-2">
-                            <input {...register("systemConfig.metadataInputs.custom")} type="checkbox" />
+                            <input {...register("systemConfig.metadataInputs.custom")} type="checkbox" disabled={isDeadlineCloudDisabled} />
                             <span className="text-sm">Custom</span>
                         </label>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <input {...register("systemConfig.requireTemplate")} type="checkbox" id="requireTemplate" />
+                    <input {...register("systemConfig.requireTemplate")} type="checkbox" id="requireTemplate" disabled={isDeadlineCloudDisabled} />
                     <label htmlFor="requireTemplate" className="text-sm font-medium">
                         Require Template
                     </label>
@@ -488,6 +524,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                         {...register("systemConfig.allowCustomTemplateOverride")}
                         type="checkbox"
                         id="allowCustom"
+                        disabled={isDeadlineCloudDisabled}
                     />
                     <label htmlFor="allowCustom" className="text-sm font-medium">
                         Allow Custom Template Override
@@ -498,7 +535,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-1">Aux Preview Pipeline Suffix</label>
                     <input
                         {...register("systemConfig.auxPreviewPipelineSuffix")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="e.g. -preview"
                     />
                 </div>
@@ -507,7 +545,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-1">Input File Filters (Allow)</label>
                     <input
                         {...register("systemConfig.inputFileFilters.allow")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="Comma-separated extensions: .jpg, .png"
                     />
                 </div>
@@ -516,7 +555,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                     <label className="block text-sm font-medium mb-1">Input File Filters (Exclude)</label>
                     <input
                         {...register("systemConfig.inputFileFilters.exclude")}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        disabled={isDeadlineCloudDisabled}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="Comma-separated extensions: .tmp, .log"
                     />
                 </div>
