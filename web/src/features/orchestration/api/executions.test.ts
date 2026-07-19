@@ -45,7 +45,8 @@ describe("executions service", () => {
             });
             const r = await listExecutionsGlobal();
             expect(apiClient.get).toHaveBeenCalledWith("workflows/executions", {});
-            expect(r).toEqual([true, [{ workflowExecutionId: "e1" }]]);
+            // Returns the unwrapped page object { Items, NextToken? } so useInfiniteQuery can page.
+            expect(r).toEqual([true, { Items: [{ workflowExecutionId: "e1" }] }]);
         });
 
         it("listExecutionsGlobal(params) sends queryStringParameters", async () => {
@@ -69,7 +70,8 @@ describe("executions service", () => {
                 "database/db1/assets/a1/workflows/executions",
                 {}
             );
-            expect(r).toEqual([true, [{ workflowExecutionId: "e1" }]]);
+            // Returns the unwrapped page object { Items, NextToken? } so useInfiniteQuery can page.
+            expect(r).toEqual([true, { Items: [{ workflowExecutionId: "e1" }] }]);
         });
 
         it("listExecutionsForAsset with params sends queryStringParameters", async () => {
