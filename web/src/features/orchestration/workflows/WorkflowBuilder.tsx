@@ -5,17 +5,35 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { usePipelines, useWorkflow, useWorkflowMutations } from "../api/queries";
+import { usePipelines, useWorkflow, useWorkflowMutations, useTemplates } from "../api/queries";
 import PipelineOrderList from "./PipelineOrderList";
 import DagPreview from "./DagPreview";
 import { validateWorkflow } from "./workflowValidation";
-import type { Workflow, SpecifiedPipelineRef, InputFileArity, ConcurrencyRestriction, OutputLocationType } from "../types";
+import type { Workflow, SpecifiedPipelineRef, InputFileArity, ConcurrencyRestriction, OutputLocationType, Template } from "../types";
 
 interface WorkflowBuilderProps {
     mode: "create" | "edit";
     databaseId: string;
     workflowId?: string;
 }
+
+// Helper component to fetch templates per pipeline and report up
+const TemplatesFetcher: React.FC<{
+    pipelineDatabaseId: string;
+    pipelineId: string;
+    onTemplatesLoaded: (key: string, templates: Template[]) => void;
+}> = ({ pipelineDatabaseId, pipelineId, onTemplatesLoaded }) => {
+    const { data: templates } = useTemplates(pipelineDatabaseId, pipelineId);
+    const key = `${pipelineDatabaseId}:${pipelineId}`;
+
+    useEffect(() => {
+        if (templates) {
+            onTemplatesLoaded(key, templates);
+        }
+    }, [templates, key, onTemplatesLoaded]);
+
+    return null; // This component only fetches and reports
+};
 
 const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, workflowId }) => {
     const navigate = useNavigate();
@@ -40,12 +58,17 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const [allowOverride, setAllowOverride] = useState(false);
 
     const [specifiedPipelines, setSpecifiedPipelines] = useState<SpecifiedPipelineRef[]>([]);
+    const [templatesByPipeline, setTemplatesByPipeline] = useState<Record<string, Template[]>>({});
 
     const [validationErrors, setValidationErrors] = useState<string[]>([]);
     const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
     const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+
+    const handleTemplatesLoaded = useCallback((key: string, templates: Template[]) => {
+        setTemplatesByPipeline((prev) => ({ ...prev, [key]: templates }));
+    }, []);
 
     // Load workflow data in edit mode
     useEffect(() => {
@@ -416,10 +439,22 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Pipeline Order</h2>
                 <div className="space-y-4">
+                    {/* Fetch templates for each selected pipeline */}
+                    {specifiedPipelines.map((ref, idx) => {
+                        if (!ref.pipelineId || !ref.pipelineDatabaseId) return null;
+                        return (
+                            <TemplatesFetcher
+                                key={`${ref.pipelineDatabaseId}:${ref.pipelineId}-${idx}`}
+                                pipelineDatabaseId={ref.pipelineDatabaseId}
+                                pipelineId={ref.pipelineId}
+                                onTemplatesLoaded={handleTemplatesLoaded}
+                            />
+                        );
+                    })}
                     <PipelineOrderList
                         value={specifiedPipelines}
                         pipelineOptions={pipelines}
-                        templatesByPipeline={{}}
+                        templatesByPipeline={templatesByPipeline}
                         onChange={setSpecifiedPipelines}
                     />
                     <DagPreview refs={specifiedPipelines} />

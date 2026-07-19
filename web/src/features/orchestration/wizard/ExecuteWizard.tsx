@@ -87,6 +87,24 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
 
     const currentIndex = steps.findIndex((s) => s.id === currentStageId);
 
+    // Compute offending (disabled/archived) pipelines
+    const offendingPipelines = useMemo(() => {
+        const offenders: Array<{ pipelineId: string; pipelineName: string; reason: string }> = [];
+        effectiveWorkflow.specifiedPipelines.forEach((ref) => {
+            const pipeline = pipelines.find(
+                (p) => p?.pipelineId === ref.pipelineId && p?.databaseId === (ref.pipelineDatabaseId || databaseId)
+            );
+            if (!pipeline) {
+                offenders.push({ pipelineId: ref.pipelineId, pipelineName: ref.pipelineId, reason: "not found" });
+            } else if (pipeline.archived) {
+                offenders.push({ pipelineId: ref.pipelineId, pipelineName: pipeline.pipelineName, reason: "archived" });
+            } else if (!pipeline.enabled) {
+                offenders.push({ pipelineId: ref.pipelineId, pipelineName: pipeline.pipelineName, reason: "disabled" });
+            }
+        });
+        return offenders;
+    }, [effectiveWorkflow.specifiedPipelines, pipelines, databaseId]);
+
     // Compute validation errors for all pipelines
     const validationErrors = useMemo(() => {
         const errors: Record<string, string[]> = {};
@@ -103,7 +121,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         return errors;
     }, [effectiveWorkflow.specifiedPipelines, pipelineData]);
 
-    const hasValidationErrors = Object.values(validationErrors).some((errs) => errs.length > 0);
+    const hasValidationErrors = Object.values(validationErrors).some((errs) => errs.length > 0) || offendingPipelines.length > 0;
 
     const handleNext = () => {
         if (currentIndex < steps.length - 1) {
@@ -172,21 +190,36 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                     onInputFilesChange={setInputFiles}
                     onOutputAssetIdChange={setOutputAssetId}
                     onOutputDatabaseIdChange={setOutputDatabaseId}
+                    offendingPipelines={offendingPipelines}
                 />
             );
         }
 
         if (currentStageId === "review") {
             return (
-                <WizardReviewStage
-                    workflow={effectiveWorkflow}
-                    pipelines={pipelines}
-                    pipelineData={pipelineData}
-                    inputFiles={inputFiles}
-                    outputAssetId={outputAssetId}
-                    outputDatabaseId={outputDatabaseId}
-                    validationErrors={validationErrors}
-                />
+                <>
+                    {offendingPipelines.length > 0 && (
+                        <div className="mb-4 p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200">
+                            <strong>Cannot Execute:</strong> The following pipelines are disabled or archived:
+                            <ul className="list-disc list-inside mt-2">
+                                {offendingPipelines.map((off, idx) => (
+                                    <li key={idx}>
+                                        <strong>{off.pipelineName}</strong> ({off.reason})
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    <WizardReviewStage
+                        workflow={effectiveWorkflow}
+                        pipelines={pipelines}
+                        pipelineData={pipelineData}
+                        inputFiles={inputFiles}
+                        outputAssetId={outputAssetId}
+                        outputDatabaseId={outputDatabaseId}
+                        validationErrors={validationErrors}
+                    />
+                </>
             );
         }
 

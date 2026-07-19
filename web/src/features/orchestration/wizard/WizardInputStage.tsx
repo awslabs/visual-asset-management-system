@@ -16,6 +16,7 @@ interface WizardInputStageProps {
     onInputFilesChange: (files: ExecuteInputFile[]) => void;
     onOutputAssetIdChange: (assetId?: string) => void;
     onOutputDatabaseIdChange: (dbId?: string) => void;
+    offendingPipelines?: Array<{ pipelineId: string; pipelineName: string; reason: string }>;
 }
 
 const WizardInputStage: React.FC<WizardInputStageProps> = ({
@@ -28,6 +29,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     onInputFilesChange,
     onOutputAssetIdChange,
     onOutputDatabaseIdChange,
+    offendingPipelines = [],
 }) => {
     const inputFileArity = workflow.systemConfig?.inputFileArity || "one";
     const allowOutputOverride = workflow.systemConfig?.outputTarget?.allowOverride || false;
@@ -38,6 +40,22 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
             <div className="p-4 bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-400 dark:border-yellow-700 rounded text-yellow-900 dark:text-yellow-200">
                 <strong>Cannot Execute:</strong>{" "}
                 {!workflow.enabled ? "This workflow is disabled." : "This workflow is archived."}
+            </div>
+        );
+    }
+
+    // Offending pipelines banner
+    if (offendingPipelines.length > 0) {
+        return (
+            <div className="p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200">
+                <strong>Cannot Execute:</strong> The following pipelines are disabled or archived:
+                <ul className="list-disc list-inside mt-2">
+                    {offendingPipelines.map((off, idx) => (
+                        <li key={idx}>
+                            <strong>{off.pipelineName}</strong> ({off.reason})
+                        </li>
+                    ))}
+                </ul>
             </div>
         );
     }

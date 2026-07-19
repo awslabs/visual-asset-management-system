@@ -34,6 +34,17 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
         initial?.executionConfig?.executionType === "DeadlineCloud" &&
         !showDeadlineCloud;
 
+    // Convert inputFileFilters arrays to comma-separated strings for text inputs
+    const initialAllowStr = initial?.systemConfig?.inputFileFilters?.allow
+        ? initial.systemConfig.inputFileFilters.allow.join(", ")
+        : "";
+    const initialExcludeStr = initial?.systemConfig?.inputFileFilters?.exclude
+        ? initial.systemConfig.inputFileFilters.exclude.join(", ")
+        : "";
+
+    const [allowFiltersText, setAllowFiltersText] = React.useState(initialAllowStr);
+    const [excludeFiltersText, setExcludeFiltersText] = React.useState(initialExcludeStr);
+
     const {
         register,
         handleSubmit,
@@ -79,6 +90,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
 
         setValidationErrors({});
 
+        // Split comma-separated filter strings into arrays (match WorkflowBuilder pattern)
+        const allow = allowFiltersText.split(",").map(s => s.trim()).filter(Boolean);
+        const exclude = excludeFiltersText.split(",").map(s => s.trim()).filter(Boolean);
+
         const body: Pipeline = {
             databaseId,
             pipelineId: data.pipelineId || "",
@@ -87,7 +102,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
             description: data.description,
             enabled: data.enabled,
             executionConfig: data.executionConfig!,
-            systemConfig: data.systemConfig,
+            systemConfig: {
+                ...data.systemConfig,
+                inputFileFilters: { allow, exclude },
+            },
         };
 
         try {
@@ -544,7 +562,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                 <div>
                     <label className="block text-sm font-medium mb-1">Input File Filters (Allow)</label>
                     <input
-                        {...register("systemConfig.inputFileFilters.allow")}
+                        value={allowFiltersText}
+                        onChange={(e) => setAllowFiltersText(e.target.value)}
                         disabled={isDeadlineCloudDisabled}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="Comma-separated extensions: .jpg, .png"
@@ -554,7 +573,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ mode, databaseId, initial, 
                 <div>
                     <label className="block text-sm font-medium mb-1">Input File Filters (Exclude)</label>
                     <input
-                        {...register("systemConfig.inputFileFilters.exclude")}
+                        value={excludeFiltersText}
+                        onChange={(e) => setExcludeFiltersText(e.target.value)}
                         disabled={isDeadlineCloudDisabled}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                         placeholder="Comma-separated extensions: .tmp, .log"

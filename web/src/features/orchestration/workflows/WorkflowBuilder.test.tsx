@@ -16,6 +16,7 @@ jest.mock("../api/queries", () => ({
     useWorkflow: jest.fn(),
     useWorkflowMutations: jest.fn(),
     useTriggers: jest.fn(),
+    useTemplates: jest.fn(),
 }));
 
 jest.mock("./PipelineOrderList", () => ({
@@ -52,11 +53,12 @@ describe("WorkflowBuilder", () => {
         queryClient = createQueryClient();
         jest.clearAllMocks();
 
-        const { usePipelines, useWorkflow, useWorkflowMutations, useTriggers } = require("../api/queries");
+        const { usePipelines, useWorkflow, useWorkflowMutations, useTriggers, useTemplates } = require("../api/queries");
 
         usePipelines.mockReturnValue({ data: [] });
         useWorkflow.mockReturnValue({ data: undefined });
         useTriggers.mockReturnValue({ data: [] });
+        useTemplates.mockReturnValue({ data: [] }); // Mock templates for TemplatesFetcher helper
         useWorkflowMutations.mockReturnValue({
             createWorkflow: { mutateAsync: mockCreate },
             updateWorkflow: { mutateAsync: mockUpdate },
