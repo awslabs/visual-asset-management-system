@@ -10,11 +10,11 @@ import ExecutionsBoard from "../features/orchestration/executions/ExecutionsBoar
 const ExecutionsPage: React.FC = () => {
     const [searchParams] = useSearchParams();
     const workflowId = searchParams.get("workflowId");
-    const databaseId = searchParams.get("databaseId");
+    const workflowDatabaseId = searchParams.get("workflowDatabaseId");
 
     const scope =
-        workflowId && databaseId
-            ? { kind: "workflow" as const, databaseId, workflowId }
+        workflowId && workflowDatabaseId
+            ? { kind: "workflow" as const, databaseId: workflowDatabaseId, workflowId }
             : { kind: "global" as const };
 
     return <ExecutionsBoard scope={scope} />;

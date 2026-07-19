@@ -24,6 +24,9 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
 
     const canViewLogs = can("GET", "/workflows/executions/{executionId}/logs");
 
+    // Per-pipeline Monaco editor state: { [pipelineIdx]: true if editor is visible }
+    const [expandedEditors, setExpandedEditors] = useState<Record<number, boolean>>({});
+
     const fetchLogs = async () => {
         if (loadingLogs || logs !== null) return;
         setLoadingLogs(true);
@@ -289,14 +292,28 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                         {pipeline.renderedConfigBody && (
                                             <div>
                                                 <h4 className="text-sm font-semibold mb-2">Executed Configuration</h4>
-                                                <div className="border border-gray-300 dark:border-gray-600 rounded overflow-hidden">
-                                                    <ConfigEditor
-                                                        value={pipeline.renderedConfigBody}
-                                                        language={pipeline.configFormat || "json"}
-                                                        readOnly
-                                                        height="300px"
-                                                    />
-                                                </div>
+                                                {!expandedEditors[idx] ? (
+                                                    <div>
+                                                        <pre className="text-xs overflow-auto p-3 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded max-h-[300px]">
+                                                            {pipeline.renderedConfigBody}
+                                                        </pre>
+                                                        <button
+                                                            onClick={() => setExpandedEditors((prev) => ({ ...prev, [idx]: true }))}
+                                                            className="mt-2 px-3 py-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                                        >
+                                                            View in editor
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="border border-gray-300 dark:border-gray-600 rounded overflow-hidden">
+                                                        <ConfigEditor
+                                                            value={pipeline.renderedConfigBody}
+                                                            language={pipeline.configFormat || "json"}
+                                                            readOnly
+                                                            height="300px"
+                                                        />
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                     </div>

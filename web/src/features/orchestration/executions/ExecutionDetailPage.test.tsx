@@ -120,6 +120,81 @@ describe("ExecutionDetailPage", () => {
 
         // Check template snapshot is visible
         expect(screen.getByText(/template-1/)).toBeInTheDocument();
+
+        // Config should show as <pre> by default, not Monaco
+        const configPre = screen.getByText('{"key": "value"}');
+        expect(configPre.tagName).toBe("PRE");
+
+        // Check for "View in editor" button
+        expect(screen.getByText("View in editor")).toBeInTheDocument();
+    });
+
+    it("expands Monaco editor when 'View in editor' is clicked", async () => {
+        const { useExecutionDetails } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+
+        const mockDetail: ExecutionDetail = {
+            workflowExecutionId: "e1",
+            workflowId: "wf-1",
+            workflowDatabaseId: "db-1",
+            executionStatus: "SUCCEEDED",
+            triggeredByUserId: "user-1",
+            triggerType: "manual",
+            executionStartDate: "2026-07-18T10:00:00Z",
+            executionStopDate: "2026-07-18T10:30:00Z",
+            pipelines: [
+                {
+                    pipelineId: "pipe-1",
+                    pipelineName: "Test Pipeline",
+                    executionStatus: "SUCCEEDED",
+                    executionStartDate: "2026-07-18T10:05:00Z",
+                    executionStopDate: "2026-07-18T10:25:00Z",
+                    renderedConfigBody: '{"key": "value"}',
+                    configFormat: "json",
+                    templateId: "template-1",
+                    templateTags: { tag1: "value1" },
+                    customTemplateOverrideUsed: false,
+                },
+            ],
+            inputFiles: [],
+            outputs: {},
+        };
+
+        useExecutionDetails.mockReturnValue({
+            data: mockDetail,
+            isLoading: false,
+            error: null,
+        });
+
+        useAllowedRoutes.mockReturnValue({
+            loading: false,
+            can: jest.fn(() => true),
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        // Navigate to Pipelines tab
+        const pipelinesTab = screen.getByRole("button", { name: /Pipelines/i });
+        await userEvent.click(pipelinesTab);
+
+        await waitFor(() => {
+            expect(screen.getByText("Test Pipeline")).toBeInTheDocument();
+        });
+
+        // Click "View in editor"
+        const viewButton = screen.getByText("View in editor");
+        await userEvent.click(viewButton);
+
+        // Button should disappear after click
+        await waitFor(() => {
+            expect(screen.queryByText("View in editor")).not.toBeInTheDocument();
+        });
     });
 
     it("hides Logs section when permission is denied", () => {

@@ -4,7 +4,8 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import WorkflowsPage from "./WorkflowsPage";
@@ -25,6 +26,12 @@ const mockNavigate = jest.fn();
 jest.mock("react-router-dom", () => ({
     ...jest.requireActual("react-router-dom"),
     useNavigate: () => mockNavigate,
+}));
+
+// Mock ExecuteWizard
+jest.mock("../wizard/ExecuteWizard", () => ({
+    __esModule: true,
+    default: () => null,
 }));
 
 describe("WorkflowsPage", () => {
@@ -172,5 +179,58 @@ describe("WorkflowsPage", () => {
 
         // Create button should not be present
         expect(screen.queryByRole("button", { name: /create/i })).not.toBeInTheDocument();
+    });
+
+    it("navigates to executions page with aligned params on 'View Executions'", async () => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+
+        useWorkflows.mockReturnValue({
+            data: mockWorkflows,
+            isLoading: false,
+            error: null,
+        });
+
+        useWorkflowMutations.mockReturnValue({
+            archiveWorkflow: { mutateAsync: jest.fn() },
+        });
+
+        useAllowedRoutes.mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        // Right-click the first workflow card to open context menu
+        const firstCard = screen.getByText("Workflow Alpha").closest("div[class*='flex items-center']");
+        expect(firstCard).toBeInTheDocument();
+        if (!firstCard) throw new Error("Card not found");
+
+        await userEvent.pointer([
+            { keys: "[MouseRight>]", target: firstCard },
+        ]);
+
+        // Click "View Executions" in the context menu
+        await waitFor(() => {
+            const viewExecutionsButton = screen.getByText("View Executions");
+            expect(viewExecutionsButton).toBeInTheDocument();
+        });
+
+        const viewExecutionsButton = screen.getByText("View Executions");
+        await userEvent.click(viewExecutionsButton);
+
+        // Check navigate was called with the correct params
+        await waitFor(() => {
+            expect(mockNavigate).toHaveBeenCalledWith(
+                "/executions?workflowId=wf-1&workflowDatabaseId=db1"
+            );
+        });
     });
 });

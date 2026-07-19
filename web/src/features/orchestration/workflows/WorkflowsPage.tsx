@@ -11,6 +11,7 @@ import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import Dialog from "../components/Dialog";
+import ExecuteWizard from "../wizard/ExecuteWizard";
 import type { Workflow } from "../types";
 
 interface WorkflowsPageProps {
@@ -25,6 +26,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
         facets: {},
     });
     const [archiveConfirmWorkflow, setArchiveConfirmWorkflow] = useState<Workflow | null>(null);
+    const [executeWorkflow, setExecuteWorkflow] = useState<Workflow | null>(null);
 
     const { data: workflows = [], isLoading, error } = useWorkflows(databaseId, includeArchived);
     const { loading: permissionsLoading, can } = useAllowedRoutes();
@@ -66,6 +68,8 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
 
     const renderWorkflowCard = (workflow: Workflow) => {
         const pipelineCount = workflow.specifiedPipelines?.length || 0;
+        // Execution count omitted: backend list response lacks per-workflow execution summary.
+        // Querying per card would cause N+1 storm. Backend follow-up: add executionCount to Workflow list response.
 
         const contextMenuItems: ContextMenuItem[] = [
             {
@@ -76,9 +80,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
             },
             {
                 label: "Execute",
-                onSelect: () => {
-                    // TODO: Wire execute wizard in Phase 5
-                },
+                onSelect: () => setExecuteWorkflow(workflow),
                 hidden: !can("POST", "/workflows/{workflowDatabaseId}/{workflowId}/execute"),
             },
             {
@@ -242,6 +244,15 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                         undone by including archived workflows and unarchiving.
                     </p>
                 </Dialog>
+            )}
+
+            {executeWorkflow && (
+                <ExecuteWizard
+                    open={!!executeWorkflow}
+                    onClose={() => setExecuteWorkflow(null)}
+                    workflow={executeWorkflow}
+                    databaseId={executeWorkflow.databaseId}
+                />
             )}
         </div>
     );
