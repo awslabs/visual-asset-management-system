@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, Suspense } from "react";
+import React, { useReducer, useEffect, useCallback, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePipelines, useWorkflow, useWorkflowMutations, useTemplates } from "../api/queries";
 import PipelineOrderList from "./PipelineOrderList";
+import WorkflowSystemConfigFields from "./WorkflowSystemConfigFields";
+import WorkflowValidationPanel from "./WorkflowValidationPanel";
 import { validateWorkflow } from "./workflowValidation";
 import type { Workflow, SpecifiedPipelineRef, InputFileArity, ConcurrencyRestriction, OutputLocationType, Template } from "../types";
 
@@ -18,7 +20,111 @@ interface WorkflowBuilderProps {
     workflowId?: string;
 }
 
-// Helper component to fetch templates per pipeline and report up
+interface WorkflowFormState {
+    workflowIdValue: string;
+    workflowName: string;
+    category: string;
+    description: string;
+    subDashboardUrl: string;
+    enabled: boolean;
+    inputFileArity: InputFileArity;
+    assetScope: Record<string, boolean>;
+    metadataInputs: Record<string, boolean>;
+    allowFilters: string;
+    excludeFilters: string;
+    concurrencyRestriction: ConcurrencyRestriction;
+    locationType: OutputLocationType;
+    allowOverride: boolean;
+    specifiedPipelines: SpecifiedPipelineRef[];
+    templatesByPipeline: Record<string, Template[]>;
+    validationErrors: string[];
+    validationWarnings: string[];
+    backendWarnings: string[];
+    saving: boolean;
+    saveError: string | null;
+}
+
+type WorkflowFormAction =
+    | { type: "SET_FIELD"; field: keyof WorkflowFormState; value: any }
+    | { type: "LOAD_WORKFLOW"; workflow: Workflow }
+    | { type: "SET_TEMPLATES"; key: string; templates: Template[] }
+    | { type: "SET_VALIDATION"; errors: string[]; warnings: string[] }
+    | { type: "SET_SAVING"; saving: boolean }
+    | { type: "SET_SAVE_ERROR"; error: string | null }
+    | { type: "SET_BACKEND_WARNINGS"; warnings: string[] };
+
+const initialState: WorkflowFormState = {
+    workflowIdValue: "",
+    workflowName: "",
+    category: "",
+    description: "",
+    subDashboardUrl: "",
+    enabled: true,
+    inputFileArity: "one",
+    assetScope: {},
+    metadataInputs: {},
+    allowFilters: "",
+    excludeFilters: "",
+    concurrencyRestriction: "none",
+    locationType: "asset",
+    allowOverride: false,
+    specifiedPipelines: [],
+    templatesByPipeline: {},
+    validationErrors: [],
+    validationWarnings: [],
+    backendWarnings: [],
+    saving: false,
+    saveError: null,
+};
+
+function workflowFormReducer(state: WorkflowFormState, action: WorkflowFormAction): WorkflowFormState {
+    switch (action.type) {
+        case "SET_FIELD":
+            return { ...state, [action.field]: action.value };
+        case "LOAD_WORKFLOW": {
+            const workflow = action.workflow;
+            const sc = workflow.systemConfig || {};
+            return {
+                ...state,
+                workflowIdValue: workflow.workflowId || "",
+                workflowName: workflow.workflowName || "",
+                category: workflow.category || "",
+                description: workflow.description || "",
+                subDashboardUrl: workflow.subDashboardUrl || "",
+                enabled: workflow.enabled ?? true,
+                specifiedPipelines: workflow.specifiedPipelines || [],
+                inputFileArity: sc.inputFileArity || "one",
+                assetScope: sc.assetScope || {},
+                metadataInputs: sc.metadataInputs || {},
+                allowFilters: (sc.inputFileFilters?.allow || []).join(", "),
+                excludeFilters: (sc.inputFileFilters?.exclude || []).join(", "),
+                concurrencyRestriction: sc.concurrencyRestriction || "none",
+                locationType: sc.outputTarget?.locationType || "asset",
+                allowOverride: sc.outputTarget?.allowOverride ?? false,
+            };
+        }
+        case "SET_TEMPLATES":
+            return {
+                ...state,
+                templatesByPipeline: { ...state.templatesByPipeline, [action.key]: action.templates },
+            };
+        case "SET_VALIDATION":
+            return {
+                ...state,
+                validationErrors: action.errors,
+                validationWarnings: action.warnings,
+            };
+        case "SET_SAVING":
+            return { ...state, saving: action.saving };
+        case "SET_SAVE_ERROR":
+            return { ...state, saveError: action.error };
+        case "SET_BACKEND_WARNINGS":
+            return { ...state, backendWarnings: action.warnings };
+        default:
+            return state;
+    }
+}
+
 const TemplatesFetcher: React.FC<{
     pipelineDatabaseId: string;
     pipelineId: string;
@@ -33,7 +139,7 @@ const TemplatesFetcher: React.FC<{
         }
     }, [templates, key, onTemplatesLoaded]);
 
-    return null; // This component only fetches and reports
+    return null;
 };
 
 const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, workflowId }) => {
@@ -42,107 +148,66 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const { data: workflow } = useWorkflow(databaseId, workflowId || "");
     const { createWorkflow, updateWorkflow } = useWorkflowMutations();
 
-    const [workflowIdValue, setWorkflowIdValue] = useState("");
-    const [workflowName, setWorkflowName] = useState("");
-    const [category, setCategory] = useState("");
-    const [description, setDescription] = useState("");
-    const [subDashboardUrl, setSubDashboardUrl] = useState("");
-    const [enabled, setEnabled] = useState(true);
-
-    const [inputFileArity, setInputFileArity] = useState<InputFileArity>("one");
-    const [assetScope, setAssetScope] = useState<Record<string, boolean>>({});
-    const [metadataInputs, setMetadataInputs] = useState<Record<string, boolean>>({});
-    const [allowFilters, setAllowFilters] = useState("");
-    const [excludeFilters, setExcludeFilters] = useState("");
-    const [concurrencyRestriction, setConcurrencyRestriction] = useState<ConcurrencyRestriction>("none");
-    const [locationType, setLocationType] = useState<OutputLocationType>("asset");
-    const [allowOverride, setAllowOverride] = useState(false);
-
-    const [specifiedPipelines, setSpecifiedPipelines] = useState<SpecifiedPipelineRef[]>([]);
-    const [templatesByPipeline, setTemplatesByPipeline] = useState<Record<string, Template[]>>({});
-
-    const [validationErrors, setValidationErrors] = useState<string[]>([]);
-    const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
-    const [backendWarnings, setBackendWarnings] = useState<string[]>([]);
-    const [saving, setSaving] = useState(false);
-    const [saveError, setSaveError] = useState<string | null>(null);
+    const [state, dispatch] = useReducer(workflowFormReducer, initialState);
 
     const handleTemplatesLoaded = useCallback((key: string, templates: Template[]) => {
-        setTemplatesByPipeline((prev) => ({ ...prev, [key]: templates }));
+        dispatch({ type: "SET_TEMPLATES", key, templates });
     }, []);
 
-    // Load workflow data in edit mode
     useEffect(() => {
         if (mode === "edit" && workflow) {
-            setWorkflowIdValue(workflow.workflowId || "");
-            setWorkflowName(workflow.workflowName || "");
-            setCategory(workflow.category || "");
-            setDescription(workflow.description || "");
-            setSubDashboardUrl(workflow.subDashboardUrl || "");
-            setEnabled(workflow.enabled ?? true);
-            setSpecifiedPipelines(workflow.specifiedPipelines || []);
-
-            const sc = workflow.systemConfig || {};
-            setInputFileArity(sc.inputFileArity || "one");
-            setAssetScope(sc.assetScope || {});
-            setMetadataInputs(sc.metadataInputs || {});
-            setAllowFilters((sc.inputFileFilters?.allow || []).join(", "));
-            setExcludeFilters((sc.inputFileFilters?.exclude || []).join(", "));
-            setConcurrencyRestriction(sc.concurrencyRestriction || "none");
-            setLocationType(sc.outputTarget?.locationType || "asset");
-            setAllowOverride(sc.outputTarget?.allowOverride ?? false);
+            dispatch({ type: "LOAD_WORKFLOW", workflow });
         }
     }, [mode, workflow]);
 
     // HARD COUPLING: when locationType is "none", force inputFileArity to "none"
     useEffect(() => {
-        if (locationType === "none" && inputFileArity !== "none") {
-            setInputFileArity("none");
+        if (state.locationType === "none" && state.inputFileArity !== "none") {
+            dispatch({ type: "SET_FIELD", field: "inputFileArity", value: "none" });
         }
-    }, [locationType, inputFileArity]);
+    }, [state.locationType, state.inputFileArity]);
 
     const assembleWorkflow = useCallback((): Workflow => {
         return {
             databaseId,
-            workflowId: workflowIdValue,
-            workflowName,
-            category,
-            description,
-            subDashboardUrl,
-            enabled,
-            specifiedPipelines,
+            workflowId: state.workflowIdValue,
+            workflowName: state.workflowName,
+            category: state.category,
+            description: state.description,
+            subDashboardUrl: state.subDashboardUrl,
+            enabled: state.enabled,
+            specifiedPipelines: state.specifiedPipelines,
             systemConfig: {
-                inputFileArity,
-                assetScope,
-                metadataInputs,
+                inputFileArity: state.inputFileArity,
+                assetScope: state.assetScope,
+                metadataInputs: state.metadataInputs,
                 inputFileFilters: {
-                    allow: allowFilters.split(",").map(s => s.trim()).filter(Boolean),
-                    exclude: excludeFilters.split(",").map(s => s.trim()).filter(Boolean),
+                    allow: state.allowFilters.split(",").map(s => s.trim()).filter(Boolean),
+                    exclude: state.excludeFilters.split(",").map(s => s.trim()).filter(Boolean),
                 },
-                concurrencyRestriction,
-                outputTarget: { locationType, allowOverride },
+                concurrencyRestriction: state.concurrencyRestriction,
+                outputTarget: { locationType: state.locationType, allowOverride: state.allowOverride },
             },
         };
     }, [
         databaseId,
-        workflowIdValue,
-        workflowName,
-        category,
-        description,
-        subDashboardUrl,
-        enabled,
-        specifiedPipelines,
-        inputFileArity,
-        assetScope,
-        metadataInputs,
-        allowFilters,
-        excludeFilters,
-        concurrencyRestriction,
-        locationType,
-        allowOverride,
+        state.workflowIdValue,
+        state.workflowName,
+        state.category,
+        state.description,
+        state.subDashboardUrl,
+        state.enabled,
+        state.specifiedPipelines,
+        state.inputFileArity,
+        state.assetScope,
+        state.metadataInputs,
+        state.allowFilters,
+        state.excludeFilters,
+        state.concurrencyRestriction,
+        state.locationType,
+        state.allowOverride,
     ]);
 
-    // Run validation on change
     useEffect(() => {
         const assembled = assembleWorkflow();
 
@@ -153,41 +218,40 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         }, {});
 
         const result = validateWorkflow(assembled, pipelinesById);
-        setValidationErrors(result.errors);
-        setValidationWarnings(result.warnings);
+        dispatch({ type: "SET_VALIDATION", errors: result.errors, warnings: result.warnings });
     }, [assembleWorkflow, pipelines]);
 
     const handleSave = async () => {
-        if (validationErrors.length > 0) return;
+        if (state.validationErrors.length > 0) return;
 
-        setSaving(true);
-        setSaveError(null);
+        dispatch({ type: "SET_SAVING", saving: true });
+        dispatch({ type: "SET_SAVE_ERROR", error: null });
         try {
             const body = assembleWorkflow();
 
             if (mode === "create") {
                 const result = await createWorkflow.mutateAsync(body);
                 if (result?.warnings) {
-                    setBackendWarnings(result.warnings);
+                    dispatch({ type: "SET_BACKEND_WARNINGS", warnings: result.warnings });
                 }
                 navigate(`/databases/${databaseId}/workflows`);
             } else {
-                const result = await updateWorkflow.mutateAsync({ databaseId, workflowId: workflowIdValue, body });
+                const result = await updateWorkflow.mutateAsync({ databaseId, workflowId: state.workflowIdValue, body });
                 if (result?.warnings) {
-                    setBackendWarnings(result.warnings);
+                    dispatch({ type: "SET_BACKEND_WARNINGS", warnings: result.warnings });
                 }
                 navigate(`/databases/${databaseId}/workflows`);
             }
         } catch (err: any) {
             console.error("Save failed:", err);
-            setSaveError(err?.message || "Failed to save workflow");
+            dispatch({ type: "SET_SAVE_ERROR", error: err?.message || "Failed to save workflow" });
         } finally {
-            setSaving(false);
+            dispatch({ type: "SET_SAVING", saving: false });
         }
     };
 
-    const isArityDisabled = locationType === "none";
-    const isSaveDisabled = validationErrors.length > 0 || saving;
+    const isArityDisabled = state.locationType === "none";
+    const isSaveDisabled = state.validationErrors.length > 0 || state.saving;
 
     return (
         <div className="space-y-6">
@@ -207,8 +271,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                             <input
                                 id="workflowId"
                                 type="text"
-                                value={workflowIdValue}
-                                onChange={(e) => setWorkflowIdValue(e.target.value)}
+                                value={state.workflowIdValue}
+                                onChange={(e) => dispatch({ type: "SET_FIELD", field: "workflowIdValue", value: e.target.value })}
                                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                             />
                         </div>
@@ -221,7 +285,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                             <input
                                 id="workflowId"
                                 type="text"
-                                value={workflowIdValue}
+                                value={state.workflowIdValue}
                                 disabled
                                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 opacity-50"
                             />
@@ -234,8 +298,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         <input
                             id="workflowName"
                             type="text"
-                            value={workflowName}
-                            onChange={(e) => setWorkflowName(e.target.value)}
+                            value={state.workflowName}
+                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "workflowName", value: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                         />
                     </div>
@@ -246,8 +310,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         <input
                             id="category"
                             type="text"
-                            value={category}
-                            onChange={(e) => setCategory(e.target.value)}
+                            value={state.category}
+                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "category", value: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                         />
                     </div>
@@ -257,8 +321,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         </label>
                         <textarea
                             id="description"
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
+                            value={state.description}
+                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "description", value: e.target.value })}
                             rows={3}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                         />
@@ -270,8 +334,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         <input
                             id="subDashboardUrl"
                             type="text"
-                            value={subDashboardUrl}
-                            onChange={(e) => setSubDashboardUrl(e.target.value)}
+                            value={state.subDashboardUrl}
+                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "subDashboardUrl", value: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                         />
                     </div>
@@ -279,11 +343,11 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         <label className="flex items-center gap-2">
                             <input
                                 type="checkbox"
-                                checked={enabled}
-                                onChange={(e) => setEnabled(e.target.checked)}
+                                checked={state.enabled}
+                                onChange={(e) => dispatch({ type: "SET_FIELD", field: "enabled", value: e.target.checked })}
                             />
                             <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                                {enabled ? "Enabled" : "Disabled"}
+                                {state.enabled ? "Enabled" : "Disabled"}
                             </span>
                         </label>
                     </div>
@@ -292,156 +356,31 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
             <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">System Configuration</h2>
-                <div className="space-y-4">
-                    <div>
-                        <label htmlFor="inputFileArity" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
-                            Input File Arity
-                        </label>
-                        {isArityDisabled && (
-                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                                Locked to 'none' when output location is 'none' (results-only workflows require no input files)
-                            </p>
-                        )}
-                        <select
-                            id="inputFileArity"
-                            value={inputFileArity}
-                            onChange={(e) => setInputFileArity(e.target.value as InputFileArity)}
-                            disabled={isArityDisabled}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50"
-                        >
-                            <option value="none">none</option>
-                            <option value="one">one</option>
-                            <option value="multi">multi</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium mb-2 text-gray-900 dark:text-gray-100">
-                            Asset Scope
-                        </label>
-                        <div className="space-y-1">
-                            <label className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    checked={assetScope.asset || false}
-                                    onChange={(e) => setAssetScope({ ...assetScope, asset: e.target.checked })}
-                                />
-                                <span className="text-sm text-gray-900 dark:text-gray-100">Asset</span>
-                            </label>
-                            <label className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    checked={assetScope.pipeline || false}
-                                    onChange={(e) => setAssetScope({ ...assetScope, pipeline: e.target.checked })}
-                                />
-                                <span className="text-sm text-gray-900 dark:text-gray-100">Pipeline</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium mb-2 text-gray-900 dark:text-gray-100">
-                            Metadata Inputs
-                        </label>
-                        <div className="space-y-1">
-                            <label className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    checked={metadataInputs.asset || false}
-                                    onChange={(e) => setMetadataInputs({ ...metadataInputs, asset: e.target.checked })}
-                                />
-                                <span className="text-sm text-gray-900 dark:text-gray-100">Asset Metadata</span>
-                            </label>
-                            <label className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    checked={metadataInputs.file || false}
-                                    onChange={(e) => setMetadataInputs({ ...metadataInputs, file: e.target.checked })}
-                                />
-                                <span className="text-sm text-gray-900 dark:text-gray-100">File Metadata</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label htmlFor="allowFilters" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
-                            Input File Filters - Allow (comma-separated)
-                        </label>
-                        <input
-                            id="allowFilters"
-                            type="text"
-                            value={allowFilters}
-                            onChange={(e) => setAllowFilters(e.target.value)}
-                            placeholder="e.g., *.jpg, *.png"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        />
-                    </div>
-
-                    <div>
-                        <label htmlFor="excludeFilters" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
-                            Input File Filters - Exclude (comma-separated)
-                        </label>
-                        <input
-                            id="excludeFilters"
-                            type="text"
-                            value={excludeFilters}
-                            onChange={(e) => setExcludeFilters(e.target.value)}
-                            placeholder="e.g., *.tmp, *.bak"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        />
-                    </div>
-
-                    <div>
-                        <label htmlFor="concurrencyRestriction" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
-                            Concurrency Restriction
-                        </label>
-                        <select
-                            id="concurrencyRestriction"
-                            value={concurrencyRestriction}
-                            onChange={(e) => setConcurrencyRestriction(e.target.value as ConcurrencyRestriction)}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        >
-                            <option value="none">none</option>
-                            <option value="perAsset">perAsset</option>
-                            <option value="perInputFile">perInputFile</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label htmlFor="locationType" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
-                            Output Target - Location Type
-                        </label>
-                        <select
-                            id="locationType"
-                            value={locationType}
-                            onChange={(e) => setLocationType(e.target.value as OutputLocationType)}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        >
-                            <option value="asset">asset</option>
-                            <option value="none">none</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="flex items-center gap-2">
-                            <input
-                                type="checkbox"
-                                checked={allowOverride}
-                                onChange={(e) => setAllowOverride(e.target.checked)}
-                            />
-                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                                {allowOverride ? "Allow Override" : "No Override"}
-                            </span>
-                        </label>
-                    </div>
-                </div>
+                <WorkflowSystemConfigFields
+                    inputFileArity={state.inputFileArity}
+                    assetScope={state.assetScope}
+                    metadataInputs={state.metadataInputs}
+                    allowFilters={state.allowFilters}
+                    excludeFilters={state.excludeFilters}
+                    concurrencyRestriction={state.concurrencyRestriction}
+                    locationType={state.locationType}
+                    allowOverride={state.allowOverride}
+                    isArityDisabled={isArityDisabled}
+                    onInputFileArityChange={(value) => dispatch({ type: "SET_FIELD", field: "inputFileArity", value })}
+                    onAssetScopeChange={(value) => dispatch({ type: "SET_FIELD", field: "assetScope", value })}
+                    onMetadataInputsChange={(value) => dispatch({ type: "SET_FIELD", field: "metadataInputs", value })}
+                    onAllowFiltersChange={(value) => dispatch({ type: "SET_FIELD", field: "allowFilters", value })}
+                    onExcludeFiltersChange={(value) => dispatch({ type: "SET_FIELD", field: "excludeFilters", value })}
+                    onConcurrencyRestrictionChange={(value) => dispatch({ type: "SET_FIELD", field: "concurrencyRestriction", value })}
+                    onLocationTypeChange={(value) => dispatch({ type: "SET_FIELD", field: "locationType", value })}
+                    onAllowOverrideChange={(value) => dispatch({ type: "SET_FIELD", field: "allowOverride", value })}
+                />
             </div>
 
             <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Pipeline Order</h2>
                 <div className="space-y-4">
-                    {/* Fetch templates for each selected pipeline */}
-                    {specifiedPipelines.map((ref, idx) => {
+                    {state.specifiedPipelines.map((ref, idx) => {
                         if (!ref.pipelineId || !ref.pipelineDatabaseId) return null;
                         return (
                             <TemplatesFetcher
@@ -453,62 +392,25 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         );
                     })}
                     <PipelineOrderList
-                        value={specifiedPipelines}
+                        value={state.specifiedPipelines}
                         pipelineOptions={pipelines}
-                        templatesByPipeline={templatesByPipeline}
-                        onChange={setSpecifiedPipelines}
+                        templatesByPipeline={state.templatesByPipeline}
+                        onChange={(value) => dispatch({ type: "SET_FIELD", field: "specifiedPipelines", value })}
                     />
-                    {specifiedPipelines.length > 0 && (
+                    {state.specifiedPipelines.length > 0 && (
                         <Suspense fallback={<div className="text-sm text-gray-500 dark:text-gray-400">Loading preview...</div>}>
-                            <DagPreview refs={specifiedPipelines} />
+                            <DagPreview refs={state.specifiedPipelines} />
                         </Suspense>
                     )}
                 </div>
             </div>
 
-            <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Validation</h2>
-                <div className="space-y-4">
-                    {saveError && (
-                        <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded">
-                            <strong>Save Error:</strong> {saveError}
-                        </div>
-                    )}
-                    {validationErrors.length > 0 && (
-                        <div className="text-red-700 dark:text-red-400">
-                            <strong>Errors (blocking save):</strong>
-                            <ul className="list-disc list-inside">
-                                {validationErrors.map((e, i) => (
-                                    <li key={i}>{e}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                    {validationWarnings.length > 0 && (
-                        <div className="text-orange-700 dark:text-orange-400">
-                            <strong>Warnings:</strong>
-                            <ul className="list-disc list-inside">
-                                {validationWarnings.map((w, i) => (
-                                    <li key={i}>{w}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                    {backendWarnings.length > 0 && (
-                        <div className="text-orange-700 dark:text-orange-400">
-                            <strong>Backend Warnings:</strong>
-                            <ul className="list-disc list-inside">
-                                {backendWarnings.map((w, i) => (
-                                    <li key={i}>{w}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                    {validationErrors.length === 0 && validationWarnings.length === 0 && backendWarnings.length === 0 && !saveError && (
-                        <div className="text-green-700 dark:text-green-400">All validations passed</div>
-                    )}
-                </div>
-            </div>
+            <WorkflowValidationPanel
+                validationErrors={state.validationErrors}
+                validationWarnings={state.validationWarnings}
+                backendWarnings={state.backendWarnings}
+                saveError={state.saveError}
+            />
 
             <div className="flex justify-end gap-2">
                 <button
@@ -522,7 +424,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     disabled={isSaveDisabled}
                     className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
                 >
-                    {saving ? "Saving..." : "Save"}
+                    {state.saving ? "Saving..." : "Save"}
                 </button>
             </div>
         </div>

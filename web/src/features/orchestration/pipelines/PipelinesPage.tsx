@@ -10,6 +10,7 @@ import CategoryGroupedList from "../components/CategoryGroupedList";
 import FilterBar, { type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import Dialog from "../components/Dialog";
+import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import PipelineForm from "./PipelineForm";
 import TemplateEditor from "./TemplateEditor";
 import type { Pipeline, ExecutionType } from "../types";
@@ -272,32 +273,12 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
             )}
 
             {archiveConfirmPipeline && (
-                <Dialog
+                <ArchiveConfirmDialog
+                    entityName={archiveConfirmPipeline.pipelineName}
                     open={!!archiveConfirmPipeline}
-                    onOpenChange={(open) => !open && setArchiveConfirmPipeline(null)}
-                    title="Archive Pipeline"
-                    footer={
-                        <>
-                            <button
-                                onClick={() => setArchiveConfirmPipeline(null)}
-                                className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={() => handleArchive(archiveConfirmPipeline)}
-                                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
-                            >
-                                Archive
-                            </button>
-                        </>
-                    }
-                >
-                    <p className="text-gray-700 dark:text-gray-300">
-                        Are you sure you want to archive <strong>{archiveConfirmPipeline.pipelineName}</strong>?
-                        This action can be undone by including archived pipelines and unarchiving.
-                    </p>
-                </Dialog>
+                    onConfirm={() => handleArchive(archiveConfirmPipeline)}
+                    onCancel={() => setArchiveConfirmPipeline(null)}
+                />
             )}
         </div>
     );
