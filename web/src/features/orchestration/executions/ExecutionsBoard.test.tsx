@@ -56,11 +56,14 @@ describe("ExecutionsBoard", () => {
             can: jest.fn(() => true),
         });
 
-        // Default mock for useExecutions (empty)
+        // Default mock for useExecutions (empty, infinite query shape)
         useExecutions.mockReturnValue({
-            data: [],
+            data: { pages: [{ Items: [] }], pageParams: [] },
             isLoading: false,
             error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
         });
     });
 
@@ -99,9 +102,12 @@ describe("ExecutionsBoard", () => {
         ];
 
         useExecutions.mockReturnValue({
-            data: mockExecutions,
+            data: { pages: [{ Items: mockExecutions }], pageParams: [] },
             isLoading: false,
             error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
         });
 
         render(
@@ -143,9 +149,12 @@ describe("ExecutionsBoard", () => {
         ];
 
         useExecutions.mockReturnValue({
-            data: mockExecutions,
+            data: { pages: [{ Items: mockExecutions }], pageParams: [] },
             isLoading: false,
             error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
         });
 
         const { container } = render(
@@ -184,9 +193,12 @@ describe("ExecutionsBoard", () => {
         ];
 
         useExecutions.mockReturnValue({
-            data: mockExecutions,
+            data: { pages: [{ Items: mockExecutions }], pageParams: [] },
             isLoading: false,
             error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
         });
 
         // Deny logs permission
@@ -234,9 +246,12 @@ describe("ExecutionsBoard", () => {
         ];
 
         useExecutions.mockReturnValue({
-            data: mockExecutions,
+            data: { pages: [{ Items: mockExecutions }], pageParams: [] },
             isLoading: false,
             error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
         });
 
         render(

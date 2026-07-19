@@ -4,7 +4,7 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
-import { toTuple, pageAll } from "./client";
+import { toTuple } from "./client";
 import type { ExecuteRequest, Execution, ExecutionDetail } from "../types";
 
 export async function executeWorkflow(
@@ -19,17 +19,10 @@ export async function executeWorkflow(
 
 export async function listExecutionsGlobal(
     params?: Record<string, string>
-): Promise<[boolean, Execution[] | string]> {
+): Promise<[boolean, { Items: Execution[]; NextToken?: string } | string]> {
     return toTuple(async () => {
         const opts = params ? { queryStringParameters: params } : {};
-        return pageAll((token) =>
-            apiClient.get("workflows/executions", {
-                ...opts,
-                ...(token && {
-                    queryStringParameters: { ...opts.queryStringParameters, startingToken: token },
-                }),
-            })
-        );
+        return apiClient.get("workflows/executions", opts);
     });
 }
 
@@ -37,18 +30,11 @@ export async function listExecutionsForAsset(
     databaseId: string,
     assetId: string,
     params?: Record<string, string>
-): Promise<[boolean, Execution[] | string]> {
+): Promise<[boolean, { Items: Execution[]; NextToken?: string } | string]> {
     return toTuple(async () => {
         const path = `database/${databaseId}/assets/${assetId}/workflows/executions`;
         const opts = params ? { queryStringParameters: params } : {};
-        return pageAll((token) =>
-            apiClient.get(path, {
-                ...opts,
-                ...(token && {
-                    queryStringParameters: { ...opts.queryStringParameters, startingToken: token },
-                }),
-            })
-        );
+        return apiClient.get(path, opts);
     });
 }
 

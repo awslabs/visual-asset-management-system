@@ -5,9 +5,12 @@
 
 import {
     useQuery,
+    useInfiniteQuery,
     useMutation,
     useQueryClient,
     type UseQueryOptions,
+    type UseInfiniteQueryOptions,
+    type InfiniteData,
 } from "@tanstack/react-query";
 import * as pipelineService from "./pipelines";
 import * as workflowService from "./workflows";
@@ -208,28 +211,44 @@ export function useTriggers(databaseId: string, workflowId: string) {
 // EXECUTION HOOKS
 // ============================================================================
 
+type ExecutionListResponse = { Items: Execution[]; NextToken?: string };
+
 export function useExecutions(
     scope: ExecutionScope,
     filters?: Record<string, string>,
-    opts?: Partial<UseQueryOptions<Execution[]>>
+    opts?: any
 ) {
-    return useQuery({
+    return useInfiniteQuery({
         queryKey: qk.executions(scope, filters),
-        queryFn: async () => {
+        queryFn: async ({ pageParam }: { pageParam?: string }) => {
+            const params: Record<string, string> = { ...filters, pageSize: "50" };
+            if (pageParam) {
+                params.startingToken = pageParam;
+            }
+
             if (scope.kind === "global") {
-                // For workflow scope, pass workflowId as a filter to global list
-                const params = scope.kind === "global" ? filters : { ...filters };
-                return callService<Execution[]>(() => executionService.listExecutionsGlobal(params));
+                const [ok, data] = await executionService.listExecutionsGlobal(params);
+                if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
+                return data as ExecutionListResponse;
             } else if (scope.kind === "workflow") {
-                // Workflow scope: call global with workflowId filter
-                const params = { ...filters, workflowId: scope.workflowId, databaseId: scope.databaseId };
-                return callService<Execution[]>(() => executionService.listExecutionsGlobal(params));
+                const workflowParams = { ...params, workflowId: scope.workflowId, databaseId: scope.databaseId };
+                const [ok, data] = await executionService.listExecutionsGlobal(workflowParams);
+                if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
+                return data as ExecutionListResponse;
             } else {
                 // Asset scope
-                return callService<Execution[]>(() => executionService.listExecutionsForAsset(scope.databaseId, scope.assetId, filters));
+                const [ok, data] = await executionService.listExecutionsForAsset(scope.databaseId, scope.assetId, params);
+                if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
+                return data as ExecutionListResponse;
             }
         },
-        refetchInterval: (query) => computeRefetchInterval((query.state.data as any[]) ?? []),
+        getNextPageParam: (lastPage: ExecutionListResponse) => lastPage.NextToken,
+        initialPageParam: undefined as string | undefined,
+        refetchInterval: (query: any) => {
+            // Compute refetch interval from all pages
+            const allRows = query.state.data?.pages.flatMap((p: ExecutionListResponse) => p.Items) ?? [];
+            return computeRefetchInterval(allRows);
+        },
         ...opts,
     });
 }
@@ -247,7 +266,8 @@ export function useExecuteWorkflow() {
     return useMutation({
         mutationFn: ({ workflowDatabaseId, workflowId, body }: { workflowDatabaseId: string; workflowId: string; body: any }) =>
             callService(() => executionService.executeWorkflow(workflowDatabaseId, workflowId, body)),
-        onSuccess: () => {
+        onSuccess: (_, vars) => {
+            // Invalidate all execution list scopes (a new execution could appear in any scope)
             queryClient.invalidateQueries({ queryKey: ["executions"] });
         },
     });
@@ -259,23 +279,29 @@ export function useExecutionActions() {
     const abortExecution = useMutation({
         mutationFn: ({ executionId, groupId }: { executionId: string; groupId?: string }) =>
             callService(() => executionService.abortExecution(executionId, groupId)),
-        onSuccess: () => {
+        onSuccess: (_, vars) => {
+            // Narrow invalidation: only the execution list scope and the specific execution detail
             queryClient.invalidateQueries({ queryKey: ["executions"] });
+            queryClient.invalidateQueries({ queryKey: qk.execution(vars.executionId) });
         },
     });
 
     const rerunExecution = useMutation({
         mutationFn: ({ executionId, executionGroupId }: { executionId: string; executionGroupId?: string }) =>
             callService(() => executionService.rerunExecution(executionId, executionGroupId)),
-        onSuccess: () => {
+        onSuccess: (_, vars) => {
+            // Re-run creates a NEW execution, so invalidate lists + the original execution detail
             queryClient.invalidateQueries({ queryKey: ["executions"] });
+            queryClient.invalidateQueries({ queryKey: qk.execution(vars.executionId) });
         },
     });
 
     const permanentDeleteExecution = useMutation({
         mutationFn: (executionId: string) => callService(() => executionService.permanentDeleteExecution(executionId)),
-        onSuccess: () => {
+        onSuccess: (_, executionId) => {
+            // Permanent delete removes the execution, so invalidate lists + its detail view
             queryClient.invalidateQueries({ queryKey: ["executions"] });
+            queryClient.invalidateQueries({ queryKey: qk.execution(executionId) });
         },
     });
 

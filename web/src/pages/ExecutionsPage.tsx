@@ -17,7 +17,7 @@ const ExecutionsPage: React.FC = () => {
             ? { kind: "workflow" as const, databaseId, workflowId }
             : { kind: "global" as const };
 
-    return <ExecutionsBoard scope={scope} groupByWorkflow />;
+    return <ExecutionsBoard scope={scope} />;
 };
 
 export default ExecutionsPage;

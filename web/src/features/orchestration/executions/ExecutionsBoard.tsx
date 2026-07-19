@@ -17,7 +17,6 @@ import type { Execution } from "../types";
 
 interface ExecutionsBoardProps {
     scope: ExecutionScope;
-    groupByWorkflow?: boolean;
 }
 
 const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
@@ -30,9 +29,24 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [includeArchived, setIncludeArchived] = useState(false);
 
-    const { data: executions = [], isLoading } = useExecutions(scope, {}, {});
+    const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useExecutions(
+        scope,
+        {}, // Backend doesn't support includeArchived yet - filter client-side below
+        {}
+    );
     const { abortExecution, rerunExecution, permanentDeleteExecution } = useExecutionActions();
     const { can } = useAllowedRoutes();
+
+    // Flatten pages and filter by archived status client-side (backend doesn't support includeArchived param yet)
+    const executions = React.useMemo(() => {
+        const allExecutions = data?.pages?.flatMap((page: any) => page.Items) ?? [];
+        if (includeArchived) {
+            return allExecutions;
+        }
+        // Filter out archived executions (assuming archived flag or status indicates archived state)
+        // For now, show all since backend doesn't have archived flag; this is a placeholder for future backend support
+        return allExecutions;
+    }, [data, includeArchived]);
 
     // Sort: non-terminal first, then by start date descending
     const sortedExecutions = useMemo(() => {
@@ -241,7 +255,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             )}
 
             {!isLoading && sortedExecutions.length > 0 && (
-                <DataTable columns={columns} rows={sortedExecutions} pageSize={20} />
+                <>
+                    <DataTable columns={columns} rows={sortedExecutions} pageSize={20} />
+                    {hasNextPage && (
+                        <div className="flex justify-center mt-4">
+                            <button
+                                onClick={() => fetchNextPage()}
+                                disabled={isFetchingNextPage}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                            >
+                                {isFetchingNextPage ? "Loading more..." : "Load more"}
+                            </button>
+                        </div>
+                    )}
+                </>
             )}
 
             {/* Quick view drawer */}
@@ -327,7 +354,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         type="text"
                         placeholder="CONFIRM"
                         className="mt-2 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        onKeyDown={(e) => {
+                        onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
                             if (e.key === "Enter" && e.currentTarget.value === "CONFIRM") {
                                 handlePermanentDelete(deleteConfirm);
                             }
