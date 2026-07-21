@@ -165,7 +165,7 @@ The web distribution determines whether a second Web ACL is also created:
 -   **ALB deployment (without CloudFront)**: A single regional Web ACL protects both the REST API stage and the ALB.
 -   **No CloudFront or ALB**: The regional Web ACL protects the API Gateway stage.
 
-Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint.
+Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint. Within that policy, the AWS Common Rule Set runs its `SizeRestrictions_BODY` rule in count (non-blocking) mode through a per-rule `ruleActionOverrides` entry, so request bodies up to the API Gateway REST maximum of 10 MB — such as multi-part upload requests — are not rejected, while the rest of the managed rules continue to block.
 
 ## VPC Configuration Options
 
@@ -258,6 +258,7 @@ These interface endpoints are always created when VPC endpoints are enabled:
 | AWS STS                   | `STS`             | Credential federation                                                                                                                                                                          |
 | Amazon CloudWatch Logs    | `CLOUDWATCH_LOGS` | Log delivery                                                                                                                                                                                   |
 | AWS Step Functions        | `STEP_FUNCTIONS`  | Workflow execution                                                                                                                                                                             |
+| Amazon EventBridge        | `EVENTBRIDGE`     | Orchestration bus access (`events`). In-VPC Lambdas publish and consume events on the workflow orchestration bus — file-upload trigger dispatch and pipeline sub-process registration.         |
 | Amazon SNS                | `SNS`             | Event notifications                                                                                                                                                                            |
 | Amazon SQS                | `SQS`             | Queue operations                                                                                                                                                                               |
 
@@ -269,11 +270,14 @@ The execute-api interface VPC endpoint (`com.amazonaws.{region}.execute-api`) is
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint            | Condition                                      | Purpose                           |
-| ------------------- | ---------------------------------------------- | --------------------------------- |
-| AWS KMS             | `useKmsCmkEncryption.enabled`                  | KMS key operations                |
-| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`      | FIPS-compliant KMS                |
-| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint` | ALB-to-S3 static web file serving |
+| Endpoint                      | Condition                                                       | Purpose                                                      |
+| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
+| Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check |
+| Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange               |
+| Amazon Cognito (FIPS)         | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp` and `cognito-identity`          |
+| AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                           |
+| AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                           |
+| Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                            |
 
 :::info[ALB Amazon S3 interface endpoint]
 In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:

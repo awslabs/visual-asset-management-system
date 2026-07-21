@@ -27,8 +27,13 @@
         {
             "name": "VAMS-RateLimit",
             "priority": 10,
-            "limit": 2000,
-            "aggregateKeyType": "IP"
+            "limit": 10000,
+            "aggregateKeyType": "FORWARDED_IP",
+            "forwardedIPConfig": {
+                "headerName": "X-Forwarded-For",
+                "fallbackBehavior": "NO_MATCH"
+            },
+            "blockResponseCode": 429
         }
     ]
 }

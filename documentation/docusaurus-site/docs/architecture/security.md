@@ -378,6 +378,14 @@ For external (imported) asset buckets, VAMS does not apply resource policies to 
 
 For custom bucket policy statements beyond network restrictions, `infra/config/policy/s3AdditionalBucketPolicyConfig.json` applies an operator-defined statement to all VAMS-created buckets. See the [configuration reference](../deployment/configuration-reference.md) for details.
 
+## AWS WAF and Rate Limiting
+
+When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
+
+The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the `X-Forwarded-For` client IP (`FORWARDED_IP`) rather than the immediate connection source, so it counts each real end user even when requests arrive through CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress IP. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
+
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit, aggregation key, and response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+
 ## IAM Least Privilege
 
 Each Lambda function receives an individually scoped IAM execution role:

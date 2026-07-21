@@ -349,6 +349,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 subnetConfigurations.push(subnetPublicConfig);
@@ -526,6 +527,15 @@ export class VPCBuilderNestedStack extends NestedStack {
                 securityGroups: [vpceSecurityGroup],
             });
 
+            // Create VPC endpoint for EventBridge.
+            new ec2.InterfaceVpcEndpoint(this, "EventBridgeEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.EVENTBRIDGE,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
             //Add endpoints for Cognito when Cognito auth is enabled. The browser signs in
             //against cognito-idp (SRP/InitiateAuth) and exchanges tokens against
             //cognito-identity, so an isolated VPC needs both to authenticate without
@@ -616,6 +626,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useSplatToolbox.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 // Create VPC endpoint for Batch
@@ -648,6 +659,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 // Create VPC endpoint for EFS (Cosmos Predict pipeline)
                 if (
                     props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                    props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                     props.config.app.pipelines.useNvidiaGr00t.enabled
                 ) {
                     new ec2.InterfaceVpcEndpoint(this, "EFSEndpoint", {
@@ -695,6 +707,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useSplatToolbox.enabled ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
 
