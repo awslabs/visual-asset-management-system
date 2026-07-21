@@ -28,7 +28,10 @@ ALLOWED_CONSTRAINT_OBJECT_TYPES = [
     'userRole',
     'pipeline',
     'workflow',
-    'metadataSchema'
+    'metadataSchema',
+    'complianceSchema',
+    'complianceEvaluation',
+    'complianceCascade',
 ]
 
 ALLOWED_CONSTRAINT_OPERATORS = [
@@ -239,6 +242,10 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "metadataSchemaName": "",
             "metadataSchemaEntityType": "",
             #"field": "", //deprecated, old metadata schema
+
+            "complianceSchemaName": "",
+            "complianceState": "",
+            "cascadeId": "",
 
             "object__type": "",
             "route__path": "",

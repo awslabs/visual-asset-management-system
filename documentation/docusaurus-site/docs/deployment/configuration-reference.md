@@ -502,7 +502,7 @@ Controls the Federated Model Management (FMM) compliance feature. When enabled, 
 | `app.federatedModelManagement.autoLoadDefaultSchema` | boolean | `true` | When FMM is enabled, deploys a default compliance schema (`default-compliance-schema`) requiring name, owner, and classification fields. Set to `false` to skip. |
 | `app.federatedModelManagement.quarantineBlocksDownload` | boolean | `false` | When `true`, quarantined assets cannot be downloaded unless the asset has an active exception or the requesting user holds the `compliance_admin` role. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
 
-See [Compliance (Federated Model Management)](../concepts/compliance.md) for a full description of the feature.
+**Authorization:** When FMM is enabled, the default admin role is automatically granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes-fmm) for details.
 
 ## Processing pipelines (`app.pipelines`)
 

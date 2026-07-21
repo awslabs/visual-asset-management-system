@@ -83,6 +83,15 @@ def get_asset_audit(database_id, asset_id, params):
 
     Supports optional startDate/endDate query params (ISO 8601).
     """
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     limit = int(params.get("limit", "50"))
     start_date = params.get("startDate")
     end_date = params.get("endDate")
@@ -113,6 +122,15 @@ def query_audit(params):
 
     Supports eventType, startDate, endDate, and limit query params.
     """
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     event_type = params.get("eventType")
     limit = int(params.get("limit", "50"))
     start_date = params.get("startDate")

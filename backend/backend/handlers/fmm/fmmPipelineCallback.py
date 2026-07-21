@@ -56,6 +56,10 @@ def lambda_handler(event, context):
         "input": "{...}",
         "output": "{...}"
     }
+
+    The execution input includes standard VAMS fields (bucketAsset, assetId,
+    databaseId) plus FMM context (evaluationId, fmmContext). The compliance
+    output JSON is written by the pipeline to the metadata output path.
     """
     try:
         detail = event.get("detail", {})
@@ -95,8 +99,8 @@ def lambda_handler(event, context):
         )
 
         pipeline_results = _process_pipeline_results(
-            execution_status, execution_output, pending_rules,
-            database_id, asset_id,
+            execution_status, execution_input, execution_output,
+            pending_rules, database_id, asset_id,
         )
 
         all_results = [
@@ -205,6 +209,7 @@ def lambda_handler(event, context):
 
 def _process_pipeline_results(
     execution_status: str,
+    execution_input: Dict[str, Any],
     execution_output: Dict[str, Any],
     pending_rules: List[Dict[str, Any]],
     database_id: str,
@@ -227,7 +232,7 @@ def _process_pipeline_results(
         return results
 
     compliance_output = _read_compliance_output(
-        execution_output, database_id, asset_id
+        execution_input, execution_output, database_id, asset_id
     )
 
     if compliance_output is None:
@@ -308,36 +313,86 @@ def _process_pipeline_results(
 
 
 def _read_compliance_output(
+    execution_input: Dict[str, Any],
     execution_output: Dict[str, Any],
     database_id: str,
     asset_id: str,
 ) -> Optional[Dict[str, Any]]:
-    """Read compliance output from S3 pipeline metadata path."""
-    metadata_path = execution_output.get("outputS3AssetMetadataPath")
-    if not metadata_path:
-        return None
+    """Read compliance-output.json from the pipeline's metadata output path.
 
-    s3_key = f"{metadata_path}{asset_id}/compliance-output.json"
-    if s3_key.startswith("s3://"):
-        parts = s3_key.replace("s3://", "").split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-    else:
-        bucket = asset_bucket_name
-        key = s3_key
+    Strategy:
+    1. Try the execution output's process-output body which contains
+       metadataPathKey (the relative path within the asset bucket).
+    2. Fall back to listing objects under the asset prefix looking for
+       compliance-output.json from this execution.
+    """
+    bucket = execution_input.get("bucketAsset", asset_bucket_name)
 
+    metadata_path_key = _extract_metadata_path_key(execution_output)
+    if metadata_path_key:
+        key = f"{metadata_path_key}compliance-output.json"
+        output = _try_read_s3_json(bucket, key)
+        if output and output.get("complianceOutput") is True:
+            return output
+
+    evaluation_id = execution_input.get("evaluationId", "")
+    if evaluation_id:
+        key = f"compliance/{database_id}/{asset_id}/{evaluation_id}/compliance-output.json"
+        output = _try_read_s3_json(bucket, key)
+        if output and output.get("complianceOutput") is True:
+            return output
+
+    return None
+
+
+def _extract_metadata_path_key(execution_output: Dict[str, Any]) -> Optional[str]:
+    """Extract the metadata path key from the workflow execution output.
+
+    The process-output Lambda (last step in workflow) receives metadataPathKey
+    in its body. The execution output may have nested state output structures.
+    """
+    if isinstance(execution_output, dict):
+        body = execution_output.get("body", {})
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except (json.JSONDecodeError, TypeError):
+                body = {}
+        if isinstance(body, dict):
+            path_key = body.get("metadataPathKey")
+            if path_key:
+                return path_key
+
+        for key, val in execution_output.items():
+            if key.startswith("process-outputs") and isinstance(val, dict):
+                nested_output = val.get("output", val)
+                if isinstance(nested_output, dict):
+                    nested_body = nested_output.get("body", {})
+                    if isinstance(nested_body, str):
+                        try:
+                            nested_body = json.loads(nested_body)
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                    if isinstance(nested_body, dict):
+                        path_key = nested_body.get("metadataPathKey")
+                        if path_key:
+                            return path_key
+    return None
+
+
+def _try_read_s3_json(
+    bucket: str, key: str
+) -> Optional[Dict[str, Any]]:
+    """Attempt to read and parse a JSON file from S3."""
     try:
         response = s3_client.get_object(Bucket=bucket, Key=key)
         body = response["Body"].read().decode("utf-8")
-        output = json.loads(body)
-        if output.get("complianceOutput") is True:
-            return output
-        return None
+        return json.loads(body)
     except s3_client.exceptions.NoSuchKey:
-        logger.info(f"No compliance output at s3://{bucket}/{key}")
+        logger.info(f"No object at s3://{bucket}/{key}")
         return None
     except Exception as e:
-        logger.warning(f"Failed reading compliance output: {e}")
+        logger.warning(f"Failed reading s3://{bucket}/{key}: {e}")
         return None
 
 

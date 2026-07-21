@@ -74,6 +74,15 @@ def lambda_handler(event, context):
         if "statusCode" in claims_and_roles:
             return claims_and_roles
 
+        method_allowed_on_api = False
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            return authorization_error()
+
         if http_method == "PUT" and asset_id:
             body = json.loads(event.get("body", "{}"))
             response = bind_schema_to_asset(database_id, asset_id, body)
@@ -109,6 +118,15 @@ def bind_schema_to_database(database_id, body):
     schema_name = body.get("schemaName")
     if not schema_name:
         return validation_error(body={"message": "schemaName is required"})
+
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": schema_name,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "PUT"):
+            return authorization_error()
 
     if not schema_exists(schema_name):
         return validation_error(
@@ -157,6 +175,15 @@ def unbind_schema_from_database(database_id):
     """Remove the compliance schema binding from a database."""
     if not database_id:
         return validation_error(body={"message": "databaseId is required"})
+
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "DELETE"):
+            return authorization_error()
 
     db_response = database_table.get_item(Key={"databaseId": database_id})
     if "Item" not in db_response:
@@ -208,6 +235,15 @@ def bind_schema_to_asset(database_id, asset_id, body):
     schema_name = body.get("schemaName")
     if not schema_name:
         return validation_error(body={"message": "schemaName is required"})
+
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": schema_name,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "PUT"):
+            return authorization_error()
 
     if not schema_exists(schema_name):
         return validation_error(
@@ -267,6 +303,15 @@ def unbind_schema_from_asset(database_id, asset_id):
         return validation_error(
             body={"message": "databaseId and assetId are required"}
         )
+
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "DELETE"):
+            return authorization_error()
 
     existing = compliance_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}
@@ -329,6 +374,15 @@ def get_bindings(database_id):
     """Get the schema binding for a database and any asset overrides."""
     if not database_id:
         return validation_error(body={"message": "databaseId is required"})
+
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
 
     db_response = database_table.get_item(Key={"databaseId": database_id})
     db_item = db_response.get("Item")

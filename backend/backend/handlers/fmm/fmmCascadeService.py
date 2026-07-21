@@ -105,6 +105,15 @@ def create_cascade(body):
     if not triggered_by_db or not triggered_by_asset:
         return validation_error(body={"message": "databaseId and assetId are required"})
 
+    obj = {
+        "object__type": "complianceCascade",
+        "cascadeId": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
+
     actor = claims_and_roles.get("sub", "system")
     now = datetime.now(timezone.utc)
     cascade_id = str(uuid.uuid4())
@@ -146,6 +155,15 @@ def approve_cascade(cascade_id, body):
     """Approve a pending cascade and begin execution."""
     if not cascade_id:
         return validation_error(body={"message": "cascadeId is required"})
+
+    obj = {
+        "object__type": "complianceCascade",
+        "cascadeId": cascade_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
 
     actor = claims_and_roles.get("sub", "system")
     reason = body.get("reason", "approved")
@@ -203,6 +221,15 @@ def reject_cascade(cascade_id, body):
     if not cascade_id:
         return validation_error(body={"message": "cascadeId is required"})
 
+    obj = {
+        "object__type": "complianceCascade",
+        "cascadeId": cascade_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
+
     actor = claims_and_roles.get("sub", "system")
     reason = body.get("reason", "rejected")
     now = datetime.now(timezone.utc).isoformat()
@@ -230,6 +257,15 @@ def reject_cascade(cascade_id, body):
 
 def get_cascade(cascade_id):
     """Get cascade status."""
+    obj = {
+        "object__type": "complianceCascade",
+        "cascadeId": cascade_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     response = cascade_table.get_item(Key={"cascadeId": cascade_id})
     item = response.get("Item")
     if not item:
@@ -243,6 +279,15 @@ def get_cascade(cascade_id):
 
 def list_pending_cascades():
     """List cascades awaiting approval."""
+    obj = {
+        "object__type": "complianceCascade",
+        "cascadeId": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     response = cascade_table.query(
         IndexName="StateIndex",
         KeyConditionExpression=Key("state").eq("pending_approval"),

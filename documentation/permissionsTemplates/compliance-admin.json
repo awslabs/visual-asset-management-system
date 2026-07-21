@@ -1,0 +1,107 @@
+{
+    "metadata": {
+        "name": "Compliance Admin",
+        "description": "Administrative access for FMM compliance operations. Can manage compliance schemas, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Scoped to a specific database.",
+        "version": "1.0"
+    },
+    "variables": [
+        {
+            "name": "DATABASE_ID",
+            "required": true,
+            "description": "The databaseId to scope compliance permissions to"
+        },
+        { "name": "ROLE_NAME", "required": true, "description": "The role name to create" }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-compliance-web-routes",
+            "description": "Allow navigation to compliance pages",
+            "objectType": "web",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
+                { "field": "route__path", "operator": "starts_with", "value": "/databases" }
+            ],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-api-routes",
+            "description": "Allow API access to compliance endpoints",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                { "field": "route__path", "operator": "starts_with", "value": "/compliance" },
+                { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" }
+            ],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas",
+            "description": "Allow full management of compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "PUT", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations",
+            "description": "Allow viewing and triggering compliance evaluations in {{DATABASE_ID}}",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades",
+            "description": "Allow viewing, approving, and rejecting cascade operations",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-assets-readonly",
+            "description": "Allow read access to assets in {{DATABASE_ID}} for compliance viewing",
+            "objectType": "asset",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-database-readonly",
+            "description": "Allow read access to the {{DATABASE_ID}} database entity",
+            "objectType": "database",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" }
+            ]
+        }
+    ]
+}

@@ -110,6 +110,10 @@ export function buildFMMEvaluateService(
                 storageResources.dynamo.fmmCascadeStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME:
                 storageResources.dynamo.databaseStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSETAUXILIARY_STORAGE_BUCKET:
+                storageResources.s3.assetAuxiliaryBucket.bucketName,
         },
     });
     storageResources.dynamo.fmmSchemaStorageTable.grantReadData(fun);
@@ -124,6 +128,7 @@ export function buildFMMEvaluateService(
     storageResources.dynamo.workflowStorageTable.grantReadData(fun);
     storageResources.dynamo.fmmCascadeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["states:StartExecution"],

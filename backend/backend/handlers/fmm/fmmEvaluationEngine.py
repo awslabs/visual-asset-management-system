@@ -45,6 +45,9 @@ try:
     metadata_schema_table_name = os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"]
     asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
     workflow_table_name = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
+    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    s3_auxiliary_bucket = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -55,6 +58,8 @@ evaluation_table = dynamodb.Table(evaluation_table_name)
 audit_table = dynamodb.Table(audit_table_name)
 asset_metadata_table = dynamodb.Table(asset_metadata_table_name)
 metadata_schema_table = dynamodb.Table(metadata_schema_table_name)
+asset_table = dynamodb.Table(asset_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 asset_links_table = dynamodb.Table(asset_links_table_name)
 workflow_table = dynamodb.Table(workflow_table_name)
 
@@ -571,7 +576,22 @@ def _invoke_pipeline_rules(
     database_id: str,
     asset_id: str,
 ) -> None:
-    """Invoke Step Functions workflows for pipeline rules."""
+    """Invoke Step Functions workflows for pipeline rules.
+
+    Builds a standard VAMS workflow execution input (bucketAsset,
+    inputAssetFileKey, etc.) so the existing workflow ASL can resolve
+    its States.Format path expressions. FMM-specific context is passed
+    in the 'fmmContext' field which pipelines can read for compliance
+    output generation.
+    """
+    asset_info = _get_asset_info(database_id, asset_id)
+    if not asset_info:
+        logger.error(
+            f"Cannot invoke pipeline rules: asset {database_id}/{asset_id} "
+            "not found or missing bucket info"
+        )
+        return
+
     for rule_name, rule in pipeline_rules:
         workflow_arn = _get_workflow_arn(
             rule.pipelineRef.databaseId, rule.pipelineRef.workflowId
@@ -583,14 +603,30 @@ def _invoke_pipeline_rules(
             )
             continue
 
-        execution_input = {
+        fmm_context = {
             "evaluationId": evaluation_id,
-            "databaseId": database_id,
-            "assetId": asset_id,
             "ruleName": rule_name,
-            "pipelineRef": rule.pipelineRef.dict(),
             "checks": [c.dict() for c in rule.checks],
             "inputParameters": rule.inputParameters or {},
+        }
+
+        input_metadata = {
+            "fmmContext": fmm_context,
+        }
+
+        execution_input = {
+            "bucketAsset": asset_info["bucketName"],
+            "bucketAssetAuxiliary": s3_auxiliary_bucket,
+            "inputAssetLocationKey": asset_info["assetLocationKey"],
+            "inputAssetFileKey": asset_info["assetFileKey"],
+            "databaseId": database_id,
+            "assetId": asset_id,
+            "workflowDatabaseId": rule.pipelineRef.databaseId,
+            "workflowId": rule.pipelineRef.workflowId,
+            "inputMetadata": json.dumps(input_metadata),
+            "executingUserName": "fmm-compliance-engine",
+            "executingRequestContext": json.dumps({}),
+            "evaluationId": evaluation_id,
         }
 
         try:
@@ -606,6 +642,46 @@ def _invoke_pipeline_rules(
             logger.exception(
                 f"Failed to start SFN execution for rule '{rule_name}': {e}"
             )
+
+
+def _get_asset_info(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
+    """Look up asset bucket and file key for workflow execution."""
+    response = asset_table.query(
+        KeyConditionExpression=(
+            Key("databaseId").eq(database_id)
+            & Key("assetId").eq(asset_id)
+        ),
+        Limit=1,
+    )
+    items = response.get("Items", [])
+    if not items:
+        return None
+
+    asset = items[0]
+    asset_location = asset.get("assetLocation", {})
+    asset_file_key = asset_location.get("Key", "")
+    bucket_id = asset.get("bucketId")
+
+    if not bucket_id or not asset_file_key:
+        return None
+
+    bucket_response = s3_asset_buckets_table.query(
+        KeyConditionExpression=Key("bucketId").eq(bucket_id),
+        Limit=1,
+    )
+    bucket_items = bucket_response.get("Items", [])
+    if not bucket_items:
+        return None
+
+    bucket_name = bucket_items[0].get("bucketName")
+    if not bucket_name:
+        return None
+
+    return {
+        "bucketName": bucket_name,
+        "assetLocationKey": asset_file_key,
+        "assetFileKey": asset_file_key,
+    }
 
 
 def _get_workflow_arn(workflow_database_id: str, workflow_id: str) -> Optional[str]:

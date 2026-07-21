@@ -115,6 +115,15 @@ def evaluate_asset(database_id, asset_id, body):
     if not database_id or not asset_id:
         return validation_error(body={"message": "databaseId and assetId are required"})
 
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
+
     asset_response = asset_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}
     )
@@ -225,6 +234,15 @@ def sweep_schema(schema_name, body):
     if not schema_name:
         return validation_error(body={"message": "schemaName is required"})
 
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": schema_name,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
+
     response = compliance_table.query(
         IndexName="SchemaNameIndex",
         KeyConditionExpression=Key("schemaName").eq(schema_name),
@@ -252,6 +270,15 @@ def sweep_schema(schema_name, body):
 
 def get_evaluations(database_id, asset_id):
     """Get evaluation history for an asset."""
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     response = evaluation_table.query(
         IndexName="AssetIndex",
         KeyConditionExpression=Key("databaseId:assetId").eq(
@@ -265,6 +292,15 @@ def get_evaluations(database_id, asset_id):
 
 def get_compliance_state(database_id, asset_id):
     """Get current compliance state for an asset."""
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     response = compliance_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}
     )
@@ -305,6 +341,15 @@ def get_database_compliance_overview(database_id):
     """Get compliance overview for all assets in a database."""
     if not database_id:
         return validation_error(body={"message": "databaseId is required"})
+
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
 
     response = compliance_table.query(
         KeyConditionExpression=Key("databaseId").eq(database_id),

@@ -357,6 +357,7 @@ The asset's compliance state changes to `compliant` and the exception is recorde
 
 :::note
 Exceptions are visible in the database compliance overview. The asset will show as compliant until the next re-evaluation triggers.
+:::
 
 ---
 
@@ -421,7 +422,75 @@ The compliance audit log records every compliance action across the system.
 
 ## Permissions
 
-Compliance operations are governed by the same role-based access control system as other VAMS features. API-level authorization (Tier 1) controls which users can access compliance endpoints. To grant a role access to compliance features, include the `/compliance/*` routes in the role's API constraints.
+Compliance operations are governed by the same two-tier role-based access control system as other VAMS features. Both tiers must allow access for an operation to succeed.
+
+### Tier 1: API route access
+
+Controls which users can call compliance API endpoints. To grant access, create a constraint with object type `api` that matches `/compliance` routes:
+
+```json
+{
+    "objectType": "api",
+    "criteriaOr": [
+        { "field": "route__path", "operator": "starts_with", "value": "/compliance" }
+    ],
+    "groupPermissions": [
+        { "permission": "GET", "permissionType": "allow" },
+        { "permission": "POST", "permissionType": "allow" }
+    ]
+}
+```
+
+### Tier 2: Object-level access
+
+Controls which specific compliance resources a user can access. Three object types govern compliance operations:
+
+| Object Type | Controls | Constraint Fields | Use Case |
+| --- | --- | --- | --- |
+| `complianceSchema` | Schema CRUD, binding, sweep | `complianceSchemaName` | Restrict which schemas a user can view or manage |
+| `complianceEvaluation` | Evaluate, quarantine, audit | `databaseId`, `complianceState` | Scope evaluations and quarantine actions to specific databases |
+| `complianceCascade` | Cascade approve/reject | `cascadeId` | Control who can approve cascade propagations |
+
+### Default admin access
+
+The built-in admin role automatically receives full access (GET, PUT, POST, DELETE) to all three compliance object types with `contains .*` criteria (matches all values). No additional configuration is needed for administrators.
+
+### Permission templates
+
+VAMS includes two pre-built permission templates for compliance roles:
+
+| Template | File | Description |
+| --- | --- | --- |
+| Compliance Admin | `compliance-admin.json` | Full management access: create/update schemas, trigger evaluations, release quarantine, approve cascades. Scoped to a specific database. |
+| Compliance Readonly | `compliance-readonly.json` | View-only access: view schemas, evaluation results, quarantine list, cascade status, and audit logs. Cannot trigger evaluations or modify state. |
+
+Both templates accept `DATABASE_ID` and `ROLE_NAME` variables. Apply them via **Admin > Permissions > Constraints > Import Template** or the CLI.
+
+### Example: Database-scoped compliance admin
+
+To grant a user full compliance management for a specific database:
+
+1. Apply the `compliance-admin` template with `DATABASE_ID` set to your target database.
+2. Assign the resulting role to the user.
+
+The user can manage schemas globally but can only trigger evaluations and view compliance state within the scoped database.
+
+### Example: Read-only compliance viewer
+
+To grant a user view-only compliance access:
+
+1. Apply the `compliance-readonly` template with `DATABASE_ID` set to your target database.
+2. Assign the resulting role to the user.
+
+The user can view schemas, evaluation history, quarantine status, and audit logs but cannot trigger evaluations, release quarantines, or approve cascades.
+
+:::tip[Troubleshooting 403 errors]
+If a user receives "Not Authorized" on compliance pages, verify they have both:
+1. An `api` constraint allowing `/compliance` routes (Tier 1)
+2. A `complianceSchema`, `complianceEvaluation`, or `complianceCascade` constraint matching the resource (Tier 2)
+
+Missing either tier results in a 403 response.
+:::
 
 ---
 

@@ -202,6 +202,8 @@ def list_schemas():
         response = schema_table.scan()
         items = response.get("Items", [])
 
+        casbin_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
+
         schemas_by_name = {}
         for item in items:
             name = item["schemaName"]
@@ -209,7 +211,17 @@ def list_schemas():
             if name not in schemas_by_name or version > schemas_by_name[name]["version"]:
                 schemas_by_name[name] = normalize_schema_item(item)
 
-        return success(body={"schemas": list(schemas_by_name.values())})
+        filtered = []
+        for schema in schemas_by_name.values():
+            obj = {
+                "object__type": "complianceSchema",
+                "complianceSchemaName": schema.get("schemaName", ""),
+            }
+            if casbin_enforcer and not casbin_enforcer.enforce(obj, "GET"):
+                continue
+            filtered.append(schema)
+
+        return success(body={"schemas": filtered})
     except Exception as e:
         logger.exception("Error listing schemas")
         return internal_error(body={"message": str(e)})
@@ -230,6 +242,16 @@ def get_schema(schema_name):
                 "body": json.dumps({"message": f"Schema '{schema_name}' not found"}),
                 "headers": {"Content-Type": "application/json"},
             }
+
+        obj = {
+            "object__type": "complianceSchema",
+            "complianceSchemaName": schema_name,
+        }
+        if claims_and_roles.get("tokens"):
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(obj, "GET"):
+                return authorization_error()
+
         return success(body=normalize_schema_item(items[0]))
     except Exception as e:
         logger.exception("Error getting schema")
@@ -241,6 +263,15 @@ def register_schema(body):
     schema_name = body.get("schemaName") or body.get("name")
     if not schema_name:
         return validation_error(body={"message": "Missing required field: schemaName"})
+
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": schema_name,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
 
     schema_body = body.get("schemaBody") or body.get("rules")
     if not schema_body:
@@ -294,6 +325,15 @@ def update_schema(schema_name, body):
     System schemas (isSystem=True) cannot be modified unless the caller
     registered them (i.e., is the system actor).
     """
+    obj = {
+        "object__type": "complianceSchema",
+        "complianceSchemaName": schema_name,
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "PUT"):
+            return authorization_error()
+
     existing = schema_table.query(
         KeyConditionExpression=Key("schemaName").eq(schema_name),
         ScanIndexForward=False,

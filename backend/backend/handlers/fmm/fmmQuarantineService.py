@@ -93,6 +93,16 @@ def lambda_handler(event, context):
 
 def list_quarantined():
     """List all quarantined assets."""
+    obj = {
+        "object__type": "complianceEvaluation",
+        "complianceState": "quarantined",
+        "databaseId": "",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "GET"):
+            return authorization_error()
+
     response = compliance_table.scan(
         FilterExpression=Attr("complianceState").eq("quarantined"),
     )
@@ -117,6 +127,16 @@ def release_quarantine(database_id, asset_id, body):
     """Release an asset from quarantine."""
     if not database_id or not asset_id:
         return validation_error(body={"message": "databaseId and assetId are required"})
+
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+        "complianceState": "quarantined",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
 
     actor = claims_and_roles.get("sub", "system")
     reason = body.get("reason", "released via API")
@@ -168,6 +188,16 @@ def grant_exception(database_id, asset_id, body):
     """Grant an exception for a quarantined asset."""
     if not database_id or not asset_id:
         return validation_error(body={"message": "databaseId and assetId are required"})
+
+    obj = {
+        "object__type": "complianceEvaluation",
+        "databaseId": database_id,
+        "complianceState": "quarantined",
+    }
+    if claims_and_roles.get("tokens"):
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(obj, "POST"):
+            return authorization_error()
 
     reason = body.get("reason")
     if not reason:

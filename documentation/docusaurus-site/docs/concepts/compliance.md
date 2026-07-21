@@ -152,23 +152,122 @@ The final compliance state is determined by the highest-severity failure:
 3. Only `inform`-level failures → asset remains `compliant` (failures logged in audit)
 4. All rules pass → asset is `compliant`
 
+#### Pipeline rule execution (async)
+
+Pipeline rules invoke VAMS workflows (AWS Step Functions) to perform complex validation that cannot be done synchronously — for example, geometric accuracy checks, file format validation, or AI-based quality assessment. The execution is fully asynchronous:
+
+```
+Evaluation Engine                   Step Functions                    EventBridge
+     |                                    |                                |
+     |-- start_execution(input) --------->|                                |
+     |   (evaluationId in input)          |                                |
+     |                                    |-- runs workflow steps --------->|
+     |   evaluation status:               |   (containers, lambdas)        |
+     |   "pending_pipeline"               |                                |
+     |                                    |-- execution complete ---------> |
+     |                                    |                                |
+     |<----------------------------------------- EventBridge rule triggers--|
+     |   fmmPipelineCallback                                               |
+     |   reads compliance-output.json                                      |
+     |   compares measurements vs tolerances                               |
+     |   merges with metadata/relationship results                         |
+     |   determines final verdict                                          |
+```
+
+**Pipeline rule definition:**
+
+```json
+{
+    "ruleType": "pipeline",
+    "enforcement": "quarantine",
+    "pipelineRef": {
+        "databaseId": "GLOBAL",
+        "workflowId": "coord-validate-workflow"
+    },
+    "checks": [
+        {
+            "name": "residual_check",
+            "outputField": "residual_error_mm",
+            "tolerance": { "operator": "lte", "value": 1.0 }
+        }
+    ],
+    "inputParameters": {
+        "referenceFrame": "EPSG:27700"
+    }
+}
+```
+
+**Key fields:**
+
+| Field | Description |
+| --- | --- |
+| `pipelineRef.databaseId` | Database containing the workflow (use `GLOBAL` for cross-database workflows) |
+| `pipelineRef.workflowId` | The VAMS workflow ID to execute |
+| `checks[].name` | Human-readable check name |
+| `checks[].outputField` | Key in the pipeline's output `measurements` object to evaluate |
+| `checks[].tolerance` | Comparison criteria (operator + value/min/max) |
+| `inputParameters` | Optional parameters passed to the workflow as `fmmContext.inputParameters` |
+
+**Workflow input context:**
+
+The evaluation engine passes an `fmmContext` object in the workflow's `inputMetadata` field:
+
+```json
+{
+    "fmmContext": {
+        "evaluationId": "eval-abc123",
+        "ruleName": "coord-accuracy",
+        "checks": [
+            {
+                "name": "residual_check",
+                "outputField": "residual_error_mm",
+                "tolerance": { "operator": "lte", "value": 1.0 }
+            }
+        ],
+        "inputParameters": { "referenceFrame": "EPSG:27700" }
+    }
+}
+```
+
+Pipelines can read `inputParameters` to configure their processing (for example, which reference frame to compare against). The `evaluationId` is used by the callback to correlate results.
+
 #### Pipeline compliance output contract
 
-Pipelines referenced by `pipeline` rules must produce a structured output at the configured S3 path:
+When the workflow completes successfully, the pipeline container must write a `compliance-output.json` file to the metadata output path in Amazon S3. The file structure:
 
 ```json
 {
     "complianceOutput": true,
     "measurements": {
-        "field_name": 0.45,
-        "another_field": 0.8
+        "residual_error_mm": 0.45,
+        "coverage_percent": 98.2
     },
     "status": "success",
     "errors": []
 }
 ```
 
-The `measurements` object keys correspond to the `outputField` values defined in pipeline rule checks. The evaluation engine compares each measurement against its configured tolerance.
+| Field | Type | Description |
+| --- | --- | --- |
+| `complianceOutput` | boolean | Must be `true` — identifies this as a compliance output file |
+| `measurements` | object | Key-value pairs where keys match `checks[].outputField` names |
+| `status` | string | `"success"` or `"error"` |
+| `errors` | array | Error messages if `status` is `"error"` |
+
+The `measurements` keys must match the `outputField` values defined in the pipeline rule's `checks` array. The evaluation callback reads each measurement and compares it against the configured tolerance.
+
+**Output file location fallback:** The callback first checks the Step Functions execution output for a metadata path key. If not found, it falls back to a well-known path: `compliance/\{databaseId\}/\{assetId\}/\{evaluationId\}/compliance-output.json` in the asset auxiliary bucket.
+
+#### Pipeline execution failure handling
+
+If the Step Functions execution fails, times out, or is aborted:
+
+- All pending pipeline rule checks are marked as failed
+- The failure reason includes the execution status (FAILED, TIMED_OUT, ABORTED)
+- The evaluation proceeds to verdict determination using the failed results
+- If any failed pipeline rule has `quarantine` enforcement, the asset is quarantined
+
+If the pipeline succeeds but no `compliance-output.json` is found, or the output has `status: "error"`, all checks for that rule are also marked as failed.
 
 #### Tolerance operators
 
@@ -271,6 +370,47 @@ All FMM endpoints are under the `/compliance` path prefix and require authentica
 | ------ | ----------------------------------------------- | -------------------- |
 | GET    | `/compliance/audit/\{databaseId\}/\{assetId\}`      | Get asset audit history |
 | GET    | `/compliance/audit`                             | Query audit log      |
+
+## Authorization model
+
+FMM compliance operations are protected by the same two-tier Casbin ABAC/RBAC system used across VAMS. Both tiers must allow access for any operation to succeed.
+
+### Tier 1: API route access
+
+All compliance endpoints are under the `/compliance` path prefix. A user's `api` object type constraint must match these routes for the request to proceed past the API Gateway authorizer.
+
+### Tier 2: Object-level access
+
+Three dedicated object types control access to compliance resources:
+
+| Object Type | Constraint Fields | Controls |
+| --- | --- | --- |
+| `complianceSchema` | `complianceSchemaName` | Schema CRUD, schema binding (bind/unbind to databases and assets), and sweep operations |
+| `complianceEvaluation` | `databaseId`, `complianceState` | Evaluation triggers, compliance state queries, quarantine list/release/exception, and audit log access |
+| `complianceCascade` | `cascadeId` | Cascade creation, approval, rejection, and status queries |
+
+### Default admin constraints
+
+The built-in admin role is seeded with constraints for all three compliance object types at deploy time. Each constraint uses `contains .*` criteria (matches all values) with full GET/PUT/POST/DELETE permissions. No additional configuration is required for administrators to access compliance features.
+
+### Scoped access patterns
+
+Non-admin roles can be scoped to specific resources using constraint criteria:
+
+- **Database-scoped evaluations**: Set `databaseId equals my-database` on a `complianceEvaluation` constraint to restrict evaluation access to a single database.
+- **Schema-scoped management**: Set `complianceSchemaName equals my-schema` on a `complianceSchema` constraint to restrict schema management to specific schemas.
+- **State-scoped quarantine**: Set `complianceState equals quarantined` on a `complianceEvaluation` constraint to grant access only to quarantined asset operations.
+
+### Permission templates
+
+Two pre-built templates simplify compliance role setup:
+
+| Template | Access Level | Scope |
+| --- | --- | --- |
+| `compliance-admin.json` | Full CRUD on schemas; POST+GET on evaluations and cascades; read-only assets/databases | Scoped to `DATABASE_ID` variable for evaluations |
+| `compliance-readonly.json` | GET-only on schemas, evaluations, cascades, and audit | Scoped to `DATABASE_ID` variable for evaluations |
+
+For detailed permission configuration instructions, see [User Guide: Compliance > Permissions](../user-guide/compliance.md#permissions).
 
 ## System pipelines and workflows
 

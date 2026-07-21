@@ -1451,6 +1451,330 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "userRole",
                 },
             },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: "initial_admin_allow_all_complianceschemas",
+                },
+                constraintId: {
+                    S: "initial_admin_allow_all_complianceschemas",
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "complianceSchemaName",
+                                },
+                                id: {
+                                    S: "admin_all_complianceschemas",
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET/PUT/POST/DELETE on all compliance schemas for admin",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-get-all-complianceschemas",
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-put-all-complianceschemas",
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-post-all-complianceschemas",
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-delete-all-complianceschemas",
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: "admin-allow-all-complianceschemas",
+                },
+                objectType: {
+                    S: "complianceSchema",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: "initial_admin_allow_all_complianceevaluations",
+                },
+                constraintId: {
+                    S: "initial_admin_allow_all_complianceevaluations",
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "databaseId",
+                                },
+                                id: {
+                                    S: "admin_all_complianceevaluations",
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET/PUT/POST/DELETE on all compliance evaluations for admin",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-get-all-complianceevaluations",
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-put-all-complianceevaluations",
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-post-all-complianceevaluations",
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-delete-all-complianceevaluations",
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: "admin-allow-all-complianceevaluations",
+                },
+                objectType: {
+                    S: "complianceEvaluation",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: "initial_admin_allow_all_compliancecascades",
+                },
+                constraintId: {
+                    S: "initial_admin_allow_all_compliancecascades",
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "cascadeId",
+                                },
+                                id: {
+                                    S: "admin_all_compliancecascades",
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET/PUT/POST/DELETE on all compliance cascades for admin",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-get-all-compliancecascades",
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-put-all-compliancecascades",
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-post-all-compliancecascades",
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-delete-all-compliancecascades",
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: "admin-allow-all-compliancecascades",
+                },
+                objectType: {
+                    S: "complianceCascade",
+                },
+            },
         ];
 
         let i = 0;

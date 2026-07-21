@@ -21,6 +21,8 @@ os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "test-metadata-schema-tabl
 os.environ["PIPELINE_STORAGE_TABLE_NAME"] = "test-pipeline-table"
 os.environ["WORKFLOW_STORAGE_TABLE_NAME"] = "test-workflow-table"
 os.environ["S3_ASSET_STORAGE_BUCKET"] = "test-asset-bucket"
+os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"] = "test-s3-asset-buckets-table"
+os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"] = "test-auxiliary-bucket"
 
 # ---------------------------------------------------------------------------
 # Build a real module hierarchy for backend.backend.handlers.fmm so that
@@ -222,7 +224,10 @@ _fmm_handler_names = [
     "fmmComplianceTrigger",
     "fmmCascadeService",
     "fmmSchemaService",
+    "fmmSchemaBindingService",
     "fmmEvaluateService",
+    "fmmEvaluationEngine",
+    "fmmPipelineCallback",
     "fmmQuarantineService",
 ]
 for _name in _fmm_handler_names:
@@ -234,6 +239,7 @@ def mock_casbin_enforcer():
     """Auto-mock CasbinEnforcer to always allow API access in FMM tests."""
     mock_enforcer_instance = MagicMock()
     mock_enforcer_instance.enforceAPI.return_value = True
+    mock_enforcer_instance.enforce.return_value = True
     mock_enforcer_class = MagicMock(return_value=mock_enforcer_instance)
 
     patch_targets = [
@@ -242,6 +248,7 @@ def mock_casbin_enforcer():
         "backend.backend.handlers.fmm.fmmQuarantineService.CasbinEnforcer",
         "backend.backend.handlers.fmm.fmmCascadeService.CasbinEnforcer",
         "backend.backend.handlers.fmm.fmmAuditService.CasbinEnforcer",
+        "backend.backend.handlers.fmm.fmmSchemaBindingService.CasbinEnforcer",
     ]
 
     active_patches = []
