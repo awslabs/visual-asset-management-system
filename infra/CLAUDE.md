@@ -32,13 +32,13 @@ infra/
     config.json                 # Active deployment configuration
     config.template.{commercial,govcloud,eusovereign}.json
     saml-config.ts              # SAML provider settings
-    csp/ docker/ policy/        # CSP additional config, Docker build, S3 bucket + IAM role policy JSON
+    csp/ docker/ policy/        # CSP additional config, Docker build, S3 bucket + IAM role + WAF rule policy (wafPolicyConfig.json) JSON
   gen/genEndpoints.ts           # Endpoint generation utility
   lib/
     core-stack.ts               # CoreVAMSStack -- root stack orchestrator
-    cf-waf-stack.ts             # WAF (regional ACL for API GW/ALB; CLOUDFRONT ACL in us-east-1 when CloudFront on)
+    cf-waf-stack.ts             # WAF (regional ACL for API GW/ALB; CLOUDFRONT ACL in us-east-1 when CloudFront on); rules built from config/policy/wafPolicyConfig.json
     aspects/                    # iam-role-transform.aspect.ts, log-retention.aspect.ts (1-year retention)
-    constructs/wafv2-basic-construct.ts
+    constructs/wafv2-basic-construct.ts  # Builds the WAF Web ACL from wafPolicyConfig.json: managed rule groups (block or count-only per `block`) + per-rule `ruleActionOverrides` (e.g. SizeRestrictions_BODY -> count) + rate-based rules (FORWARDED_IP aggregation + `forwardedIPConfig`, and a 429 custom-response body); count-only Common Rule Set fallback when no policy supplied
     helper/
       const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso, aws-eusc)
       iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring
@@ -55,7 +55,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~1800 lines: DynamoDB, S3, SNS, SQS, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # Publishes 57 SSM String parameters (52 resource names + 5 legacy)
+        resourceNamesBuilder-nestedStack.ts  # Publishes 63 SSM String parameters (58 resource names + 5 legacy)
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
       auth/
         authBuilder-nestedStack.ts       # Cognito user pool, identity pool, SAML, external OAuth
@@ -102,7 +102,7 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 57 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 63 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)
   |           +-- ApiGatewayV2Amplify (API Gateway + authorizer)
   |                 +-- ApiBuilder (primary API routes; includes pipeline + workflow)
@@ -155,6 +155,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.authProvider`: useCognito (enabled, useSaml, useUserPasswordAuthFlow), useExternalOAuthIdp, authorizerOptions.allowedIpRanges
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE)
 -   `app.govCloud` (enabled, il6Compliant); `app.iamRoleConfig` (useCustomBootstrapRoles, useCustomVamsStackRoles — mappings in `config/policy/iamRoleConfig.json`); `app.webUi` (optionalBannerHtmlMessage, allowUnsafeEvalFeatures)
+-   `app.useWaf` (boolean): when true, the Web ACL rules load from `config/policy/wafPolicyConfig.json` — `managedRuleGroups` (block or count-only per `block`, plus optional per-rule `ruleActionOverrides` such as `SizeRestrictions_BODY -> count` so large upload bodies up to the API Gateway REST 10 MB limit are not blocked) and `rateBasedRules` (per-entry `limit`, `aggregateKeyType` `IP`/`FORWARDED_IP` with optional `forwardedIPConfig`, and `blockResponseCode` default 429). `getConfig()` loads the file into `config.wafPolicyJSON` (undefined = legacy count-only Common Rule Set). Not part of `config.json`/ConfigPublic beyond the boolean, so it is outside ConfigBuilder + the config templates.
 
 `Config` extends `ConfigPublic` internally with `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `iamRoleCustomizationJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, and SSM parameter paths.
 
@@ -273,6 +274,10 @@ Partition(): string  // Returns current partition
 
 **Content Security Policy.** `generateContentSecurityPolicy()` in `security.ts` builds CSP headers: base sources (self, blob, data, API URL, S3 endpoint); conditional sources (Cognito IDP/Identity, Location Service, unsafe-eval); extensible via `config/csp/cspAdditionalConfig.json`.
 
+**WAF rule policy.** When `config.app.useWaf` is true, `Wafv2BasicConstruct` (`constructs/wafv2-basic-construct.ts`) builds the Web ACL rules from `config/policy/wafPolicyConfig.json` via `buildRulesFromPolicy()`: managed rule groups (`overrideAction` count vs none per `block`), optional per-rule `ruleActionOverrides` mapped to `managedRuleGroupStatement.ruleActionOverrides` (`actionToUse` count/block/allow), and rate-based rules. The shipped policy overrides the Common Rule Set's `SizeRestrictions_BODY` to `count` — it is the only Common Rule Set rule that blocks on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking (the remaining body-inspecting rules use `oversizeHandling: CONTINUE`, matching on attack signatures, not size). No `AssociationConfig` body-inspection override is needed for the 10 MB guarantee.
+
+**WAF rate-based rules.** Each `rateBasedRules` entry sets `limit` (per 5-min window) and `aggregateKeyType`. The shipped `VAMS-RateLimit` uses `FORWARDED_IP` (with `forwardedIPConfig.headerName` = `X-Forwarded-For`, `fallbackBehavior` = `NO_MATCH`) so it counts the real client IP behind CloudFront/ALB/NAT rather than a shared upstream address; the same policy applies to both the CloudFront-scoped and regional ACLs. Rate blocks return a `429` (via `blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`, `APPLICATION_JSON`) registered on the ACL when any rate rule exists — distinct from the `403` used for auth denials. The web `apiClient` and the VAMS CLI both treat `429` as retryable (honor `Retry-After`, back off) rather than an auth failure. Managed-group blocks keep the WAF default 403. Test: `test/wafRateLimit.test.ts`.
+
 **IAM aspects.** `IamRoleTransform` applies role name prefixes and permission boundaries (from `cdk.json` "aws" environment settings). `LogRetentionAspect` forces `RetentionDays.ONE_YEAR` on all `CfnLogGroup` resources.
 
 ---
@@ -335,7 +340,7 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 ### 4. Adding a New DynamoDB Table
 
 1. Add to `storageResources` interface + create the table in `storageResourcesBuilder()` in `storageBuilder-nestedStack.ts`
-2. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`; use `RemovalPolicy.DESTROY` (current pattern)
+2. Apply KMS encryption if `config.app.useKmsCmkEncryption.enabled`; the shared `dynamodbDefaultProps` sets `RemovalPolicy.RETAIN` (current pattern — retained tables survive teardown; all tables are auto-named so retained orphans never collide on redeploy)
 3. Add constant to `RESOURCE_PARAM_KEYS.dynamoTables` in `infra/common/resourceParamKeys.ts`
 4. Add matching `ResourceParamKey` entry to `ResourceKeys` in `backend/backend/common/resourceNames.py`
 5. Add matching constant to `ResourceParamKeys` in `infra/deploymentDataMigration/tools/ssm_resource_lookup.py`
@@ -354,7 +359,7 @@ Whenever you **add or change** an S3 bucket, DynamoDB table, or CloudWatch log g
 
 These axes are independent. **Retained + auto-named** resources (asset, auxiliary, artefacts, access logs buckets; all DynamoDB tables) survive teardown but do **not** block redeploy. **Custom/fixed-named** resources (the ALB web app bucket and its access logs bucket, named for the domain host; every `/aws/vendedlogs/...` log group) **must** be flagged so operators delete any orphaned copy before redeploying.
 
-**SSM String parameters** (57 resource-name parameters published by ResourceNamesBuilder, including the 11 workflow-execution V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (63 resource-name parameters published by ResourceNamesBuilder, including the 11 workflow-execution V2 data-model tables and the 6 pipeline/workflow V2 data-model tables): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 
@@ -430,6 +435,7 @@ Note: `test/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock c
 | S3 bucket registry                | `lib/helper/s3AssetBuckets.ts`                                                               |
 | Feature flags enum                | `common/vamsAppFeatures.ts`                                                                  |
 | WAF stack                         | `lib/cf-waf-stack.ts`                                                                        |
+| WAF construct + rule policy       | `lib/constructs/wafv2-basic-construct.ts` + `config/policy/wafPolicyConfig.json`             |
 | Aspects (IAM role, log retention) | `lib/aspects/{iam-role-transform,log-retention}.aspect.ts`                                   |
 | Pipeline orchestrator             | `lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`                                  |
 | Static web hosting                | `lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`                              |

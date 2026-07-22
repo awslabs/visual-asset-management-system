@@ -54,6 +54,27 @@ async function parseErrorResponse(response: Response): Promise<ApiError> {
     return new ApiError(errorMessage, response.status, body);
 }
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds, clamped to a
+ * sane range. Defaults to 2s when absent/unparseable so a single 429 retries promptly.
+ */
+function parseRetryAfterMs(headerValue: string | null): number {
+    const DEFAULT_MS = 2000;
+    const MAX_MS = 30000;
+    if (!headerValue) return DEFAULT_MS;
+    const seconds = Number(headerValue);
+    if (Number.isFinite(seconds)) {
+        return Math.min(Math.max(seconds * 1000, 0), MAX_MS);
+    }
+    const dateMs = Date.parse(headerValue);
+    if (Number.isFinite(dateMs)) {
+        return Math.min(Math.max(dateMs - Date.now(), 0), MAX_MS);
+    }
+    return DEFAULT_MS;
+}
+
 class ApiClient {
     private getBaseUrl(): string {
         return localStorage.getItem("api_path") || "/";
@@ -118,6 +139,17 @@ class ApiClient {
 
         const response = await fetch(url, init);
         if (!response.ok) {
+            // 429 = WAF/API-Gateway rate limiting. This is NOT an auth failure — never touch
+            // the session. Retry once after the server's Retry-After (or a short default),
+            // then surface a clear, retryable error so the UI can tell the user to slow down.
+            if (response.status === 429) {
+                if (!retried) {
+                    const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+                    await delay(retryAfterMs);
+                    return this.request(method, path, options, true);
+                }
+                throw await parseErrorResponse(response);
+            }
             if (response.status === 401 || response.status === 403) {
                 const alive = await ensureValidSession();
                 if (!alive) {

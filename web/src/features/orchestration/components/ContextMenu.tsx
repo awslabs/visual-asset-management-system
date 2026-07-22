@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import * as RadixContextMenu from "@radix-ui/react-context-menu";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 
 export interface ContextMenuItem {
     label: string;
@@ -19,33 +19,41 @@ interface ContextMenuProps {
     trigger: React.ReactNode;
 }
 
+/**
+ * Kebab action menu: the trigger control opens the menu on click. Backed by Radix
+ * DropdownMenu so the visible ⋮/⋯ affordance behaves like a normal button.
+ */
 const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
     const visibleItems = items.filter((item) => !item.hidden);
 
     return (
-        <RadixContextMenu.Root>
-            <RadixContextMenu.Trigger asChild>{trigger}</RadixContextMenu.Trigger>
-            <RadixContextMenu.Portal>
-                <RadixContextMenu.Content className="min-w-[200px] bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 p-1 z-50">
+        <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                    align="end"
+                    sideOffset={4}
+                    className="min-w-[200px] bg-surface-container rounded-md shadow-lg border border-border-default p-1 z-50"
+                >
                     {visibleItems.map((item, idx) => (
-                        <RadixContextMenu.Item
+                        <DropdownMenu.Item
                             key={idx}
                             onSelect={item.onSelect}
                             disabled={item.disabled}
                             className={`px-3 py-2 text-sm rounded cursor-pointer outline-none ${
                                 item.disabled
-                                    ? "text-gray-400 dark:text-gray-600 cursor-not-allowed"
+                                    ? "text-text-disabled cursor-not-allowed"
                                     : item.danger
-                                      ? "text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-                                      : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                    ? "text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                    : "text-text-primary hover:bg-surface-hover"
                             }`}
                         >
                             {item.label}
-                        </RadixContextMenu.Item>
+                        </DropdownMenu.Item>
                     ))}
-                </RadixContextMenu.Content>
-            </RadixContextMenu.Portal>
-        </RadixContextMenu.Root>
+                </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+        </DropdownMenu.Root>
     );
 };
 

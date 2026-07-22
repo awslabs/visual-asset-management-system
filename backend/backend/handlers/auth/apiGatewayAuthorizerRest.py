@@ -17,12 +17,17 @@ logger = Logger()
 def _wildcard_resource(method_arn: str) -> str:
     # arn:partition:execute-api:region:acct:apiId/stage/VERB/resourcepath...
     head, _, tail = method_arn.partition(":execute-api:")
-    region_acct_api_stage = tail.split("/")
     # tail = "region:acct:apiId/stage/VERB/path..."
     prefix = tail.split("/")
     api_part = prefix[0]                      # "region:acct:apiId"
     stage = prefix[1] if len(prefix) > 1 else "*"
-    return f"{head}:execute-api:{api_part}/{stage}/*/*"
+    # A SINGLE trailing "*" after the stage — it matches the HTTP method AND the full resource path
+    # including "/" separators. A "*/*" form only matches {METHOD}/{single-segment}, so a policy
+    # cached (authorizerResultTtlInSeconds, keyed on the Authorization header) from a one-segment
+    # path like POST/uploads would NOT match a multi-segment path like POST/uploads/{id}/complete or
+    # GET/database/{db}/assets/{a}/... — API Gateway then 403s the reused-cache request without
+    # re-invoking the authorizer. The single-star wildcard covers every method + path for the API+stage.
+    return f"{head}:execute-api:{api_part}/{stage}/*"
 
 
 def _policy(principal_id: str, effect: str, resource: str, context: dict = None) -> dict:

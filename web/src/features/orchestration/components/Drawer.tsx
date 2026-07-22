@@ -15,22 +15,19 @@ interface DrawerProps {
 }
 
 const Drawer: React.FC<DrawerProps> = ({ open, onOpenChange, title, children, side = "right" }) => {
-    const sideClasses =
-        side === "left"
-            ? "left-0 top-0 h-full"
-            : "right-0 top-0 h-full";
+    const sideClasses = side === "left" ? "left-0 top-0 h-full" : "right-0 top-0 h-full";
 
     return (
         <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
             <RadixDialog.Portal>
                 <RadixDialog.Overlay className="fixed inset-0 bg-black/50 dark:bg-black/70 z-40" />
                 <RadixDialog.Content
-                    className={`fixed ${sideClasses} bg-white dark:bg-gray-900 shadow-xl w-full max-w-md overflow-auto z-50 p-6`}
+                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full max-w-md overflow-auto z-50 p-6`}
                 >
-                    <RadixDialog.Title className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                    <RadixDialog.Title className="text-xl font-semibold text-text-primary mb-4">
                         {title}
                     </RadixDialog.Title>
-                    <div className="text-gray-700 dark:text-gray-300">{children}</div>
+                    <div className="text-text-primary">{children}</div>
                     <RadixDialog.Close className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
                         <span className="text-xl">×</span>
                     </RadixDialog.Close>

@@ -596,9 +596,10 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
         stop_date = to_iso(row.get('stopDate', {}).get('S', ''))
         status = row.get('executionStatus', {}).get('S', '')
 
-        # 1) V2 main row
+        # 1) V2 main row. PK attribute is 'workflowExecutionId' (matches the WorkflowExecutionsStorageTableV2
+        # hash key + build_workflow_execution_record); SK is 'workflowDatabaseId:workflowId'.
         main_batch.append({
-            'executionId': s(execution_id),
+            'workflowExecutionId': s(execution_id),
             'workflowDatabaseId:workflowId': s(f"{workflow_database_id}:{workflow_id}"),
             'workflowId': s(workflow_id),
             'workflowDatabaseId': s(workflow_database_id),
@@ -955,6 +956,416 @@ def run_aux_preview_relocation_step(config: dict, args, base_param_prefix, profi
     return 0 if stats.get('errors', 0) == 0 else 1
 
 
+# =============================================================================
+# STEP 4: Pipeline + workflow DEFINITION migration (V1 -> V2 tables)
+# =============================================================================
+#
+# The workflowExecutions step (STEP 2) reshapes execution HISTORY. This step migrates the pipeline
+# and workflow DEFINITIONS themselves from the V1 tables (PipelineStorageTable / WorkflowStorageTable)
+# into the V2 tables (PipelineStorageTableV2 / WorkflowStorageTableV2, plus per-pipeline templates).
+#
+# Scope + safety:
+#   - ONLY user-database (non-GLOBAL) definitions are migrated. GLOBAL built-ins are (re)created by
+#     the CDK vamsSchema importer at deploy time with new consolidated ids + templates; migrating the
+#     old GLOBAL rows would clobber those freshly-registered built-ins, so GLOBAL is skipped entirely.
+#     This is the "don't-clobber-built-ins" rule.
+#   - Soft-deleted rows (databaseId ending in '#deleted') are skipped.
+#   - Idempotent: V2 rows are keyed by the same (databaseId, pipelineId/workflowId), so a re-run
+#     overwrites rather than duplicates. Migrated rows are flagged migratedRecord=true.
+#   - The V1 tables are never modified (read-only source).
+#
+# V1 -> V2 field mapping (pipeline):
+#   userProvidedResource JSON {isProvided, resourceId} + pipelineExecutionType + waitForCallback +
+#   taskTimeout  ->  executionConfig (typed per executionType). assetType/outputType/pipelineType are
+#   dropped (assetType folds into systemConfig.inputFileFilters.allow; outputType folds into a template).
+#   inputParameters (the old per-pipeline default config JSON) -> a single migrated template's configBody
+#   so an existing user pipeline keeps its default parameters as a selectable template.
+#
+# Consolidated built-in id remap: a user workflow may reference a built-in pipeline whose id was
+# consolidated in v2.6 (e.g. conversion-3d-basic-to-obj -> conversion-3d-basic). CONSOLIDATED_PIPELINE_ID_MAP
+# rewrites those references (and records which template the old id maps to) so the migrated workflow
+# still resolves. A user's OWN pipelines (non-GLOBAL) are never remapped.
+
+# Old built-in pipelineId -> (new consolidated pipelineId, template id the old id maps to). Mirrors the
+# WB7 vamsSchema consolidations. Used only to rewrite workflow specifiedPipelines references to GLOBAL
+# built-ins; user-owned pipelines pass through unchanged.
+CONSOLIDATED_PIPELINE_ID_MAP = {
+    "conversion-3d-basic-to-obj": ("conversion-3d-basic", "convert-to-obj"),
+    "conversion-3d-basic-to-stl": ("conversion-3d-basic", "convert-to-stl"),
+    "conversion-3d-basic-to-gltf": ("conversion-3d-basic", "convert-to-gltf"),
+    "conversion-3d-basic-to-glb": ("conversion-3d-basic", "convert-to-glb"),
+    "rapid-pipeline-to-glb": ("rapid-pipeline", "rapid-pipeline-to-glb"),
+    "rapid-pipeline-to-gltf": ("rapid-pipeline", "rapid-pipeline-to-gltf"),
+    "vntana-model-ops-to-usdz": ("vntana-model-ops", "model-ops-to-usdz"),
+    "vntana-model-ops-to-glb": ("vntana-model-ops", "model-ops-to-glb"),
+    "vntana-model-ops-to-gltf": ("vntana-model-ops", "model-ops-to-gltf"),
+    "3dRecon-splat-toolbox-objects": ("3dRecon-splat-toolbox", "splat-objects"),
+    "3dRecon-splat-toolbox-environments-360": ("3dRecon-splat-toolbox", "splat-environments-360"),
+}
+
+GLOBAL_DATABASE = "GLOBAL"
+_PIPELINE_SCHEMA_VERSION = 1
+_TEMPLATE_SCHEMA_VERSION = 1
+_WORKFLOW_SCHEMA_VERSION = 1
+
+
+def n(val) -> Dict:
+    """DynamoDB wire-format Number attribute from an int/str."""
+    return {'N': str(val)}
+
+
+def bool_(val) -> Dict:
+    """DynamoDB wire-format Boolean attribute."""
+    return {'BOOL': bool(val)}
+
+
+def m(val: Dict) -> Dict:
+    """DynamoDB wire-format Map attribute from a python dict of already-wired values."""
+    return {'M': val}
+
+
+def string_list(values: List[str]) -> Dict:
+    """DynamoDB wire-format List of Strings."""
+    return {'L': [s(v) for v in values]}
+
+
+def _remap_pipeline_reference(pipeline_database_id: str, pipeline_id: str) -> Tuple[str, str, str]:
+    """Rewrite a workflow's reference to a (possibly consolidated) built-in pipeline. Only GLOBAL
+    references are remapped; a user-owned pipeline passes through unchanged. Returns the effective
+    (pipelineDatabaseId, pipelineId, defaultTemplateId) — for a consolidated built-in the third element
+    is the per-format template that reproduces the pre-consolidation behavior (e.g. the old
+    conversion-3d-basic-to-obj id maps to pipeline conversion-3d-basic + template convert-to-obj), which
+    the migrated workflow ref carries so the pipeline (which now requires a template) still executes."""
+    if pipeline_database_id == GLOBAL_DATABASE and pipeline_id in CONSOLIDATED_PIPELINE_ID_MAP:
+        new_id, template_id = CONSOLIDATED_PIPELINE_ID_MAP[pipeline_id]
+        return GLOBAL_DATABASE, new_id, template_id
+    return pipeline_database_id, pipeline_id, ""
+
+
+def _v1_execution_config(row: Dict) -> Dict:
+    """Build the V2 executionConfig wire-format Map from a V1 pipeline row's loose fields
+    (pipelineExecutionType / waitForCallback / taskTimeout + the userProvidedResource JSON)."""
+    exec_type = row.get('pipelineExecutionType', {}).get('S', 'Lambda') or 'Lambda'
+    wait_for_callback = row.get('waitForCallback', {}).get('S', 'Disabled') or 'Disabled'
+    task_timeout = row.get('taskTimeout', {}).get('S', '') or ''
+
+    # userProvidedResource is a JSON string {isProvided, resourceId}; the resourceId is the Lambda
+    # function name for a Lambda pipeline. SQS/EventBridge resources are user-configured at run time.
+    resource_id = ''
+    try:
+        upr = json.loads(row.get('userProvidedResource', {}).get('S', '') or '{}')
+        resource_id = upr.get('resourceId', '') or ''
+    except (ValueError, TypeError):
+        resource_id = ''
+
+    lambda_block, sqs_block, eb_block = {}, {}, {}
+    if exec_type == 'Lambda' and resource_id:
+        lambda_block = {'resourceId': s(resource_id)}
+    elif exec_type == 'SQS' and resource_id:
+        sqs_block = {'queueUrl': s(resource_id)}
+    elif exec_type == 'EventBridge' and resource_id:
+        eb_block = {'busArn': s(resource_id)}
+
+    return m({
+        'executionType': s(exec_type),
+        'waitForCallback': s(wait_for_callback),
+        'taskTimeout': s(task_timeout),
+        'taskHeartbeatTimeout': s(row.get('taskHeartbeatTimeout', {}).get('S', '') or ''),
+        'lambda': m(lambda_block),
+        'sqs': m(sqs_block),
+        'eventBridge': m(eb_block),
+        'deadlineCloud': m({}),
+    })
+
+
+def _v1_system_config(row: Dict) -> Dict:
+    """Build the V2 systemConfig wire-format Map from a V1 pipeline row. assetType (a single '.ext'
+    or '.all') folds into inputFileFilters.allow ('.all' = allow-all, i.e. empty allow list)."""
+    asset_type = row.get('assetType', {}).get('S', '') or ''
+    allow = [] if (not asset_type or asset_type == '.all') else [asset_type]
+    return m({
+        'inputFileArity': s('one'),
+        'assetScope': m({
+            'crossAssetAllowed': bool_(False),
+            'singleAssetOnly': bool_(True),
+            'wholeAssetAllowed': bool_(False),
+            'folderAllowed': bool_(False),
+        }),
+        'metadataInputs': m({
+            'assetMetadata': bool_(True),
+            'fileMetadata': bool_(True),
+            'fileAttributes': bool_(True),
+        }),
+        'requireTemplate': bool_(False),
+        'allowCustomTemplateOverride': bool_(True),
+        'auxPreviewPipelineSuffix': s(''),
+        'inputFileFilters': m({'allow': string_list(allow), 'exclude': string_list([])}),
+    })
+
+
+def _v2_pipeline_item(row: Dict, now: str) -> Dict:
+    """Build a PipelineStorageTableV2 wire-format row from a V1 pipeline row."""
+    database_id = row.get('databaseId', {}).get('S', '')
+    pipeline_id = row.get('pipelineId', {}).get('S', '')
+    name = row.get('name', {}).get('S', '') or pipeline_id
+    description = row.get('description', {}).get('S', '') or ''
+    category = row.get('pipelineType', {}).get('S', '') or ''  # standardFile/previewFile -> category
+    enabled = row.get('enabled', {}).get('BOOL', True)
+    return {
+        'databaseId': s(database_id),
+        'pipelineId': s(pipeline_id),
+        'databaseId:category': s(f"{database_id}:{category}"),
+        'pipelineName': s(name),
+        'category': s(category),
+        'description': s(description),
+        'executionConfig': _v1_execution_config(row),
+        'systemConfig': _v1_system_config(row),
+        'enabled': bool_(enabled),
+        'archived': bool_(False),
+        'dateCreated': s(now),
+        'dateModified': s(now),
+        'createdBy': s('SYSTEM_USER'),
+        'modifiedBy': s('SYSTEM_USER'),
+        'schemaVersion': n(_PIPELINE_SCHEMA_VERSION),
+        'migratedRecord': bool_(True),
+    }
+
+
+def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
+    """Build a single migrated PipelineTemplatesStorageTable row carrying the V1 pipeline's
+    inputParameters as the template configBody, so the migrated pipeline keeps its default config as a
+    selectable template. Returns None when the V1 pipeline had no inputParameters."""
+    database_id = row.get('databaseId', {}).get('S', '')
+    pipeline_id = row.get('pipelineId', {}).get('S', '')
+    input_parameters = row.get('inputParameters', {}).get('S', '') or ''
+    if not input_parameters.strip():
+        return None
+    template_id = 'migrated-default'
+    return {
+        'pipelineDatabaseId:pipelineId': s(f"{database_id}:{pipeline_id}"),
+        'templateId': s(template_id),
+        'pipelineDatabaseId': s(database_id),
+        'pipelineId': s(pipeline_id),
+        'templateName': s('Migrated default parameters'),
+        'description': s('Default input parameters migrated from the v2.5 pipeline definition.'),
+        'configFormat': s('json'),
+        'allowCustomEdit': bool_(True),
+        'inputInstructions': s(''),
+        'bodyStorage': s('inline'),
+        'configBody': s(input_parameters),
+        'webFormJson': s(''),
+        'configBodyS3Key': s(''),
+        'configBodyHash': s(''),
+        'webFormS3Key': s(''),
+        'webFormHash': s(''),
+        'overrides': m({}),
+        'dateCreated': s(now),
+        'dateModified': s(now),
+        'createdBy': s('SYSTEM_USER'),
+        'modifiedBy': s('SYSTEM_USER'),
+        'schemaVersion': n(_TEMPLATE_SCHEMA_VERSION),
+        'migratedRecord': bool_(True),
+    }
+
+
+def _v2_workflow_item(row: Dict, now: str) -> Dict:
+    """Build a WorkflowStorageTableV2 wire-format row from a V1 workflow row, rewriting the
+    specifiedPipelines.functions list into the V2 specifiedPipelines ref list (with consolidated
+    built-in id remap)."""
+    database_id = row.get('databaseId', {}).get('S', '')
+    workflow_id = row.get('workflowId', {}).get('S', '')
+    description = row.get('description', {}).get('S', '') or ''
+
+    functions = row.get('specifiedPipelines', {}).get('M', {}).get('functions', {}).get('L', [])
+    refs = []
+    for fn in functions:
+        fm = fn.get('M', {})
+        p_id = fm.get('name', {}).get('S', '') or fm.get('pipelineId', {}).get('S', '')
+        p_db = fm.get('databaseId', {}).get('S', '') or database_id
+        eff_db, eff_id, default_template_id = _remap_pipeline_reference(p_db, p_id)
+        refs.append(m({
+            'pipelineDatabaseId': s(eff_db),
+            'pipelineId': s(eff_id),
+            'pipelineDatabaseId:pipelineId': s(f"{eff_db}:{eff_id}"),
+            'jobName': s(fm.get('name', {}).get('S', '') or ''),
+            # A consolidated built-in requires a template; carry the per-format template so the
+            # migrated workflow still executes without a human selecting one per run.
+            'defaultTemplateId': s(default_template_id),
+        }))
+
+    return {
+        'databaseId': s(database_id),
+        'workflowId': s(workflow_id),
+        'databaseId:category': s(f"{database_id}:"),
+        'workflowName': s(workflow_id),
+        'category': s(''),
+        'description': s(description),
+        'workflow_arn': s(row.get('workflow_arn', {}).get('S', '') or ''),
+        'aslSchemaVersion': s(''),
+        'jobNames': {'L': []},
+        'specifiedPipelines': {'L': refs},
+        'systemConfig': m({
+            'inputFileArity': s('one'),
+            'assetScope': m({
+                'crossAssetAllowed': bool_(False),
+                'singleAssetOnly': bool_(True),
+                'wholeAssetAllowed': bool_(False),
+                'folderAllowed': bool_(False),
+            }),
+            'metadataInputs': m({
+                'assetMetadata': bool_(True),
+                'fileMetadata': bool_(True),
+                'fileAttributes': bool_(True),
+            }),
+            'inputFileFilters': m({'allow': string_list([]), 'exclude': string_list([])}),
+            'concurrencyRestriction': s('none'),
+            'outputTarget': m({'locationType': s('asset'), 'allowOverride': bool_(True)}),
+        }),
+        'subDashboardUrl': s(''),
+        'enabled': bool_(row.get('enabled', {}).get('BOOL', True)),
+        'archived': bool_(False),
+        'dateCreated': s(now),
+        'dateModified': s(now),
+        'createdBy': s('SYSTEM_USER'),
+        'modifiedBy': s('SYSTEM_USER'),
+        'schemaVersion': n(_WORKFLOW_SCHEMA_VERSION),
+        'migratedRecord': bool_(True),
+    }
+
+
+def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, limit: int) -> Tuple[Dict, Dict]:
+    """Migrate user-database pipeline + workflow DEFINITIONS from V1 tables to V2 tables. GLOBAL
+    built-ins are skipped (re-created by the CDK importer). Returns (counts, totals)."""
+    v1_pipeline_table = cfg['pipeline_storage_table_name_v1']
+    v2_pipeline_table = cfg['pipeline_storage_table_name_v2']
+    v2_template_table = cfg['pipeline_templates_storage_table_name']
+    v1_workflow_table = cfg['workflow_storage_table_name']
+    v2_workflow_table = cfg['workflow_storage_table_name_v2']
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    counts = {'pipelines': 0, 'templates': 0, 'workflows': 0, 'skipped_global': 0,
+              'skipped_deleted': 0, 'errors': 0}
+
+    # --- Pipelines ---
+    pipeline_batch, template_batch = [], []
+    v1_pipelines = scan_all_items(dynamodb_client, v1_pipeline_table, limit)
+    for row in v1_pipelines:
+        database_id = row.get('databaseId', {}).get('S', '')
+        pipeline_id = row.get('pipelineId', {}).get('S', '')
+        if not database_id or not pipeline_id:
+            continue
+        if database_id.endswith('#deleted'):
+            counts['skipped_deleted'] += 1
+            continue
+        if database_id == GLOBAL_DATABASE:
+            counts['skipped_global'] += 1  # built-in: re-created by the CDK importer, never clobbered
+            continue
+        pipeline_batch.append(_v2_pipeline_item(row, now))
+        counts['pipelines'] += 1
+        tpl = _v2_migrated_template_item(row, now)
+        if tpl:
+            template_batch.append(tpl)
+            counts['templates'] += 1
+
+    w, e = flush_batch_write(dynamodb_client, v2_pipeline_table, pipeline_batch, dry_run)
+    counts['errors'] += e
+    if template_batch:
+        _, te = flush_batch_write(dynamodb_client, v2_template_table, template_batch, dry_run)
+        counts['errors'] += te
+
+    # --- Workflows ---
+    workflow_batch = []
+    v1_workflows = scan_all_items(dynamodb_client, v1_workflow_table, limit)
+    for row in v1_workflows:
+        database_id = row.get('databaseId', {}).get('S', '')
+        workflow_id = row.get('workflowId', {}).get('S', '')
+        if not database_id or not workflow_id:
+            continue
+        if database_id.endswith('#deleted'):
+            counts['skipped_deleted'] += 1
+            continue
+        if database_id == GLOBAL_DATABASE:
+            counts['skipped_global'] += 1
+            continue
+        workflow_batch.append(_v2_workflow_item(row, now))
+        counts['workflows'] += 1
+
+    _, we = flush_batch_write(dynamodb_client, v2_workflow_table, workflow_batch, dry_run)
+    counts['errors'] += we
+
+    return counts, {'v1_pipelines': len(v1_pipelines), 'v1_workflows': len(v1_workflows)}
+
+
+def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Run the pipeline + workflow DEFINITION migration step (V1 -> V2). Returns 0 on success."""
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
+
+    # Resolve the five table names: explicit config overrides win, else resolve from the SSM prefix.
+    try:
+        lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region) if base_param_prefix else None
+
+        def resolve(cfg_key, param_key):
+            override = config.get(cfg_key)
+            if override and not str(override).startswith('<') and not str(override).startswith('YOUR-'):
+                return override
+            if not lookup:
+                raise ValueError(
+                    f"Config '{cfg_key}' is unset and no resource_names_ssm_param_prefix is configured "
+                    "to resolve it from SSM.")
+            return lookup.resolve(param_key)
+
+        cfg = {
+            'pipeline_storage_table_name_v1': resolve(
+                'pipeline_storage_table_name_v1', ResourceParamKeys.PIPELINE_STORAGE_TABLE),
+            'pipeline_storage_table_name_v2': resolve(
+                'pipeline_storage_table_name_v2', ResourceParamKeys.PIPELINE_STORAGE_TABLE_V2),
+            'pipeline_templates_storage_table_name': resolve(
+                'pipeline_templates_storage_table_name', ResourceParamKeys.PIPELINE_TEMPLATES_STORAGE_TABLE),
+            'workflow_storage_table_name': resolve(
+                'workflow_storage_table_name', ResourceParamKeys.WORKFLOW_STORAGE_TABLE),
+            'workflow_storage_table_name_v2': resolve(
+                'workflow_storage_table_name_v2', ResourceParamKeys.WORKFLOW_STORAGE_TABLE_V2),
+        }
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the pipelineWorkflowDefinitions step: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.5 -> v2.6 PIPELINE + WORKFLOW DEFINITION MIGRATION (V1 -> V2)")
+    logger.info(f"Dry Run: {dry_run}   (GLOBAL built-ins are skipped — re-created by the CDK importer)")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts, totals = migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run, limit)
+    except Exception as e:
+        logger.error(f"pipelineWorkflowDefinitions step failed: {e}")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("PIPELINE + WORKFLOW DEFINITION MIGRATION SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  V1 pipelines scanned:     {totals['v1_pipelines']}")
+    logger.info(f"  V1 workflows scanned:     {totals['v1_workflows']}")
+    logger.info(f"  V2 pipeline rows written: {counts['pipelines']}")
+    logger.info(f"  V2 template rows written: {counts['templates']}")
+    logger.info(f"  V2 workflow rows written: {counts['workflows']}")
+    logger.info(f"  Skipped (GLOBAL built-in): {counts['skipped_global']}")
+    logger.info(f"  Skipped (soft-deleted):    {counts['skipped_deleted']}")
+    logger.info(f"  Errors:                    {counts['errors']}")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='VAMS v2.5 to v2.6 OpenSearch reindex migration (vams-*-v2 -> vams-*-v3).',
@@ -984,7 +1395,8 @@ Notes:
     parser.add_argument('--config', required=True,
                         help='Path to the migration JSON configuration file')
     parser.add_argument('--steps',
-                        choices=['reindex', 'assetHistory', 'workflowExecutions', 'auxPreviewRelocation', 'all'],
+                        choices=['reindex', 'assetHistory', 'workflowExecutions', 'auxPreviewRelocation',
+                                 'pipelineWorkflowDefinitions', 'all'],
                         default='all',
                         help="Which release migration step(s) to run (default: all)")
     parser.add_argument('--operation', choices=['assets', 'files', 'both'],
@@ -1015,6 +1427,7 @@ Notes:
     run_asset_history = args.steps in ('assetHistory', 'all')
     run_workflow_executions = args.steps in ('workflowExecutions', 'all')
     run_aux_preview_relocation = args.steps in ('auxPreviewRelocation', 'all')
+    run_pipeline_workflow_definitions = args.steps in ('pipelineWorkflowDefinitions', 'all')
 
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
@@ -1140,6 +1553,13 @@ Notes:
         logger.info("")
         logger.info("##### STEP: Auxiliary preview relocation #####")
         rc = run_aux_preview_relocation_step(config, args, base_param_prefix, profile, region, dry_run)
+        if rc != 0:
+            exit_code = rc
+
+    if run_pipeline_workflow_definitions:
+        logger.info("")
+        logger.info("##### STEP: Pipeline + workflow definition migration (V1 -> V2) #####")
+        rc = run_pipeline_workflow_definitions_step(config, args, base_param_prefix, profile, region, dry_run)
         if rc != 0:
             exit_code = rc
 

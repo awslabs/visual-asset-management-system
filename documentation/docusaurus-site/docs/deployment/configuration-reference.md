@@ -133,17 +133,19 @@ When `app.useWaf` is enabled, the rules attached to the web ACL(s) are defined b
 
 The file has two sections:
 
-| Section             | Purpose                                                                                                                                                                                                                            |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `managedRuleGroups` | AWS or third-party managed rule groups to attach. Each entry sets `name`, `vendorName`, `managedRuleGroupName`, `priority`, and `block` (`true` applies the group's own block actions; `false` runs the group in count-only mode). |
-| `rateBasedRules`    | Rate-based rules for L7 DDoS and brute-force throttling. Each entry sets `name`, `priority`, `limit` (requests per 5-minute window per aggregate key), and `aggregateKeyType` (`IP` or `FORWARDED_IP`).                            |
+| Section             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `managedRuleGroups` | AWS or third-party managed rule groups to attach. Each entry sets `name`, `vendorName`, `managedRuleGroupName`, `priority`, and `block` (`true` applies the group's own block actions; `false` runs the group in count-only mode). An optional `ruleActionOverrides` array changes individual rules inside the group without disabling the whole group: each override sets `name` (a rule within the group, for example `SizeRestrictions_BODY`) and `action` (`count`, `allow`, or `block`). This runs a single rule in `count` mode while every other rule in the group still blocks. |
+| `rateBasedRules`    | Rate-based rules for L7 DDoS and brute-force throttling. Each entry sets `name`, `priority`, `limit` (requests per 5-minute window per aggregate key), and `aggregateKeyType` (`IP` or `FORWARDED_IP`). When `aggregateKeyType` is `FORWARDED_IP`, an optional `forwardedIPConfig` sets the `headerName` (default `X-Forwarded-For`) and `fallbackBehavior` (`MATCH` or `NO_MATCH`, default `NO_MATCH`) used to read the true client IP. An optional `blockResponseCode` (default `429`) sets the HTTP status returned when the rule blocks.                                            |
 
-The shipped file applies the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a 2,000-request-per-IP rate limit. The web ACL default action remains `allow`, so only requests matching a rule are blocked or counted.
+The shipped file applies the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule limiting each client to 10,000 requests per 5-minute window. Within the AWS Common Rule Set, the `SizeRestrictions_BODY` rule is overridden to `count` (through `ruleActionOverrides`) so that large request bodies — such as the multi-part upload initialize and complete requests, up to the Amazon API Gateway REST API maximum payload of 10 MB — are observed rather than blocked, while every other rule in the Common Rule Set continues to block. This is the only Common Rule Set rule that acts on body size alone; the remaining body-inspecting rules match on attack signatures, not size, so leaving them in block mode does not affect large payloads. The web ACL default action remains `allow`, so only requests matching a rule are blocked or counted.
+
+The rate-based rule aggregates on `FORWARDED_IP` (the `X-Forwarded-For` client IP) so it counts each real end-user rather than a shared upstream address — important when VAMS is fronted by Amazon CloudFront or an Application Load Balancer, or when many users reach the deployment through a shared corporate NAT gateway or VPN egress IP. The same policy applies to both the CloudFront-scoped and regional web ACLs. VAMS is chatty per active user (the executions board polls for live status, uploads issue multi-part requests, and viewers stream large files), so the limit is set well above a single user's normal request rate while still stopping request floods. When the rule blocks, it returns HTTP `429 Too Many Requests` with a small JSON body — the correct throttle status, distinct from the `403` returned for an authorization denial — so clients can recognize throttling and retry. The VAMS web application and the VAMS CLI both treat a `429` as a transient, retryable condition: they honor the `Retry-After` header and retry with backoff rather than surfacing it as an authentication or permission failure.
 
 If the file is empty or absent, VAMS applies its baseline rule set: a single AWS Common Rule Set in count-only mode. Populate the file to enable enforced protection.
 
 :::tip[Validate before enabling block mode]
-Managed rule groups can match legitimate traffic (for example, large multipart uploads or presigned-URL flows). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives.
+Managed rule groups can match legitimate traffic (for example, large multipart uploads or presigned-URL flows). Set a rule group's `block` to `false` to observe its matches in Amazon CloudWatch first, then switch to `true` once you confirm normal VAMS traffic is not caught, adding scoped rule exclusions for any false positives. When only a single rule is the source of false positives, prefer a `ruleActionOverrides` entry that sets that rule's `action` to `count` over dropping the whole group to count mode — this is how the shipped policy handles `SizeRestrictions_BODY`, allowing multi-part upload bodies up to the Amazon API Gateway REST 10 MB limit while the rest of the Common Rule Set keeps blocking.
 :::
 
 ### KMS encryption (`app.useKmsCmkEncryption`)
@@ -547,11 +549,11 @@ Processes E57, LAS, and LAZ point cloud files for Potree web viewing. **Requires
 Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack.ts` (`PcPotreeViewerBuilderNestedStack`).
 :::
 
-| Field                                                                        | Type    | Default | Description                                                               |
-| ---------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
-| `app.pipelines.usePreviewPcPotreeViewer.enabled`                             | boolean | `false` | Enables the point cloud Potree viewer pipeline.                           |
-| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS`                | boolean | `false` | Automatically registers the pipeline during deployment.                   |
-| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads.                      |
+| Field                                                                        | Type    | Default | Description                                             |
+| ---------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------- |
+| `app.pipelines.usePreviewPcPotreeViewer.enabled`                             | boolean | `false` | Enables the point cloud Potree viewer pipeline.         |
+| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS`                | boolean | `false` | Automatically registers the pipeline during deployment. |
+| `app.pipelines.usePreviewPcPotreeViewer.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads.    |
 
 ### 3D preview thumbnail (`app.pipelines.usePreview3dThumbnail`)
 
@@ -590,10 +592,10 @@ Generates Gaussian splat reconstructions from media files. **Requires VPC.**
 Nested stack: `infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/splatToolboxBuilder-nestedStack.ts` (`SplatToolboxBuilderNestedStack`) — AWS Batch on GPU instances.
 :::
 
-| Field                                                     | Type    | Default | Description                                                               |
-| --------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
-| `app.pipelines.useSplatToolbox.enabled`                   | boolean | `false` | Enables the Gaussian splatting pipeline.                                  |
-| `app.pipelines.useSplatToolbox.autoRegisterWithVAMS`      | boolean | `true`  | Automatically registers the pipeline during deployment.                   |
+| Field                                                | Type    | Default | Description                                             |
+| ---------------------------------------------------- | ------- | ------- | ------------------------------------------------------- |
+| `app.pipelines.useSplatToolbox.enabled`              | boolean | `false` | Enables the Gaussian splatting pipeline.                |
+| `app.pipelines.useSplatToolbox.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers the pipeline during deployment. |
 
 ### Mesh to Gaussian Splat (`app.pipelines.useMesh2Splat`)
 
@@ -805,8 +807,8 @@ Support for the `DeadlineCloud` pipeline execution type: workflow task states su
 Lambda builder: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildDeadlineCloudJobCallbackFunction`) — deployed in the API builder stack with an EventBridge rule on the default bus.
 :::
 
-| Setting                                                | Type    | Default | Description                                                                                                       |
-| ------------------------------------------------------ | ------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| Setting                                           | Type    | Default | Description                                                                                                          |
+| ------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
 | `app.pipelines.deadlineCloudExecutionTypeEnabled` | boolean | `false` | Deploys the Deadline Cloud job-callback Lambda + default-bus rule and grants the workflow role `deadline:CreateJob`. |
 
 ## Addons (`app.addons`)

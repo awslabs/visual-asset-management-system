@@ -112,3 +112,46 @@ class TestStageInclusiveBaseUrl:
             # The trailing slash should be stripped, stage preserved, endpoint joined
             assert called_url == "https://abc123.execute-api.us-east-1.amazonaws.com/api/database", \
                 f"Expected trailing slash to be handled, got {called_url}"
+
+
+class TestListWorkflowExecutionsHttpMethod:
+    """The asset-scoped execution list route is GET-only; the optional workflowDatabaseId filter must
+    be sent as a GET body, not a POST (no POST is registered on that resource)."""
+
+    def _client(self):
+        mock_profile_manager = MagicMock()
+        mock_profile_manager.is_override_token.return_value = False
+        mock_profile_manager.load_auth_profile.return_value = {}
+        return APIClient("https://x.execute-api.us-east-1.amazonaws.com/api",
+                         profile_manager=mock_profile_manager)
+
+    def test_workflow_database_filter_uses_get_with_body(self):
+        client = self._client()
+        with patch.object(client.session, "request") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.content = b'{"message": {"Items": []}}'
+            mock_resp.headers = {}
+            mock_resp.json.return_value = {"message": {"Items": []}}
+            mock_req.return_value = mock_resp
+
+            client.list_workflow_executions("db1", "asset1", workflow_database_id="global")
+
+            method = mock_req.call_args[0][0]
+            assert method == "GET", f"Expected GET (route is GET-only), got {method}"
+            assert mock_req.call_args.kwargs.get("json") == {"workflowDatabaseId": "global"}
+
+    def test_no_filter_uses_plain_get(self):
+        client = self._client()
+        with patch.object(client.session, "request") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.content = b'{"message": {"Items": []}}'
+            mock_resp.headers = {}
+            mock_resp.json.return_value = {"message": {"Items": []}}
+            mock_req.return_value = mock_resp
+
+            client.list_workflow_executions("db1", "asset1")
+
+            assert mock_req.call_args[0][0] == "GET"
+            assert mock_req.call_args.kwargs.get("json") is None

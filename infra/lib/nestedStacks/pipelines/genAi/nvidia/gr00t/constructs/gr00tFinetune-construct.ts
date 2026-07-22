@@ -9,7 +9,6 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as batch from "aws-cdk-lib/aws-batch";
@@ -36,7 +35,7 @@ import {
     kmsKeyPolicyStatementGenerator,
     grantExternalAssetBucketKmsKeys,
 } from "../../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
 export interface Gr00tFinetuneConstructProps extends cdk.StackProps {
@@ -46,7 +45,7 @@ export interface Gr00tFinetuneConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
     // From common construct:
     modelCacheBucket: s3.Bucket;
     efsFileSystem: efs.FileSystem;
@@ -641,78 +640,35 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
         this.vamsExecuteFunctionName = vamsExecuteFunction.functionName;
 
         /**
-         * Auto-Registration with VAMS
+         * Auto-Registration with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables)
          */
         const modelConfig = gr00tConfig.modelsFinetune.gr00tN1_5_3B;
         if (modelConfig.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction-gr00tN1_5_3B",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider-gr00tN1_5_3B", {
-                onEventHandler: importFunction,
-            });
-
-            NagSuppressions.addResourceSuppressionsByPath(
-                Stack.of(this),
-                `/${this.toString()}/ImportProvider-gr00tN1_5_3B/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "Custom resource provider requires wildcard permissions to invoke the import global pipeline workflow function with version qualifiers. Scope is limited to the single import function.",
-                        appliesTo: [
-                            {
-                                regex: "/^Resource::arn:.*:lambda:.*:function:<importGlobalPipelineWorkflow[A-Z0-9]+>:\\*$/g",
-                            },
-                        ],
-                    },
-                ],
-                true
-            );
-
-            new cdk.CustomResource(this, "Gr00tFinetune-PipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "nvidia-gr00t-finetune-n1-5-3b",
-                    pipelineDescription:
-                        "NVIDIA Gr00t N1.5 3B Fine-Tuning - Fine-tune the Gr00t foundation model on custom robot manipulation datasets for embodied AI",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".checkpoint",
-                    waitForCallback: "Enabled",
+            new VamsSchemaRegistration(this, "Gr00tFinetuneRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "genAi",
+                    "nvidia",
+                    "gr00t",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: vamsExecuteFunction.functionName,
-                    taskTimeout: "28800",
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({
-                        datasetPath: "dataset",
-                        dataConfig: "so100_dualcam",
-                        baseModelPath: "nvidia/GR00T-N1.5-3B",
-                        maxSteps: "6000",
-                        batchSize: "32",
-                        learningRate: "1e-4",
-                        weightDecay: "1e-5",
-                        warmupRatio: "0.05",
-                        saveSteps: "2000",
-                        numGpus: "1",
-                        loraRank: "0",
-                        loraAlpha: "16",
-                        loraDropout: "0.1",
-                        tuneLlm: "false",
-                        tuneVisual: "false",
-                        tuneProjector: "true",
-                        tuneDiffusionModel: "true",
-                        embodimentTag: "new_embodiment",
-                        videoBackend: "torchvision_av",
-                    }),
+                },
+                idOverrides: {
+                    pipelineId: "nvidia-gr00t-finetune-n1-5-3b",
                     workflowId: "nvidia-gr00t-finetune-n1-5-3b",
-                    workflowDescription:
-                        "NVIDIA Gr00t N1.5 3B Fine-Tuning - Fine-tune the Gr00t foundation model on custom robot manipulation datasets for embodied AI",
-                    autoTriggerOnFileExtensionsUpload: "",
                 },
             });
         }

@@ -1,0 +1,5 @@
+{
+    "workflowName": "NVIDIA Gr00t N1.5 3B Fine-Tuning",
+    "category": "GenAI",
+    "description": "NVIDIA Gr00t N1.5 3B Fine-Tuning - Fine-tune the Gr00t foundation model on custom robot manipulation datasets for embodied AI"
+}

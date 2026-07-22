@@ -36,4 +36,22 @@ describe("DataTable", () => {
         expect(screen.getByText("Row 20")).toBeInTheDocument();
         expect(screen.queryByText("Row 10")).not.toBeInTheDocument();
     });
+
+    it("fires onRowClick with the clicked row's data", async () => {
+        const rows = [
+            { id: 1, name: "Alpha" },
+            { id: 2, name: "Beta" },
+        ];
+        const columns = [
+            { header: "ID", accessorKey: "id" },
+            { header: "Name", accessorKey: "name" },
+        ];
+        const onRowClick = jest.fn();
+
+        render(<DataTable columns={columns} rows={rows} onRowClick={onRowClick} />);
+
+        await userEvent.click(screen.getByText("Beta"));
+        expect(onRowClick).toHaveBeenCalledTimes(1);
+        expect(onRowClick).toHaveBeenCalledWith({ id: 2, name: "Beta" });
+    });
 });

@@ -12,7 +12,7 @@ import WorkflowBuilder from "./WorkflowBuilder";
 
 // Mock the dependencies
 jest.mock("../api/queries", () => ({
-    usePipelines: jest.fn(),
+    useAllPipelines: jest.fn(),
     useWorkflow: jest.fn(),
     useWorkflowMutations: jest.fn(),
     useTriggers: jest.fn(),
@@ -53,9 +53,15 @@ describe("WorkflowBuilder", () => {
         queryClient = createQueryClient();
         jest.clearAllMocks();
 
-        const { usePipelines, useWorkflow, useWorkflowMutations, useTriggers, useTemplates } = require("../api/queries");
+        const {
+            useAllPipelines,
+            useWorkflow,
+            useWorkflowMutations,
+            useTriggers,
+            useTemplates,
+        } = require("../api/queries");
 
-        usePipelines.mockReturnValue({ data: [] });
+        useAllPipelines.mockReturnValue({ data: [] });
         useWorkflow.mockReturnValue({ data: undefined });
         useTriggers.mockReturnValue({ data: [] });
         useTemplates.mockReturnValue({ data: [] }); // Mock templates for TemplatesFetcher helper
@@ -66,8 +72,9 @@ describe("WorkflowBuilder", () => {
         });
     });
 
-    it("enforces locationType=none requires inputFileArity=none (coupling)", async () => {
+    it("renders as a wizard: Basic step first, Save only on the Review step", async () => {
         const { validateWorkflow } = require("./workflowValidation");
+        validateWorkflow.mockReturnValue({ errors: [], warnings: [] });
 
         render(
             <QueryClientProvider client={queryClient}>
@@ -77,64 +84,30 @@ describe("WorkflowBuilder", () => {
             </QueryClientProvider>
         );
 
-        // Wait for form to render
+        // Basic step shows the name field; there is no Save yet (only Next).
         await waitFor(() => {
             expect(screen.getByLabelText(/workflow name/i)).toBeInTheDocument();
         });
+        expect(screen.queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument();
 
-        // Initially, validation should have error for no pipelines
-        validateWorkflow.mockReturnValue({
-            errors: ["At least one pipeline is required"],
-            warnings: [],
-        });
+        // Basic step requires a name before Next is enabled.
+        await userEvent.type(screen.getByLabelText(/workflow name/i), "My Workflow");
 
-        // Set up a scenario with locationType=none and arity=one (coupling violation)
-        validateWorkflow.mockReturnValue({
-            errors: [
-                "At least one pipeline is required",
-                "Workflows with no output location (results-only) must have inputFileArity set to 'none'",
-            ],
-            warnings: [],
-        });
+        // basic -> execution -> pipelines
+        await userEvent.click(screen.getByRole("button", { name: /next/i }));
+        await userEvent.click(screen.getByRole("button", { name: /next/i }));
 
-        // Add a pipeline
-        const addPipelineButton = screen.getByText(/add pipeline/i);
-        await userEvent.click(addPipelineButton);
-
-        // Mock validation after adding pipeline but with coupling violation
-        validateWorkflow.mockReturnValue({
-            errors: ["Workflows with no output location (results-only) must have inputFileArity set to 'none'"],
-            warnings: [],
-        });
-
-        // Wait for validation to run
+        // Pipelines step requires at least one pipeline before Next is enabled.
         await waitFor(() => {
-            const saveButton = screen.getByRole("button", { name: /save/i });
-            expect(saveButton).toBeDisabled();
+            expect(screen.getByText("Add Pipeline")).toBeInTheDocument();
         });
+        await userEvent.click(screen.getByText("Add Pipeline"));
 
-        // Expect coupling error message to be shown
+        // pipelines -> review; Save appears on the final step.
+        await userEvent.click(screen.getByRole("button", { name: /next/i }));
         await waitFor(() => {
-            expect(
-                screen.getByText(/workflows with no output location.*must have inputFileArity.*none/i)
-            ).toBeInTheDocument();
-        });
-
-        // Fix the coupling: mock validation with no errors
-        validateWorkflow.mockReturnValue({
-            errors: [],
-            warnings: [],
-        });
-
-        // Trigger re-render by typing in a field
-        const nameInput = screen.getByLabelText(/workflow name/i);
-        await userEvent.clear(nameInput);
-        await userEvent.type(nameInput, "Test Workflow");
-
-        // Now Save button should be ENABLED
-        await waitFor(() => {
-            const saveButton = screen.getByRole("button", { name: /save/i });
-            expect(saveButton).toBeEnabled();
+            expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
         });
     });
 });

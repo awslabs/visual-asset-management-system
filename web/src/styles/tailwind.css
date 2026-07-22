@@ -6,3 +6,24 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Tailwind preflight is disabled globally (so it can't bleed into Cloudscape pages), which
+ * leaves button elements inside the orchestration module with the browser default gray
+ * chrome. Scope a minimal button reset to the module root so ghost/icon buttons render flat.
+ * Background and border utilities on primary buttons win on specificity and are unaffected.
+ */
+@layer base {
+    /* where() contributes zero specificity, so this matches Tailwind preflight own
+     * low-specificity element reset; utility classes on primary buttons still override it. */
+    :where(.orchestration-root) button {
+        background-color: transparent;
+        border: 0;
+        padding: 0;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+    }
+}

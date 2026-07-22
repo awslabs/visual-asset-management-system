@@ -41,6 +41,20 @@ os.environ['AUTH_TABLE_NAME'] = 'example-auth-table'
 os.environ['CONSTRAINTS_TABLE_NAME'] = 'test-constraint-table'
 os.environ['USER_ROLES_TABLE_NAME'] = 'example-user-roles-table'
 
+# Pipeline/workflow V2 data-model tables (break-glass env overrides so V2 handlers resolve test
+# names without an SSM call at import).
+os.environ['PIPELINE_STORAGE_TABLE_V2_NAME'] = 'pipelineStorageTableV2'
+os.environ['PIPELINE_TEMPLATES_STORAGE_TABLE_NAME'] = 'pipelineTemplatesStorageTable'
+os.environ['PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE_NAME'] = 'pipelineTemplateTagSchemaStorageTable'
+os.environ['WORKFLOW_STORAGE_TABLE_V2_NAME'] = 'workflowStorageTableV2'
+os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTable'
+# setdefault (not assignment): some handler test modules pin their own value for this table via
+# os.environ.setdefault at import and assert on it (e.g. test_processOutput_records). Seed a
+# default only when unset so workflowService can resolve it at import without overriding those.
+os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
+os.environ['WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE_NAME'] = 'workflowExecutionOutputsIndexTable'
+os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
+
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
 os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret-key'
@@ -627,52 +641,7 @@ def setup_mock_imports():
     # Add mock modules for pipelines
     if 'backend.handlers.pipelines' not in sys.modules:
         sys.modules['backend.handlers.pipelines'] = MockModule()
-    if 'backend.handlers.pipelines.createPipeline' not in sys.modules:
-        class CreatePipeline:
-            def __init__(self, dynamodb=None, cloudformation=None, lambda_client=None, env=None):
-                self.dynamodb = dynamodb
-                self.cloudformation = cloudformation
-                self.lambda_client = lambda_client
-                self.env = env or {}
-                self._now = lambda: "2023-06-14 19:53:45"
-                
-            def createLambdaPipeline(self, body):
-                if self.lambda_client:
-                    self.lambda_client.create_function(
-                        FunctionName=body.get('pipelineId', ''),
-                        Role=self.env.get('ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE', ''),
-                        PackageType='Zip',
-                        Code={
-                            'S3Bucket': self.env.get('LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET', ''),
-                            'S3Key': self.env.get('LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY', ''),
-                        },
-                        Handler='lambda_function.lambda_handler',
-                        Runtime='python3.12'
-                    )
-                return {}
-                
-            def upload_Pipeline(self, body):
-                if self.dynamodb:
-                    table = self.dynamodb.Table(self.env.get('PIPELINE_STORAGE_TABLE_NAME', ''))
-                    date_created = self._now()
-                    item = {
-                        'dateCreated': '"{}"'.format(date_created),
-                        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
-                        'enabled': False
-                    }
-                    item.update(body)
-                    table.put_item(
-                        Item=item,
-                        ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
-                    )
-                    self.createLambdaPipeline(body)
-                return {}
-                
-        sys.modules['backend.handlers.pipelines.createPipeline'] = MockModule(
-            CreatePipeline=CreatePipeline
-        )
-    
-    
+
     # Add mock modules for metadata
     if 'backend.handlers.metadata' not in sys.modules:
         sys.modules['backend.handlers.metadata'] = MockModule()

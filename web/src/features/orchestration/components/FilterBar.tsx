@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import SearchInput from "./SearchInput";
 
 export interface FilterFacet {
     key: string;
@@ -34,21 +35,18 @@ const FilterBar: React.FC<FilterBarProps> = ({ value, onChange, facets = [] }) =
         });
     };
 
+    // Search box (with a magnifier icon, no text label) followed by the facet dropdowns, matching
+    // the filter-row layout used elsewhere in the app. The parent row places this on the left and
+    // any page-specific controls (group-by, include-archived) on the right.
     return (
-        <div className="flex gap-2 items-center p-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded">
-            <input
-                type="text"
-                value={value.searchText}
-                onChange={handleSearchChange}
-                placeholder="Search..."
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+        <div className="flex flex-wrap gap-2 items-center">
+            <SearchInput value={value.searchText} onChange={handleSearchChange} />
             {facets.map((facet) => (
                 <select
                     key={facet.key}
                     value={value.facets[facet.key] || ""}
                     onChange={(e) => handleFacetChange(facet.key, e.target.value)}
-                    className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="px-3 py-1.5 text-sm border border-border-input rounded-lg bg-surface-input text-text-primary focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                     <option value="">{facet.label}: All</option>
                     {facet.options.map((opt) => (

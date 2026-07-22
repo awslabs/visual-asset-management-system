@@ -44,6 +44,9 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         showXPathInStatusbar: false,
         maxWidth: "auto",
         placeholder: "",
+        // Disable the 'source' plugin, which lazy-loads ACE + js-beautify from cdnjs (blocked by
+        // the VAMS CSP). Keeps all script loading same-origin.
+        disablePlugins: ["source"],
         buttons: [
             "bold",
             "italic",

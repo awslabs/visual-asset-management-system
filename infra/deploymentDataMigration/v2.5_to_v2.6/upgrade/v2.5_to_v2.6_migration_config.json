@@ -41,8 +41,15 @@
     "_comment_pin_files": "Pipeline execution input files table (PK pipelineExecutionId)",
     "pipeline_execution_input_files_storage_table_name": "YOUR-STACK-PipelineExecutionInputFilesStorageTable-XXXXX",
 
-    "_comment_workflows": "Workflow definition table (read source for specifiedPipelines)",
+    "_comment_workflows": "Workflow definition table (read source for specifiedPipelines; also the V1 read source for the pipelineWorkflowDefinitions step)",
     "workflow_storage_table_name": "YOUR-STACK-WorkflowStorageTable-XXXXX",
+
+    "_comment_defs_step": "===== STEP: pipelineWorkflowDefinitions (V1 -> V2 pipeline/workflow DEFINITION migration) =====",
+    "_comment_defs": "Migrates user-database (non-GLOBAL) pipeline + workflow DEFINITIONS from the V1 tables into the V2 tables. GLOBAL built-ins are skipped (re-created by the CDK vamsSchema importer at deploy time). All five table names resolve automatically from resource_names_ssm_param_prefix; the explicit overrides below are only needed when the prefix is not set. (workflow_storage_table_name above is reused as the V1 workflow read source.)",
+    "pipeline_storage_table_name_v1": null,
+    "pipeline_storage_table_name_v2": null,
+    "pipeline_templates_storage_table_name": null,
+    "workflow_storage_table_name_v2": null,
 
     "_comment_safety": "===== Shared safety options (apply to both steps) =====",
     "dry_run": false,

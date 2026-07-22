@@ -70,10 +70,7 @@ describe("useAllowedRoutes", () => {
     });
 
     it("can() returns false on fetch error and loading becomes false", async () => {
-        (APIService.fetchAllowedApiRoutes as jest.Mock).mockResolvedValue([
-            false,
-            "Network error",
-        ]);
+        (APIService.fetchAllowedApiRoutes as jest.Mock).mockResolvedValue([false, "Network error"]);
         const { result } = renderHook(() => useAllowedRoutes());
         await waitFor(() => expect(result.current.loading).toBe(false));
         expect(result.current.can("GET", "/workflows/executions/{executionId}/logs")).toBe(false);

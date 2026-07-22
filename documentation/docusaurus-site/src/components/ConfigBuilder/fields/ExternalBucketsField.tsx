@@ -11,6 +11,7 @@ interface Bucket {
     bucketArn: string;
     baseAssetsPrefix: string;
     defaultSyncDatabaseId: string;
+    isDefault?: boolean;
 }
 
 interface Props {
@@ -19,7 +20,12 @@ interface Props {
     onChange: (value: Bucket[] | null) => void;
 }
 
-const EMPTY: Bucket = { bucketArn: "", baseAssetsPrefix: "/", defaultSyncDatabaseId: "" };
+const EMPTY: Bucket = {
+    bucketArn: "",
+    baseAssetsPrefix: "/",
+    defaultSyncDatabaseId: "",
+    isDefault: false,
+};
 
 /**
  * Editor for app.assetBuckets.externalAssetBuckets. Emits `null` when empty
@@ -31,9 +37,19 @@ export default function ExternalBucketsField({ field, value, onChange }: Props) 
 
     const update = (next: Bucket[]) => onChange(next.length === 0 ? null : next);
 
-    const updateField = (index: number, key: keyof Bucket, next: string) => {
+    const updateField = (
+        index: number,
+        key: "bucketArn" | "baseAssetsPrefix" | "defaultSyncDatabaseId",
+        next: string
+    ) => {
         const copy = buckets.map((b) => ({ ...b }));
         copy[index][key] = next;
+        update(copy);
+    };
+
+    // Only one bucket may be the default; setting one clears the rest.
+    const setDefault = (index: number, next: boolean) => {
+        const copy = buckets.map((b, i) => ({ ...b, isDefault: next && i === index }));
         update(copy);
     };
 
@@ -73,6 +89,16 @@ export default function ExternalBucketsField({ field, value, onChange }: Props) 
                                 updateField(index, "defaultSyncDatabaseId", e.target.value)
                             }
                         />
+                    </div>
+                    <div className={styles.field}>
+                        <label className={styles.fieldLabel}>
+                            <input
+                                type="checkbox"
+                                checked={!!bucket.isDefault}
+                                onChange={(e) => setDefault(index, e.target.checked)}
+                            />{" "}
+                            Default asset bucket (houses pipeline template + run I/O data)
+                        </label>
                     </div>
                     <button
                         type="button"

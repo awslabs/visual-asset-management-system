@@ -41,7 +41,7 @@ const ArchiveConfirmDialog: React.FC<ArchiveConfirmDialogProps> = ({
                 </>
             }
         >
-            <p className="text-gray-700 dark:text-gray-300">
+            <p className="text-text-primary">
                 Are you sure you want to archive <strong>{entityName}</strong>? This action can be
                 undone by including archived items and unarchiving.
             </p>

@@ -192,9 +192,9 @@ When adding a new API endpoint, add the function to the appropriate service file
 
 The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** (the seed of the future design system) and is Cloudscape-free. This boundary is intentional:
 
-- **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
-- **`features/orchestration/**`** (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
-- **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+-   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
 
 Import Cloudscape from individual subpaths, NEVER from the barrel export.
 
@@ -321,7 +321,7 @@ The orchestration module implements Tier-1 permission graying via `useAllowedRou
 ```typescript
 const { can } = useAllowedRoutes();
 const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
-<Button disabled={!canDelete}>Permanent Delete</Button>
+<Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
 ### **Rule 12: Use Dual-Mode Auth Token Utilities**

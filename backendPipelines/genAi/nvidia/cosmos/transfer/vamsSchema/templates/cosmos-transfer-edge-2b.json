@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos-transfer-edge-2b",
+    "templateName": "Transfer (edge control)",
+    "description": "Style/content transfer with edge control signals using the Cosmos Transfer 2B model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_TYPE\":\"transfer\",\"CONTROL_TYPE\":\"edge\",\"DISABLE_GUARDRAILS\":\"true\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Provide the transfer prompt via the COSMOS_TRANSFER_PROMPT file metadata key (or PROMPT in the config). COSMOS_TRANSFER_CONTROL_TYPE (edge/depth/segmentation/blur) and COSMOS_TRANSFER_CONTROL_PATH file metadata select the control signal at run time."
+}

@@ -8,7 +8,6 @@ import { Construct } from "constructs";
 import { Names } from "aws-cdk-lib";
 import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
 import * as sqs from "aws-cdk-lib/aws-sqs";
-import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -20,18 +19,6 @@ import {
     buildCreateDatabaseLambdaFunction,
     buildDatabaseService,
 } from "../../lambdaBuilder/databaseFunctions";
-import {
-    buildExecutionServiceFunction,
-    buildWorkflowService,
-    buildCreateWorkflowFunction,
-    buildExecuteWorkflowFunction,
-    buildProcessWorkflowExecutionOutputFunction,
-    buildInterimPipelineTrackingFunction,
-    buildHandleExecutionErrorFunction,
-    buildRegisterPipelineExecutionFunction,
-    buildImportGlobalPipelineWorkflowFunction,
-    buildSqsAutoExecuteWorkflowFunction,
-} from "../../lambdaBuilder/workflowFunctions";
 import {
     buildAssetService,
     buildStreamAuxiliaryPreviewAssetFunction,
@@ -50,11 +37,6 @@ import {
     buildEditCommentLambdaFunction,
     buildCommentService,
 } from "../../lambdaBuilder/commentFunctions";
-import {
-    buildCreatePipelineFunction,
-    buildEnablePipelineFunction,
-    buildPipelineService,
-} from "../../lambdaBuilder/pipelineFunctions";
 import { NestedStack } from "aws-cdk-lib";
 
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
@@ -79,13 +61,17 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
 import * as iam from "aws-cdk-lib/aws-iam";
-import { kmsKeyPolicyStatementGenerator, generateUniqueNameHash } from "../../helper/security";
-import * as logs from "aws-cdk-lib/aws-logs";
+import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Service } from "../../../lib/helper/service-helper";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 
 export class ApiBuilderNestedStack extends NestedStack {
-    public importGlobalPipelineWorkflowFunctionName = "";
+    // Shared references consumed by the workflow/pipeline/execution functions in ApiBuilder2 (which
+    // now own that whole domain): the metadata service and the upload-file lambda. Assigned in the
+    // constructor; the process-output lambda invokes uploadFile, and the execute/process-output
+    // lambdas invoke the metadata service.
+    public metadataServiceFunction!: lambda.Function;
+    public uploadFileFunction!: lambda.Function;
 
     constructor(
         parent: Construct,
@@ -432,6 +418,8 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // Shared with ApiBuilder2's execute + process-output lambdas (they invoke the metadata service).
+        this.metadataServiceFunction = metadataService;
 
         // Asset Link Metadata Routes (updated - removed metadataKey path parameter)
         attachFunctionToApi(this, metadataService, {
@@ -623,6 +611,8 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
+        // Shared with ApiBuilder2's process-output lambda (writes outputs back to the asset).
+        this.uploadFileFunction = uploadFileFunction;
         attachFunctionToApi(this, uploadFileFunction, {
             routePath: "/uploads",
             method: apigateway.HttpMethod.POST,
@@ -873,292 +863,13 @@ export class ApiBuilderNestedStack extends NestedStack {
             registry: registry,
         });
 
-        //Pipeline Resources
-        const enablePipelineFunction = buildEnablePipelineFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-
-        const createPipelineFunction = buildCreatePipelineFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            enablePipelineFunction,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createPipelineFunction, {
-            routePath: "/pipelines",
-            method: apigateway.HttpMethod.PUT,
-            registry: registry,
-        });
-
-        const pipelineService = buildPipelineService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/database/{databaseId}/pipelines",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/database/{databaseId}/pipelines/{pipelineId}",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/database/{databaseId}/pipelines/{pipelineId}",
-            method: apigateway.HttpMethod.DELETE,
-            registry: registry,
-        });
-        attachFunctionToApi(this, pipelineService, {
-            routePath: "/pipelines",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-
-        //Workflows
-        const workflowService = buildWorkflowService(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/database/{databaseId}/workflows",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/database/{databaseId}/workflows/{workflowId}",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/database/{databaseId}/workflows/{workflowId}",
-            method: apigateway.HttpMethod.DELETE,
-            registry: registry,
-        });
-        attachFunctionToApi(this, workflowService, {
-            routePath: "/workflows",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-
-        // Single shared CloudWatch log group for all workflow Step Functions executions.
-        // Every workflow state machine logs here (with includeExecutionData enabled), so
-        // per-execution logs are isolated by the execution ARN/name within this one group
-        // -- there is no per-workflow log group. Created once and shared by the list,
-        // process-output, create, and execute workflow lambdas (rather than baked into
-        // each workflow's ASL definition).
-        const workflowsLogGroup = new logs.LogGroup(this, "vamsPipelineWorkflows", {
-            logGroupName:
-                "/aws/vendedlogs/vamsPipelineWorkflows" + //important to have 'vams' in the name as resource access looks for this
-                generateUniqueNameHash(
-                    config.env.coreStackName,
-                    config.env.account,
-                    "vamsPipelineWorkflows",
-                    10
-                ),
-            retention: logs.RetentionDays.TEN_YEARS,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-        });
-
-        const executionServiceFunction = buildExecutionServiceFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            workflowsLogGroup,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-
-        // Abort a running workflow execution (execution-keyed; executions may span
-        // multiple assets, so this is not scoped under a single asset path).
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}",
-            method: apigateway.HttpMethod.DELETE,
-            registry: registry,
-        });
-
-        // Execution detail/traceability view (cross-fetched names, inputs, outputs).
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-
-        // Execution logs (truncated stored log, or full live CloudWatch search).
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/logs",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-
-        const processWorkflowExecutionOutputFunction = buildProcessWorkflowExecutionOutputFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            uploadFileFunction,
-            metadataService,
-            workflowsLogGroup,
-            config,
-            vpc,
-            subnets
-        );
-
-        // Interim pipeline-tracking + error-handler lambdas, inserted into the workflow ASL
-        // (interim states between pipelines; error-handler catch state). Built before
-        // createWorkflow so their function names can be embedded in the generated ASL.
-        const interimPipelineTrackingFunction = buildInterimPipelineTrackingFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            workflowsLogGroup,
-            config,
-            vpc,
-            subnets
-        );
-
-        const handleExecutionErrorFunction = buildHandleExecutionErrorFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            workflowsLogGroup,
-            config,
-            vpc,
-            subnets
-        );
-
-        // Pipeline sub-process registration lambda + its standing EventBridge rule on the
-        // orchestration bus (pipelines optionally PutEvents to register sub-SFN / log ARNs).
-        buildRegisterPipelineExecutionFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets
-        );
-
-        const createWorkflowFunction = buildCreateWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            processWorkflowExecutionOutputFunction,
-            interimPipelineTrackingFunction,
-            handleExecutionErrorFunction,
-            workflowsLogGroup,
-            config.env.coreStackName,
-            config,
-            vpc,
-            subnets
-        );
-        attachFunctionToApi(this, createWorkflowFunction, {
-            routePath: "/workflows",
-            method: apigateway.HttpMethod.PUT,
-            registry: registry,
-        });
-
-        const runWorkflowFunction = buildExecuteWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            metadataService,
-            workflowsLogGroup,
-            config,
-            vpc,
-            subnets
-        );
-
-        attachFunctionToApi(this, runWorkflowFunction, {
-            routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}",
-            method: apigateway.HttpMethod.POST,
-            registry: registry,
-        });
-
-        // Use the workflow auto-execute queue from storage resources
-        const workflowAutoExecuteQueue = storageResources.sqs.workflowAutoExecuteQueue;
-
-        // Create the auto-execute workflow Lambda function
-        const sqsAutoExecuteWorkflowFunction = buildSqsAutoExecuteWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            runWorkflowFunction,
-            config,
-            vpc,
-            subnets
-        );
-
-        // Grant SQS permissions to the Lambda
-        workflowAutoExecuteQueue.grantConsumeMessages(sqsAutoExecuteWorkflowFunction);
-
-        // Setup event source mapping with GovCloud support
-        if (config.app.govCloud.enabled) {
-            const esmWorkflowAutoExecute = new lambda.EventSourceMapping(
-                this,
-                "WorkflowAutoExecuteSqsEventSource",
-                {
-                    eventSourceArn: workflowAutoExecuteQueue.queueArn,
-                    target: sqsAutoExecuteWorkflowFunction,
-                    batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(3),
-                }
-            );
-            const cfnEsmWorkflowAutoExecute = esmWorkflowAutoExecute.node
-                .defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmWorkflowAutoExecute.addPropertyDeletionOverride("Tags");
-        } else {
-            sqsAutoExecuteWorkflowFunction.addEventSource(
-                new eventsources.SqsEventSource(workflowAutoExecuteQueue, {
-                    batchSize: 10,
-                    maxBatchingWindow: cdk.Duration.seconds(3),
-                })
-            );
-        }
-
-        // Create the import global pipeline workflow function with direct function references
-        const importGlobalPipelineWorkflowFunction = buildImportGlobalPipelineWorkflowFunction(
-            this,
-            lambdaCommonBaseLayer,
-            storageResources,
-            config,
-            vpc,
-            subnets,
-            createPipelineFunction,
-            pipelineService,
-            createWorkflowFunction,
-            workflowService
-        );
-
-        // Set the class variable for use by core stack
-        this.importGlobalPipelineWorkflowFunctionName =
-            importGlobalPipelineWorkflowFunction.functionName;
+        // Pipeline, workflow, and execution API domains (CRUD + templates + triggers + execute +
+        // execution ops) and the workflow Step Functions execution lambdas (process-output /
+        // interim-tracking / error-handler / register) are all built in ApiBuilder2NestedStack,
+        // which owns that whole domain. ApiBuilder only exposes the two shared functions those
+        // lambdas need (the metadata service and the upload-file lambda) via public properties.
+        this.metadataServiceFunction = metadataService;
+        this.uploadFileFunction = uploadFileFunction;
 
         const ingestAssetFunction = buildIngestAssetFunction(
             this,

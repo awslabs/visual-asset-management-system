@@ -1,0 +1,5 @@
+{
+    "workflowName": "Isaac Lab RL Training",
+    "category": "Simulation",
+    "description": "Automated workflow for RL policy training using Isaac Lab simulation on GPU instances."
+}

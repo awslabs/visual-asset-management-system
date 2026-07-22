@@ -1,0 +1,8 @@
+{
+    "templateId": "convert-to-obj",
+    "templateName": "Convert to OBJ",
+    "description": "Convert a 3D mesh to OBJ format using the Trimesh library.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".obj\"}",
+    "allowCustomEdit": false
+}

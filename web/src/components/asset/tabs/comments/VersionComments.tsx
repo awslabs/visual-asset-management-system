@@ -114,6 +114,10 @@ export default function VersionComments(props: VersionCommentsProps) {
         showXPathInStatusbar: false,
         maxWidth: "auto",
         placeholder: "",
+        // The 'source' (HTML source-view) plugin lazy-loads ACE + js-beautify from cdnjs, which the
+        // VAMS CSP blocks. The comment editor has no source button, so disable the plugin to keep
+        // all script loading same-origin (no external CDN reach).
+        disablePlugins: ["source"],
         buttons: [
             "bold",
             "italic",

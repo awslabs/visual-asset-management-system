@@ -84,15 +84,18 @@ export function missingRequiredTags(
 /**
  * Resolve pipeline execution parameters according to the 5-case template-resolution contract.
  */
-export function resolvePipelineParams(input: ResolvePipelineParamsInput): ResolvePipelineParamsResult {
-    const { pipeline, template, templateId, tags, customTemplateOverride, customEditedBody } = input;
+export function resolvePipelineParams(
+    input: ResolvePipelineParamsInput
+): ResolvePipelineParamsResult {
+    const { pipeline, template, templateId, tags, customTemplateOverride, customEditedBody } =
+        input;
     const errors: string[] = [];
 
     const requireTemplate = !!pipeline.systemConfig?.requireTemplate;
     const allowOverride = !!pipeline.systemConfig?.allowCustomTemplateOverride;
 
     // Build providedKeys set: all tag keys + schema defaults
-    const providedKeys = new Set<string>(tags.map(t => t.key));
+    const providedKeys = new Set<string>(tags.map((t) => t.key));
     if (template?.tagSchema) {
         for (const field of template.tagSchema) {
             if (field.default !== undefined) {
@@ -115,9 +118,14 @@ export function resolvePipelineParams(input: ResolvePipelineParamsInput): Resolv
         }
     }
 
-    // Check override early
+    // A template-backed override is allowed when EITHER the pipeline allows a custom override OR the
+    // chosen template allows custom edit (the unified "Customize configuration" toggle). A
+    // template-LESS override still requires the pipeline-level grant.
+    const allowTemplateEdit = !!template?.allowCustomEdit;
     if (customTemplateOverride && !allowOverride) {
-        errors.push("This pipeline does not allow a custom template override");
+        if (!(templateId && allowTemplateEdit)) {
+            errors.push("This pipeline does not allow a custom template override");
+        }
     }
 
     // Determine case
@@ -164,7 +172,11 @@ export function resolvePipelineParams(input: ResolvePipelineParamsInput): Resolv
                 // Case 5
                 return {
                     errors,
-                    params: { templateId, templateTags: tags, customTemplateOverride: customEditedBody },
+                    params: {
+                        templateId,
+                        templateTags: tags,
+                        customTemplateOverride: customEditedBody,
+                    },
                     mode: 5,
                 };
             } else {
@@ -181,7 +193,9 @@ export function resolvePipelineParams(input: ResolvePipelineParamsInput): Resolv
         if (customTemplateOverride) {
             // Case 3: override without template
             if (requireTemplate) {
-                errors.push("This pipeline requires a template; a template-less override is not allowed");
+                errors.push(
+                    "This pipeline requires a template; a template-less override is not allowed"
+                );
             }
 
             // No schema validation, but check unmatched tags

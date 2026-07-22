@@ -1,0 +1,8 @@
+{
+    "templateId": "rapid-pipeline-to-gltf",
+    "templateName": "Optimize to GLTF",
+    "description": "Optimize and convert a 3D model to GLTF using DGG RapidPipeline.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".gltf\"}",
+    "allowCustomEdit": false
+}

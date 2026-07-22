@@ -1,0 +1,147 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pure helpers for the workflow V2 storage data model.
+
+This module has NO AWS or environment dependencies so it can be imported and unit-tested in
+isolation, mirroring common/workflows/executionRecords.py. It builds:
+  - WorkflowStorageTableV2 rows:          PK databaseId, SK workflowId
+  - WorkflowTriggersStorageTable rows:    PK workflowDatabaseId:workflowId, SK triggerType
+  - WorkflowExecutionOutputsIndexStorageTable rows: PK databaseId:assetId, SK workflowExecutionId
+
+Each specifiedPipelines ref stores pipelineDatabaseId + pipelineId together so the composite
+pipeline key resolves unambiguously.
+"""
+
+from common.workflows.executionRecords import iso_now, workflow_composite_key
+
+WORKFLOW_SCHEMA_VERSION = 1
+
+# Trigger types (only fileUpload implemented now; typed for extensibility).
+TRIGGER_TYPES = ("fileUpload",)
+
+
+def build_workflow_system_config(
+    input_file_arity="one",
+    asset_scope=None,
+    metadata_inputs=None,
+    input_file_filters=None,
+    concurrency_restriction="none",
+    output_target=None,
+):
+    """Workflow system-config block. Defaults match the create-when-unspecified defaults.
+
+    - input_file_arity: none | one | multi
+    - concurrency_restriction: none | perAsset | perInputFile
+    - output_target: {locationType: asset, allowOverride: bool}
+    """
+    return {
+        "inputFileArity": input_file_arity or "one",
+        "assetScope": asset_scope or {
+            "crossAssetAllowed": False,
+            "singleAssetOnly": True,
+            "wholeAssetAllowed": False,
+            "folderAllowed": False,
+        },
+        "metadataInputs": metadata_inputs or {
+            "assetMetadata": True,
+            "fileMetadata": True,
+            "fileAttributes": True,
+        },
+        "inputFileFilters": input_file_filters or {"allow": [], "exclude": []},
+        "concurrencyRestriction": concurrency_restriction or "none",
+        "outputTarget": output_target or {"locationType": "asset", "allowOverride": False},
+    }
+
+
+def build_specified_pipeline_ref(pipeline_database_id, pipeline_id, job_name="", default_template_id=""):
+    """One ordered pipeline reference in a workflow's specifiedPipelines snapshot.
+
+    Stores pipelineDatabaseId + pipelineId together (composite pipeline key) so the reference is
+    unambiguous even when ids are overridden across databases. `default_template_id` is the fallback
+    template this pipeline uses when a run supplies no per-pipeline templateId (empty when none).
+    """
+    return {
+        "pipelineDatabaseId": pipeline_database_id,
+        "pipelineId": pipeline_id,
+        "pipelineDatabaseId:pipelineId": f"{pipeline_database_id}:{pipeline_id}",
+        "jobName": job_name or "",
+        "defaultTemplateId": default_template_id or "",
+    }
+
+
+def build_workflow_record(
+    database_id, workflow_id, workflow_name, category, description,
+    specified_pipelines, system_config,
+    workflow_arn="", asl_schema_version="", sub_dashboard_url="",
+    enabled=True, archived=False, created_by="", modified_by="",
+    date_created="", date_modified="", job_names=None,
+):
+    """WorkflowStorageTableV2 row (database-scoped: PK databaseId, SK workflowId).
+
+    job_names are the per-pipeline job names the ASL generator baked into the execution output S3
+    paths (workflow order). The execute handler reads them to reconstruct the identical output
+    prefixes — the parity contract mirrored from V1's workflow record jobNames.
+    """
+    now = iso_now()
+    return {
+        "databaseId": database_id,  # PK
+        "workflowId": workflow_id,  # SK
+        "databaseId:category": f"{database_id}:{category or ''}",  # GSI PK
+        "workflowName": workflow_name or "",
+        "category": category or "",
+        "description": description or "",
+        "workflow_arn": workflow_arn or "",
+        "aslSchemaVersion": asl_schema_version or "",
+        "jobNames": job_names or [],
+        "specifiedPipelines": specified_pipelines or [],
+        "systemConfig": system_config or build_workflow_system_config(),
+        "subDashboardUrl": sub_dashboard_url or "",
+        "enabled": bool(enabled),
+        "archived": bool(archived),
+        "dateCreated": date_created or now,
+        "dateModified": date_modified or now,
+        "createdBy": created_by or "",
+        "modifiedBy": modified_by or "",
+        "schemaVersion": WORKFLOW_SCHEMA_VERSION,
+    }
+
+
+def build_trigger_record(
+    workflow_database_id, workflow_id, trigger_type, trigger_config,
+    enabled=True, date_created="", date_modified="",
+):
+    """WorkflowTriggersStorageTable row (PK workflowDatabaseId:workflowId, SK triggerType).
+
+    trigger_config for fileUpload: {inputFileFilters: {allow, exclude},
+    defaultTemplateIds: {"<pipelineDatabaseId>:<pipelineId>": templateId}}.
+    """
+    now = iso_now()
+    return {
+        "workflowDatabaseId:workflowId": workflow_composite_key(workflow_database_id, workflow_id),  # PK
+        "triggerType": trigger_type,  # SK / GSI PK
+        "workflowDatabaseId": workflow_database_id,
+        "workflowId": workflow_id,
+        "triggerConfig": trigger_config or {},
+        "enabled": bool(enabled),
+        "dateCreated": date_created or now,
+        "dateModified": date_modified or now,
+    }
+
+
+def build_file_upload_trigger_config(input_file_filters=None, default_template_ids=None):
+    """triggerConfig for a fileUpload trigger."""
+    return {
+        "inputFileFilters": input_file_filters or {"allow": [], "exclude": []},
+        "defaultTemplateIds": default_template_ids or {},
+    }
+
+
+def build_execution_output_index_record(database_id, asset_id, workflow_execution_id):
+    """WorkflowExecutionOutputsIndexStorageTable row: 'executions that wrote to this asset'."""
+    return {
+        "databaseId:assetId": f"{database_id}:{asset_id}",  # PK
+        "workflowExecutionId": workflow_execution_id,  # SK / GSI PK
+        "databaseId": database_id,
+        "assetId": asset_id,
+    }

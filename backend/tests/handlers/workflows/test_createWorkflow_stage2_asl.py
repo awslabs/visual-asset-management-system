@@ -1,14 +1,14 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 2 ASL-flow tests for createWorkflow.generate_workflow_asl: interim-tracking states
-inserted between pipelines, every state's Catch routed through the error-handler state, and
-the Stage 2 resolved-input envelope on each pipeline payload.
+"""Stage 2 ASL-flow tests for the shared workflow ASL generator
+(common.workflows.workflowAslBuilder.generate_workflow_asl): interim-tracking states inserted between
+pipelines, every state's Catch routed through the error-handler state, and the Stage 2 resolved-input
+envelope on each pipeline payload.
 
-Unlike test_createWorkflow_asl_passthrough.py (which stubs the ASL builder), these tests use
-the REAL common.workflows.stepfunctions_builder (registered by the root conftest) so the generated
-state structure -- Catch targets, the HandleExecutionError state, interim states -- is
-exercised end to end.
+Unlike test_createWorkflow_asl_passthrough.py (which stubs the ASL builder), these tests use the REAL
+common.workflows.stepfunctions_builder (registered by the root conftest) so the generated state
+structure -- Catch targets, the HandleExecutionError state, interim states -- is exercised end to end.
 """
 
 import os
@@ -16,18 +16,33 @@ import json
 import pytest
 from unittest import mock
 
-# createWorkflow reads these at import time. The real stepfunctions_builder is registered by
-# the root conftest, so this module deliberately does NOT stub it.
-os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "t-wf")
-os.environ.setdefault("VAMS_STACK_NAME", "t-stack")
-os.environ.setdefault("PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME", "t-po")
-os.environ.setdefault("INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME", "t-interim")
-os.environ.setdefault("HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME", "t-err")
+# The real stepfunctions_builder is registered by the root conftest, so this module deliberately does
+# NOT stub it. The shared generator takes its Lambda names + partition explicitly; a small module-level
+# harness supplies them so the tests read like the old 3-arg wrapper.
 os.environ.setdefault("AWS_REGION", "us-east-1")
-os.environ.setdefault("LAMBDA_ROLE_ARN", "arn:aws:iam::1:role/t")
-os.environ.setdefault("LOG_GROUP_ARN", "arn:aws:logs:us-east-1:1:log-group:t")
 
-from backend.backend.handlers.workflows import createWorkflow as cw
+from backend.backend.common.workflows import workflowAslBuilder as _asl
+
+
+class _Cw:
+    """Test harness mirroring the former createWorkflow module surface: a 3-arg generate_workflow_asl
+    that supplies the fixed Lambda names + the (mockable) partition the shared generator needs."""
+    process_workflow_output_function = "t-po"
+    interim_tracking_function = "t-interim"
+    error_handler_function = "t-err"
+    aws_partition = "aws"
+
+    def generate_workflow_asl(self, pipelines, database_id, workflow_id):
+        return _asl.generate_workflow_asl(
+            pipelines, database_id, workflow_id,
+            process_workflow_output_function=self.process_workflow_output_function,
+            interim_tracking_function=self.interim_tracking_function,
+            error_handler_function=self.error_handler_function,
+            aws_partition=self.aws_partition,
+        )
+
+
+cw = _Cw()
 
 
 def _pipelines(n):

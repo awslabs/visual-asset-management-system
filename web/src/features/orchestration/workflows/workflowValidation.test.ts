@@ -155,4 +155,34 @@ describe("validateWorkflow", () => {
         );
         expect(r.warnings.length).toBe(0);
     });
+
+    it.each(["https://example.com/d", "http://host/x", "", undefined])(
+        "accepts a valid/empty subDashboardUrl: %s",
+        (url) => {
+            const r = validateWorkflow(
+                {
+                    specifiedPipelines: [{ pipelineId: "p" }],
+                    systemConfig: {},
+                    subDashboardUrl: url,
+                } as any,
+                {}
+            );
+            expect(r.errors.some((e) => /Sub-Dashboard URL/i.test(e))).toBe(false);
+        }
+    );
+
+    it.each(["javascript:alert(1)", "data:text/html,x", "ftp://h/x", "//example.com"])(
+        "errors on a dangerous/relative subDashboardUrl: %s",
+        (url) => {
+            const r = validateWorkflow(
+                {
+                    specifiedPipelines: [{ pipelineId: "p" }],
+                    systemConfig: {},
+                    subDashboardUrl: url,
+                } as any,
+                {}
+            );
+            expect(r.errors.some((e) => /Sub-Dashboard URL/i.test(e))).toBe(true);
+        }
+    );
 });

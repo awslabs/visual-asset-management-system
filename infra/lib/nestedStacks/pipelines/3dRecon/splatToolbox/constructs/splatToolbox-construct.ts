@@ -8,7 +8,6 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
@@ -30,7 +29,7 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
@@ -42,7 +41,7 @@ export interface SplatToolboxConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -380,79 +379,34 @@ export class SplatToolboxConstruct extends Construct {
                 props.storageResources.encryption.kmsKey
             );
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables). The
+        // former Objects and 360-Environments registrations collapse to ONE pipeline + two templates
+        // (splat-objects / splat-environments-360) selected per execution; the pipeline uses the longer
+        // (48h) task timeout so either capture mode fits.
         if (props.config.app.pipelines.useSplatToolbox.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            NagSuppressions.addResourceSuppressionsByPath(
-                Stack.of(this),
-                `/${this.toString()}/ImportProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "Custom resource provider requires wildcard permissions to invoke the import function with version qualifiers",
-                        appliesTo: [
-                            {
-                                regex: "/^Resource::arn:.*:lambda:.*:function:<importGlobalPipelineWorkflow[A-Z0-9]+>:\\*$/g",
-                            },
-                        ],
-                    },
-                ],
-                true
-            );
-            // Register Splat Toolbox pipeline and workflow for Objects
-            new cdk.CustomResource(this, "3dReconSplatToolboxObjectsPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "3dRecon-splat-toolbox-objects",
-                    pipelineDescription:
-                        "3D Gaussian Splat Pipeline - Auto process images and videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".all",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "SplatToolboxRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "3dRecon",
+                    "splatToolbox",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: SplatToolboxPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "28800", // 8 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "3dRecon-splat-toolbox-objects",
-                    workflowDescription:
-                        "3D Gaussian Splat Pipeline - Auto process images and 2D videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
-                    autoTriggerOnFileExtensionsUpload: "",
                 },
-            });
-
-            // Register Splat Toolbox pipeline and workflow for Environment Generation
-            new cdk.CustomResource(this, "3dReconSplatToolboxEnvironmentPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "3dRecon-splat-toolbox-environments-360",
-                    pipelineDescription:
-                        "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".all",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: SplatToolboxPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "172800", // 48 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({ SPHERICAL_CAMERA: true }),
-                    workflowId: "3dRecon-splat-toolbox-environments-360",
-                    workflowDescription:
-                        "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
-                    autoTriggerOnFileExtensionsUpload: "",
+                idOverrides: {
+                    pipelineId: "3dRecon-splat-toolbox",
+                    workflowId: "3dRecon-splat-toolbox",
                 },
             });
         }

@@ -26,7 +26,7 @@ export interface CoordinateTransformBuilderNestedStackProps extends cdk.StackPro
     assetAuxiliaryBucket: s3.IBucket;
     storageResources: storageResources;
     kmsKey?: kms.IKey;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 export class CoordinateTransformBuilderNestedStack extends NestedStack {
@@ -51,8 +51,8 @@ export class CoordinateTransformBuilderNestedStack extends NestedStack {
                 assetAuxiliaryBucket: props.assetAuxiliaryBucket,
                 storageResources: props.storageResources,
                 kmsKey: props.kmsKey,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
             }
         );
 

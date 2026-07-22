@@ -42,6 +42,12 @@ export function validateWorkflow(
         );
     }
 
+    // ERROR: subDashboardUrl must be an absolute http(s) URL (mirrors the backend rule; blocks
+    // javascript:/data:/relative URLs that would otherwise be a stored-XSS link in the UI).
+    if (wf.subDashboardUrl && !/^https?:\/\//i.test(wf.subDashboardUrl)) {
+        errors.push("Sub-Dashboard URL must be an absolute http:// or https:// URL");
+    }
+
     // WARNING: Check for archived/disabled pipelines and arity mismatches
     if (wf.specifiedPipelines) {
         for (const ref of wf.specifiedPipelines) {
@@ -57,9 +63,7 @@ export function validateWorkflow(
 
             // Warn if archived
             if (pipeline.archived === true) {
-                warnings.push(
-                    `Pipeline '${ref.pipelineId}' is archived and may not be executable`
-                );
+                warnings.push(`Pipeline '${ref.pipelineId}' is archived and may not be executable`);
             }
 
             // Warn if disabled

@@ -1,0 +1,206 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React from "react";
+import InfoTooltip from "../components/InfoTooltip";
+import StringListInput from "../components/StringListInput";
+import AssetSpanControl from "../components/AssetSpanControl";
+import type { InputFileArity } from "../types";
+
+/**
+ * Structured editor for a template's `overrides` object. A template may override only these four
+ * keys of the pipeline's systemConfig: inputFileArity, metadataInputs, assetScope, inputFileFilters
+ * (the backend ignores any other key). Each section has an "override" toggle — off means the key is
+ * omitted from the overrides object and the pipeline's value is inherited. Producing the object here
+ * (rather than a raw-JSON box) guarantees a valid shape.
+ */
+interface TemplateOverridesEditorProps {
+    value: Record<string, any>;
+    onChange: (overrides: Record<string, any>) => void;
+}
+
+const selectClass =
+    "w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary";
+
+const OverrideToggle: React.FC<{
+    checked: boolean;
+    onChange: (v: boolean) => void;
+    label: string;
+    info: string;
+}> = ({ checked, onChange, label, info }) => (
+    <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        Override {label}
+        <InfoTooltip text={info} />
+    </label>
+);
+
+const MetaRow: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string }> = ({
+    checked,
+    onChange,
+    label,
+}) => (
+    <label className="flex items-center gap-2 text-sm text-text-primary">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        {label}
+    </label>
+);
+
+const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({ value, onChange }) => {
+    // A key is "overridden" when present in the object. Toggling off removes it (inherit).
+    const has = (key: string) => value[key] !== undefined && value[key] !== null;
+    const setKey = (key: string, v: any) => onChange({ ...value, [key]: v });
+    const removeKey = (key: string) => {
+        const next = { ...value };
+        delete next[key];
+        onChange(next);
+    };
+
+    const metadata = value.metadataInputs || {};
+    const filters = value.inputFileFilters || { allow: [], exclude: [] };
+
+    return (
+        <div className="space-y-4">
+            <p className="text-xs text-text-secondary">
+                Optionally override the pipeline's input-handling settings for executions that use
+                this template. Anything left un-toggled inherits the pipeline's value.
+            </p>
+
+            {/* inputFileArity */}
+            <div className="space-y-1">
+                <OverrideToggle
+                    checked={has("inputFileArity")}
+                    onChange={(on) =>
+                        on ? setKey("inputFileArity", "one") : removeKey("inputFileArity")
+                    }
+                    label="input file count"
+                    info="Override how many input files an execution using this template takes."
+                />
+                {has("inputFileArity") && (
+                    <select
+                        aria-label="Override input file count"
+                        value={value.inputFileArity}
+                        onChange={(e) => setKey("inputFileArity", e.target.value as InputFileArity)}
+                        className={selectClass}
+                    >
+                        <option value="none">None</option>
+                        <option value="one">One file</option>
+                        <option value="multi">Multiple files</option>
+                    </select>
+                )}
+            </div>
+
+            {/* assetScope */}
+            <div className="space-y-1">
+                <OverrideToggle
+                    checked={has("assetScope")}
+                    onChange={(on) =>
+                        on
+                            ? setKey("assetScope", {
+                                  crossAssetAllowed: false,
+                                  singleAssetOnly: true,
+                                  wholeAssetAllowed: false,
+                                  folderAllowed: false,
+                              })
+                            : removeKey("assetScope")
+                    }
+                    label="asset selection rules"
+                    info="Override the pipeline's asset-span / whole-asset / folder rules for this template."
+                />
+                {has("assetScope") && (
+                    <AssetSpanControl
+                        scope={value.assetScope}
+                        onChange={(s) => setKey("assetScope", s)}
+                    />
+                )}
+            </div>
+
+            {/* metadataInputs */}
+            <div className="space-y-1">
+                <OverrideToggle
+                    checked={has("metadataInputs")}
+                    onChange={(on) =>
+                        on
+                            ? setKey("metadataInputs", {
+                                  assetMetadata: true,
+                                  fileMetadata: true,
+                                  fileAttributes: true,
+                              })
+                            : removeKey("metadataInputs")
+                    }
+                    label="metadata inputs"
+                    info="Override which metadata is provided to the pipeline for this template."
+                />
+                {has("metadataInputs") && (
+                    <div className="space-y-1 pl-1">
+                        <MetaRow
+                            checked={metadata.assetMetadata || false}
+                            onChange={(v) =>
+                                setKey("metadataInputs", { ...metadata, assetMetadata: v })
+                            }
+                            label="Asset metadata"
+                        />
+                        <MetaRow
+                            checked={metadata.fileMetadata || false}
+                            onChange={(v) =>
+                                setKey("metadataInputs", { ...metadata, fileMetadata: v })
+                            }
+                            label="File metadata"
+                        />
+                        <MetaRow
+                            checked={metadata.fileAttributes || false}
+                            onChange={(v) =>
+                                setKey("metadataInputs", { ...metadata, fileAttributes: v })
+                            }
+                            label="File attributes"
+                        />
+                    </div>
+                )}
+            </div>
+
+            {/* inputFileFilters */}
+            <div className="space-y-1">
+                <OverrideToggle
+                    checked={has("inputFileFilters")}
+                    onChange={(on) =>
+                        on
+                            ? setKey("inputFileFilters", { allow: [], exclude: [] })
+                            : removeKey("inputFileFilters")
+                    }
+                    label="input file filters"
+                    info="Override the pipeline's allow/exclude input-file filters for this template."
+                />
+                {has("inputFileFilters") && (
+                    <div className="space-y-2 pl-1">
+                        <div>
+                            <span className="block text-xs text-text-secondary mb-1">Allow</span>
+                            <StringListInput
+                                ariaLabel="Override allow filter"
+                                value={filters.allow || []}
+                                onChange={(allow) =>
+                                    setKey("inputFileFilters", { ...filters, allow })
+                                }
+                                placeholder="e.g. *.glb"
+                            />
+                        </div>
+                        <div>
+                            <span className="block text-xs text-text-secondary mb-1">Exclude</span>
+                            <StringListInput
+                                ariaLabel="Override exclude filter"
+                                value={filters.exclude || []}
+                                onChange={(exclude) =>
+                                    setKey("inputFileFilters", { ...filters, exclude })
+                                }
+                                placeholder="e.g. *.tmp"
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default TemplateOverridesEditor;

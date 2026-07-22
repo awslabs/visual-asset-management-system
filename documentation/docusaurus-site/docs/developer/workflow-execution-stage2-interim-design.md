@@ -40,13 +40,13 @@ New fields on `WorkflowExecutionConfigurationStorageTable` (one config row per e
 `recordType="configuration"`) — these are the **workflow execution input configuration**
 (core-lambda operational config, per §0):
 
-| Field                     | Source today                     | Notes                                                            |
-| ------------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `outputLocationType`      | constant `"asset"`               | Only `"asset"` supported now; enum point for future targets.     |
-| `outputAssetId`           | execute path `assetId`           | Where outputs land. Future generic-execute lets the user pick.   |
-| `outputDatabaseId`        | execute path `databaseId`        | "                                                                |
-| `inputMetadataAssetId`    | execute path `assetId`           | Recording only (no Casbin). Optional later when metadata is free.|
-| `inputMetadataDatabaseId` | execute path `databaseId`        | Recording only.                                                  |
+| Field                     | Source today              | Notes                                                             |
+| ------------------------- | ------------------------- | ----------------------------------------------------------------- |
+| `outputLocationType`      | constant `"asset"`        | Only `"asset"` supported now; enum point for future targets.      |
+| `outputAssetId`           | execute path `assetId`    | Where outputs land. Future generic-execute lets the user pick.    |
+| `outputDatabaseId`        | execute path `databaseId` | "                                                                 |
+| `inputMetadataAssetId`    | execute path `assetId`    | Recording only (no Casbin). Optional later when metadata is free. |
+| `inputMetadataDatabaseId` | execute path `databaseId` | Recording only.                                                   |
 
 **Output-asset permission (proactive):** executeWorkflow enforces Casbin **POST** on the
 output asset (= the path asset today) at launch. Denied → **403, no SFN started**. This is
@@ -55,18 +55,18 @@ generic execute lands, this is the gate on the user-chosen output asset.
 
 ## 2. Input-tracking reshape (workflow level, not per-pipeline)
 
-- **Input asset files** are tracked on the **workflow execution** via
-  `WorkflowExecutionInputsStorageTable` (already PK `workflowExecutionId`). executeWorkflow
-  stops writing per-pipeline `PipelineExecutionInputFilesStorageTable` rows for inputs;
-  that table is reserved for any future per-pipeline input-file needs.
-- **Workflow-level input configuration** lives in
-  `WorkflowExecutionConfigurationStorageTable` and does **not** include per-pipeline config.
-- **Per-pipeline input configuration** lives in
-  `PipelineExecutionInputConfigurationStorageTable` (PK `pipelineExecutionId`) **and** as a
-  config file in that pipeline's input folder.
-- **executionService details handler** repoints its `inputFiles` assembly at
-  `WorkflowExecutionInputsStorageTable` (was per-pipeline). (Reconciliation of the
-  Stage‑1.5 details API.)
+-   **Input asset files** are tracked on the **workflow execution** via
+    `WorkflowExecutionInputsStorageTable` (already PK `workflowExecutionId`). executeWorkflow
+    stops writing per-pipeline `PipelineExecutionInputFilesStorageTable` rows for inputs;
+    that table is reserved for any future per-pipeline input-file needs.
+-   **Workflow-level input configuration** lives in
+    `WorkflowExecutionConfigurationStorageTable` and does **not** include per-pipeline config.
+-   **Per-pipeline input configuration** lives in
+    `PipelineExecutionInputConfigurationStorageTable` (PK `pipelineExecutionId`) **and** as a
+    config file in that pipeline's input folder.
+-   **executionService details handler** repoints its `inputFiles` assembly at
+    `WorkflowExecutionInputsStorageTable` (was per-pipeline). (Reconciliation of the
+    Stage‑1.5 details API.)
 
 ## 3. Working-file layout (asset bucket execution folder + aux for scratch)
 
@@ -142,24 +142,24 @@ P1 -> interim(1->2) -> P2 -> interim(2->3) -> ... -> Pn -> processWorkflowExecut
                   WorkflowProcessingJobFailed (Fail)
 ```
 
-- **One reusable interim Lambda** (built once in CDK). createWorkflow inserts a distinct
-  Task state per adjacent pipeline pair, each carrying that gap's `from`/`to`
-  pipelineExecutionIds + the next pipeline's config/manifest targets in its payload.
-- After pipeline N, the interim lambda:
-  1. **Logs N's outputs**: diff the shared output **files** folder using a
-     **versionId snapshot** taken before N (snapshot stored per execution; P1's snapshot is
-     written by executeWorkflow). N's outputs = keys new since the snapshot OR whose latest
-     `versionId` changed. Record `PipelineExecutionOutputFiles` rows with `s3VersionId`, plus
-     N's stop date + status on its `PipelineExecutions` row.
-  2. **Prepares N+1**: write `pipeline{N+1}/input/manifest.json` (§5), refresh the versionId
-     snapshot, and set the SFN result so N+1's state reads its (already-written, §7)
-     `inputConfigurationS3Location` + new `inputManifestS3Location`.
-- **End state** stays `processWorkflowExecutionOutput`, which logs the **last** pipeline's
-  outputs (same diff/version logic, shared module) and finalizes the execution
-  (stop date, status, execution log) — its current behavior, extended with the diff +
-  S3-version capture.
-- The shared diff/record/version logic lives in a common module imported by both the interim
-  lambda and processWorkflowExecutionOutput (no duplication).
+-   **One reusable interim Lambda** (built once in CDK). createWorkflow inserts a distinct
+    Task state per adjacent pipeline pair, each carrying that gap's `from`/`to`
+    pipelineExecutionIds + the next pipeline's config/manifest targets in its payload.
+-   After pipeline N, the interim lambda:
+    1. **Logs N's outputs**: diff the shared output **files** folder using a
+       **versionId snapshot** taken before N (snapshot stored per execution; P1's snapshot is
+       written by executeWorkflow). N's outputs = keys new since the snapshot OR whose latest
+       `versionId` changed. Record `PipelineExecutionOutputFiles` rows with `s3VersionId`, plus
+       N's stop date + status on its `PipelineExecutions` row.
+    2. **Prepares N+1**: write `pipeline{N+1}/input/manifest.json` (§5), refresh the versionId
+       snapshot, and set the SFN result so N+1's state reads its (already-written, §7)
+       `inputConfigurationS3Location` + new `inputManifestS3Location`.
+-   **End state** stays `processWorkflowExecutionOutput`, which logs the **last** pipeline's
+    outputs (same diff/version logic, shared module) and finalizes the execution
+    (stop date, status, execution log) — its current behavior, extended with the diff +
+    S3-version capture.
+-   The shared diff/record/version logic lives in a common module imported by both the interim
+    lambda and processWorkflowExecutionOutput (no duplication).
 
 ## 6a. Error-catch state + error-handler lambda
 
@@ -173,23 +173,23 @@ any pipeline/interim state --Catch(States.ALL, ResultPath=$.errorInfo)--> handle
 handleExecutionError --> WorkflowProcessingJobFailed (Fail)   # SFN still ends FAILED
 ```
 
-- **One reusable error-handler Lambda** (built once in CDK). createWorkflow points every task
-  state's `Catch` at it, capturing the caught error object via `ResultPath` (e.g.
-  `$.errorInfo`) so the handler receives the Step Functions `Error`/`Cause`.
-- On invocation the handler reconciles all tables for the execution:
-  - sets the V2 main row to `FAILED` with a stop date (unless already terminal) and stores
-    the specific `executionError` (from the caught `Error: Cause`) + the full CloudWatch
-    `executionLog` (same fetch the end-state lambda uses);
-  - marks every non-terminal `PipelineExecutions` row `FAILED` with a stop date;
-  - writes a per-pipeline logs row for the failing pipeline when identifiable.
-- After the handler returns, the state machine transitions to `WorkflowProcessingJobFailed`
-  so the execution still terminates in a `FAILED` SFN status (the handler does not swallow the
-  failure — it only records it). The handler is best-effort/idempotent: any error inside it is
-  logged and still falls through to the Fail state so a bookkeeping problem never masks the
-  original failure.
-- This reuses the shared status/stop/log module (§6) so the failure path and the success path
-  write consistent fields. It also complements the abort API (which writes `ABORTED`); the
-  error handler writes `FAILED`.
+-   **One reusable error-handler Lambda** (built once in CDK). createWorkflow points every task
+    state's `Catch` at it, capturing the caught error object via `ResultPath` (e.g.
+    `$.errorInfo`) so the handler receives the Step Functions `Error`/`Cause`.
+-   On invocation the handler reconciles all tables for the execution:
+    -   sets the V2 main row to `FAILED` with a stop date (unless already terminal) and stores
+        the specific `executionError` (from the caught `Error: Cause`) + the full CloudWatch
+        `executionLog` (same fetch the end-state lambda uses);
+    -   marks every non-terminal `PipelineExecutions` row `FAILED` with a stop date;
+    -   writes a per-pipeline logs row for the failing pipeline when identifiable.
+-   After the handler returns, the state machine transitions to `WorkflowProcessingJobFailed`
+    so the execution still terminates in a `FAILED` SFN status (the handler does not swallow the
+    failure — it only records it). The handler is best-effort/idempotent: any error inside it is
+    logged and still falls through to the Fail state so a bookkeeping problem never masks the
+    original failure.
+-   This reuses the shared status/stop/log module (§6) so the failure path and the success path
+    write consistent fields. It also complements the abort API (which writes `ABORTED`); the
+    error handler writes `FAILED`.
 
 ## 7. Config-file authorship
 
@@ -207,14 +207,14 @@ versioning on the asset bucket (already enabled for versioned outputs).
 
 ## What is NOT in this stage
 
-- No use-case pipeline container/lambda changes (their input contract changes; re-massaged
-  in a later task). All VAMS pipelines will need redeployment after this stage.
-- No generic-output execute API yet (output asset = path asset today); the recorded
-  `output*`/`inputMetadata*` fields + POST check lay the groundwork.
-- The DeadlineCloud task builder exists at the execution layer (`DeadlineCloudTaskBuilder`
-  emits `aws-sdk:deadline:createJob.waitForTaskToken` task states; the job-callback lambda
-  resolves task tokens from the default-bus `aws.deadline` job status events and registers
-  the job as the pipeline execution's sub-process). Pipeline **creation** with
-  `pipelineExecutionType: DeadlineCloud` is not yet possible — the request model, storage
-  shape, and UI land with the pipeline/workflow table overhaul (see the pipeline refactor
-  plan's "Deadline Cloud creation enablement" section).
+-   No use-case pipeline container/lambda changes (their input contract changes; re-massaged
+    in a later task). All VAMS pipelines will need redeployment after this stage.
+-   No generic-output execute API yet (output asset = path asset today); the recorded
+    `output*`/`inputMetadata*` fields + POST check lay the groundwork.
+-   The DeadlineCloud task builder exists at the execution layer (`DeadlineCloudTaskBuilder`
+    emits `aws-sdk:deadline:createJob.waitForTaskToken` task states; the job-callback lambda
+    resolves task tokens from the default-bus `aws.deadline` job status events and registers
+    the job as the pipeline execution's sub-process). Pipeline **creation** with
+    `pipelineExecutionType: DeadlineCloud` is not yet possible — the request model, storage
+    shape, and UI land with the pipeline/workflow table overhaul (see the pipeline refactor
+    plan's "Deadline Cloud creation enablement" section).

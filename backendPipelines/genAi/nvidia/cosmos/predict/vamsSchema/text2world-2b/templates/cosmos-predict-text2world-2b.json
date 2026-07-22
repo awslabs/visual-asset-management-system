@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos-predict-text2world-2b",
+    "templateName": "Text-to-World (2B)",
+    "description": "Generate a video world from a text prompt with the Cosmos Predict 2B model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_TYPE\":\"text2world\",\"MODEL_SIZE\":\"2B\",\"DISABLE_GUARDRAILS\":\"true\",\"OFFLOAD_TEXT_ENCODER\":\"true\",\"OFFLOAD_TOKENIZER\":\"true\",\"OFFLOAD_DIFFUSION_MODEL\":\"true\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Provide the generation prompt via the COSMOS_PREDICT_PROMPT asset metadata key (or PROMPT in the config)."
+}

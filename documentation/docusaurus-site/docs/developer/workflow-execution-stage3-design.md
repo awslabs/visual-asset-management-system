@@ -218,21 +218,21 @@ The record carries typed, list-valued fields so the _kind_ of each reported reso
 unambiguous and multiple sub-processes / log files are supported (the table is new, so there are
 no legacy single-ARN fields):
 
-| Field                         | Shape                                                                  | Meaning                                             |
-| ----------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------- |
-| `orchestrationBusEventPrefix` | string                                                                 | The event source prefix this pipeline reports under |
-| `registeredSubExecutions`     | list of `{ resourceType, ...locator ARNs }`                            | Reported sub-process resources (any type)           |
-| `registeredLogs`              | list of `{ logGroupArn, logGroupName, logStreamName, logStreamPrefix }`| Reported CloudWatch log locations                   |
+| Field                         | Shape                                                                   | Meaning                                             |
+| ----------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------- |
+| `orchestrationBusEventPrefix` | string                                                                  | The event source prefix this pipeline reports under |
+| `registeredSubExecutions`     | list of `{ resourceType, ...locator ARNs }`                             | Reported sub-process resources (any type)           |
+| `registeredLogs`              | list of `{ logGroupArn, logGroupName, logStreamName, logStreamPrefix }` | Reported CloudWatch log locations                   |
 
 Each `registeredSubExecutions` entry is **typed by `resourceType`** so it can hold any kind of
 sub-process, with whichever locator keys apply to that type:
 
-| `resourceType`            | Locator keys                                   | Abortable today |
-| ------------------------- | ---------------------------------------------- | --------------- |
-| `stepFunctionsExecution`  | `stateMachineArn`, `executionArn`              | Yes             |
-| `batchJob`                | `jobArn`, `jobId`                              | Not yet         |
-| `ecsTask`                 | `taskArn`, `clusterArn`                        | Not yet         |
-| _(other)_                 | `arn` (generic fallback)                       | Not yet         |
+| `resourceType`           | Locator keys                      | Abortable today |
+| ------------------------ | --------------------------------- | --------------- |
+| `stepFunctionsExecution` | `stateMachineArn`, `executionArn` | Yes             |
+| `batchJob`               | `jobArn`, `jobId`                 | Not yet         |
+| `ecsTask`                | `taskArn`, `clusterArn`           | Not yet         |
+| _(other)_                | `arn` (generic fallback)          | Not yet         |
 
 A bare `{ stateMachineArn, executionArn }` report (what the current use-case pipelines send)
 normalizes to `resourceType: "stepFunctionsExecution"` for back-compat. All reported types are

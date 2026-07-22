@@ -33,19 +33,25 @@ tools/VamsCLI/
 └── README.md               # User documentation
 ```
 
-### **Command Groups (20 top-level)**
+### **Command Groups (22 top-level)**
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
-industry, user, role, api-key
+pipeline, execution, industry, user, role, api-key
 ```
 
 Sync has a nested sub-command group:
 
 -   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
+
+Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution APIs:
+
+-   `pipeline create|get|list|update|delete`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
+-   `workflow create|get|list|update|delete`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
+-   `execution list` (global, permission-filtered), `execution details|logs|abort|rerun|permanent-delete`
 
 Industry has nested sub-command groups:
 

@@ -22,8 +22,7 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { layerBundlingCommand } from "../../../../../helper/lambda";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 export interface ConversionMeshCadMetadataExtractionConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -32,7 +31,7 @@ export interface ConversionMeshCadMetadataExtractionConstructProps extends cdk.S
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -55,9 +54,6 @@ export class ConversionMeshCadMetadataExtractionConstruct extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        const region = Stack.of(this).region;
-        const account = Stack.of(this).account;
-
         //Build Lambda VAMS Execution Function
         const pipelineConversionMeshCadMetadataExtractionLambdaFunction =
             buildVamsExecuteMeshCadMetadataExtractionPipelineFunction(
@@ -79,64 +75,40 @@ export class ConversionMeshCadMetadataExtractionConstruct extends NestedStack {
         this.pipelineVamsLambdaFunctionName =
             pipelineConversionMeshCadMetadataExtractionLambdaFunction.functionName;
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (
             props.config.app.pipelines.useConversionCadMeshMetadataExtraction
                 .autoRegisterWithVAMS === true
         ) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register meshCad metadata extraction  pipeline and workflow
-            new cdk.CustomResource(this, "ConversionMetadataExtractionCadMeshPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "metadata-extraction-cad-mesh",
-                    pipelineDescription:
-                        "Basic Metadata Attribute Extraction (File-level metadata) - using Trimesh and CADQuery library. Supported files are STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ, STP, DXF.",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".all",
-                    waitForCallback: "Disabled", // Synchronous pipeline
+            new VamsSchemaRegistration(this, "MeshCadMetadataExtractionRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "conversion",
+                    "meshCadMetadataExtraction",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName:
                         pipelineConversionMeshCadMetadataExtractionLambdaFunction.functionName,
-                    taskTimeout: "900", // 15 minutes (lambda limit)
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({ outputType: ".all" }),
-                    workflowId: "metadata-extraction-cad-mesh",
-                    workflowDescription:
-                        "Basic Metadata Attribute Extraction (File-level metadata) - using Trimesh and CADQuery library. Supported files are STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ, STP, DXF.",
-                    autoTriggerOnFileExtensionsUpload:
-                        props.config.app.pipelines.useConversionCadMeshMetadataExtraction
-                            .autoRegisterAutoTriggerOnFileUpload === true
-                            ? ".stl,.obj,.ply,.gltf,.glb,.3mf,.xaml,.3dxml,.dae,.xyz,.stp,.dxf"
-                            : "",
                 },
+                idOverrides: {
+                    pipelineId: "metadata-extraction-cad-mesh",
+                    workflowId: "metadata-extraction-cad-mesh",
+                },
+                triggerEnabled:
+                    props.config.app.pipelines.useConversionCadMeshMetadataExtraction
+                        .autoRegisterAutoTriggerOnFileUpload === true,
             });
-
-            //Nag supression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
     }
 }

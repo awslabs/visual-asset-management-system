@@ -27,7 +27,9 @@ The following options appear on nearly every command and are not repeated in ind
 | `tag`, `tag-type`                                                            | Tag and tag type management for asset categorization                                           | [Tags](commands/tags.md)                               |
 | `metadata`, `metadata-schema`                                                | Metadata CRUD for assets, files, links, and databases; schema inspection                       | [Metadata](commands/metadata.md)                       |
 | `search`                                                                     | Search assets and files using Amazon OpenSearch Service                                        | [Search](commands/search.md)                           |
-| `workflow`                                                                   | List, execute, and monitor processing workflows                                                | [Workflows](commands/workflows.md)                     |
+| `pipeline`, `pipeline template`, `pipeline tag-schema`                       | Pipeline definitions, configuration templates, and template tag schemas                        | [Pipelines](commands/pipelines.md)                     |
+| `workflow`, `workflow trigger`, `workflow execute`                           | Workflow CRUD, file-upload triggers, and asset-less multi-file execution                       | [Workflows](commands/workflows.md)                     |
+| `execution`                                                                  | Global execution list, details, logs, abort, re-run, and permanent delete                      | [Executions](commands/executions.md)                   |
 | `role`, `role constraint`, `role user`                                       | Role management, permission constraints, user-role assignments, and template import            | [Permissions](commands/permissions.md)                 |
 | `user cognito`, `api-key`                                                    | Amazon Cognito user management and API key management                                          | [Users and API Keys](commands/users-and-keys.md)       |
 | `industry engineering bom`, `industry engineering plm`, `industry spatial`   | BOM assembly, PLM XML import, and spatial GLB combination                                      | [Industry](commands/industry.md)                       |
@@ -80,11 +82,13 @@ vamscli metadata asset list -d my-db -a my-asset
 vamscli metadata-schema list -d my-database -e assetMetadata
 ```
 
-### Workflows and Permissions
+### Pipelines, Workflows, Executions, and Permissions
 
 ```bash
+vamscli pipeline list -d my-database
 vamscli workflow list -d my-database
-vamscli workflow execute -d my-db -a my-asset -w workflow-123 --workflow-database-id global
+vamscli workflow execute --workflow-database-id global -w workflow-123 --input-file my-db:asset1:/model.glb
+vamscli execution list --status RUNNING
 vamscli role list
 vamscli role constraint template import -j ./database-admin.json
 ```

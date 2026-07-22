@@ -57,6 +57,10 @@ class TestBuildExecutionItems:
         assert it["workflowExecutionId"] == "E1"
         assert it["startDate"] == "2026-06-16T00:00:00Z"
         assert it["stopDate"] == "2026-06-16T00:05:00Z"
+        # Aliased under the global/workflow-list keys too, so the shared web ExecutionsBoard renders
+        # Started/Stopped/Duration on the asset Workflows tab.
+        assert it["executionStartDate"] == "2026-06-16T00:00:00Z"
+        assert it["executionStopDate"] == "2026-06-16T00:05:00Z"
         assert it["inputAssetFileKey"] == "/x.glb"
         assert it["databaseId"] == "db" and it["assetId"] == "a1"
         assert it["executionStatus"] == "SUCCEEDED"

@@ -9,19 +9,43 @@ import { Pipeline, Template, TagSchemaField } from "../types";
 describe("resolveTemplate", () => {
     describe("findUnmatchedTags", () => {
         it("flags an unmatched {{tag}} in the body", () => {
-            expect(findUnmatchedTags('{"a":"{{ missing }}"}', new Set(["provided"]), new Set(["executionId"]))).toEqual(["missing"]);
+            expect(
+                findUnmatchedTags(
+                    '{"a":"{{ missing }}"}',
+                    new Set(["provided"]),
+                    new Set(["executionId"])
+                )
+            ).toEqual(["missing"]);
         });
 
         it("does not flag tags that are provided", () => {
-            expect(findUnmatchedTags('{"a":"{{ provided }}"}', new Set(["provided"]), new Set(["executionId"]))).toEqual([]);
+            expect(
+                findUnmatchedTags(
+                    '{"a":"{{ provided }}"}',
+                    new Set(["provided"]),
+                    new Set(["executionId"])
+                )
+            ).toEqual([]);
         });
 
         it("does not flag system tags", () => {
-            expect(findUnmatchedTags('{"a":"{{ executionId }}"}', new Set(["provided"]), new Set(["executionId"]))).toEqual([]);
+            expect(
+                findUnmatchedTags(
+                    '{"a":"{{ executionId }}"}',
+                    new Set(["provided"]),
+                    new Set(["executionId"])
+                )
+            ).toEqual([]);
         });
 
         it("does not flag metadata_ prefixed dynamic tags", () => {
-            expect(findUnmatchedTags('{"a":"{{ metadata_customField }}"}', new Set([]), new Set(["executionId"]))).toEqual([]);
+            expect(
+                findUnmatchedTags(
+                    '{"a":"{{ metadata_customField }}"}',
+                    new Set([]),
+                    new Set(["executionId"])
+                )
+            ).toEqual([]);
         });
 
         it("handles multiple tags", () => {
@@ -30,7 +54,9 @@ describe("resolveTemplate", () => {
         });
 
         it("handles whitespace in tags", () => {
-            expect(findUnmatchedTags('{"a":"{{  spaced  }}"}', new Set([]), new Set())).toEqual(["spaced"]);
+            expect(findUnmatchedTags('{"a":"{{  spaced  }}"}', new Set([]), new Set())).toEqual([
+                "spaced",
+            ]);
         });
     });
 
@@ -75,7 +101,11 @@ describe("resolveTemplate", () => {
                 { key: "required2", value: null },
                 { key: "required3", value: undefined },
             ];
-            expect(missingRequiredTags(schema, tags)).toEqual(["required1", "required2", "required3"]);
+            expect(missingRequiredTags(schema, tags)).toEqual([
+                "required1",
+                "required2",
+                "required3",
+            ]);
         });
 
         it("does not flag optional tags", () => {
@@ -94,27 +124,29 @@ describe("resolveTemplate", () => {
                 pipeline: { systemConfig: { allowCustomTemplateOverride: false } } as any,
                 templateId: "t",
                 customTemplateOverride: "{}",
-                tags: []
+                tags: [],
             });
             expect(r.errors.length).toBeGreaterThan(0);
-            expect(r.errors.some(e => /allow/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /allow/i.test(e))).toBe(true);
         });
 
         it("rejects template-less override when requireTemplate is true", () => {
             const r = resolvePipelineParams({
-                pipeline: { systemConfig: { allowCustomTemplateOverride: true, requireTemplate: true } } as any,
+                pipeline: {
+                    systemConfig: { allowCustomTemplateOverride: true, requireTemplate: true },
+                } as any,
                 customTemplateOverride: "{}",
-                tags: []
+                tags: [],
             });
-            expect(r.errors.some(e => /require/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /require/i.test(e))).toBe(true);
         });
 
         it("rejects no-template execution when requireTemplate is true", () => {
             const r = resolvePipelineParams({
                 pipeline: { systemConfig: { requireTemplate: true } } as any,
-                tags: []
+                tags: [],
             });
-            expect(r.errors.some(e => /require/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /require/i.test(e))).toBe(true);
         });
 
         it("rejects customEditedBody when template does not allow custom edit", () => {
@@ -133,9 +165,9 @@ describe("resolveTemplate", () => {
                 template,
                 templateId: "t",
                 tags: [],
-                customEditedBody: '{"edited":true}'
+                customEditedBody: '{"edited":true}',
             });
-            expect(r.errors.some(e => /allow custom editing/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /allow custom editing/i.test(e))).toBe(true);
         });
 
         it("case 1: templateId + tags is valid", () => {
@@ -152,7 +184,7 @@ describe("resolveTemplate", () => {
                 pipeline: { systemConfig: {} } as any,
                 template,
                 templateId: "t",
-                tags: []
+                tags: [],
             });
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(1);
@@ -173,9 +205,9 @@ describe("resolveTemplate", () => {
                 pipeline: { systemConfig: {} } as any,
                 template,
                 templateId: "t",
-                tags: [{ key: "executionId", value: "bad" }]
+                tags: [{ key: "executionId", value: "bad" }],
             });
-            expect(r.errors.some(e => /reserved/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /reserved/i.test(e))).toBe(true);
         });
 
         it("case 1: detects unmatched tags in template body", () => {
@@ -192,9 +224,9 @@ describe("resolveTemplate", () => {
                 pipeline: { systemConfig: {} } as any,
                 template,
                 templateId: "t",
-                tags: []
+                tags: [],
             });
-            expect(r.errors.some(e => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
         });
 
         it("case 1: detects missing required tags", () => {
@@ -211,9 +243,9 @@ describe("resolveTemplate", () => {
                 pipeline: { systemConfig: {} } as any,
                 template,
                 templateId: "t",
-                tags: []
+                tags: [],
             });
-            expect(r.errors.some(e => /required/i.test(e) && /required1/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /required/i.test(e) && /required1/i.test(e))).toBe(true);
         });
 
         it("case 2: templateId + override is valid when allowOverride is true", () => {
@@ -231,7 +263,7 @@ describe("resolveTemplate", () => {
                 template,
                 templateId: "t",
                 tags: [],
-                customTemplateOverride: '{"override":true}'
+                customTemplateOverride: '{"override":true}',
             });
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(2);
@@ -253,16 +285,18 @@ describe("resolveTemplate", () => {
                 template,
                 templateId: "t",
                 tags: [{ key: "required1", value: "val" }],
-                customTemplateOverride: '{"a":"{{ missing }}"}'
+                customTemplateOverride: '{"a":"{{ missing }}"}',
             });
-            expect(r.errors.some(e => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
         });
 
         it("case 3: template-less override is valid when allowOverride and !requireTemplate", () => {
             const r = resolvePipelineParams({
-                pipeline: { systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false } } as any,
+                pipeline: {
+                    systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false },
+                } as any,
                 tags: [],
-                customTemplateOverride: '{"override":true}'
+                customTemplateOverride: '{"override":true}',
             });
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(3);
@@ -270,26 +304,30 @@ describe("resolveTemplate", () => {
 
         it("case 3: detects reserved key collision without schema", () => {
             const r = resolvePipelineParams({
-                pipeline: { systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false } } as any,
+                pipeline: {
+                    systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false },
+                } as any,
                 tags: [{ key: "assetDataObject", value: "bad" }],
-                customTemplateOverride: '{}'
+                customTemplateOverride: "{}",
             });
-            expect(r.errors.some(e => /reserved/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /reserved/i.test(e))).toBe(true);
         });
 
         it("case 3: detects unmatched tags in override body", () => {
             const r = resolvePipelineParams({
-                pipeline: { systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false } } as any,
+                pipeline: {
+                    systemConfig: { allowCustomTemplateOverride: true, requireTemplate: false },
+                } as any,
                 tags: [],
-                customTemplateOverride: '{"a":"{{ missing }}"}'
+                customTemplateOverride: '{"a":"{{ missing }}"}',
             });
-            expect(r.errors.some(e => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
         });
 
         it("case 4: no-template no-override is valid when !requireTemplate", () => {
             const r = resolvePipelineParams({
                 pipeline: { systemConfig: { requireTemplate: false } } as any,
-                tags: []
+                tags: [],
             });
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(4);
@@ -298,7 +336,7 @@ describe("resolveTemplate", () => {
         it("case 4: allows tags (system vars only scenario)", () => {
             const r = resolvePipelineParams({
                 pipeline: { systemConfig: {} } as any,
-                tags: [{ key: "customTag", value: "value" }]
+                tags: [{ key: "customTag", value: "value" }],
             });
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(4);
@@ -321,7 +359,7 @@ describe("resolveTemplate", () => {
                 template,
                 templateId: "t",
                 tags: [],
-                customEditedBody: '{"edited":true}'
+                customEditedBody: '{"edited":true}',
             });
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(5);
@@ -344,9 +382,9 @@ describe("resolveTemplate", () => {
                 template,
                 templateId: "t",
                 tags: [],
-                customEditedBody: '{"a":"{{ missing }}"}'
+                customEditedBody: '{"a":"{{ missing }}"}',
             });
-            expect(r.errors.some(e => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
+            expect(r.errors.some((e) => /unmatched/i.test(e) && /missing/i.test(e))).toBe(true);
         });
     });
 });

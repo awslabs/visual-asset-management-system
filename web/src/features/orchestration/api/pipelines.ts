@@ -7,17 +7,40 @@ import { apiClient } from "../../../services/apiClient";
 import { toTuple, pageAll } from "./client";
 import type { Pipeline, Template, TagSchemaField } from "../types";
 
+/**
+ * One server page of pipelines. Returns the raw page object { Items, NextToken? } so the
+ * caller (useInfiniteQuery) can page via the backend's maxItems/pageSize/startingToken params.
+ */
 export async function listPipelines(
+    databaseId?: string,
+    params?: Record<string, string>
+): Promise<[boolean, { Items: Pipeline[]; NextToken?: string } | string]> {
+    return toTuple(async () => {
+        const path = databaseId ? `database/${databaseId}/pipelines` : "pipelines";
+        const opts = params ? { queryStringParameters: params } : {};
+        return apiClient.get(path, opts);
+    });
+}
+
+/**
+ * All pipelines, draining every server page. Used where the complete set is required
+ * (e.g. resolving a workflow's pipeline references, populating the builder's picker) —
+ * NOT for the paginated list view, which uses listPipelines + useInfiniteQuery.
+ */
+export async function listAllPipelines(
     databaseId?: string,
     includeArchived?: boolean
 ): Promise<[boolean, Pipeline[] | string]> {
     return toTuple(async () => {
         const path = databaseId ? `database/${databaseId}/pipelines` : "pipelines";
-        const opts = includeArchived
-            ? { queryStringParameters: { includeArchived: "true" } }
-            : {};
+        const opts = includeArchived ? { queryStringParameters: { includeArchived: "true" } } : {};
         return pageAll((token) =>
-            apiClient.get(path, { ...opts, ...(token && { queryStringParameters: { ...opts.queryStringParameters, startingToken: token } }) })
+            apiClient.get(path, {
+                ...opts,
+                ...(token && {
+                    queryStringParameters: { ...opts.queryStringParameters, startingToken: token },
+                }),
+            })
         );
     });
 }
@@ -30,9 +53,7 @@ export async function getPipeline(
 }
 
 export async function createPipeline(body: Pipeline): Promise<[boolean, any]> {
-    return toTuple(() =>
-        apiClient.post(`database/${body.databaseId}/pipelines`, { body })
-    );
+    return toTuple(() => apiClient.post(`database/${body.databaseId}/pipelines`, { body }));
 }
 
 export async function updatePipeline(
@@ -40,9 +61,7 @@ export async function updatePipeline(
     pipelineId: string,
     body: Partial<Pipeline>
 ): Promise<[boolean, any]> {
-    return toTuple(() =>
-        apiClient.put(`database/${databaseId}/pipelines/${pipelineId}`, { body })
-    );
+    return toTuple(() => apiClient.put(`database/${databaseId}/pipelines/${pipelineId}`, { body }));
 }
 
 export async function archivePipeline(
@@ -113,11 +132,14 @@ export async function getTagSchema(
     pipelineId: string,
     templateId: string
 ): Promise<[boolean, TagSchemaField[] | string]> {
-    return toTuple(() =>
-        apiClient.get(
+    // The response is a TagSchemaResponseModel object with the fields under `.fields`.
+    return toTuple(async () => {
+        const resp: any = await apiClient.get(
             `database/${databaseId}/pipelines/${pipelineId}/templates/${templateId}/tagSchema`
-        )
-    );
+        );
+        const msg = resp?.message ?? resp;
+        return msg?.fields ?? [];
+    });
 }
 
 export async function setTagSchema(
@@ -126,10 +148,11 @@ export async function setTagSchema(
     templateId: string,
     fields: TagSchemaField[]
 ): Promise<[boolean, any]> {
+    // The set handler parses SetTagSchemaRequestModel, which expects a `{ fields: [...] }` object.
     return toTuple(() =>
         apiClient.put(
             `database/${databaseId}/pipelines/${pipelineId}/templates/${templateId}/tagSchema`,
-            { body: fields }
+            { body: { fields } }
         )
     );
 }

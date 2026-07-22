@@ -28,22 +28,44 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
 }) => {
     const { data: templates } = useTemplates(pipeline.databaseId, pipeline.pipelineId);
 
+    // Initial template selection precedence: the run's already-chosen template (revisiting the
+    // step), then the workflow ref's default, then the pipeline's own default template (isDefault).
+    const initialTemplateId =
+        data?.templateId ||
+        pipelineRef.defaultTemplateId ||
+        (templates || []).find((t) => t.isDefault)?.templateId;
+
     const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>(
-        data?.templateId || pipelineRef.defaultTemplateId
+        initialTemplateId
     );
     const [tagFormData, setTagFormData] = useState<Record<string, any>>({});
-    const [customOverrideMode, setCustomOverrideMode] = useState(false);
-    const [customOverrideBody, setCustomOverrideBody] = useState<string>("");
-    const [customEditMode, setCustomEditMode] = useState(false);
-    const [customEditedBody, setCustomEditedBody] = useState<string>("");
+    // Single "Customize configuration" toggle: when on, the config editor is editable and the edited
+    // body is sent as a custom override. Replaces the earlier separate override/edit toggles.
+    const [customize, setCustomize] = useState<boolean>(
+        !!data?.customTemplateOverride || !!data?.customEditedBody
+    );
+    const [customBody, setCustomBody] = useState<string>(
+        data?.customTemplateOverride || data?.customEditedBody || ""
+    );
 
     const selectedTemplate = useMemo(() => {
         if (!templates || !selectedTemplateId) return undefined;
         return templates.find((t) => t.templateId === selectedTemplateId);
     }, [templates, selectedTemplateId]);
 
+    // Once templates load, adopt the pipeline's default template if nothing is selected yet.
+    useEffect(() => {
+        if (!selectedTemplateId && templates && templates.length > 0) {
+            const def = templates.find((t) => t.isDefault);
+            if (def) setSelectedTemplateId(def.templateId);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [templates]);
+
     // Initialize tagFormData from data or template defaults (only on template change)
-    const [initializedTemplateId, setInitializedTemplateId] = useState<string | undefined>(undefined);
+    const [initializedTemplateId, setInitializedTemplateId] = useState<string | undefined>(
+        undefined
+    );
     useEffect(() => {
         // Only initialize when the template ID changes
         if (selectedTemplateId !== initializedTemplateId) {
@@ -73,31 +95,23 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     const handleTemplateChange = (templateId: string) => {
         setSelectedTemplateId(templateId);
         setTagFormData({});
-        setCustomOverrideMode(false);
-        setCustomOverrideBody("");
-        setCustomEditMode(false);
-        setCustomEditedBody("");
+        setCustomize(false);
+        setCustomBody("");
     };
 
     const handleTagChange = (formData: any) => {
         setTagFormData(formData);
     };
 
-    // Compute resolved config body for display
+    // The config editor shows the customized body when customizing, otherwise the template body.
     const resolvedConfigBody = useMemo(() => {
-        if (customOverrideMode) {
-            return customOverrideBody;
-        }
-        if (customEditMode) {
-            return customEditedBody;
-        }
-        if (selectedTemplate?.configBody) {
-            return selectedTemplate.configBody;
-        }
-        return "";
-    }, [selectedTemplate, customOverrideMode, customOverrideBody, customEditMode, customEditedBody]);
+        if (customize) return customBody;
+        return selectedTemplate?.configBody || "";
+    }, [selectedTemplate, customize, customBody]);
 
-    // Run resolvePipelineParams to compute validation errors and resolved params
+    // Run resolvePipelineParams to compute validation errors and resolved params. A customized body
+    // is sent as customTemplateOverride (the backend accepts it under either the pipeline's override
+    // grant or the template's allowCustomEdit grant).
     const validationResult = useMemo(() => {
         if (!selectedTemplate && !selectedTemplateId) {
             return { errors: [], params: {}, mode: 4 as const };
@@ -109,19 +123,9 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
             template: selectedTemplate,
             templateId: selectedTemplateId,
             tags,
-            customTemplateOverride: customOverrideMode ? customOverrideBody : undefined,
-            customEditedBody: customEditMode ? customEditedBody : undefined,
+            customTemplateOverride: customize ? customBody : undefined,
         });
-    }, [
-        pipeline,
-        selectedTemplate,
-        selectedTemplateId,
-        tagFormData,
-        customOverrideMode,
-        customOverrideBody,
-        customEditMode,
-        customEditedBody,
-    ]);
+    }, [pipeline, selectedTemplate, selectedTemplateId, tagFormData, customize, customBody]);
 
     // Update parent whenever local state changes
     useEffect(() => {
@@ -130,8 +134,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
             pipelineId: pipeline.pipelineId,
             templateId: selectedTemplateId,
             tags,
-            customTemplateOverride: customOverrideMode ? customOverrideBody : undefined,
-            customEditedBody: customEditMode ? customEditedBody : undefined,
+            customTemplateOverride: customize ? customBody : undefined,
             errors: validationResult.errors,
             params: validationResult.params,
             mode: validationResult.mode,
@@ -141,10 +144,8 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     }, [
         selectedTemplateId,
         tagFormData,
-        customOverrideMode,
-        customOverrideBody,
-        customEditMode,
-        customEditedBody,
+        customize,
+        customBody,
         pipeline.pipelineId,
         validationResult,
         // Intentionally omit onChange to avoid infinite loop
@@ -152,23 +153,23 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
 
     const allowOverride = !!pipeline.systemConfig?.allowCustomTemplateOverride;
     const allowCustomEdit = selectedTemplate?.allowCustomEdit || false;
+    // The unified "Customize configuration" toggle is available when either grant is present.
+    const canCustomize = allowOverride || allowCustomEdit;
 
     return (
         <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                {pipeline.pipelineName}
-            </h3>
+            <h3 className="text-lg font-semibold text-text-primary">{pipeline.pipelineName}</h3>
 
             {/* Template selection */}
             {templates && templates.length > 0 && (
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    <label className="block text-sm font-medium text-text-primary mb-2">
                         Template
                     </label>
                     <select
                         value={selectedTemplateId || ""}
                         onChange={(e) => handleTemplateChange(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value="">-- Select Template --</option>
                         {templates.map((tpl) => (
@@ -183,7 +184,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
             {/* Tag form */}
             {selectedTemplate?.tagSchema && selectedTemplate.tagSchema.length > 0 && (
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    <label className="block text-sm font-medium text-text-primary mb-2">
                         Template Tags
                     </label>
                     <DynamicTagForm
@@ -194,62 +195,45 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                 </div>
             )}
 
-            {/* Custom override mode */}
-            {allowOverride && (
+            {/* Unified "Customize configuration" toggle — available when the pipeline allows a custom
+                override OR the selected template allows custom edit. When on, the config editor below
+                becomes editable and the edited body is sent as the run's config. */}
+            {canCustomize && (
                 <div>
-                    <label className="flex items-center text-sm text-gray-700 dark:text-gray-300">
+                    <label className="flex items-center text-sm text-text-primary">
                         <input
                             type="checkbox"
-                            checked={customOverrideMode}
+                            checked={customize}
                             onChange={(e) => {
-                                setCustomOverrideMode(e.target.checked);
-                                if (e.target.checked && !customOverrideBody) {
-                                    setCustomOverrideBody(selectedTemplate?.configBody || "");
+                                setCustomize(e.target.checked);
+                                if (e.target.checked && !customBody) {
+                                    setCustomBody(selectedTemplate?.configBody || "");
                                 }
                             }}
                             className="mr-2"
                         />
-                        Use custom config override
+                        Customize configuration before running
                     </label>
+                    <p className="text-xs text-text-secondary mt-1 ml-6">
+                        Edit the configuration below for this run only. Leave off to use the
+                        template's configuration as-is.
+                    </p>
                 </div>
             )}
 
-            {/* Custom edit mode (inline toggle) */}
-            {allowCustomEdit && !customOverrideMode && (
+            {/* Config editor — shown when a template is selected OR the run is customizing a
+                template-less config. Editable only while customizing. */}
+            {(selectedTemplate || customize) && (
                 <div>
-                    <label className="flex items-center text-sm text-gray-700 dark:text-gray-300">
-                        <input
-                            type="checkbox"
-                            checked={customEditMode}
-                            onChange={(e) => {
-                                setCustomEditMode(e.target.checked);
-                                if (e.target.checked && !customEditedBody) {
-                                    setCustomEditedBody(selectedTemplate?.configBody || "");
-                                }
-                            }}
-                            className="mr-2"
-                        />
-                        Edit resolved config inline
-                    </label>
-                </div>
-            )}
-
-            {/* Config editor */}
-            {selectedTemplate && (
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Resolved Config
+                    <label className="block text-sm font-medium text-text-primary mb-2">
+                        {customize ? "Configuration (editable)" : "Configuration (from template)"}
                     </label>
                     <ConfigEditor
                         value={resolvedConfigBody}
-                        language={selectedTemplate.configFormat}
-                        readOnly={!(customOverrideMode || customEditMode)}
+                        language={selectedTemplate?.configFormat || "json"}
+                        readOnly={!customize}
                         onChange={(value) => {
-                            if (customOverrideMode) {
-                                setCustomOverrideBody(value || "");
-                            } else if (customEditMode) {
-                                setCustomEditedBody(value || "");
-                            }
+                            if (customize) setCustomBody(value || "");
                         }}
                         height="300px"
                     />

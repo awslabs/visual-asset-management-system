@@ -15,6 +15,7 @@ jest.mock("../../../services/apiClient", () => ({
 import { apiClient } from "../../../services/apiClient";
 import {
     listWorkflows,
+    listAllWorkflows,
     getWorkflow,
     createWorkflow,
     updateWorkflow,
@@ -29,14 +30,14 @@ describe("workflows service", () => {
         jest.clearAllMocks();
     });
 
-    describe("listWorkflows", () => {
-        it("listWorkflows(db) hits database/{db}/workflows", async () => {
+    describe("listWorkflows (one server page)", () => {
+        it("listWorkflows(db) hits database/{db}/workflows and returns the page object", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue({
-                message: { Items: [{ workflowId: "w1" }] },
+                message: { Items: [{ workflowId: "w1" }], NextToken: "tok" },
             });
             const r = await listWorkflows("db1");
-            expect(apiClient.get).toHaveBeenCalledWith("database/db1/workflows", expect.anything());
-            expect(r).toEqual([true, [{ workflowId: "w1" }]]);
+            expect(apiClient.get).toHaveBeenCalledWith("database/db1/workflows", {});
+            expect(r).toEqual([true, { Items: [{ workflowId: "w1" }], NextToken: "tok" }]);
         });
 
         it("listWorkflows() without databaseId hits workflows", async () => {
@@ -44,16 +45,29 @@ describe("workflows service", () => {
                 message: { Items: [{ workflowId: "w1" }] },
             });
             const r = await listWorkflows();
-            expect(apiClient.get).toHaveBeenCalledWith("workflows", expect.anything());
-            expect(r).toEqual([true, [{ workflowId: "w1" }]]);
+            expect(apiClient.get).toHaveBeenCalledWith("workflows", {});
+            expect(r).toEqual([true, { Items: [{ workflowId: "w1" }] }]);
         });
 
-        it("listWorkflows with includeArchived passes query param", async () => {
+        it("listWorkflows(db, params) sends pagination query params", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue({ message: { Items: [] } });
-            await listWorkflows("db1", true);
+            await listWorkflows("db1", { pageSize: "50", startingToken: "tok" });
             expect(apiClient.get).toHaveBeenCalledWith("database/db1/workflows", {
-                queryStringParameters: { includeArchived: "true" },
+                queryStringParameters: { pageSize: "50", startingToken: "tok" },
             });
+        });
+    });
+
+    describe("listAllWorkflows (drains all pages)", () => {
+        it("pages to exhaustion and returns a flat array", async () => {
+            (apiClient.get as jest.Mock)
+                .mockResolvedValueOnce({
+                    message: { Items: [{ workflowId: "w1" }], NextToken: "t2" },
+                })
+                .mockResolvedValueOnce({ message: { Items: [{ workflowId: "w2" }] } });
+            const r = await listAllWorkflows("db1", true);
+            expect(r).toEqual([true, [{ workflowId: "w1" }, { workflowId: "w2" }]]);
+            expect(apiClient.get).toHaveBeenCalledTimes(2);
         });
     });
 
@@ -98,14 +112,39 @@ describe("workflows service", () => {
     describe("listTriggers", () => {
         it("hits database/{db}/workflows/{wid}/triggers", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue({
-                message: { Items: [{ triggerType: "fileUpload" }] },
+                message: { Items: [{ triggerType: "fileUpload", enabled: true }] },
             });
             const r = await listTriggers("db1", "w1");
             expect(apiClient.get).toHaveBeenCalledWith(
                 "database/db1/workflows/w1/triggers",
                 expect.anything()
             );
-            expect(r).toEqual([true, [{ triggerType: "fileUpload" }]]);
+            expect(r[0]).toBe(true);
+            expect((r[1] as any[])[0].triggerType).toBe("fileUpload");
+        });
+
+        it("flattens triggerConfig so filters/defaults survive a load→save round-trip", async () => {
+            // Response nests the settings under triggerConfig (backend TriggerResponseModel shape).
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: {
+                    Items: [
+                        {
+                            triggerType: "fileUpload",
+                            enabled: true,
+                            triggerConfig: {
+                                inputFileFilters: { allow: ["*.glb"], exclude: ["*.tmp"] },
+                                defaultTemplateIds: { "GLOBAL:p1": "t1" },
+                            },
+                        },
+                    ],
+                },
+            });
+            const [, data] = await listTriggers("db1", "w1");
+            const trigger = (data as any[])[0];
+            // The editor reads these flat — they must be populated, not undefined.
+            expect(trigger.inputFileFilters).toEqual({ allow: ["*.glb"], exclude: ["*.tmp"] });
+            expect(trigger.defaultTemplateIds).toEqual({ "GLOBAL:p1": "t1" });
+            expect(trigger.enabled).toBe(true);
         });
     });
 

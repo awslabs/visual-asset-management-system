@@ -50,7 +50,9 @@ describe("ExecutionsPage", () => {
     it("passes workflow scope when workflowId and workflowDatabaseId params are present", () => {
         render(
             <QueryClientProvider client={queryClient}>
-                <MemoryRouter initialEntries={["/executions?workflowId=wf-1&workflowDatabaseId=db1"]}>
+                <MemoryRouter
+                    initialEntries={["/executions?workflowId=wf-1&workflowDatabaseId=db1"]}
+                >
                     <Routes>
                         <Route path="/executions" element={<ExecutionsPage />} />
                     </Routes>

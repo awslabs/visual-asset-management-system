@@ -1,0 +1,8 @@
+{
+    "templateId": "convert-to-glb",
+    "templateName": "Convert to GLB",
+    "description": "Convert a 3D mesh to GLB format using the Trimesh library.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".glb\"}",
+    "allowCustomEdit": false
+}

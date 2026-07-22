@@ -20,6 +20,8 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
+import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -34,52 +36,6 @@ import {
     grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
-
-export function buildWorkflowService(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "workflowService";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.workflows.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {},
-    });
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: [
-                "states:DeleteStateMachine",
-                "states:DescribeStateMachine",
-                "states:UpdateStateMachine",
-            ],
-            resources: [IAMArn("*" + config.name + "*").statemachine],
-        })
-    );
-    return fun;
-}
 
 export function buildExecutionServiceFunction(
     scope: Construct,
@@ -115,25 +71,38 @@ export function buildExecutionServiceFunction(
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort
-    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED
-    // Read-only sources for the details + logs APIs.
-    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort + permanent-delete
+    // WB5.3 adds permanent-delete (removes rows across every sub-table) + global-list/permanent
+    // output-asset access via the outputs-index table, so the execution sub-tables become
+    // read/WRITE and the outputs-index table is granted here.
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED + delete
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionOutputsIndexTable.grantReadWriteData(fun);
+    // Definition tables (V2) are read only to cross-fetch human-readable workflow/pipeline
+    // names + descriptions for the detail view.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["states:DescribeExecution", "states:StopExecution"],
+            // DescribeExecution/StopExecution + GetExecutionHistory (the whole-execution log view
+            // renders the Step Functions execution history) act on executions; DescribeStateMachine
+            // resolves a registered sub-SFN's CloudWatch log group from its state-machine ARN.
+            actions: [
+                "states:DescribeExecution",
+                "states:StopExecution",
+                "states:GetExecutionHistory",
+                "states:DescribeStateMachine",
+            ],
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,
                 IAMArn("*" + config.name + "*").statemachineExecution,
@@ -144,89 +113,18 @@ export function buildExecutionServiceFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
-            // Scoped to VAMS-named log groups (the workflow SFN log group contains 'vams').
-            resources: [IAMArn("*" + config.name + "*").loggroup],
-        })
-    );
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-
-    return fun;
-}
-
-export function buildCreateWorkflowFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    processWorkflowExecutionOutputFunction: lambda.Function,
-    interimPipelineTrackingFunction: lambda.Function,
-    handleExecutionErrorFunction: lambda.Function,
-    workflowsLogGroup: logs.LogGroup,
-    stackName: string,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const logGroupWorkflows = workflowsLogGroup;
-
-    const role = buildWorkflowRole(
-        scope,
-        processWorkflowExecutionOutputFunction,
-        config,
-        storageResources.encryption.kmsKey
-    );
-    const name = "createWorkflow";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.workflows.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {
-            PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
-                processWorkflowExecutionOutputFunction.functionName,
-            // Interim pipeline-tracking + error-handler lambda names, embedded into the
-            // generated ASL (interim states between pipelines; error-handler catch state).
-            INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME:
-                interimPipelineTrackingFunction.functionName,
-            HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME: handleExecutionErrorFunction.functionName,
-            VAMS_STACK_NAME: stackName,
-            LAMBDA_ROLE_ARN: role.roleArn,
-            LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
-            // Deployment partition for the Step Functions service-integration ARNs embedded in
-            // the generated ASL (arn:{partition}:states:::...), so workflows are valid in
-            // GovCloud/China/ISO partitions and not just commercial "aws".
-            AWS_PARTITION: config.env.partition,
-        },
-    });
-    storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: [
-                "states:CreateStateMachine",
-                "states:DescribeStateMachine",
-                "states:UpdateStateMachine",
+            // Read scope covers both the whole-execution and per-pipeline-step log sources the
+            // logs API reads: (1) VAMS-named groups — the shared workflow SFN log group contains
+            // the config name; (2) the vended-logs namespace — each pipeline state machine emits
+            // to its own '/aws/vendedlogs/VAMSstateMachine-*' group, which a pipeline registers as
+            // a sub-process log and full/per-step log retrieval reads. Both suffixed with ':*' so
+            // stream-level reads within each group are also permitted.
+            resources: [
+                IAMArn("*" + config.name + "*").loggroup,
+                IAMArn("*" + config.name + "*").loggroup + ":*",
+                IAMArn("/aws/vendedlogs/*").loggroup,
+                IAMArn("/aws/vendedlogs/*").loggroup + ":*",
             ],
-            resources: [IAMArn("*" + config.name + "*").statemachine],
-        })
-    );
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["iam:PassRole"],
-            resources: [IAMArn("*" + config.name + "*").role],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -234,10 +132,18 @@ export function buildCreateWorkflowFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
+
     return fun;
 }
 
-export function buildExecuteWorkflowFunction(
+/**
+ * Asset-less multi-file execute handler (Phase 2, WB5.2). Reads the V2 workflow/pipeline/template/
+ * tag-schema tables + the buckets table (default run bucket + per-input asset buckets), writes the
+ * V2 execution records, and starts the workflow state machine. Run I/O lives in the default asset
+ * bucket; input files are read from their own asset buckets and output write-back targets the output
+ * asset bucket, so it needs read/write across all asset buckets (like the V1 executeWorkflow).
+ */
+export function buildExecuteWorkflowV2Function(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -258,33 +164,38 @@ export function buildExecuteWorkflowFunction(
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
+                : undefined,
         vpcSubnets:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // Table/bucket names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX).
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
-            // Orchestration bus ARN + event source prefix written into each pipeline's
-            // manifest.systemConfig so a pipeline can optionally register sub-process ARNs.
             ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
             ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
+            // Block launching an execution whose referenced pipeline is DeadlineCloud when the type
+            // is disabled (covers a pipeline created while enabled, then the deployment disabling it).
+            DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED: config.app.pipelines
+                .deadlineCloudExecutionTypeEnabled
+                ? "true"
+                : "false",
         },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.workflowExecutionOutputsIndexTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 
@@ -309,58 +220,6 @@ export function buildExecuteWorkflowFunction(
             ],
         })
     );
-    return fun;
-}
-
-export function buildSqsAutoExecuteWorkflowFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    executeWorkflowFunction: lambda.Function,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "sqsAutoExecuteWorkflow";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.workflows.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined,
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {
-            EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME: executeWorkflowFunction.functionName,
-        },
-    });
-
-    // Grant DynamoDB permissions
-    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-
-    // Grant invoke permission to executeWorkflow Lambda
-    executeWorkflowFunction.grantInvoke(fun);
-
-    //grant asset bucket permissions
-    grantReadPermissionsToAllAssetBuckets(fun);
-
-    // Apply security helpers
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
-
     return fun;
 }
 
@@ -577,6 +436,91 @@ export function buildRegisterPipelineExecutionFunction(
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
+    return fun;
+}
+
+/**
+ * File-upload workflow trigger dispatcher (Phase 2, WB5b). An asset file upload publishes an
+ * `asset.file.uploaded` event to the orchestration bus; a standing rule (deployment event-source
+ * prefix + that detail-type) targets a durable SQS buffer this lambda consumes. Per uploaded file it
+ * enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByTypeGSI), matches
+ * inputFileFilters + database scope, and invokes executeWorkflowV2 (as SYSTEM_USER) per firing
+ * trigger. Its own SQS buffer + DLQ isolate the fan-out from the V1 auto-execute queue.
+ */
+export function buildWorkflowTriggerDispatchFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    executeWorkflowV2Function: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const kmsEncryptionKey = storageResources.encryption.kmsKey;
+    // Durable buffer: a single upload action can fan out to many files; SQS gives batching + retry.
+    const dispatchDlq = new sqs.Queue(scope, "WorkflowTriggerDispatchDLQ", {
+        encryption: kmsEncryptionKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsEncryptionKey,
+        enforceSSL: true,
+    });
+    const dispatchQueue = new sqs.Queue(scope, "WorkflowTriggerDispatchQueue", {
+        visibilityTimeout: Duration.seconds(960), // > the 900s function timeout
+        encryption: kmsEncryptionKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsEncryptionKey,
+        enforceSSL: true,
+        deadLetterQueue: { queue: dispatchDlq, maxReceiveCount: 3 },
+    });
+    dispatchQueue.grantSendMessages(Service("EVENTS").Principal);
+
+    const name = "workflowTriggerDispatch";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        // EventBridge/SQS-invoked execution handler under handlers/workflows/sfn/.
+        handler: `handlers.workflows.sfn.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME: executeWorkflowV2Function.functionName,
+        },
+    });
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    executeWorkflowV2Function.grantInvoke(fun);
+    // Reads uploaded-object metadata to resolve the asset (head_object across asset buckets).
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Standing rule: route this deployment's asset.file.uploaded events to the dispatch buffer.
+    const uploadRule = new events.Rule(scope, "WorkflowFileUploadTriggerRule", {
+        eventBus: storageResources.eventBridge.orchestrationBus,
+        eventPattern: {
+            source: events.Match.prefix(storageResources.eventBridge.eventSourcePrefix),
+            detailType: ["asset.file.uploaded"],
+        },
+    });
+    uploadRule.addTarget(new eventsTargets.SqsQueue(dispatchQueue));
+    fun.addEventSource(
+        new eventsources.SqsEventSource(dispatchQueue, {
+            batchSize: 10,
+            maxBatchingWindow: Duration.seconds(3),
+        })
+    );
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
 
@@ -835,17 +779,24 @@ export function buildWorkflowRole(
     return role;
 }
 
+/**
+ * Global pipeline + workflow import custom-resource lambda. Registers a built-in (or externally
+ * self-registered) pipeline + workflow into the pipeline/workflow tables from a vamsSchema bundle. It
+ * upserts via SYSTEM_USER cross-calls to the four service functions, so it needs their names as env +
+ * invoke permission on them, plus read on the artefacts bucket where the schema files are uploaded.
+ * Also invocable directly (external self-registration) — no API route.
+ */
 export function buildImportGlobalPipelineWorkflowFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    pipelineServiceV2Function: lambda.Function,
+    pipelineTemplateServiceFunction: lambda.Function,
+    workflowServiceV2Function: lambda.Function,
+    workflowTriggerServiceFunction: lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    createPipelineFunction: lambda.Function,
-    pipelineServiceFunction: lambda.Function,
-    createWorkflowFunction: lambda.Function,
-    workflowServiceFunction: lambda.Function
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "importGlobalPipelineWorkflow";
     const fun = new lambda.Function(scope, name, {
@@ -864,26 +815,159 @@ export function buildImportGlobalPipelineWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            // Service function names - set directly from function parameters
-            CREATE_PIPELINE_FUNCTION_NAME: createPipelineFunction.functionName,
-            PIPELINE_SERVICE_FUNCTION_NAME: pipelineServiceFunction.functionName,
-            CREATE_WORKFLOW_FUNCTION_NAME: createWorkflowFunction.functionName,
-            WORKFLOW_SERVICE_FUNCTION_NAME: workflowServiceFunction.functionName,
+            PIPELINE_SERVICE_V2_FUNCTION_NAME: pipelineServiceV2Function.functionName,
+            PIPELINE_TEMPLATE_SERVICE_FUNCTION_NAME: pipelineTemplateServiceFunction.functionName,
+            WORKFLOW_SERVICE_V2_FUNCTION_NAME: workflowServiceV2Function.functionName,
+            WORKFLOW_TRIGGER_SERVICE_FUNCTION_NAME: workflowTriggerServiceFunction.functionName,
+            // Artefacts bucket the CDK uploads the vamsSchema files to (S3-key delivery mode).
+            VAMS_SCHEMA_BUCKET: storageResources.s3.artefactsBucket.bucketName,
         },
     });
 
-    // Grant invoke permissions to the service functions directly
-    createPipelineFunction.grantInvoke(fun);
-    pipelineServiceFunction.grantInvoke(fun);
-    createWorkflowFunction.grantInvoke(fun);
-    workflowServiceFunction.grantInvoke(fun);
+    pipelineServiceV2Function.grantInvoke(fun);
+    pipelineTemplateServiceFunction.grantInvoke(fun);
+    workflowServiceV2Function.grantInvoke(fun);
+    workflowTriggerServiceFunction.grantInvoke(fun);
+    storageResources.s3.artefactsBucket.grantRead(fun);
 
-    // Apply standard security helper functions
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
 
+    return fun;
+}
+
+/**
+ * Workflow V2 service (CRUD + enable/disable/archive + save-validation). Reads/writes the V2
+ * workflow + triggers tables (triggers listed on the details view) and reads the V2 pipeline table
+ * (referenced-pipeline authorization + save-consistency checks + GLOBAL/scope string checks).
+ *
+ * Create/update generate the workflow ASL from the referenced pipelines and (re)deploy the Step
+ * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it builds a
+ * dedicated SFN execution role (buildWorkflowRole) and receives the execution-overhaul lambda names
+ * + log group + partition as env, plus states:Create/Describe/UpdateStateMachine + iam:PassRole.
+ */
+export function buildWorkflowServiceV2Function(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    processWorkflowExecutionOutputFunction: lambda.Function,
+    interimPipelineTrackingFunction: lambda.Function,
+    handleExecutionErrorFunction: lambda.Function,
+    workflowsLogGroup: logs.LogGroup,
+    stackName: string,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    // SFN execution role the deployed state machines assume (mirrors buildCreateWorkflowFunction).
+    const role = buildWorkflowRole(
+        scope,
+        processWorkflowExecutionOutputFunction,
+        config,
+        storageResources.encryption.kmsKey
+    );
+    const name = "workflowService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            // Execution-overhaul lambda names embedded in the generated ASL (interim states between
+            // pipelines; error-handler catch state; end-state process-output), plus the SFN role +
+            // shared workflow log group + partition the deploy uses. Read lazily by workflowAsl.
+            PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
+                processWorkflowExecutionOutputFunction.functionName,
+            INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME:
+                interimPipelineTrackingFunction.functionName,
+            HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME: handleExecutionErrorFunction.functionName,
+            VAMS_STACK_NAME: stackName,
+            LAMBDA_ROLE_ARN: role.roleArn,
+            LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            AWS_PARTITION: config.env.partition,
+        },
+    });
+    storageResources.dynamo.workflowStorageTableV2.grantReadWriteData(fun);
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    // Read the workflow-executions table (+ its by-workflow GSI) to compute each workflow's
+    // executionCount on the list response via a bounded COUNT query.
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "states:CreateStateMachine",
+                "states:DescribeStateMachine",
+                "states:UpdateStateMachine",
+            ],
+            resources: [IAMArn("*" + config.name + "*").statemachine],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["iam:PassRole"],
+            resources: [IAMArn("*" + config.name + "*").role],
+        })
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
+}
+
+/**
+ * Workflow trigger service (fileUpload trigger CRUD). Reads the workflow table (parent-object
+ * Casbin) and reads/writes the triggers table.
+ */
+export function buildWorkflowTriggerServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "workflowTriggerService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {},
+    });
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadWriteData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }

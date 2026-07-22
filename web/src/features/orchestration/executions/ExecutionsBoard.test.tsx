@@ -15,6 +15,8 @@ jest.mock("../api/queries", () => ({
     useExecutions: jest.fn(),
     useExecutionActions: jest.fn(),
     useExecutionDetails: jest.fn(),
+    // ExecuteWorkflowButton (in the board toolbar) lists workflows; default to empty.
+    useAllWorkflows: jest.fn(() => ({ data: [] })),
 }));
 
 // Mock the permissions hook
@@ -123,10 +125,16 @@ describe("ExecutionsBoard", () => {
         expect(screen.getByText("exec-2")).toBeInTheDocument();
         expect(screen.getByText("exec-3")).toBeInTheDocument();
 
-        // Status badges should be visible
-        expect(screen.getByText("Running")).toBeInTheDocument();
-        expect(screen.getByText("Succeeded")).toBeInTheDocument();
-        expect(screen.getByText("Aborted")).toBeInTheDocument();
+        // Status badges should be visible (scope to the badge <span>, not the filter <option>s).
+        const badge = (label: string) =>
+            screen.getAllByText(label).find((el) => el.tagName.toLowerCase() === "span");
+        expect(badge("Running")).toBeInTheDocument();
+        expect(badge("Succeeded")).toBeInTheDocument();
+        expect(badge("Aborted")).toBeInTheDocument();
+
+        // Database column header + value are shown (sortable via the header).
+        expect(screen.getByRole("columnheader", { name: "Database" })).toBeInTheDocument();
+        expect(screen.getAllByText("db-1").length).toBeGreaterThan(0);
     });
 
     it("sorts non-terminal rows (RUNNING) above terminal rows", () => {

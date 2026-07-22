@@ -1,0 +1,9 @@
+{
+    "templateId": "isaaclab-training-cartpole",
+    "templateName": "Train (Cartpole, rsl_rl)",
+    "description": "Train an RL policy with Isaac Lab (Isaac-Cartpole-Direct-v0, rsl_rl, 4096 envs, 1500 iterations).",
+    "configFormat": "json",
+    "configBody": "{\"trainingConfig\":{\"mode\":\"train\",\"task\":\"Isaac-Cartpole-Direct-v0\",\"numEnvs\":4096,\"maxIterations\":1500,\"rlLibrary\":\"rsl_rl\"},\"computeConfig\":{\"numNodes\":1}}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Set trainingConfig.task to your Isaac Lab task id, tune numEnvs / maxIterations / rlLibrary, and computeConfig.numNodes for multi-node training."
+}

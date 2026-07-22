@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos-reason-2b",
+    "templateName": "Reason 2B (analyze / caption)",
+    "description": "Analyze and caption a video or image with the Cosmos Reason 2B vision-language model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_TYPE\":\"reason\",\"MODEL_SIZE\":\"2B\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Provide the analysis/caption prompt via the COSMOS_REASON_PROMPT file metadata key (or PROMPT in the config); a sensible default caption prompt is used when none is set."
+}

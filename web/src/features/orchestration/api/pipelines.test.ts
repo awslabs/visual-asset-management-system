@@ -15,6 +15,7 @@ jest.mock("../../../services/apiClient", () => ({
 import { apiClient } from "../../../services/apiClient";
 import {
     listPipelines,
+    listAllPipelines,
     getPipeline,
     createPipeline,
     updatePipeline,
@@ -33,14 +34,15 @@ describe("pipelines service", () => {
         jest.clearAllMocks();
     });
 
-    describe("listPipelines", () => {
-        it("listPipelines(db) hits database/{db}/pipelines", async () => {
+    describe("listPipelines (one server page)", () => {
+        it("listPipelines(db) hits database/{db}/pipelines and returns the page object", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue({
-                message: { Items: [{ pipelineId: "p1" }] },
+                message: { Items: [{ pipelineId: "p1" }], NextToken: "tok" },
             });
             const r = await listPipelines("db1");
-            expect(apiClient.get).toHaveBeenCalledWith("database/db1/pipelines", expect.anything());
-            expect(r).toEqual([true, [{ pipelineId: "p1" }]]);
+            expect(apiClient.get).toHaveBeenCalledWith("database/db1/pipelines", {});
+            // Returns the unwrapped page { Items, NextToken? } so useInfiniteQuery can page.
+            expect(r).toEqual([true, { Items: [{ pipelineId: "p1" }], NextToken: "tok" }]);
         });
 
         it("listPipelines() without databaseId hits pipelines", async () => {
@@ -48,16 +50,29 @@ describe("pipelines service", () => {
                 message: { Items: [{ pipelineId: "p1" }] },
             });
             const r = await listPipelines();
-            expect(apiClient.get).toHaveBeenCalledWith("pipelines", expect.anything());
-            expect(r).toEqual([true, [{ pipelineId: "p1" }]]);
+            expect(apiClient.get).toHaveBeenCalledWith("pipelines", {});
+            expect(r).toEqual([true, { Items: [{ pipelineId: "p1" }] }]);
         });
 
-        it("listPipelines with includeArchived passes query param", async () => {
+        it("listPipelines(db, params) sends pagination query params", async () => {
             (apiClient.get as jest.Mock).mockResolvedValue({ message: { Items: [] } });
-            await listPipelines("db1", true);
+            await listPipelines("db1", { pageSize: "50", startingToken: "tok" });
             expect(apiClient.get).toHaveBeenCalledWith("database/db1/pipelines", {
-                queryStringParameters: { includeArchived: "true" },
+                queryStringParameters: { pageSize: "50", startingToken: "tok" },
             });
+        });
+    });
+
+    describe("listAllPipelines (drains all pages)", () => {
+        it("pages to exhaustion and returns a flat array", async () => {
+            (apiClient.get as jest.Mock)
+                .mockResolvedValueOnce({
+                    message: { Items: [{ pipelineId: "p1" }], NextToken: "t2" },
+                })
+                .mockResolvedValueOnce({ message: { Items: [{ pipelineId: "p2" }] } });
+            const r = await listAllPipelines("db1", true);
+            expect(r).toEqual([true, [{ pipelineId: "p1" }, { pipelineId: "p2" }]]);
+            expect(apiClient.get).toHaveBeenCalledTimes(2);
         });
     });
 
@@ -147,31 +162,40 @@ describe("pipelines service", () => {
         it("deletes the template path", async () => {
             (apiClient.del as jest.Mock).mockResolvedValue({ message: "archived" });
             await archiveTemplate("db1", "p1", "t1");
-            expect(apiClient.del).toHaveBeenCalledWith("database/db1/pipelines/p1/templates/t1", {});
+            expect(apiClient.del).toHaveBeenCalledWith(
+                "database/db1/pipelines/p1/templates/t1",
+                {}
+            );
         });
     });
 
     describe("getTagSchema", () => {
-        it("calls database/{db}/pipelines/{pid}/templates/{tid}/tagSchema", async () => {
+        it("unwraps the fields array from the tagSchema response object", async () => {
+            // Backend returns a TagSchemaResponseModel object with the array under `.fields`.
             (apiClient.get as jest.Mock).mockResolvedValue({
-                message: [{ tagKey: "k1", type: "string" }],
+                message: {
+                    pipelineDatabaseId: "db1",
+                    pipelineId: "p1",
+                    templateId: "t1",
+                    fields: [{ tagKey: "k1", type: "string" }],
+                },
             });
             const r = await getTagSchema("db1", "p1", "t1");
             expect(apiClient.get).toHaveBeenCalledWith(
                 "database/db1/pipelines/p1/templates/t1/tagSchema"
             );
-            expect(r[0]).toBe(true);
+            expect(r).toEqual([true, [{ tagKey: "k1", type: "string" }]]);
         });
     });
 
     describe("setTagSchema", () => {
-        it("puts fields array to database/{db}/pipelines/{pid}/templates/{tid}/tagSchema", async () => {
+        it("puts a { fields } object to database/{db}/pipelines/{pid}/templates/{tid}/tagSchema", async () => {
             (apiClient.put as jest.Mock).mockResolvedValue({ message: "updated" });
             const fields = [{ tagKey: "k1", type: "string" as const }];
             await setTagSchema("db1", "p1", "t1", fields);
             expect(apiClient.put).toHaveBeenCalledWith(
                 "database/db1/pipelines/p1/templates/t1/tagSchema",
-                { body: fields }
+                { body: { fields } }
             );
         });
     });

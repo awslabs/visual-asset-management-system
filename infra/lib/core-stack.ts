@@ -241,6 +241,10 @@ export class CoreVAMSStack extends cdk.Stack {
                 lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
                 vpc: this.vpc,
                 subnets: this.subnetsIsolated,
+                // Shared functions built in ApiBuilder that the workflow/pipeline/execution domain in
+                // ApiBuilder2 depends on: the metadata service and the upload-file lambda.
+                metadataServiceFunction: apiBuilderNestedStack.metadataServiceFunction,
+                uploadFileFunction: apiBuilderNestedStack.uploadFileFunction,
             });
             apiBuilder2NestedStack.addDependency(storageResourcesNestedStack);
             apiBuilder2NestedStack.addDependency(apiBuilderNestedStack);
@@ -280,11 +284,13 @@ export class CoreVAMSStack extends cdk.Stack {
                     vpceSecurityGroup: this.vpceSecurityGroup,
                     isolatedSubnets: this.subnetsIsolated,
                     privateSubnets: this.subnetsPrivate,
-                    importGlobalPipelineWorkflowFunctionName:
-                        apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        apiBuilder2NestedStack.importGlobalPipelineWorkflowV2FunctionName,
                 }
             );
             pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
+            // The V2 vamsSchema registration CRs invoke the import lambda built in ApiBuilder2.
+            pipelineBuilderNestedStack.addDependency(apiBuilder2NestedStack);
 
             ///Optional Addons (Nested Stack)
             const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {
@@ -400,7 +406,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this,
                 "ImportGlobalPipelineWorkflowFunctionNameOutput",
                 {
-                    value: apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
+                    value: apiBuilder2NestedStack.importGlobalPipelineWorkflowV2FunctionName,
                     description:
                         "Lambda function name for importing global pipelines and workflows from IaC deployments",
                 }
@@ -432,10 +438,10 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             //Nag supressions
-            const refactorPaths = [`/${props.stackName}/ApiBuilder/VAMSWorkflowIAMRole/Resource`];
+            const refactorPaths = [`/${props.stackName}/ApiBuilder2/VAMSWorkflowIAMRole/Resource`];
 
             for (const path of refactorPaths) {
-                const reason = `Intention is to refactor this model away moving forward 
+                const reason = `Intention is to refactor this model away moving forward
                 so that this type of access is not required within the stack.
                 Customers are advised to isolate VAMS to its own account in test and prod
                 as a substitute to tighter resource access.`;

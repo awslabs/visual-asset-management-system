@@ -26,7 +26,7 @@ export interface CosmosBuilderNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -76,10 +76,15 @@ export class CosmosBuilderNestedStack extends NestedStack {
             storageResources: props.storageResources,
         });
 
-        // Conditionally create CodeBuild construct for container image builds
+        // Conditionally create CodeBuild construct for container image builds. Built when EITHER the
+        // main Cosmos (Predict/Transfer/Reason) OR Cosmos3 (omni) opts into CodeBuild — the construct
+        // builds whichever pipeline repos are enabled, so a Cosmos3-only deployment with
+        // useNvidiaCosmos3.useCodeBuild=true still gets a cloud-built image (was previously ignored,
+        // falling back to a large local Docker build).
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
+        const cosmos3ConfigEarly = props.config.app.pipelines.useNvidiaCosmos3;
         let codeBuildConstruct: CosmosCodeBuildConstruct | undefined;
-        if (cosmosConfig.useCodeBuild) {
+        if (cosmosConfig.useCodeBuild || cosmos3ConfigEarly?.useCodeBuild) {
             codeBuildConstruct = new CosmosCodeBuildConstruct(this, "CosmosCodeBuild", {
                 config: props.config,
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
@@ -101,8 +106,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                     // Shared resources from common construct
                     modelCacheBucket: cosmosCommon.modelCacheBucket,
                     efsFileSystem: cosmosCommon.efsFileSystem,
@@ -139,8 +144,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                     // Shared resources from common construct
                     modelCacheBucket: cosmosCommon.modelCacheBucket,
                     efsFileSystem: cosmosCommon.efsFileSystem,
@@ -170,8 +175,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
                 // Shared resources from common construct
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 efsFileSystem: cosmosCommon.efsFileSystem,
@@ -207,8 +212,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 efsFileSystem: cosmosCommon.efsFileSystem,
                 efsSecurityGroup: cosmosCommon.efsSecurityGroup,

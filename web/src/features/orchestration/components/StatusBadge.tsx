@@ -65,9 +65,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
         <span
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.textColor}`}
         >
-            {config.icon && (
-                <span className={isRunning ? "animate-pulse" : ""}>{config.icon}</span>
-            )}
+            {config.icon && <span className={isRunning ? "animate-pulse" : ""}>{config.icon}</span>}
             <span>{config.label}</span>
         </span>
     );

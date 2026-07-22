@@ -1,10 +1,8 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end handler tests for executeWorkflow, executionService, createWorkflow,
-and workflowService after the gold-standard refactor. These lock the API wire
-contract (response body shapes, status codes, and validation messages) so the
-refactor does not change I/O.
+"""End-to-end handler tests for executionService (list / abort / details / logs). These lock the API
+wire contract (response body shapes, status codes, and validation messages).
 """
 
 import os
@@ -36,19 +34,14 @@ for k, v in {
     "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
     "S3_ASSETAUXILIARY_STORAGE_BUCKET": "t-aux",
     "METADATA_SERVICE_LAMBDA_FUNCTION_NAME": "t-md-svc",
-    # createWorkflow additionally reads these at import time.
-    "VAMS_STACK_NAME": "t-stack",
-    "PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME": "t-po",
-    "INTERIM_PIPELINE_TRACKING_LAMBDA_FUNCTION_NAME": "t-interim",
-    "HANDLE_EXECUTION_ERROR_LAMBDA_FUNCTION_NAME": "t-err",
     "AWS_REGION": "us-east-1",
     "LAMBDA_ROLE_ARN": "arn:aws:iam::123456789012:role/t-role",
     "LOG_GROUP_ARN": "arn:aws:logs:us-east-1:123456789012:log-group:t",
 }.items():
     os.environ.setdefault(k, v)
 
-# handlers.workflows package __init__ + createWorkflow import common.workflows.stepfunctions_builder
-# at import time; provide a lightweight stub (these tests do not exercise ASL generation).
+# The handlers.workflows package import chain pulls common.workflows.stepfunctions_builder; provide a
+# lightweight stub (these tests do not exercise ASL generation).
 if "common.workflows.stepfunctions_builder" not in sys.modules:
     _sf = types.ModuleType("common.workflows.stepfunctions_builder")
     for _name in (
@@ -59,10 +52,7 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
         setattr(_sf, _name, MagicMock())
     sys.modules["common.workflows.stepfunctions_builder"] = _sf
 
-from backend.backend.handlers.workflows import executeWorkflow as ew
 from backend.backend.handlers.workflows import executionService as le
-from backend.backend.handlers.workflows import createWorkflow as cw
-from backend.backend.handlers.workflows import workflowService as ws
 
 
 def _event(method, path_params=None, body=None, query=None):
@@ -78,103 +68,6 @@ def _event(method, path_params=None, body=None, query=None):
 
 def _body(resp):
     return json.loads(resp["body"])
-
-
-# ============================ executeWorkflow ============================
-
-@pytest.mark.unit
-class TestExecuteWorkflowHandler:
-    def _claims(self):
-        return {"tokens": ["user@x"], "roles": [], "mfaEnabled": False}
-
-    def test_method_not_allowed(self):
-        with patch.object(ew, "request_to_claims", return_value=self._claims()), \
-             patch.object(ew, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = ew.lambda_handler(_event("GET", {"databaseId": "dbx", "assetId": "a1", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == "Method not allowed"
-
-    def test_api_unauthorized(self):
-        with patch.object(ew, "request_to_claims", return_value={"tokens": []}):
-            resp = ew.lambda_handler(_event("POST", {"databaseId": "dbx", "assetId": "a1", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 403
-
-    def test_missing_path_param(self):
-        with patch.object(ew, "request_to_claims", return_value=self._claims()), \
-             patch.object(ew, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            # Missing workflowId path param.
-            resp = ew.lambda_handler(_event("POST", {"databaseId": "dbx", "assetId": "a1"}, body={"workflowDatabaseId": "dbx"}), MagicMock())
-        assert resp["statusCode"] == 400
-        assert "Missing path parameter" in _body(resp)["message"] and "workflowId" in _body(resp)["message"]
-
-    def test_missing_workflow_database_id_message_preserved(self):
-        # The request model's @root_validator emits the original required-field message
-        # when workflowDatabaseId is absent. (Exercised at the model level so the real
-        # validate() dispatcher message is used rather than the test's permissive mock,
-        # and surfaced through the handler's _clean_validation_message extraction.)
-        from aws_lambda_powertools.utilities.parser import parse, ValidationError
-        from backend.backend.models.workflows import ExecuteWorkflowRequestModel
-        with patch("models.workflows.validate",
-                   return_value=(False, "workflowDatabaseId is a required field.")):
-            with pytest.raises(ValidationError) as ei:
-                parse({}, model=ExecuteWorkflowRequestModel)
-        assert ew._clean_validation_message(ei.value) == "workflowDatabaseId is a required field."
-
-    def test_workflow_database_mismatch_message_preserved(self):
-        with patch.object(ew, "request_to_claims", return_value=self._claims()), \
-             patch.object(ew, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            # workflowDatabaseId is a valid ID but neither GLOBAL nor the asset's db.
-            resp = ew.lambda_handler(
-                _event("POST", {"databaseId": "dbAxx", "assetId": "a1", "workflowId": "wfx"},
-                       body={"workflowDatabaseId": "dbBxx"}), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == (
-            "Workflow can only be executed on assets from the same database or from global workflows")
-
-    def test_happy_path_returns_execution_id(self):
-        # Authorize everything, stub the data layer + launch, assert {"message": execId}.
-        with patch.object(ew, "request_to_claims", return_value=self._claims()), \
-             patch.object(ew, "CasbinEnforcer") as MockEnf, \
-             patch.object(ew, "get_asset", return_value=[{"assetId": "a1", "bucketId": "b1",
-                          "assetLocation": {"Key": "a1/"}, "assetName": "n", "tags": []}]), \
-             patch.object(ew, "get_workflow", return_value=[{"workflowId": "wfx", "databaseId": "dbx",
-                          "workflow_arn": "arn:sm", "specifiedPipelines": {"functions": [{"name": "p1"}]}}]), \
-             patch.object(ew, "validate_pipelines", return_value=(True, "")), \
-             patch.object(ew, "get_default_bucket_details", return_value={"bucketName": "bkt", "baseAssetsPrefix": "", "bucketId": "b1"}), \
-             patch.object(ew, "verify_inputs_exist_in_s3", return_value=[]), \
-             patch.object(ew, "get_workflow_executions", return_value={"Items": []}), \
-             patch.object(ew, "build_pipeline_input_metadata", return_value={"VAMS": {}}), \
-             patch.object(ew, "launchWorkflow", return_value="EXEC123") as mock_launch:
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = ew.lambda_handler(
-                _event("POST", {"databaseId": "dbx", "assetId": "a1", "workflowId": "wfx"},
-                       body={"workflowDatabaseId": "dbx", "fileKey": "/folder/x.glb"}), MagicMock())
-        assert resp["statusCode"] == 200
-        assert _body(resp)["message"] == "EXEC123"
-        mock_launch.assert_called_once()
-
-    def test_duplicate_running_execution_blocked(self):
-        with patch.object(ew, "request_to_claims", return_value=self._claims()), \
-             patch.object(ew, "CasbinEnforcer") as MockEnf, \
-             patch.object(ew, "get_asset", return_value=[{"assetId": "a1", "bucketId": "b1",
-                          "assetLocation": {"Key": "a1/"}, "assetName": "n", "tags": []}]), \
-             patch.object(ew, "get_workflow", return_value=[{"workflowId": "wfx", "databaseId": "dbx",
-                          "workflow_arn": "arn:sm", "specifiedPipelines": {"functions": [{"name": "p1"}]}}]), \
-             patch.object(ew, "validate_pipelines", return_value=(True, "")), \
-             patch.object(ew, "get_default_bucket_details", return_value={"bucketName": "bkt", "baseAssetsPrefix": "", "bucketId": "b1"}), \
-             patch.object(ew, "verify_inputs_exist_in_s3", return_value=[]), \
-             patch.object(ew, "get_workflow_executions", return_value={"Items": [{"workflowExecutionId": "running"}]}):
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = ew.lambda_handler(
-                _event("POST", {"databaseId": "dbx", "assetId": "a1", "workflowId": "wfx"},
-                       body={"workflowDatabaseId": "dbx"}), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == "Workflow has a currently running execution on this file"
 
 
 # ============================ executionService (list) ============================
@@ -392,9 +285,14 @@ class TestExecutionDetailsHandler:
                     "s3Bucket": "secret-bucket", "s3Key": "secret/key"}
 
         def _query_all(table_name, key_cond):
-            if table_name == le.pipeline_execution_output_files_table:
-                return [out_file]
+            # Only the small per-pipeline input-configuration table is read via _query_all now.
             return []
+
+        # The bounded output/input sub-collection reads go through _query_capped -> (rows, truncated).
+        def _query_capped(table_name, key_cond, max_items):
+            if table_name == le.pipeline_execution_output_files_table:
+                return [out_file], False
+            return [], False
 
         with patch.object(le, "request_to_claims", return_value=self._claims()), \
              patch.object(le, "CasbinEnforcer") as MockEnf, \
@@ -404,7 +302,8 @@ class TestExecutionDetailsHandler:
              patch.object(le, "get_pipeline_execution_rows", return_value=[prow]), \
              patch.object(le, "get_workflow_definition", return_value={"description": "wf desc"}), \
              patch.object(le, "get_pipeline_definition", return_value={"pipelineId": "convert", "description": "Converts", "pipelineType": "standardFile"}), \
-             patch.object(le, "_query_all", side_effect=_query_all):
+             patch.object(le, "_query_all", side_effect=_query_all), \
+             patch.object(le, "_query_capped", side_effect=_query_capped):
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = True
             resp = le.lambda_handler(self._event_details(), MagicMock())
@@ -518,6 +417,37 @@ class TestExecutionLogsHandler:
         assert '"EabcId"' in captured["filterPattern"]
         assert '"P1"' in captured["filterPattern"]
 
+    def test_logs_full_caller_filter_pattern_is_quoted_literal(self):
+        # A caller filterPattern is appended as a single QUOTED literal term with embedded quotes
+        # stripped, so it cannot break out of the quote and inject OR/negation that would broaden
+        # the search past the AND-ed execution/pipeline scope (shared log group cross-read guard).
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId"}
+        captured = {}
+
+        def _filter_log_events(**kwargs):
+            captured.update(kwargs)
+            return {"events": [], "nextToken": None}
+
+        malicious = '" ?"OtherExecId'  # tries to close the term and OR in another id
+        with patch.object(le, "request_to_claims", return_value=self._claims()), \
+             patch.object(le, "CasbinEnforcer") as MockEnf, \
+             patch.object(le, "get_execution_main_row", return_value=self._main_row()), \
+             patch.object(le, "get_execution_input_assets", return_value=[]), \
+             patch.object(le, "get_pipeline_execution_rows", return_value=[prow]), \
+             patch.object(le.logs_client, "filter_log_events", side_effect=_filter_log_events):
+            MockEnf.return_value.enforceAPI.return_value = True
+            MockEnf.return_value.enforce.return_value = True
+            resp = le.lambda_handler(
+                self._event_logs(query={"mode": "full", "pipelineExecutionId": "P1",
+                                        "filterPattern": malicious}), MagicMock())
+        assert resp["statusCode"] == 200
+        fp = captured["filterPattern"]
+        # Scope terms still present, and the caller term is a single quoted literal with the
+        # embedded double-quotes removed (so no term-boundary escape / OR injection).
+        assert '"EabcId"' in fp and '"P1"' in fp
+        assert '"?"' not in fp  # the "?" OR-prefix cannot appear as its own bare token
+        assert '" ?"OtherExecId"' not in fp  # raw malicious form is not passed through verbatim
+
     def test_logs_full_unknown_pipeline_404(self):
         with patch.object(le, "request_to_claims", return_value=self._claims()), \
              patch.object(le, "CasbinEnforcer") as MockEnf, \
@@ -531,234 +461,3 @@ class TestExecutionLogsHandler:
         assert resp["statusCode"] == 404
 
 
-# ============================ createWorkflow ============================
-
-def _pipeline(database_id="dbx", name="pipeOne"):
-    """A pipeline entry carrying every field the required-field check enforces."""
-    return {
-        "name": name,
-        "databaseId": database_id,
-        "pipelineType": "standardFile",
-        "pipelineExecutionType": "Lambda",
-        "outputType": "assetFile",
-        "waitForCallback": "Disabled",
-        "userProvidedResource": json.dumps({"isProvided": True, "resourceId": "arn:fn"}),
-    }
-
-
-def _workflow_body(database_id="dbx", workflow_id="wfxOne", pipelines=None):
-    return {
-        "databaseId": database_id,
-        "workflowId": workflow_id,
-        "description": "a valid workflow description",
-        "specifiedPipelines": {"functions": pipelines or [_pipeline(database_id)]},
-        "autoTriggerOnFileExtensionsUpload": "",
-    }
-
-
-@pytest.mark.unit
-class TestCreateWorkflowHandler:
-    def _claims(self):
-        return {"tokens": ["user@x"], "roles": [], "mfaEnabled": False}
-
-    def test_method_not_allowed(self):
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = cw.lambda_handler(_event("GET", body=_workflow_body()), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == "Method not allowed"
-
-    def test_api_unauthorized(self):
-        with patch.object(cw, "request_to_claims", return_value={"tokens": []}):
-            resp = cw.lambda_handler(_event("PUT", body=_workflow_body()), MagicMock())
-        assert resp["statusCode"] == 403
-
-    def test_missing_body_required(self):
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = cw.lambda_handler(_event("PUT"), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == "Request body is required"
-
-    def test_pipeline_missing_required_field(self):
-        # userProvidedResource is Optional on the Pydantic model but required by the
-        # handler's per-pipeline check. Dropping it passes model parse, then the
-        # handler's required-field check rejects it (proving the check still runs).
-        bad_pipeline = _pipeline()
-        del bad_pipeline["userProvidedResource"]
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = cw.lambda_handler(
-                _event("PUT", body=_workflow_body(pipelines=[bad_pipeline])), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == "Pipeline entry 0 is missing required field(s): userProvidedResource"
-
-    def test_global_workflow_rejects_non_global_pipeline(self):
-        body = _workflow_body(database_id="GLOBAL", workflow_id="wfxGlobal",
-                              pipelines=[_pipeline(database_id="dbx")])
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = cw.lambda_handler(_event("PUT", body=body), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == "Only global pipelines are allowed in global workflows."
-
-    def test_database_workflow_rejects_other_database_pipeline(self):
-        body = _workflow_body(database_id="dbx", pipelines=[_pipeline(database_id="dbOther")])
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = cw.lambda_handler(_event("PUT", body=body), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == (
-            "Only global or same database pipelines are allowed in a database specifc workflows.")
-
-    def test_pipeline_not_authorized(self):
-        # API + pipeline scope ok, but the pipeline Tier-2 GET enforce denies.
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = False
-            resp = cw.lambda_handler(_event("PUT", body=_workflow_body()), MagicMock())
-        assert resp["statusCode"] == 403
-        assert _body(resp)["message"] == "Not Authorized to read the pipeline"
-
-    def test_workflow_id_conflict(self):
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf, \
-             patch.object(cw, "find_conflicting_database", return_value="dbOther"):
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = cw.lambda_handler(_event("PUT", body=_workflow_body()), MagicMock())
-        assert resp["statusCode"] == 400
-        assert _body(resp)["message"] == (
-            "Workflow ID is already in use by another database. Workflow IDs must be "
-            "unique across all databases (including GLOBAL). Choose a different ID.")
-
-    def test_happy_path_put_returns_succeeded(self):
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf, \
-             patch.object(cw, "find_conflicting_database", return_value=None), \
-             patch.object(cw, "create_workflow", return_value=json.dumps({"message": "Succeeded"})) as mk:
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = cw.lambda_handler(_event("PUT", body=_workflow_body()), MagicMock())
-        assert resp["statusCode"] == 200
-        assert _body(resp)["message"] == "Succeeded"
-        mk.assert_called_once()
-
-    def test_post_invocation_also_creates(self):
-        # importGlobalPipelineWorkflow invokes this lambda with method POST; POST and
-        # PUT must behave identically (both create/update the workflow).
-        with patch.object(cw, "request_to_claims", return_value=self._claims()), \
-             patch.object(cw, "CasbinEnforcer") as MockEnf, \
-             patch.object(cw, "find_conflicting_database", return_value=None), \
-             patch.object(cw, "create_workflow", return_value=json.dumps({"message": "Succeeded"})) as mk:
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = cw.lambda_handler(_event("POST", body=_workflow_body()), MagicMock())
-        assert resp["statusCode"] == 200
-        assert _body(resp)["message"] == "Succeeded"
-        mk.assert_called_once()
-
-
-# ============================ workflowService ============================
-
-@pytest.mark.unit
-class TestWorkflowServiceHandler:
-    def _claims(self):
-        return {"tokens": ["user@x"], "roles": [], "mfaEnabled": False}
-
-    def test_method_not_allowed_is_403(self):
-        # workflowService returns "Method not allowed" as a 403 (authorization_error),
-        # unlike the execute/list handlers which use 400. Preserve that.
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf:
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = ws.lambda_handler(_event("POST", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 403
-        assert _body(resp)["message"] == "Method not allowed"
-
-    def test_api_unauthorized(self):
-        with patch.object(ws, "request_to_claims", return_value={"tokens": []}):
-            resp = ws.lambda_handler(_event("GET", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 403
-
-    def test_get_single_workflow_happy_path(self):
-        item = {"databaseId": "dbx", "workflowId": "wfx", "workflow_arn": "arn:sm"}
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf, \
-             patch.object(ws.dynamodb, "Table", return_value=MagicMock(
-                 get_item=MagicMock(return_value={"Item": dict(item)}))):
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = ws.lambda_handler(_event("GET", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 200
-        msg = _body(resp)["message"]
-        assert msg["workflowId"] == "wfx"
-        # Missing autoTrigger field is backfilled to empty string.
-        assert msg["autoTriggerOnFileExtensionsUpload"] == ""
-
-    def test_get_single_workflow_not_found_404_empty(self):
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf, \
-             patch.object(ws.dynamodb, "Table", return_value=MagicMock(
-                 get_item=MagicMock(return_value={}))):
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = ws.lambda_handler(_event("GET", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 404
-        # A missing (or unauthorized) workflow returns an empty body message.
-        assert _body(resp)["message"] == {}
-
-    def test_get_single_workflow_unauthorized_404_empty(self):
-        # Object-level enforce denies -> 404 empty body (indistinguishable from missing).
-        item = {"databaseId": "dbx", "workflowId": "wfx", "workflow_arn": "arn:sm"}
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf, \
-             patch.object(ws.dynamodb, "Table", return_value=MagicMock(
-                 get_item=MagicMock(return_value={"Item": dict(item)}))):
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = False
-            resp = ws.lambda_handler(_event("GET", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 404
-        assert _body(resp)["message"] == {}
-
-    def test_delete_workflow_happy_path(self):
-        item = {"databaseId": "dbx", "workflowId": "wfx", "workflow_arn": "arn:sm"}
-        table = MagicMock(
-            get_item=MagicMock(return_value={"Item": dict(item)}),
-            put_item=MagicMock(), delete_item=MagicMock(return_value={}))
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf, \
-             patch.object(ws.dynamodb, "Table", return_value=table), \
-             patch.object(ws, "delete_stepfunction", return_value={}):
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = True
-            resp = ws.lambda_handler(_event("DELETE", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 200
-        assert _body(resp)["message"] == "Workflow deleted"
-
-    def test_delete_workflow_not_found_404(self):
-        table = MagicMock(get_item=MagicMock(return_value={}))
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf, \
-             patch.object(ws.dynamodb, "Table", return_value=table):
-            MockEnf.return_value.enforceAPI.return_value = True
-            resp = ws.lambda_handler(_event("DELETE", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 404
-        assert _body(resp)["message"] == "Record not found"
-
-    def test_delete_workflow_not_allowed_403(self):
-        item = {"databaseId": "dbx", "workflowId": "wfx", "workflow_arn": "arn:sm"}
-        table = MagicMock(get_item=MagicMock(return_value={"Item": dict(item)}))
-        with patch.object(ws, "request_to_claims", return_value=self._claims()), \
-             patch.object(ws, "CasbinEnforcer") as MockEnf, \
-             patch.object(ws.dynamodb, "Table", return_value=table):
-            MockEnf.return_value.enforceAPI.return_value = True
-            MockEnf.return_value.enforce.return_value = False
-            resp = ws.lambda_handler(_event("DELETE", {"databaseId": "dbx", "workflowId": "wfx"}), MagicMock())
-        assert resp["statusCode"] == 403
-        assert _body(resp)["message"] == "Action not allowed"

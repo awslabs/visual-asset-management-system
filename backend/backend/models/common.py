@@ -2,11 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from decimal import Decimal
 from typing import Any, Dict, TypedDict, Optional
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_errors
 
 logger = safeLogger(service_name="CommonModels")
+
+
+def _json_default(obj: Any):
+    """json.dumps `default` hook for response bodies. DynamoDB numbers deserialize as Decimal, which
+    the stdlib JSON encoder cannot serialize; convert to int when integral, else float. Applied to
+    every API response body so any handler returning DynamoDB-sourced records is Decimal-safe."""
+    if isinstance(obj, Decimal):
+        return int(obj) if obj == obj.to_integral_value() else float(obj)
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
 
 class APIGatewayProxyResponseV2(TypedDict):
     isBase64Encoded: bool
@@ -33,7 +44,7 @@ def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGa
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
-        body=json.dumps(body)
+        body=json.dumps(body, default=_json_default)
     )
 
 
@@ -54,7 +65,7 @@ def validation_error(status_code: int = 400, body: dict = {'message': 'Validatio
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
-        body=json.dumps(body)
+        body=json.dumps(body, default=_json_default)
     )
 
 def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
@@ -74,7 +85,7 @@ def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
-        body=json.dumps(body)
+        body=json.dumps(body, default=_json_default)
     )
 
 
@@ -98,7 +109,7 @@ def authorization_error(status_code: int = 403, body: dict = {'message': 'Not Au
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
-        body=json.dumps(body)
+        body=json.dumps(body, default=_json_default)
     )
 
 
@@ -119,7 +130,7 @@ def internal_error(status_code: int = 500, body: Any = {'message': 'Internal Ser
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
-        body=json.dumps(body)
+        body=json.dumps(body, default=_json_default)
     )
 
 

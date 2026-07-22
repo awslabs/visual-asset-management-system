@@ -64,14 +64,15 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
             hidden: !can("GET", "/workflows/executions/{executionId}/logs"),
         },
         {
+            label: "Open full details",
+            onSelect: onOpenDetails,
+        },
+        // Permanent delete is destructive — keep it last in the menu, after every other action.
+        {
             label: "Permanent delete",
             onSelect: onPermanentDelete,
             danger: true,
             hidden: !can("DELETE", "/workflows/executions/{executionId}/permanent"),
-        },
-        {
-            label: "Open full details",
-            onSelect: onOpenDetails,
         },
     ];
 
@@ -79,7 +80,10 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
         <ContextMenu
             items={menuItems}
             trigger={
-                <button className="px-2 py-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
+                <button
+                    aria-label="Execution actions"
+                    className="bg-transparent border-0 px-2 py-1 rounded text-lg leading-none text-text-secondary hover:text-gray-900 hover:bg-gray-100 dark:hover:text-gray-100 dark:hover:bg-gray-700 cursor-pointer"
+                >
                     ⋯
                 </button>
             }

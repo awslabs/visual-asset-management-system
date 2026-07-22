@@ -137,6 +137,38 @@ class TestTruncateAndBuilders:
         assert rec["credentialVendingState"] == "notVended"
         assert rec["vendedRoleArn"] == "" and rec["s3ReadOnlyScopes"] == [] and rec["s3ReadWriteScopes"] == []
         assert rec["executionStartDate"] == "" and rec["executionStatus"] == ""
+        # from_pipeline_execution_id is the PipelineExecChainGSI sort key; when there is no chain
+        # parent it must be OMITTED (DynamoDB rejects an empty string for an indexed key attribute).
+        assert "from_pipeline_execution_id" not in rec
+
+    def test_build_pipeline_execution_record_omits_empty_chain_key(self):
+        # Empty/None chain parent -> attribute absent (sparse GSI).
+        for empty in ("", None):
+            rec = er.build_pipeline_execution_record(
+                pipeline_execution_id="P1", workflow_execution_id="E1",
+                pipeline_database_id="pdb", pipeline_id="pid", end_state_pipeline=False,
+                s3_asset_bucket="abkt", s3_aux_bucket="auxbkt",
+                output_prefixes={"files": "f/", "previews": "p/", "metadata": "m/", "results": "r/"},
+                input_metadata_file_prefix="", input_config_file_prefix="ic/",
+                aux_temp_prefix="t/", aux_preview_prefix="",
+                pipeline_execution_type="Lambda", wait_for_callback="Disabled",
+                pipeline_resource_arn="arn:fn", from_pipeline_execution_id=empty,
+            )
+            assert "from_pipeline_execution_id" not in rec
+
+    def test_build_pipeline_execution_record_keeps_chain_key_when_set(self):
+        # A chained pipeline records its parent's id under the chain-GSI sort key.
+        rec = er.build_pipeline_execution_record(
+            pipeline_execution_id="P2", workflow_execution_id="E1",
+            pipeline_database_id="pdb", pipeline_id="pid2", end_state_pipeline=True,
+            s3_asset_bucket="abkt", s3_aux_bucket="auxbkt",
+            output_prefixes={"files": "f/", "previews": "p/", "metadata": "m/", "results": "r/"},
+            input_metadata_file_prefix="", input_config_file_prefix="ic/",
+            aux_temp_prefix="t/", aux_preview_prefix="",
+            pipeline_execution_type="SQS", wait_for_callback="Enabled",
+            pipeline_resource_arn="url", from_pipeline_execution_id="P1",
+        )
+        assert rec["from_pipeline_execution_id"] == "P1"
 
     def test_build_input_file_record(self):
         rec = er.build_pipeline_input_file_record(
@@ -159,6 +191,15 @@ class TestTruncateAndBuilders:
         assert rec["databaseId:assetId:inputAssetFileKey"] == "db:a1:/x.glb"
         assert rec["databaseId:assetId"] == "db:a1"          # GSI PK
         assert rec["executionStartDate"] == "2026-06-16T00:00:00Z"  # GSI SK
+        assert rec["versionId"] == ""  # default when not resolved
+
+    def test_build_workflow_execution_input_record_captures_version(self):
+        rec = er.build_workflow_execution_input_record(
+            workflow_execution_id="E1", database_id="db", asset_id="a1",
+            input_asset_file_key="x.glb", execution_start_date="2026-06-16T00:00:00Z",
+            workflow_id="wf", workflow_database_id="wdb", version_id="s3-ver-123",
+        )
+        assert rec["versionId"] == "s3-ver-123"
 
 
 @pytest.mark.unit

@@ -1,0 +1,8 @@
+{
+    "templateId": "convert-to-stl",
+    "templateName": "Convert to STL",
+    "description": "Convert a 3D mesh to STL format using the Trimesh library.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".stl\"}",
+    "allowCustomEdit": false
+}

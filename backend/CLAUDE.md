@@ -57,14 +57,16 @@ backend/
 │   │   │                                           #   constraints, cognito, preTokenGen;
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
-│   │   ├── pipelines/                              # Pipeline CRUD
+│   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
+│   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
-│   │   │                                           #   executionService (list/abort/details/logs),
-│   │   │                                           #   createWorkflow (ASL gen), executeWorkflow
-│   │   │                                           #   (writes per-pipeline manifest envelope),
-│   │   │                                           #   workflowService. sfn/ (SFN/EventBridge-invoked):
-│   │   │                                           #   interimPipelineTracking, handleExecutionError,
-│   │   │                                           #   processWorkflowExecutionOutput, registerPipelineExecution,
+│   │   │                                           #   workflowService (CRUD), executeWorkflow
+│   │   │                                           #   (asset-less multi-file execute), executionService
+│   │   │                                           #   (list/abort/details/logs/rerun/permanent),
+│   │   │                                           #   workflowTriggerService, importGlobalPipelineWorkflow.
+│   │   │                                           #   sfn/ (SFN/EventBridge-invoked): interimPipelineTracking,
+│   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
+│   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
 │   │   │                                           #   deadlineCloudJobCallback
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)

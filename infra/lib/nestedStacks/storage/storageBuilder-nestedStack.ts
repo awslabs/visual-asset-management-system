@@ -52,9 +52,6 @@ export interface storageResources {
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
     };
-    sqs: {
-        workflowAutoExecuteQueue: sqs.Queue;
-    };
     sns: {
         //Created/Deleted notification events are now tracked in s3AssetBuckets.ts global utility for ease of assignment
         eventEmailSubscriptionTopic: sns.Topic;
@@ -120,6 +117,13 @@ export interface storageResources {
         workflowExecutionConfigurationStorageTable: dynamodb.Table;
         workflowStorageTable: dynamodb.Table;
         apiKeyStorageTable: dynamodb.Table;
+        // Pipeline + workflow V2 data model tables
+        pipelineStorageTableV2: dynamodb.Table;
+        pipelineTemplatesStorageTable: dynamodb.Table;
+        pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
+        workflowStorageTableV2: dynamodb.Table;
+        workflowTriggersStorageTable: dynamodb.Table;
+        workflowExecutionOutputsIndexTable: dynamodb.Table;
     };
 }
 
@@ -272,7 +276,10 @@ export function storageResourcesBuilder(
         pointInTimeRecoverySpecification: {
             pointInTimeRecoveryEnabled: true,
         },
-        removalPolicy: RemovalPolicy.DESTROY,
+        // RETAIN so DynamoDB tables survive a stack teardown and protect their data. All VAMS
+        // tables are auto-named (no explicit tableName), so retained orphans never collide with
+        // the freshly-named tables a redeploy creates.
+        removalPolicy: RemovalPolicy.RETAIN,
         billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
         encryption: config.app.useKmsCmkEncryption.enabled
             ? dynamodb.TableEncryption.CUSTOMER_MANAGED
@@ -356,11 +363,18 @@ export function storageResourcesBuilder(
             config.app.assetBuckets.presignedUrlNetworkRestrictions
         );
 
+        // The created bucket is the default UNLESS an imported external bucket is marked default.
+        const anyExternalIsDefault = (config.app.assetBuckets.externalAssetBuckets || []).some(
+            (b) => b && b.isDefault
+        );
         // Add to global array with default prefix '/'
         s3AssetBuckets.addS3AssetBucket(
             assetBucket,
             "/",
-            config.app.assetBuckets.defaultNewBucketSyncDatabaseId
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId,
+            undefined,
+            undefined,
+            !anyExternalIsDefault
         );
     }
 
@@ -453,7 +467,8 @@ export function storageResourcesBuilder(
                 bucketConfig.baseAssetsPrefix,
                 bucketConfig.defaultSyncDatabaseId,
                 bucketAccountId,
-                bucketKmsKeyArn
+                bucketKmsKeyArn,
+                !!bucketConfig.isDefault
             );
         }
     }
@@ -615,18 +630,6 @@ export function storageResourcesBuilder(
         "DatabaseIndexerSnsTopic",
         kmsEncryptionKey
     );
-
-    // Create SQS queue for workflow auto-execution
-    const workflowAutoExecuteQueue = new sqs.Queue(scope, "WorkflowAutoExecuteQueue", {
-        queueName: `${config.name}-${config.app.baseStackName}-workflowAutoExecute`,
-        visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
-        encryption: kmsEncryptionKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
-        encryptionMasterKey: kmsEncryptionKey,
-        enforceSSL: true,
-    });
-
-    // Grant SNS permission to send messages to the queue
-    workflowAutoExecuteQueue.grantSendMessages(Service("SNS").Principal);
 
     /**
      * Create CloudWatch Log Groups for Audit Logging
@@ -979,6 +982,135 @@ export function storageResourcesBuilder(
         },
     });
 
+    // ----------------------------------------------------------------------
+    // Pipeline + Workflow Storage Overhaul (V2 data model).
+    // Pipelines and workflows are database-scoped: the partition key is the
+    // databaseId and the sort key is the entity id, so (databaseId, id) is unique
+    // even when an id is overridden to a known value, and a database's entities
+    // list with a native Query. Templates, the template tag schema, triggers, and
+    // the output-asset execution index hang off these entities. All tables follow
+    // the shared dynamodbDefaultProps (RETAIN, KMS, PITR, auto-named).
+    // ----------------------------------------------------------------------
+
+    const pipelineStorageTableV2 = new dynamodb.Table(scope, "PipelineStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: { name: "databaseId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "pipelineId", type: dynamodb.AttributeType.STRING },
+    });
+    // List not-archived pipelines within a database ordered by last modified.
+    pipelineStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "PipelinesByDatabaseGSI",
+        partitionKey: { name: "databaseId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "dateModified", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // List a database's pipelines within a category.
+    pipelineStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "PipelinesByCategoryGSI",
+        partitionKey: { name: "databaseId:category", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "pipelineId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // One row per (pipeline, template). Composite PK matches the pipeline table so a
+    // database-scoped pipeline's templates are unambiguous; SK is the template id.
+    const pipelineTemplatesStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineTemplatesStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "pipelineDatabaseId:pipelineId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: { name: "templateId", type: dynamodb.AttributeType.STRING },
+        }
+    );
+
+    // One row per template holding its tag-field definitions inline as a JSON string
+    // (mirrors MetadataSchemaStorageTableV2: UUID PK + composite owner SK + owner GSI).
+    // Kept separate from the template row so a lengthy tag schema does not consume the
+    // template row's size budget.
+    const pipelineTemplateTagSchemaStorageTable = new dynamodb.Table(
+        scope,
+        "PipelineTemplateTagSchemaStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "tagSchemaId", type: dynamodb.AttributeType.STRING },
+            sortKey: {
+                name: "pipelineDatabaseId:pipelineId:templateId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+    // Resolve a template's tag schema by its owner composite key.
+    pipelineTemplateTagSchemaStorageTable.addGlobalSecondaryIndex({
+        indexName: "TagSchemaByTemplateGSI",
+        partitionKey: {
+            name: "pipelineDatabaseId:pipelineId:templateId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: { name: "tagSchemaId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const workflowStorageTableV2 = new dynamodb.Table(scope, "WorkflowStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: { name: "databaseId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "workflowId", type: dynamodb.AttributeType.STRING },
+    });
+    workflowStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "WorkflowsByDatabaseGSI",
+        partitionKey: { name: "databaseId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "dateModified", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    workflowStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "WorkflowsByCategoryGSI",
+        partitionKey: { name: "databaseId:category", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "workflowId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // One row per (workflow, trigger). Composite PK matches the workflow table; SK is
+    // the trigger type (fileUpload today). A by-type GSI lets the upload dispatcher find
+    // candidate workflows without scanning; file-filter evaluation runs after the lookup.
+    const workflowTriggersStorageTable = new dynamodb.Table(scope, "WorkflowTriggersStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "workflowDatabaseId:workflowId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: { name: "triggerType", type: dynamodb.AttributeType.STRING },
+    });
+    workflowTriggersStorageTable.addGlobalSecondaryIndex({
+        indexName: "TriggersByTypeGSI",
+        partitionKey: { name: "triggerType", type: dynamodb.AttributeType.STRING },
+        sortKey: {
+            name: "workflowDatabaseId:workflowId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Secondary output-asset index: "executions that wrote to this asset" resolves
+    // without scanning the inputs table. One row per (execution, output asset).
+    const workflowExecutionOutputsIndexTable = new dynamodb.Table(
+        scope,
+        "WorkflowExecutionOutputsIndexStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: { name: "databaseId:assetId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        }
+    );
+    workflowExecutionOutputsIndexTable.addGlobalSecondaryIndex({
+        indexName: "OutputsByExecutionGSI",
+        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "databaseId:assetId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const workflowExecutionsStorageTable = new dynamodb.Table(
         scope,
         "WorkflowExecutionsStorageTable",
@@ -1052,6 +1184,14 @@ export function storageResourcesBuilder(
             name: "workflowDatabaseId:workflowId",
             type: dynamodb.AttributeType.STRING,
         },
+        sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // Sparse GSI over executionGroupId (present only on grouped executions), so abort-by-group can
+    // enumerate every active execution in a group without scanning the table.
+    workflowExecutionsStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "WorkflowExecutionsByGroupGSI",
+        partitionKey: { name: "executionGroupId", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.ALL,
     });
@@ -1919,9 +2059,6 @@ export function storageResourcesBuilder(
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
         },
-        sqs: {
-            workflowAutoExecuteQueue: workflowAutoExecuteQueue,
-        },
         sns: {
             eventEmailSubscriptionTopic: EventEmailSubscriptionTopic,
             fileIndexerSnsTopic: FileIndexerSnsTopic,
@@ -1978,6 +2115,13 @@ export function storageResourcesBuilder(
             userRolesStorageTable: userRolesStorageTable,
             userStorageTable: userStorageTable,
             apiKeyStorageTable: apiKeyStorageTable,
+            // Pipeline + workflow V2 data model tables
+            pipelineStorageTableV2: pipelineStorageTableV2,
+            pipelineTemplatesStorageTable: pipelineTemplatesStorageTable,
+            pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
+            workflowStorageTableV2: workflowStorageTableV2,
+            workflowTriggersStorageTable: workflowTriggersStorageTable,
+            workflowExecutionOutputsIndexTable: workflowExecutionOutputsIndexTable,
         },
     };
 
@@ -2285,8 +2429,7 @@ export function storageResourcesBuilder(
             bucketSyncIndex,
             config,
             vpc,
-            subnets,
-            workflowAutoExecuteQueue
+            subnets
         );
 
         // Subscribe SQS queue to SNS topic
@@ -2355,8 +2498,7 @@ export function storageResourcesBuilder(
             bucketSyncIndex,
             config,
             vpc,
-            subnets,
-            workflowAutoExecuteQueue
+            subnets
         );
 
         // Subscribe SQS queue to SNS topic
@@ -2484,6 +2626,19 @@ export function storageResourcesBuilder(
             storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.pipelineExecutionLogsStorage]:
             storageResources.dynamo.pipelineExecutionLogsStorageTable.tableName,
+        // Pipeline + workflow V2 data model tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineStorageV2]:
+            storageResources.dynamo.pipelineStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineTemplatesStorage]:
+            storageResources.dynamo.pipelineTemplatesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineTemplateTagSchemaStorage]:
+            storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowStorageV2]:
+            storageResources.dynamo.workflowStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
+            storageResources.dynamo.workflowTriggersStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionOutputsIndex]:
+            storageResources.dynamo.workflowExecutionOutputsIndexTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

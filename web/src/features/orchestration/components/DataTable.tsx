@@ -15,25 +15,32 @@ import {
     type SortingState,
     type ColumnFiltersState,
 } from "@tanstack/react-table";
+import SearchInput from "./SearchInput";
 
 interface DataTableProps<T> {
     columns: ColumnDef<T, any>[];
     rows: T[];
     onRowContextMenu?: (row: T) => void;
+    onRowClick?: (row: T) => void;
     getRowActions?: (row: T) => React.ReactNode;
     pageSize?: number;
     sorting?: boolean;
     filtering?: boolean;
+    // Client-side pagination. Disable when the caller drives paging externally (e.g. a
+    // server-side "Load more") so the table doesn't show a second, conflicting pager.
+    paginate?: boolean;
 }
 
 function DataTable<T>({
     columns,
     rows,
     onRowContextMenu,
+    onRowClick,
     getRowActions,
     pageSize = 10,
     sorting = true,
     filtering = true,
+    paginate = true,
 }: DataTableProps<T>) {
     const [sortingState, setSortingState] = useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -53,7 +60,7 @@ function DataTable<T>({
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: sorting ? getSortedRowModel() : undefined,
         getFilteredRowModel: filtering ? getFilteredRowModel() : undefined,
-        getPaginationRowModel: getPaginationRowModel(),
+        getPaginationRowModel: paginate ? getPaginationRowModel() : undefined,
         initialState: {
             pagination: {
                 pageSize,
@@ -64,35 +71,35 @@ function DataTable<T>({
     return (
         <div className="w-full">
             {filtering && (
-                <div className="mb-4">
-                    <input
-                        type="text"
+                <div className="mb-3 flex justify-start">
+                    <SearchInput
                         value={globalFilter ?? ""}
                         onChange={(e) => setGlobalFilter(e.target.value)}
-                        placeholder="Filter..."
-                        className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                     />
                 </div>
             )}
 
-            <div className="overflow-x-auto">
-                <table className="min-w-full border-collapse border border-gray-300 dark:border-gray-700">
-                    <thead className="bg-gray-100 dark:bg-gray-800">
+            {/* Header/row styling mirrors Cloudscape's table: a light header row with a bottom
+                divider and per-row bottom borders (no full grid), muted small-caps header text.
+                The sort affordance (arrows) is kept. */}
+            <div className="overflow-x-auto border border-border-default rounded-lg">
+                <table className="min-w-full border-collapse">
+                    <thead>
                         {table.getHeaderGroups().map((headerGroup) => (
-                            <tr key={headerGroup.id}>
+                            <tr key={headerGroup.id} className="border-b border-border-default">
                                 {headerGroup.headers.map((header) => (
                                     <th
                                         key={header.id}
-                                        className="border border-gray-300 dark:border-gray-700 px-4 py-2 text-left text-gray-900 dark:text-gray-100 cursor-pointer select-none"
+                                        className="px-4 py-2.5 text-left text-xs font-bold uppercase tracking-wide text-text-secondary cursor-pointer select-none"
                                         onClick={header.column.getToggleSortingHandler()}
                                     >
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5">
                                             {flexRender(
                                                 header.column.columnDef.header,
                                                 header.getContext()
                                             )}
                                             {sorting && (
-                                                <span className="text-gray-500 dark:text-gray-400">
+                                                <span className="text-text-secondary">
                                                     {{
                                                         asc: "↑",
                                                         desc: "↓",
@@ -109,7 +116,10 @@ function DataTable<T>({
                         {table.getRowModel().rows.map((row) => (
                             <tr
                                 key={row.id}
-                                className="hover:bg-gray-50 dark:hover:bg-gray-800"
+                                className={`border-b border-border-default last:border-0 hover:bg-surface-hover${
+                                    onRowClick ? " cursor-pointer" : ""
+                                }`}
+                                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                                 onContextMenu={(e) => {
                                     if (onRowContextMenu) {
                                         e.preventDefault();
@@ -120,7 +130,7 @@ function DataTable<T>({
                                 {row.getVisibleCells().map((cell) => (
                                     <td
                                         key={cell.id}
-                                        className="border border-gray-300 dark:border-gray-700 px-4 py-2 text-gray-900 dark:text-gray-100"
+                                        className="px-4 py-2.5 text-sm text-text-primary"
                                     >
                                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                                     </td>
@@ -131,26 +141,28 @@ function DataTable<T>({
                 </table>
             </div>
 
-            {/* Pagination controls */}
-            <div className="flex items-center gap-4 mt-4">
-                <button
-                    onClick={() => table.previousPage()}
-                    disabled={!table.getCanPreviousPage()}
-                    className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    Previous
-                </button>
-                <span className="text-gray-900 dark:text-gray-100">
-                    Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-                </span>
-                <button
-                    onClick={() => table.nextPage()}
-                    disabled={!table.getCanNextPage()}
-                    className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    Next
-                </button>
-            </div>
+            {/* Pagination controls (only when the table owns paging) */}
+            {paginate && table.getPageCount() > 1 && (
+                <div className="flex items-center justify-end gap-3 mt-3 text-sm">
+                    <button
+                        onClick={() => table.previousPage()}
+                        disabled={!table.getCanPreviousPage()}
+                        className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Previous
+                    </button>
+                    <span className="text-text-secondary">
+                        Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+                    </span>
+                    <button
+                        onClick={() => table.nextPage()}
+                        disabled={!table.getCanNextPage()}
+                        className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Next
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

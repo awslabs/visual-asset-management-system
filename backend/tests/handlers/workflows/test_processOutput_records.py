@@ -22,7 +22,10 @@ os.environ.setdefault("FILE_UPLOAD_LAMBDA_FUNCTION_NAME", "t-fu")
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "t-assets")
 os.environ.setdefault("ASSET_UPLOAD_TABLE_NAME", "t-upload")
 os.environ.setdefault("DATABASE_STORAGE_TABLE_NAME", "t-db")
-os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME", "t-exec-v2")
+# Unconditional (not setdefault): the root conftest seeds a default for this var so other handlers
+# can import, but this module pins its own name and asserts on it, so it must override before the
+# processWorkflowExecutionOutput handler resolves its tables at import below.
+os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME"] = "t-exec-v2"
 os.environ.setdefault("PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME", "t-pexec")
 os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME", "t-of")
 os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME", "t-om")
@@ -59,6 +62,9 @@ class TestRecordExecutionOutputs:
         return dynamo, puts, updates
 
     def test_writes_output_files_and_completion_status(self):
+        # Pin the handler's resolved main-table name regardless of global import order (the root
+        # conftest may have seeded a different default before this module's env set took effect).
+        po.workflow_execution_database_v2 = "t-exec-v2"
         dynamo, puts, updates = self._dynamo()
         po.record_execution_outputs(
             dynamo=dynamo,
@@ -102,3 +108,41 @@ class TestRecordExecutionOutputs:
         )
         # Nothing written when there is no execution context (non-workflow/direct invoke)
         assert all(len(v) == 0 for v in puts.values())
+
+
+@pytest.mark.unit
+class TestResultsOnly:
+    """Results-only executions (outputLocationType 'none'): no output asset, no file/metadata
+    ingestion — only results text + logs + completion status recorded against the execution."""
+
+    def test_lambda_handler_results_only_skips_asset_ingestion(self):
+        from unittest.mock import patch
+        event = {"body": {
+            "outputLocationType": "none",
+            "outputAssetId": "", "outputDatabaseId": "",
+            "workflowExecutionId": "E1", "endStatePipelineExecutionId": "P1",
+            "workflowDatabaseId": "GLOBAL", "workflowId": "wf1",
+            "workflowExecutionS3InputOutputBucket": "run-bucket",
+            "resultsPathKey": "pipelines/wf1/E1/results/",
+            "executingUserName": "SYSTEM_USER", "executingRequestContext": {},
+        }}
+        with patch.object(po, "lookup_existing_asset") as m_lookup, \
+             patch.object(po, "verify_get_path_objects",
+                          return_value={"Contents": [{"Key": "pipelines/wf1/E1/results/out.json"}]}), \
+             patch.object(po, "s3c") as m_s3, \
+             patch.object(po, "_fetch_execution_logs", return_value=("log text", "stream")), \
+             patch.object(po, "record_execution_outputs") as m_record:
+            m_s3.get_object.return_value = {
+                "Body": MagicMock(read=lambda: b'{"answer": "hello from the LLM"}')}
+            resp = po.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        # No output asset was looked up or authorized.
+        m_lookup.assert_not_called()
+        # record_execution_outputs called with empty files/metadata + the collected results + empty bucket.
+        assert m_record.call_count == 1
+        kw = m_record.call_args.kwargs
+        assert kw["output_files"] == [] and kw["output_metadata"] == []
+        assert kw["bucket_name"] == ""
+        assert kw["output_results"][0]["resultsContent"] == '{"answer": "hello from the LLM"}'
+        assert kw["output_results"][0]["relativeFilePath"] == "/out.json"
+        assert kw["execution_status"] == "SUCCEEDED"

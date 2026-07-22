@@ -689,6 +689,18 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
                     ],
                 },
                 {
+                    id: "AwsSolutions-IAM5",
+                    reason: "CDK framework roles (BucketDeployment uploader, custom-resource providers) require wildcard S3 object access on the CDK staging + destination buckets to stage assets, and a function-qualifier ':*' wildcard to invoke their target Lambda. Scope is the framework resource's own generated policy.",
+                    appliesTo: [
+                        {
+                            regex: "/^Action::s3:(.*)\\*$/g",
+                        },
+                        {
+                            regex: "/^Resource::.*\\*$/g",
+                        },
+                    ],
+                },
+                {
                     id: "AwsSolutions-IAM4",
                     reason: "Intend to use AWSLambdaVPCAccessExecutionRole as is at this stage of this project.",
                     appliesTo: [

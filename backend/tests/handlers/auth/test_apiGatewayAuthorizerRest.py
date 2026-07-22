@@ -19,8 +19,11 @@ def _evt(source_ip="203.0.113.7", auth="Bearer good"):
 @pytest.mark.unit
 class TestRestAuthorizer:
     def test_wildcard_resource(self):
+        # A single trailing "*" after the stage matches METHOD + the full (multi-segment)
+        # resource path, so an authorizer policy cached on the Authorization header applies to
+        # every path on the API+stage. A "*/*" form would only match single-segment paths.
         assert rest._wildcard_resource(METHOD_ARN) == \
-            "arn:aws:execute-api:us-east-1:123456789012:abc123/prod/*/*"
+            "arn:aws:execute-api:us-east-1:123456789012:abc123/prod/*"
 
     def test_allow_returns_allow_policy_with_context(self):
         with patch.object(rest, "authenticate_request",
@@ -28,7 +31,7 @@ class TestRestAuthorizer:
             out = rest.lambda_handler(_evt(), None)
         stmt = out["policyDocument"]["Statement"][0]
         assert stmt["Effect"] == "Allow"
-        assert stmt["Resource"].endswith("/prod/*/*")
+        assert stmt["Resource"].endswith("/prod/*")
         assert out["context"]["sub"] == "u1"
         assert out["principalId"]
 

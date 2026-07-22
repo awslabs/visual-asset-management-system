@@ -206,7 +206,7 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/"):
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None):
     """Process an external upload using the fileIngestion Lambda.
 
     file_base_execution_path_extension is inserted between the output asset's location key and
@@ -246,7 +246,8 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                 "tempKey": file_key
             })
 
-        # Create the request body
+        # Create the request body. sourceBucket tells fileIngestion to READ the tempKey files from
+        # the run bucket (where the pipelines staged them) while still writing to the asset bucket.
         body = {
             "assetId": asset_id,
             "databaseId": database_id,
@@ -256,6 +257,8 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
             "workflowExecutionId": execution_id,
             "changeUserId": change_user_id
         }
+        if source_bucket:
+            body["sourceBucket"] = source_bucket
         
         # Create the Lambda payload to simulate an API Gateway request
         lambda_payload = {
@@ -617,6 +620,63 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     )
 
 
+def _process_results_only(event):
+    """End-state processing for a results-only execution (outputLocationType 'none'): no output asset,
+    no file/metadata ingestion. Reads the pipeline's results text from the run I/O bucket and records
+    only results + logs + completion status against the execution transaction. Used by pipelines that
+    return a textual response (e.g. LLM-style) rather than asset files."""
+    logger.info("Results-only execution (outputLocationType 'none'); recording results + logs, no asset ingestion")
+    source_bucket = event.get('workflowExecutionS3InputOutputBucket', '')
+
+    collected_output_results = []
+    results_path_key = event.get('resultsPathKey', '')
+    if results_path_key and source_bucket:
+        objects_found = {}
+        try:
+            objects_found = verify_get_path_objects(source_bucket, results_path_key)
+        except Exception as e:
+            logger.exception(f"Error listing result objects: {e}")
+        for obj in objects_found.get('Contents', []):
+            result_key = obj['Key']
+            if result_key.endswith('/'):
+                continue
+            try:
+                results_content = s3c.get_object(
+                    Bucket=source_bucket, Key=result_key)['Body'].read().decode("utf-8")
+                relative_file_path = "/" + result_key[len(results_path_key):].lstrip("/")
+                collected_output_results.append({
+                    "relativeFilePath": relative_file_path,
+                    "resultsContent": results_content,
+                    "s3Key": result_key,
+                })
+            except Exception as e:
+                logger.exception(f"Error reading result file {result_key}: {e}")
+
+    try:
+        log_group_arn = workflow_execution_log_group_arn
+        workflow_execution_id = event.get('workflowExecutionId', '')
+        end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
+        execution_log, stream_name = _fetch_execution_logs(log_group_arn, workflow_execution_id)
+        record_execution_outputs(
+            dynamo=dynamodb,
+            workflow_execution_id=workflow_execution_id,
+            end_state_pipeline_execution_id=end_state_pipeline_execution_id,
+            workflow_database_id=event.get('workflowDatabaseId', ''),
+            workflow_id=event.get('workflowId', ''),
+            bucket_name="",
+            output_files=[], output_metadata=[],
+            output_results=collected_output_results,
+            result_log="Workflow Execution Output Processing Complete (results-only)",
+            execution_log=execution_log,
+            log_group_arn=log_group_arn, log_stream_name=stream_name,
+            execution_status="SUCCEEDED",
+        )
+    except Exception as e:
+        logger.exception(f"Error recording results-only execution outputs (non-critical): {e}")
+
+    return success(body={"message": "Workflow Execution Output Processing Complete (results-only)"})
+
+
 def lambda_handler(event, context):
     logger.info(event)
 
@@ -642,6 +702,12 @@ def lambda_handler(event, context):
         # The rest of this handler keys off event['assetId']/event['databaseId'].
         event['assetId'] = event.get('outputAssetId', '')
         event['databaseId'] = event.get('outputDatabaseId', '')
+
+        # Results-only executions (outputLocationType "none") write no asset files/metadata — only
+        # results text + logs recorded against the execution transaction (e.g. an LLM-style pipeline
+        # returning a textual response). Handle them before the asset-required validation below.
+        if event.get('outputLocationType') == 'none' or (not event['assetId'] and not event['databaseId']):
+            return _process_results_only(event)
 
         #Input validation
         if not event['databaseId']:
@@ -734,11 +800,16 @@ def lambda_handler(event, context):
             logger.warning("No tokens found in claims_and_roles")
         
         if operation_allowed_on_asset:
-            # Get bucket details from asset's bucketId
+            # Get bucket details from asset's bucketId. bucket_name is the output asset's own bucket
+            # (the write-back destination). source_bucket is where the pipelines actually STAGED the
+            # output files/metadata/results/preview — the run I/O bucket threaded from the execute
+            # handler (workflowExecutionS3InputOutputBucket). It defaults to the asset bucket for the
+            # legacy single-bucket path where the two coincide.
             bucketDetails = get_default_bucket_details(asset['bucketId'])
             bucket_name = bucketDetails['bucketName']
+            source_bucket = event.get('workflowExecutionS3InputOutputBucket') or bucket_name
 
-            # Accumulate output descriptors for execution-output recording (Stage 1).
+            # Accumulate output descriptors for execution-output recording.
             collected_output_files = []
             collected_output_metadata = []
             collected_output_results = []
@@ -750,7 +821,7 @@ def lambda_handler(event, context):
 
                 objectsFound = {}
                 try:
-                    objectsFound = verify_get_path_objects(bucket_name, previewPathKey)
+                    objectsFound = verify_get_path_objects(source_bucket, previewPathKey)
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in preview path")
                 except Exception as e:
                     logger.exception(f"Error listing preview objects: {e}")
@@ -760,18 +831,18 @@ def lambda_handler(event, context):
 
                     if(len(files) > 1):
                         logger.error("Multiple files present in pipeline output preview folder. Limiting to top 1 for now.")
-                    
+
                     # Filter for image files
                     image_files = [f for f in files if f.endswith(ALLOWED_PREVIEW_FILE_EXTENSIONS)]
 
                     collected_output_files.extend(
-                        _collect_output_descriptors(objectsFound, "preview", previewPathKey, bucket_name)
+                        _collect_output_descriptors(objectsFound, "preview", previewPathKey, source_bucket)
                     )
 
                     if image_files:
                         # Only process the first image file
                         preview_file = image_files[0]
-                        
+
                         try:
                             # Create external upload record
                             upload_id = create_external_upload_record(
@@ -780,16 +851,16 @@ def lambda_handler(event, context):
                                 "assetPreview",
                                 previewPathKey
                             )
-                            
-                            # Update S3 object metadata
+
+                            # Update S3 object metadata (on the staged file in the source bucket)
                             update_s3_object_metadata(
                                 preview_file,
                                 event['assetId'],
                                 event['databaseId'],
                                 upload_id,
-                                bucket_name
+                                source_bucket
                             )
-                            
+
                             # Process the external upload
                             result = process_external_upload(
                                 upload_id,
@@ -801,7 +872,8 @@ def lambda_handler(event, context):
                                 requestContext,
                                 workflow_id=event.get('workflowId'),
                                 execution_id=event.get('workflowExecutionId'),
-                                change_user_id=event.get('executingUserName')
+                                change_user_id=event.get('executingUserName'),
+                                source_bucket=source_bucket
                             )
                             
                             if result:
@@ -820,7 +892,7 @@ def lambda_handler(event, context):
 
                 objectsFound = {}
                 try:
-                    objectsFound = verify_get_path_objects(bucket_name, filesPathKey)
+                    objectsFound = verify_get_path_objects(source_bucket, filesPathKey)
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in files path")
                 except Exception as e:
                     logger.exception(f"Error listing file objects: {e}")
@@ -833,7 +905,7 @@ def lambda_handler(event, context):
 
                     collected_output_files.extend(
                         _collect_output_descriptors(
-                            objectsFound, "file", filesPathKey, bucket_name,
+                            objectsFound, "file", filesPathKey, source_bucket,
                             file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
                     )
 
@@ -846,17 +918,17 @@ def lambda_handler(event, context):
                                 "assetFile",
                                 filesPathKey
                             )
-                            
-                            # Update S3 object metadata for each file
+
+                            # Update S3 object metadata for each staged file (in the source bucket)
                             for file in files:
                                 update_s3_object_metadata(
                                     file,
                                     event['assetId'],
                                     event['databaseId'],
                                     upload_id,
-                                    bucket_name
+                                    source_bucket
                                 )
-                            
+
                             # Process the external upload
                             result = process_external_upload(
                                 upload_id,
@@ -869,7 +941,8 @@ def lambda_handler(event, context):
                                 workflow_id=event.get('workflowId'),
                                 execution_id=event.get('workflowExecutionId'),
                                 change_user_id=event.get('executingUserName'),
-                                file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/')
+                                file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'),
+                                source_bucket=source_bucket
                             )
                             
                             if result:
@@ -889,7 +962,7 @@ def lambda_handler(event, context):
 
                 objectsFound = {}
                 try:
-                    objectsFound = verify_get_path_objects(bucket_name, metadataPathKey)
+                    objectsFound = verify_get_path_objects(source_bucket, metadataPathKey)
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in metadata path")
                 except Exception as e:
                     logger.exception(f"Error listing metadata objects: {e}")
@@ -930,7 +1003,7 @@ def lambda_handler(event, context):
                     if asset_metadata_file:
                         try:
                             process_metadata_file(
-                                bucket_name,
+                                source_bucket,
                                 asset_metadata_file['Key'],
                                 metadataPathKey,
                                 event['databaseId'],
@@ -1007,7 +1080,7 @@ def lambda_handler(event, context):
 
                 objectsFound = {}
                 try:
-                    objectsFound = verify_get_path_objects(bucket_name, resultsPathKey)
+                    objectsFound = verify_get_path_objects(source_bucket, resultsPathKey)
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in results path")
                 except Exception as e:
                     logger.exception(f"Error listing result objects: {e}")
@@ -1017,7 +1090,7 @@ def lambda_handler(event, context):
                     for result_key in result_files:
                         try:
                             results_content = s3c.get_object(
-                                Bucket=bucket_name, Key=result_key)['Body'].read().decode("utf-8")
+                                Bucket=source_bucket, Key=result_key)['Body'].read().decode("utf-8")
                             # Path relative to the results folder, asset-relative with a leading slash.
                             relative_file_path = "/" + result_key[len(resultsPathKey):].lstrip("/")
                             collected_output_results.append({
@@ -1029,7 +1102,7 @@ def lambda_handler(event, context):
                             logger.exception(f"Error reading result file {result_key}: {e}")
 
 
-            # Record end-state pipeline outputs + completion status (Stage 1 data model).
+            # Record end-state pipeline outputs + completion status.
             try:
                 # The workflow SFN log group is the same for every workflow; read it from
                 # env (not the ASL event) so this works even for workflows not redeployed

@@ -1,22 +1,54 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#  SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
+"""Asset-less multi-file workflow execute handler.
+
+The execute route carries an asset-less request with a multi-file input object array, an optional
+output-target override, per-pipeline template execution parameters, and an optional execution group
+id:
+
+  POST /workflows/{workflowDatabaseId}/{workflowId}/execute
+
+Flow (before launch):
+  1. Tier-1 (enforceAPI) + parse/validate the request.
+  2. Resolve + authorize (Tier-2) the workflow; gate enabled + not archived.
+  3. Resolve + authorize (Tier-2) every referenced pipeline; gate enabled + not archived.
+  4. Resolve + authorize the input assets (GET) and the output-target asset (POST).
+  5. Verify every selected input file exists in its own asset bucket (version-aware).
+  6. Per-pipeline template resolution (templateResolution) + tag validation.
+  7. Cross-entity validation (executionValidation.validate_execution) — arity, scope, filters.
+  8. Build the grouped input-metadata payload, launch the state machine, persist the V2 records
+     (including a per-pipeline config snapshot: templateId, tag schema version, tags, override flag).
+
+Run I/O (manifests, per-pipeline config files, shared output/aux prefixes) lives in the VAMS default
+asset bucket (defaultBucket.resolve_default_bucket); input files are still read from their OWN asset
+buckets (each manifest entry carries its own bucket). Output-target write-back targets the output
+asset's own bucket, resolved independently by the end-state process-output lambda.
+"""
+
+import json
 import os
+
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
-import json
-import uuid
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+
 from common.validators import validate
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
+from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from urllib.parse import unquote_plus
 from common.workflows import executionRecords as er
+from common.workflows import executionValidation as ev
+from common.workflows import templateResolution as tres
 from common.workflows import templateRender as tr
+from common.workflows import pipelineRecords as pr
+from common.workflows import workflowRecords as wr
+from common.workflows import templateBodyStorage as tbs
+from common.workflows.defaultBucket import resolve_default_bucket, DefaultBucketNotFoundError
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -24,1158 +56,1286 @@ from models.common import (
     validation_error,
     authorization_error,
     general_error,
-    VAMSGeneralErrorResponse
+    VAMSGeneralErrorResponse,
 )
-from models.workflows import ExecuteWorkflowRequestModel
+from models.executions import (
+    ExecuteWorkflowRequestV2Model,
+    ExecuteWorkflowResponseModel,
+    TRIGGER_TYPE_TO_STORED,
+)
 
 logger = safeLogger(service="ExecuteWorkflow")
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
 
+GLOBAL_DATABASE = "GLOBAL"
+OBJECT_TYPE_WORKFLOW = "workflow"
+OBJECT_TYPE_PIPELINE = "pipeline"
+OBJECT_TYPE_ASSET = "asset"
 
-def _clean_validation_message(v):
-    """Extract the human-readable message a request model's @root_validator raised,
-    so client-facing validation errors stay identical to the prior handler text
-    (the validate() dispatcher message), rather than Pydantic's verbose wrapper."""
-    try:
-        errors = v.errors()
-        if errors and errors[0].get('msg'):
-            return errors[0]['msg']
-    except Exception:
-        pass
-    return str(v)
+# Output-target location types. "asset" writes outputs onto an asset; "none" is results-only —
+# the execution produces no asset files/metadata, only results text + logs stored against the
+# execution transaction (e.g. an LLM-style pipeline returning a textual response). "none" must be
+# a non-empty sentinel: the record builders coerce a falsy location_type back to "asset".
+OUTPUT_LOCATION_TYPE_ASSET = "asset"
+OUTPUT_LOCATION_TYPE_NONE = "none"
+
+# Upper bound on candidate input rows inspected by the concurrency guard so a launch never fans out
+# into an unbounded number of describe_execution calls (mirrors the V1 handler).
+MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
+
+# Whether the DeadlineCloud execution type is enabled for this deployment. Execution is blocked when a
+# referenced pipeline is DeadlineCloud but the type has been turned off (the workflow's createJob task
+# state + the job-callback lambda are not deployed, so the execution would hang on an unresolvable task
+# token). This guards the case where a DeadlineCloud pipeline/workflow was created while the type was
+# enabled and the deployment later disabled it.
+DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED = (
+    os.environ.get("DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED", "false").strip().lower() == "true")
+
+dynamodb = boto3.resource("dynamodb")
+s3c = boto3.client("s3")
+lambda_client = boto3.client("lambda")
+sfn_client = boto3.client("stepfunctions")
 
 try:
-    client = boto3.client('lambda')
-    s3c = boto3.client('s3')
-    sfn_client = boto3.client('stepfunctions')
-    dynamodb = boto3.resource('dynamodb')
-except Exception as e:
-    logger.exception("Failed Loading Error Functions")
-
-try:
-    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-    asset_Database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-    pipeline_Database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
-    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    templates_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATES_STORAGE_TABLE)
+    tag_schema_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE)
+    buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
-    metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
+    metadata_service_function = os.environ["METADATA_SERVICE_LAMBDA_FUNCTION_NAME"]
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
-    pipeline_execution_input_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE)
-    pipeline_execution_input_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE)
-    pipeline_execution_input_configuration_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
+    pipeline_execution_input_metadata_table = get_table_name(
+        ResourceKeys.PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_input_configuration_table = get_table_name(
+        ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
-    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
-    # Real shared workflow SFN log group ARN (same group for every workflow). Recorded
-    # on the execution row so per-execution logs can later be pulled (group ARN + the
-    # row's workflow_execution_arn). Optional: empty string if logging is not configured.
+    workflow_execution_outputs_index_table = get_table_name(
+        ResourceKeys.WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE)
+    workflow_execution_configuration_table = get_table_name(
+        ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
-    # Orchestration bus ARN + event source prefix, written into each pipeline's
-    # manifest.systemConfig for optional sub-process registration. Optional: empty if unset.
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
-# Upper bound on candidate input rows inspected by the concurrency guard so a
-# launch never fans out into an unbounded number of describe_execution calls.
-MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
 
-buckets_table = dynamodb.Table(s3_asset_buckets_table)
-
-def get_default_bucket_details(bucketId):
-    """Get default S3 bucket details from database default bucket DynamoDB"""
+def _clean_validation_message(v):
+    """Extract the human-readable message a request model's @root_validator raised."""
     try:
-        bucket_response = buckets_table.query(
-            KeyConditionExpression=Key('bucketId').eq(bucketId),
-            Limit=1
-        )
-        # Use the first item from the query results
-        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
-        bucket_id = bucket.get('bucketId')
-        bucket_name = bucket.get('bucketName')
-        base_assets_prefix = bucket.get('baseAssetsPrefix')
-
-        #Check to make sure we have what we need
-        if not bucket_name or not base_assets_prefix:
-            raise Exception(f"Error getting database default bucket details.")
-
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
-
-        return {
-            'bucketId': bucket_id,
-            'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
-        }
-    except Exception as e:
-        logger.exception(f"Error getting bucket details: {e}")
-        raise Exception(f"Error getting bucket details.")
-
-def get_pipelines(databaseId, pipelineId):
-    table = dynamodb.Table(pipeline_Database)
-    response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('pipelineId').eq(pipelineId),
-        ScanIndexForward=False,
-    )
-    return response['Items']
+        errors = v.errors()
+        if errors and errors[0].get("msg"):
+            return errors[0]["msg"]
+    except Exception:
+        pass
+    return str(v)
 
 
-def _metadata_service_lambda(payload):
-    """Invoke metadata service lambda"""
-    return client.invoke(
-        FunctionName=metadata_service_function,
-        InvocationType='RequestResponse',
-        Payload=json.dumps(payload).encode('utf-8')
-    )
+#######################
+# Table accessors
+#######################
+
+def _asset_table():
+    return dynamodb.Table(asset_table_name)
 
 
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+def _workflow_table():
+    return dynamodb.Table(workflow_table_name)
 
 
-def input_exists_in_s3(bucket, key):
-    """Whether a workflow input key exists in S3. Handles both a specific file and a folder/prefix
-    (multi-file-ready — the caller checks each selected input):
+def _pipeline_table():
+    return dynamodb.Table(pipeline_table_name)
 
-      - A folder/prefix key (ends with '/') exists when at least one object lives under it.
-      - A specific file key exists when head_object succeeds (a live object; a delete-marker'd or
-        missing key does not count).
 
-    Returns True/False; a permission/other error re-raises so the launch fails loudly rather than
-    silently skipping the guard."""
-    if not key:
+def _templates_table():
+    return dynamodb.Table(templates_table_name)
+
+
+def _tag_schema_table():
+    return dynamodb.Table(tag_schema_table_name)
+
+
+def _buckets_table():
+    return dynamodb.Table(buckets_table_name)
+
+
+#######################
+# Casbin helpers (Tier-2)
+#######################
+
+def _enforce(item, object_type, action):
+    """Tier-2 enforce on a data entity, fail-closed on empty tokens (Rule 4)."""
+    if len(claims_and_roles["tokens"]) == 0:
         return False
-    if key.endswith('/'):
+    obj = dict(item)
+    obj["object__type"] = object_type
+    return CasbinEnforcer(claims_and_roles).enforce(obj, action)
+
+
+#######################
+# Bucket resolution
+#######################
+
+def _default_run_bucket():
+    """The VAMS default asset bucket used for all run I/O (manifests, config files, output/aux
+    prefixes). Input files are still read from their own asset buckets."""
+    return resolve_default_bucket(_buckets_table())
+
+
+def _asset_bucket_details(bucket_id):
+    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix} from the buckets table."""
+    response = _buckets_table().query(
+        KeyConditionExpression=Key("bucketId").eq(bucket_id), Limit=1)
+    bucket = (response.get("Items") or [{}])[0]
+    bucket_name = bucket.get("bucketName")
+    base_prefix = bucket.get("baseAssetsPrefix") or ""
+    if not bucket_name:
+        raise VAMSGeneralErrorResponse("Asset bucket details could not be resolved.")
+    if base_prefix and not base_prefix.endswith("/"):
+        base_prefix += "/"
+    if base_prefix.startswith("/"):
+        base_prefix = base_prefix[1:]
+    return {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix}
+
+
+#######################
+# Record fetch
+#######################
+
+def _get_workflow(workflow_database_id, workflow_id):
+    return _workflow_table().get_item(
+        Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item")
+
+
+def _get_pipeline(pipeline_database_id, pipeline_id):
+    return _pipeline_table().get_item(
+        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+
+
+def _get_asset(database_id, asset_id):
+    response = _asset_table().query(
+        KeyConditionExpression=Key("databaseId").eq(database_id) & Key("assetId").eq(asset_id))
+    items = response.get("Items", [])
+    return items[0] if items else None
+
+
+def _get_template_row(pipeline_database_id, pipeline_id, template_id):
+    composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
+    return _templates_table().get_item(
+        Key={"pipelineDatabaseId:pipelineId": composite, "templateId": template_id}).get("Item")
+
+
+def _get_default_template_id(pipeline_database_id, pipeline_id):
+    """Return the templateId of the pipeline's default template (isDefault=True), or "" when none.
+    Used as the fallback templateId when a run supplies none (e.g. a require-template pipeline)."""
+    composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
+    query_kwargs = {"KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite)}
+    while True:
+        response = _templates_table().query(**query_kwargs)
+        for row in response.get("Items", []):
+            if row.get("isDefault"):
+                return row.get("templateId", "")
+        if "LastEvaluatedKey" not in response:
+            break
+        query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+    return ""
+
+
+def _load_tag_schema_fields(pipeline_database_id, pipeline_id, template_id, default_bucket_name):
+    """Parsed tag-schema fields for a template (rehydrating from S3 when offloaded), or [] when no
+    schema row exists."""
+    owner = pr.template_owner_key(pipeline_database_id, pipeline_id, template_id)
+    response = _tag_schema_table().query(
+        IndexName="TagSchemaByTemplateGSI",
+        KeyConditionExpression=Key("pipelineDatabaseId:pipelineId:templateId").eq(owner))
+    rows = response.get("Items", [])
+    if not rows:
+        return []
+    row = rows[0]
+    if row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and row.get("fieldsS3Key"):
+        text = tbs.read_body_from_s3(s3c, default_bucket_name, row["fieldsS3Key"])
+        return json.loads(text) if text else []
+    fields = row.get("fields") or ""
+    return json.loads(fields) if fields else []
+
+
+def _rehydrate_template_row(row, default_bucket_name):
+    """Return the template row with configBody/webFormJson rehydrated inline (reading S3 when
+    offloaded), so template resolution sees the full stored body."""
+    bodies = tbs.rehydrate_template_bodies(s3c, default_bucket_name, row)
+    resolved = dict(row)
+    resolved["configBody"] = bodies["configBody"]
+    resolved["webFormJson"] = bodies["webFormJson"]
+    return resolved
+
+
+#######################
+# Input existence
+#######################
+
+def _input_exists_in_s3(bucket, key, version_id=""):
+    """Whether an input file (specific key, optional version) or folder/prefix exists in its bucket,
+    plus the S3 VersionId that was resolved. Returns (exists, resolved_version_id).
+
+    For a specific file, head_object returns the concrete VersionId even when no version was
+    requested (S3 resolves "current" to a real version id) — this is the exact version the run
+    reads, which is what should be recorded (rather than the time-relative notion of "latest").
+    Folder/prefix selections have no single version, so ("" is returned).
+    A permission/other error re-raises so the launch fails loudly rather than skipping the guard."""
+    if not key:
+        return False, ""
+    if key.endswith("/"):
         resp = s3c.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
-        return resp.get('KeyCount', 0) > 0 or len(resp.get('Contents', [])) > 0
+        exists = resp.get("KeyCount", 0) > 0 or len(resp.get("Contents", [])) > 0
+        return exists, ""
     try:
-        s3c.head_object(Bucket=bucket, Key=key)
-        return True
+        head_kwargs = {"Bucket": bucket, "Key": key}
+        if version_id:
+            head_kwargs["VersionId"] = version_id
+        resp = s3c.head_object(**head_kwargs)
+        return True, resp.get("VersionId", "") or version_id
     except botocore.exceptions.ClientError as e:
-        code = e.response.get('Error', {}).get('Code')
-        if code in ('404', 'NoSuchKey', 'NotFound'):
-            return False
+        code = e.response.get("Error", {}).get("Code")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False, ""
         raise
 
 
-def verify_inputs_exist_in_s3(bucket, input_keys):
-    """Verify every selected workflow input (file or folder/prefix) exists in S3. Returns the list
-    of missing keys (empty when all exist). Today the caller passes a single key; the list shape is
-    ready for multi-file/folder inputs."""
-    return [k for k in input_keys if not input_exists_in_s3(bucket, k)]
+#######################
+# Metadata service
+#######################
+
+def _metadata_service_lambda(payload):
+    return lambda_client.invoke(
+        FunctionName=metadata_service_function,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(payload).encode("utf-8"))
 
 
-def get_asset_metadata(databaseId, assetId, event):
-    """Get asset metadata using new metadata service"""
+def _fetch_metadata(database_id, asset_id, query_params, event):
+    """Invoke the metadata service GET endpoint; return the parsed 'metadata' list (best-effort)."""
     try:
-        # Build Lambda event for metadata service GET endpoint
         l_payload = {
-            'requestContext': {
-                'http': {
-                    'path': f'/database/{databaseId}/assets/{assetId}/metadata',
-                    'method': 'GET'
-                },
-                'authorizer': event['requestContext']['authorizer']
+            "requestContext": {
+                "http": {"path": f"/database/{database_id}/assets/{asset_id}/metadata", "method": "GET"},
+                "authorizer": event["requestContext"].get("authorizer"),
             },
-            'pathParameters': {
-                'databaseId': databaseId,
-                'assetId': assetId
-            },
-            'queryStringParameters': {}
+            "pathParameters": {"databaseId": database_id, "assetId": asset_id},
+            "queryStringParameters": query_params or {},
         }
-
-        logger.info("Fetching asset metadata from metadata service")
-        logger.info(l_payload)
-
-        metadata_response = _metadata_service_lambda(l_payload)
-        logger.info("Asset metadata response received")
-
-        stream = metadata_response.get('Payload', "")
-        response_body = {}
-        if stream:
-            json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info(f"Asset metadata payload status: {json_response.get('statusCode')}")
-            if "body" in json_response and json_response.get('statusCode') == 200:
-                response_body = json.loads(json_response['body'])
-
-        return response_body
+        response = _metadata_service_lambda(l_payload)
+        stream = response.get("Payload", "")
+        if not stream:
+            return []
+        json_response = json.loads(stream.read().decode("utf-8"))
+        if json_response.get("statusCode") == 200 and "body" in json_response:
+            return json.loads(json_response["body"]).get("metadata", [])
     except Exception as e:
-        logger.exception(f"Failed fetching asset metadata: {e}")
-        return {}
+        logger.exception(f"Failed fetching metadata for {database_id}:{asset_id}: {e}")
+    return []
 
 
-def get_file_metadata(databaseId, assetId, filePath, event):
-    """Get file metadata using new metadata service"""
+def _fetch_file_metadata(database_id, asset_id, file_path, meta_type, event):
+    """Invoke the metadata-service file endpoint (type 'metadata' or 'attribute')."""
     try:
-        # Build Lambda event for metadata service GET endpoint
         l_payload = {
-            'requestContext': {
-                'http': {
-                    'path': f'/database/{databaseId}/assets/{assetId}/metadata/file',
-                    'method': 'GET'
-                },
-                'authorizer': event['requestContext']['authorizer']
+            "requestContext": {
+                "http": {"path": f"/database/{database_id}/assets/{asset_id}/metadata/file", "method": "GET"},
+                "authorizer": event["requestContext"].get("authorizer"),
             },
-            'pathParameters': {
-                'databaseId': databaseId,
-                'assetId': assetId
-            },
-            'queryStringParameters': {
-                'filePath': filePath,
-                'type': 'metadata'
-            }
+            "pathParameters": {"databaseId": database_id, "assetId": asset_id},
+            "queryStringParameters": {"filePath": file_path, "type": meta_type},
         }
-
-        logger.info(f"Fetching file metadata from metadata service for file: {filePath}")
-        logger.info(l_payload)
-
-        metadata_response = _metadata_service_lambda(l_payload)
-        logger.info("File metadata response received")
-
-        stream = metadata_response.get('Payload', "")
-        response_body = {}
-        if stream:
-            json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info(f"File metadata payload status: {json_response.get('statusCode')}")
-            if "body" in json_response and json_response.get('statusCode') == 200:
-                response_body = json.loads(json_response['body'])
-
-        return response_body
+        response = _metadata_service_lambda(l_payload)
+        stream = response.get("Payload", "")
+        if not stream:
+            return []
+        json_response = json.loads(stream.read().decode("utf-8"))
+        if json_response.get("statusCode") == 200 and "body" in json_response:
+            return json.loads(json_response["body"]).get("metadata", [])
     except Exception as e:
-        logger.exception(f"Failed fetching file metadata: {e}")
-        return {}
+        logger.exception(f"Failed fetching file metadata for {database_id}:{asset_id}{file_path}: {e}")
+    return []
 
 
-def get_file_attributes(databaseId, assetId, filePath, event):
-    """Get file attributes using new metadata service"""
-    try:
-        # Build Lambda event for metadata service GET endpoint
-        l_payload = {
-            'requestContext': {
-                'http': {
-                    'path': f'/database/{databaseId}/assets/{assetId}/metadata/file',
-                    'method': 'GET'
-                },
-                'authorizer': event['requestContext']['authorizer']
-            },
-            'pathParameters': {
-                'databaseId': databaseId,
-                'assetId': assetId
-            },
-            'queryStringParameters': {
-                'filePath': filePath,
-                'type': 'attribute'
-            }
-        }
-
-        logger.info(f"Fetching file attributes from metadata service for file: {filePath}")
-        logger.info(l_payload)
-
-        metadata_response = _metadata_service_lambda(l_payload)
-        logger.info("File attributes response received")
-
-        stream = metadata_response.get('Payload', "")
-        response_body = {}
-        if stream:
-            json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info(f"File attributes payload status: {json_response.get('statusCode')}")
-            if "body" in json_response and json_response.get('statusCode') == 200:
-                response_body = json.loads(json_response['body'])
-
-        return response_body
-    except Exception as e:
-        logger.exception(f"Failed fetching file attributes: {e}")
-        return {}
-
-
-def simplify_metadata_array(metadata_array):
-    """
-    Convert verbose metadata array to simple key-value dictionary.
-    Removes all schema fields and nested structure to reduce size for pipeline input.
-
-    Args:
-        metadata_array: List of metadata objects with full schema info
-
-    Returns:
-        Dictionary with metadataKey as key and metadataValue as value
-    """
+def _simplify_metadata_array(metadata_array):
+    """Convert a verbose metadata array to a simple {key: value} dict."""
     simplified = {}
-    for item in metadata_array:
-        key = item.get('metadataKey', '')
-        value = item.get('metadataValue', '')
-        if key:  # Only add if key exists
-            simplified[key] = value
+    for item in metadata_array or []:
+        key = item.get("metadataKey", "")
+        if key:
+            simplified[key] = item.get("metadataValue", "")
     return simplified
 
 
-def get_separate_metadata(databaseId, assetId, filePath, event):
-    """Get asset metadata, file metadata, and file attributes separately using new metadata service"""
-    try:
-        # Always get asset metadata
-        asset_metadata_response = get_asset_metadata(databaseId, assetId, event)
+def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, event):
+    """Build the v2 grouped-by-asset metadata envelope for the selected inputs, honoring the
+    workflow's metadataInputs gate (asset/file/attribute toggles). One assets[] entry per unique
+    involved asset; per-file records for file metadata/attributes."""
+    want_asset = bool((metadata_inputs or {}).get("assetMetadata", True))
+    want_file = bool((metadata_inputs or {}).get("fileMetadata", True))
+    want_attr = bool((metadata_inputs or {}).get("fileAttributes", True))
 
-        # Extract metadata list from response (new format)
-        asset_metadata = asset_metadata_response.get("metadata", [])
+    # Group selected inputs by (databaseId, assetId), preserving order.
+    grouped = {}
+    order = []
+    for item in selected_inputs:
+        key = (item["databaseId"], item["assetId"])
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(item)
 
-        # If a file path is provided, also get file metadata and attributes
-        file_metadata = []
-        file_attributes = []
-        if filePath:
-            file_metadata_response = get_file_metadata(databaseId, assetId, filePath, event)
-            file_metadata = file_metadata_response.get("metadata", [])
-
-            file_attributes_response = get_file_attributes(databaseId, assetId, filePath, event)
-            file_attributes = file_attributes_response.get("metadata", [])
-
-        logger.info(f"Retrieved metadata - Asset: {len(asset_metadata)} items, File: {len(file_metadata)} items, Attributes: {len(file_attributes)} items")
-
-        return {
-            "assetMetadata": {"metadata": asset_metadata},
-            "fileMetadata": {"metadata": file_metadata},
-            "fileAttributes": {"metadata": file_attributes}
+    asset_groups = []
+    for (database_id, asset_id) in order:
+        asset = asset_records.get((database_id, asset_id), {})
+        asset_data = {
+            "assetName": asset.get("assetName", ""),
+            "description": asset.get("description", ""),
+            "tags": asset.get("tags", []),
         }
-    except Exception as e:
-        logger.exception(f"Failed fetching separate metadata: {e}")
-        return {
-            "assetMetadata": {"metadata": []},
-            "fileMetadata": {"metadata": []},
-            "fileAttributes": {"metadata": []}
-        }
+        asset_metadata = {}
+        if want_asset:
+            asset_metadata = _simplify_metadata_array(_fetch_metadata(database_id, asset_id, {}, event))
+
+        files = []
+        # Asset-level record (fileKey '/').
+        files.append(er.build_metadata_file_record("/", metadata=asset_metadata))
+        for item in grouped[(database_id, asset_id)]:
+            relative_key = item["relativeFileKey"]
+            if relative_key in ("", "/"):
+                continue  # whole-asset selection has no per-file metadata beyond the '/' record
+            file_metadata = {}
+            file_attributes = {}
+            if want_file:
+                file_metadata = _simplify_metadata_array(
+                    _fetch_file_metadata(database_id, asset_id, relative_key, "metadata", event))
+            if want_attr:
+                file_attributes = _simplify_metadata_array(
+                    _fetch_file_metadata(database_id, asset_id, relative_key, "attribute", event))
+            files.append(er.build_metadata_file_record(
+                relative_key, metadata=file_metadata, attributes=file_attributes if want_attr else None))
+        asset_groups.append(er.build_metadata_asset_group(
+            database_id, asset_id, asset_data=asset_data, files=files))
+
+    return er.build_grouped_metadata_envelope(asset_groups)
 
 
-def _parse_pipeline_resource(pipeline):
-    """Extract the resourceId (ARN/URL/bus) and resourceType from a pipeline's
-    userProvidedResource JSON string. Mirrors stepfunctions_builder parsing."""
-    raw = pipeline.get('userProvidedResource', '{}') or '{}'
+#######################
+# Referenced-entity resolution + authorization
+#######################
+
+def _resolve_and_authorize_pipelines(workflow, workflow_database_id):
+    """Resolve every referenced pipeline record, enforce Tier-2 GET, and gate enabled + not archived.
+
+    Returns (error_response_or_None, ordered_pipeline_records). Each record is the raw V2 pipeline
+    item; the disabled/archived gate is ALSO applied by the cross-entity validator, but is enforced
+    here too so a disabled pipeline fails fast with a clear message before template resolution."""
+    records = []
+    for ref in workflow.get("specifiedPipelines", []) or []:
+        pipeline_db = ref.get("pipelineDatabaseId") or workflow_database_id
+        pipeline_id = ref.get("pipelineId", "")
+        record = _get_pipeline(pipeline_db, pipeline_id)
+        if not record:
+            logger.error(f"Referenced pipeline {pipeline_db}:{pipeline_id} not found")
+            return validation_error(body={"message": "A referenced pipeline could not be found."}), None
+        # Tier-2 GET on the pipeline object; empty tokens fail closed. Surface the flat
+        # pipelineExecutionType ABAC field (from executionConfig) so execution-type constraints apply.
+        if not _enforce(
+                pr.apply_pipeline_constraint_fields(dict(record), record),
+                OBJECT_TYPE_PIPELINE, "GET"):
+            return authorization_error(), None
+        # A DeadlineCloud pipeline can only run when the deployment has the type enabled (the createJob
+        # task state + job-callback lambda exist). If the type was disabled after the pipeline was
+        # created, block the launch rather than starting an execution that hangs on the task token.
+        if ((record.get("executionConfig") or {}).get("executionType") == "DeadlineCloud"
+                and not DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED):
+            logger.error(
+                f"Pipeline {pipeline_db}:{pipeline_id} is DeadlineCloud but the execution type is "
+                f"disabled for this deployment")
+            return validation_error(body={
+                "message": "A referenced pipeline uses the DeadlineCloud execution type, which is "
+                           "not enabled for this deployment."}), None
+        record["_jobName"] = ref.get("jobName", "")
+        # A workflow ref may carry a defaultTemplateId (e.g. set by the v2.5->v2.6 migration when a
+        # consolidated built-in reference needs the format-specific template). It is the fallback the
+        # execution uses when the run supplies no per-pipeline templateId.
+        record["_defaultTemplateId"] = ref.get("defaultTemplateId", "") or ""
+        records.append(record)
+    if not records:
+        return validation_error(body={"message": "Workflow has no pipelines to execute."}), None
+    return None, records
+
+
+def _with_name(item, name_field):
+    """Casbin object carrying a `name` attribute (category/name-based rules)."""
+    obj = dict(item)
+    obj.setdefault("name", item.get(name_field, ""))
+    return obj
+
+
+def _resolve_and_authorize_assets(selected_inputs, output_asset_id, output_database_id):
+    """Resolve + authorize every distinct input asset (GET) and the output-target asset (POST).
+
+    Returns (error_response_or_None, asset_records, output_asset, output_bucket_details) where
+    asset_records maps (databaseId, assetId) -> asset item. Empty tokens fail closed.
+
+    A results-only execution passes output_asset_id/output_database_id as None: there is no output
+    asset to resolve or authorize, so (output_asset, output_bucket_details) come back as None."""
+    asset_records = {}
+    for item in selected_inputs:
+        key = (item["databaseId"], item["assetId"])
+        if key in asset_records:
+            continue
+        asset = _get_asset(item["databaseId"], item["assetId"])
+        # A genuinely-missing asset is a 404 (matches the rest of VAMS, which checks existence before
+        # authorization); an asset that exists but the caller cannot GET is a 403.
+        if not asset:
+            logger.info(f"Input asset {key[0]}:{key[1]} not found")
+            return validation_error(
+                status_code=404, body={"message": "An input asset was not found."}), None, None, None
+        if not _enforce(_with_name(asset, "assetName"), OBJECT_TYPE_ASSET, "GET"):
+            return authorization_error(), None, None, None
+        asset_records[key] = asset
+
+    # Results-only: no output asset to resolve/authorize.
+    if not output_asset_id or not output_database_id:
+        return None, asset_records, None, None
+
+    # Output-target asset (write permission = POST). Resolve its own bucket for output write-back.
+    output_asset = _get_asset(output_database_id, output_asset_id)
+    if not output_asset:
+        logger.info(f"Output asset {output_database_id}:{output_asset_id} not found")
+        return validation_error(
+            status_code=404, body={"message": "The output asset was not found."}), None, None, None
+    if not _enforce(_with_name(output_asset, "assetName"), OBJECT_TYPE_ASSET, "POST"):
+        return authorization_error(), None, None, None
     try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        parsed = {}
-    return parsed.get('resourceId', ''), parsed.get('resourceType', 'Lambda')
+        output_bucket_details = _asset_bucket_details(output_asset.get("bucketId"))
+    except VAMSGeneralErrorResponse:
+        return validation_error(body={"message": "The output asset bucket is invalid."}), None, None, None
+
+    return None, asset_records, output_asset, output_bucket_details
 
 
-def _pipeline_input_configuration(pipeline):
-    """The pipeline definition's inputParameters string, or empty string when absent.
+#######################
+# Template resolution phase
+#######################
 
-    The value is normally JSON, but it may contain ``{{tag}}`` template placeholders (see
-    templateRender) that are not valid JSON until rendered (an unquoted array/object tag such as
-    ``{{assetFileKeyArray}}`` in particular). Such templated text is passed through as-is — it is
-    validated after rendering, not here. Only non-templated text is JSON-validated (and dropped if
-    invalid) to preserve the prior guard for plain-JSON configs."""
-    raw = pipeline.get('inputParameters', '') or ''
-    if not raw or raw == '':
-        return ''
-    if tr.uses_template_tags(raw):
-        return raw
-    try:
-        json.loads(raw)
-        return raw
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("Pipeline inputParameters is not valid JSON; storing empty input configuration")
-        return ''
+def _resolve_pipeline_configs(pipeline_records, pipeline_exec_params, default_bucket_name):
+    """Per-pipeline template resolution + tag validation (templateResolution 5-case contract).
+
+    Returns (errors, resolved_by_pipeline) where resolved_by_pipeline maps pipelineId ->
+    {templateId, renderedConfig, templateTags, customTemplateOverrideUsed, configFormat,
+    tagSchemaVersion, templateSchemaVersion, templateOverrides}. `templateOverrides` is the chosen
+    template's overrides map (for the cross-entity validator's effective-config merge)."""
+    errors = []
+    resolved = {}
+    for record in pipeline_records:
+        pipeline_id = record.get("pipelineId", "")
+        pipeline_db = record.get("databaseId", "")
+        system_config = record.get("systemConfig", {}) or {}
+        params = pipeline_exec_params.get(pipeline_id) or {}
+
+        # Template id precedence: the run's per-pipeline templateId wins; then the workflow ref's
+        # defaultTemplateId (set for a consolidated built-in whose old id baked in the output
+        # format); then, only for a pipeline that REQUIRES a template, the pipeline's own default
+        # template (isDefault) — this lets a require-template pipeline run without the caller naming
+        # a template. A pipeline that does not require a template is left template-less unless the
+        # run supplies one, so its default is a UI pre-selection only (never auto-applied here).
+        template_id = params.get("templateId") or record.get("_defaultTemplateId", "") or None
+        if not template_id and system_config.get("requireTemplate"):
+            template_id = _get_default_template_id(pipeline_db, pipeline_id) or None
+        template_row = None
+        tag_schema_fields = None
+        template_overrides = {}
+        if template_id:
+            template_row = _get_template_row(pipeline_db, pipeline_id, template_id)
+            if template_row is not None:
+                template_row = _rehydrate_template_row(template_row, default_bucket_name)
+                tag_schema_fields = _load_tag_schema_fields(
+                    pipeline_db, pipeline_id, template_id, default_bucket_name)
+                template_overrides = template_row.get("overrides", {}) or {}
+
+        # When the templateId came from a fallback (workflow-ref default or the pipeline's default
+        # template) rather than the run's params, surface it to the resolver so its case selection
+        # treats the run as template-backed (params drives resolve_pipeline_config's case choice).
+        resolve_params = params
+        if template_id and not params.get("templateId"):
+            resolve_params = {**params, "templateId": template_id}
+
+        pipeline_errors, result = tres.resolve_pipeline_config(
+            system_config, template_row, tag_schema_fields, resolve_params)
+        if pipeline_errors:
+            label = f"pipeline '{pipeline_db}:{pipeline_id}'"
+            errors.extend(f"{label}: {e}" for e in pipeline_errors)
+            continue
+
+        result["templateSchemaVersion"] = str(template_row.get("schemaVersion", "")) if template_row else ""
+        result["tagSchemaVersion"] = str(pr.TAG_SCHEMA_VERSION) if tag_schema_fields else ""
+        result["templateOverrides"] = template_overrides
+        # Carry the RAW override body (pre-render) so the config snapshot can persist it verbatim —
+        # a template-less override run has no templateId to re-resolve, so re-run needs the raw text.
+        if result.get("customTemplateOverrideUsed"):
+            result["customTemplateOverrideRaw"] = params.get("customTemplateOverride", "") or ""
+        # Key by the COMPOSITE pipeline key (pipelineDatabaseId:pipelineId), not pipelineId alone: a
+        # workflow may reference two same-id pipelines across databases (e.g. GLOBAL + same-db), and
+        # keying on pipelineId would let the second silently overwrite the first's resolved config.
+        resolved[er.pipeline_composite_key(pipeline_db, pipeline_id)] = result
+    return errors, resolved
 
 
-def write_execution_input_files(execution_id, asset_bucket, pipelines, input_metadata,
-                                original_input_manifest, pipeline_config_bodies):
-    """Write an execution's input-definition files to the asset bucket (per-execution input
+#######################
+# Cross-entity validation
+#######################
+
+def _run_cross_validation(workflow, pipeline_records, resolved_configs, selected_inputs,
+                          output_target):
+    """Assemble the effective pipeline configs (pipeline systemConfig + chosen-template overrides)
+    and run executionValidation.validate_execution. Returns (errors, per_pipeline_filtered_inputs)."""
+    pipeline_effective_configs = []
+    for record in pipeline_records:
+        pipeline_id = record.get("pipelineId", "")
+        composite = er.pipeline_composite_key(record.get("databaseId", ""), pipeline_id)
+        overrides = (resolved_configs.get(composite) or {}).get("templateOverrides", {})
+        effective_system = ev.resolve_effective_pipeline_config(
+            record.get("systemConfig", {}) or {}, overrides)
+        pipeline_effective_configs.append({
+            "pipelineId": pipeline_id,
+            "pipelineDatabaseId": record.get("databaseId", ""),
+            "enabled": record.get("enabled", True),
+            "archived": record.get("archived", False),
+            "systemConfig": effective_system,
+        })
+    return ev.validate_execution(
+        workflow.get("systemConfig", {}) or {}, pipeline_effective_configs, selected_inputs,
+        output_target)
+
+
+#######################
+# Input key resolution + existence
+#######################
+
+def _asset_root_key(asset):
+    """The asset's base location key within its bucket (asset-bucket relative, no scheme)."""
+    location = asset.get("assetLocation") or {}
+    return location.get("Key", "") if isinstance(location, dict) else ""
+
+
+def _resolve_full_key(asset_root_key, relative_file_key):
+    """Full S3 key for an input file: the asset root key joined with the asset-relative key,
+    avoiding duplication when the relative key already starts with the root."""
+    root = asset_root_key or ""
+    if root and not root.endswith("/"):
+        root += "/"
+    rel = (relative_file_key or "").lstrip("/")
+    if rel and rel.startswith(root):
+        return rel
+    return root + rel
+
+
+def _verify_inputs_exist(selected_inputs, asset_records):
+    """Verify every selected input (specific file/version or whole-asset/folder) exists in its own
+    asset bucket. Returns the list of human-readable missing-input labels (empty when all exist).
+
+    Side effect: stamps each single-file item with `resolvedVersionId` — the concrete S3 VersionId
+    the run reads (from head_object), so the execution record captures the exact version used rather
+    than the time-relative "latest". Folder/whole-asset selections get no resolved version."""
+    missing = []
+    for item in selected_inputs:
+        asset = asset_records[(item["databaseId"], item["assetId"])]
+        try:
+            bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
+        except VAMSGeneralErrorResponse:
+            missing.append(f"{item['assetId']}{item['relativeFileKey']}")
+            continue
+        root = _asset_root_key(asset)
+        relative = item["relativeFileKey"]
+        if relative in ("", "/"):
+            key = root.rstrip("/") + "/"
+        else:
+            key = _resolve_full_key(root, relative)
+        exists, resolved_version_id = _input_exists_in_s3(bucket, key, item.get("versionId", ""))
+        if not exists:
+            missing.append(f"{item['assetId']}{relative}")
+            continue
+        item["resolvedVersionId"] = resolved_version_id
+    return missing
+
+
+#######################
+# Concurrency guard
+#######################
+
+def _candidate_execution_ids(inputs_table, partition, file_keys, restriction, seen):
+    """Yield distinct, not-yet-seen workflowExecutionIds for a (databaseId:assetId) partition,
+    newest-first, filtered to the exact input file keys when restriction is perInputFile. Paginates
+    to exhaustion; the per-partition inspection bound is applied by the caller."""
+    query_kwargs = {
+        "IndexName": "WorkflowExecInputsByAssetGSI",
+        "KeyConditionExpression": Key("databaseId:assetId").eq(partition),
+        "ScanIndexForward": False,
+    }
+    while True:
+        resp = inputs_table.query(**query_kwargs)
+        for input_item in resp.get("Items", []):
+            if restriction == "perInputFile" and input_item.get("inputAssetFileKey") not in file_keys:
+                continue
+            execution_id = input_item.get("workflowExecutionId", "")
+            if not execution_id or execution_id in seen:
+                continue
+            seen.add(execution_id)
+            yield execution_id
+        if "LastEvaluatedKey" not in resp:
+            return
+        query_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+
+def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs, asset_records,
+                              restriction):
+    """True when a still-running execution of this workflow conflicts with the concurrency
+    restriction:
+      - none: never conflicts.
+      - perAsset: a running execution touching any of the selected inputs' assets.
+      - perInputFile: a running execution on any of the exact selected input file keys.
+    The number of distinct executions confirmed via Step Functions is bounded by
+    MAX_CONCURRENCY_CANDIDATES_INSPECTED (warns rather than silently truncating)."""
+    if restriction not in ("perAsset", "perInputFile"):
+        return False
+
+    inputs_table = dynamodb.Table(workflow_execution_inputs_table)
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    composite = er.workflow_composite_key(workflow_database_id, workflow_id)
+
+    asset_partitions = {f"{i['databaseId']}:{i['assetId']}" for i in selected_inputs}
+    # inputAssetFileKey is stored as the normalized FULL asset key (asset root + relative), so build
+    # the comparison set the same way (per its own asset's root) rather than from the relative key.
+    file_keys = set()
+    for i in selected_inputs:
+        asset = asset_records.get((i["databaseId"], i["assetId"]), {})
+        root = _asset_root_key(asset)
+        relative = i["relativeFileKey"]
+        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
+        file_keys.add(er.normalize_file_key(full_key))
+
+    seen = set()
+    inspected = 0
+    for partition in asset_partitions:
+        for execution_id in _candidate_execution_ids(
+                inputs_table, partition, file_keys, restriction, seen):
+            if inspected >= MAX_CONCURRENCY_CANDIDATES_INSPECTED:
+                logger.warning(
+                    f"Concurrency check bounded at {MAX_CONCURRENCY_CANDIDATES_INSPECTED} distinct "
+                    "executions; older executions were not inspected.")
+                return False
+            inspected += 1
+            if _execution_running(main_table, execution_id, composite):
+                return True
+    return False
+
+
+#######################
+# Manifest + input-file writing
+#######################
+
+def _build_input_manifest_entries(selected_inputs, asset_records):
+    """Build pipeline 1's manifest input-file entries from the selected inputs. Each entry carries
+    its own asset bucket + full key + version + asset identity + per-file aux preview prefix, so a
+    multi-asset selection resolves each file from its own bucket."""
+    entries = []
+    for item in selected_inputs:
+        database_id = item["databaseId"]
+        asset_id = item["assetId"]
+        asset = asset_records[(database_id, asset_id)]
+        bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
+        root = _asset_root_key(asset)
+        relative = item["relativeFileKey"]
+        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
+        aux_preview_prefix = er.aux_preview_file_prefix(database_id, full_key)
+        entries.append(er.build_manifest_entry(
+            relative_path=relative, bucket=bucket, key=full_key,
+            version_id=item.get("versionId", ""), database_id=database_id, asset_id=asset_id,
+            asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix))
+    return entries
+
+
+def _write_execution_input_files(execution_id, run_bucket, pipelines_count, metadata_envelope,
+                                 first_manifest, pipeline_config_bodies):
+    """Write the execution's input-definition files to the DEFAULT run bucket (per-execution input
     folder keyed on execution id): the shared metadata file, one config.json per pipeline, and
-    pipeline 1's manifest. Returns
-    { metadataFileS3Key, configKeys: [perPipeline...], firstManifestS3Key } as asset-bucket keys.
-
-    ``pipeline_config_bodies`` is the per-pipeline configuration text already rendered (template
-    tags substituted) by the caller — pipeline 1's is rendered at launch here; pipelines 2+ carry
-    their raw text (they are re-written with rendered text by the interim lambda per task)."""
+    pipeline 1's manifest. Returns {metadataFileS3Key, configKeys[], firstManifestS3Key}."""
     locations = {"metadataFileS3Key": "", "configKeys": [], "firstManifestS3Key": ""}
-    if not pipelines:
+    if pipelines_count == 0:
         return locations
 
-    # Shared input metadata file, wrapped in the metadata envelope (parse a string payload
-    # back to JSON first so it stays a structured object).
     metadata_key = er.execution_input_metadata_key(execution_id)
-    if isinstance(input_metadata, str):
-        try:
-            metadata_payload = json.loads(input_metadata) if input_metadata else {}
-        except (json.JSONDecodeError, ValueError):
-            metadata_payload = input_metadata
-    else:
-        metadata_payload = input_metadata or {}
-    metadata_body = json.dumps(er.build_metadata_envelope(metadata_payload))
-    s3c.put_object(Bucket=asset_bucket, Key=metadata_key,
-                   Body=metadata_body.encode('utf-8'), ContentType='application/json')
+    s3c.put_object(Bucket=run_bucket, Key=metadata_key,
+                   Body=json.dumps(metadata_envelope).encode("utf-8"), ContentType="application/json")
     locations["metadataFileS3Key"] = metadata_key
 
-    # Per-pipeline input configuration files (1-indexed folders pipeline1..N).
-    for idx, _pipeline in enumerate(pipelines):
+    for idx in range(pipelines_count):
         cfg_key = er.pipeline_input_config_key(execution_id, idx + 1)
         cfg_body = pipeline_config_bodies[idx] if idx < len(pipeline_config_bodies) else ""
-        s3c.put_object(Bucket=asset_bucket, Key=cfg_key,
-                       Body=(cfg_body or "").encode('utf-8'), ContentType='application/json')
+        s3c.put_object(Bucket=run_bucket, Key=cfg_key,
+                       Body=(cfg_body or "").encode("utf-8"), ContentType="application/json")
         locations["configKeys"].append(cfg_key)
 
-    # Pipeline 1's resolved input manifest = the original asset input files.
     manifest_key = er.pipeline_input_manifest_key(execution_id, 1)
-    s3c.put_object(Bucket=asset_bucket, Key=manifest_key,
-                   Body=json.dumps(original_input_manifest).encode('utf-8'),
-                   ContentType='application/json')
+    s3c.put_object(Bucket=run_bucket, Key=manifest_key,
+                   Body=json.dumps(first_manifest).encode("utf-8"), ContentType="application/json")
     locations["firstManifestS3Key"] = manifest_key
     return locations
 
 
-def persist_execution_records(dynamo, execution_id, workflow_arn, workflow_execution_arn,
-                              database_id, asset_id, workflow_database_id, workflow_id,
-                              input_asset_file_key, asset_bucket, aux_bucket,
-                              triggered_by_user_id, trigger_type, execution_log_group_arn,
-                              pipelines, first_job_name, input_metadata, input_configuration,
-                              pipeline_execution_ids=None, input_config_keys=None,
-                              output_asset_id="", output_database_id="",
-                              output_file_base_execution_path_extension="/",
-                              input_asset_root_s3_key="",
-                              input_metadata_asset_id="", input_metadata_database_id="",
-                              input_metadata_file_s3_key=""):
-    """Write the V2 main execution row plus workflow-level inputs/config and one
-    PipelineExecutions row per pipeline, plus each pipeline's own input configuration row.
-
-    Input asset files are tracked at the workflow-execution level (WorkflowExecutionInputs),
-    not per-pipeline.
-
-    Returns a dict with executionId, endStatePipelineExecutionId, and the list of
-    generated pipelineExecutionIds (ordered to match `pipelines`).
-    """
-    start_date = er.iso_now()
-    first_pipeline_name = pipelines[0]['name'] if pipelines else ""
-    output_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, execution_id) \
-        if pipelines else {"files": "", "previews": "", "metadata": "", "results": ""}
-
-    # 1) Main V2 row
-    main_table = dynamo.Table(workflow_execution_database_v2)
-    main_table.put_item(Item=er.build_workflow_execution_record(
-        execution_id=execution_id,
-        workflow_database_id=workflow_database_id, workflow_id=workflow_id,
-        workflow_arn=workflow_arn, workflow_execution_arn=workflow_execution_arn,
-        execution_start_date=start_date, execution_status="NEW",
-        triggered_by_user_id=triggered_by_user_id, trigger_type=trigger_type,
-        execution_log_group_arn=execution_log_group_arn,
-    ))
-
-    # 2) Workflow-level input row (asset-scoped GET source of truth). Input asset files are
-    #    tracked here at the workflow-execution level (not per-pipeline).
-    wf_inputs_table = dynamo.Table(workflow_execution_inputs_table)
-    wf_inputs_table.put_item(Item=er.build_workflow_execution_input_record(
-        workflow_execution_id=execution_id, database_id=database_id, asset_id=asset_id,
-        input_asset_file_key=input_asset_file_key, execution_start_date=start_date,
-        workflow_id=workflow_id, workflow_database_id=workflow_database_id,
-        s3_bucket=asset_bucket, asset_root_s3_key=input_asset_root_s3_key,
-    ))
-
-    # 3) Workflow execution configuration row: pipeline snapshot + input metadata + output
-    #    target and input-metadata provenance.
-    wf_cfg_table = dynamo.Table(workflow_execution_configuration_table)
-    wf_cfg_table.put_item(Item=er.build_workflow_configuration_record(
-        workflow_execution_id=execution_id,
-        workflow_configuration="",
-        input_metadata=json.dumps(input_metadata) if not isinstance(input_metadata, str) else input_metadata,
-        specified_pipelines_snapshot=pipelines,
-        output_location_type="asset",
-        output_asset_id=output_asset_id or asset_id,
-        output_database_id=output_database_id or database_id,
-        output_file_base_execution_path_extension=output_file_base_execution_path_extension or "/",
-        input_metadata_asset_id=input_metadata_asset_id or asset_id,
-        input_metadata_database_id=input_metadata_database_id or database_id,
-        input_metadata_file_s3_key=input_metadata_file_s3_key,
-    ))
-
-    # 4) One PipelineExecutions row per pipeline (chain + end-state on last), plus each
-    #    pipeline's own input configuration row.
-    pexec_table = dynamo.Table(pipeline_executions_table)
-    pin_cfg_table = dynamo.Table(pipeline_execution_input_configuration_table)
-    if pipeline_execution_ids is None:
-        pipeline_execution_ids = [er.new_guid() for _ in pipelines]
-    input_config_keys = input_config_keys or []
-    # Per-file aux preview prefix, keyed on the FULL asset file key (asset location key + relative
-    # path) so any custom asset base prefix is preserved: {databaseId}/{assetFileKey}/preview.
-    aux_preview_prefix = er.aux_preview_file_prefix(database_id, input_asset_file_key)
-
-    prev_id = ""
-    for idx, pipeline in enumerate(pipelines):
-        pexec_id = pipeline_execution_ids[idx]
-        is_end_state = (idx == len(pipelines) - 1)
-        resource_arn, _rtype = _parse_pipeline_resource(pipeline)
-        # Bucket-relative, execution-scoped temp working prefix (matches the manifest's aux temp
-        # prefix layout: pipelines/{pipelineName}/{executionId}/).
-        aux_temp_prefix = er.aux_pipeline_prefix(pipeline['name'], execution_id)
-        cfg_key = input_config_keys[idx] if idx < len(input_config_keys) else ""
-        # Orchestration event prefix (empty when the bus is not configured).
-        event_prefix = er.orchestration_event_prefix(
-            orchestration_event_source_prefix, execution_id, pexec_id) \
-            if orchestration_event_source_prefix else ""
-        pexec_table.put_item(Item=er.build_pipeline_execution_record(
-            pipeline_execution_id=pexec_id, workflow_execution_id=execution_id,
-            pipeline_database_id=pipeline.get('databaseId', ''), pipeline_id=pipeline['name'],
-            end_state_pipeline=is_end_state,
-            s3_asset_bucket=asset_bucket, s3_aux_bucket=aux_bucket,
-            output_prefixes=output_prefixes,
-            input_metadata_file_prefix="",
-            input_config_file_prefix=cfg_key,
-            aux_temp_prefix=aux_temp_prefix, aux_preview_prefix=aux_preview_prefix,
-            pipeline_execution_type=pipeline.get('pipelineExecutionType', 'Lambda'),
-            wait_for_callback=pipeline.get('waitForCallback', 'Disabled'),
-            pipeline_resource_arn=resource_arn, from_pipeline_execution_id=prev_id,
-            orchestration_bus_event_prefix=event_prefix,
-        ))
-        # Per-pipeline input configuration row.
-        pin_cfg_table.put_item(Item=er.build_input_configuration_record(
-            pipeline_execution_id=pexec_id,
-            input_configuration=_pipeline_input_configuration(pipeline),
-            input_configuration_file_s3_key=cfg_key,
-        ))
-        prev_id = pexec_id
-
-    # 5) Workflow-level input metadata row (asset-level '/'), recorded once for the execution.
-    if input_metadata:
-        md = input_metadata if isinstance(input_metadata, dict) else {}
-        first_pexec_id = pipeline_execution_ids[0] if pipeline_execution_ids else None
-        if first_pexec_id:
-            pin_md_table = dynamo.Table(pipeline_execution_input_metadata_table)
-            pin_md_table.put_item(Item=er.build_input_metadata_record(
-                pipeline_execution_id=first_pexec_id, database_id=database_id, asset_id=asset_id,
-                file_path="/", metadata=md,
-                source_input_metadata_file_s3_key=input_metadata_file_s3_key,
-            ))
-
-    return {
-        "workflowExecutionId": execution_id,
-        "endStatePipelineExecutionId": pipeline_execution_ids[-1] if pipeline_execution_ids else "",
-        "pipelineExecutionIds": pipeline_execution_ids,
-    }
+def _pipeline_exec_type(record):
+    return (record.get("executionConfig", {}) or {}).get("executionType", "Lambda")
 
 
-def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, pipelines, inputMetadata = {}, triggerType = "Manual", storedJobNames = None, outputFileBaseExecutionPathExtension = "/"):
+def _pipeline_wait_for_callback(record):
+    return (record.get("executionConfig", {}) or {}).get("waitForCallback", "Disabled")
 
-    logger.info("Launching workflow with arn: "+workflow_arn)
 
-    # Path segment inserted between the output asset location key and each output file's relative
-    # path. Defaults to '/' (no extra path); the execute call may override it for this run.
-    output_file_base_execution_path_extension = outputFileBaseExecutionPathExtension or "/"
+def _pipeline_resource_arn(record):
+    """The pipeline's execution resource id (Lambda fn / SQS url / EventBridge bus), for the
+    pipeline-execution row's pipelineResourceArn (recording only)."""
+    ec = record.get("executionConfig", {}) or {}
+    exec_type = ec.get("executionType", "Lambda")
+    if exec_type == "SQS":
+        return (ec.get("sqs") or {}).get("queueUrl", "")
+    if exec_type == "EventBridge":
+        return (ec.get("eventBridge") or {}).get("busArn", "")
+    if exec_type == "DeadlineCloud":
+        return ""
+    return (ec.get("lambda") or {}).get("resourceId", "")
 
-    #Modify asset key to turn + sympbols into spaces for the final processing entry
-    inputAssetFileKey = unquote_plus(inputAssetFileKey)
 
-    # Generate a VAMS-owned execution GUID and use it as the Step Functions
-    # execution name so $$.Execution.Name == executionId (all ASL S3 paths and
-    # process-output keep working unchanged).
-    executionId = uuid.uuid4().hex
+def _normalize_output_path_extension(raw):
+    """Normalize the caller's output base path extension to a single leading + trailing '/'.
 
-    # Pre-generate the end-state pipeline-execution GUID so it can be threaded
-    # into the SFN input for the process-output step.
-    pipeline_execution_ids = [uuid.uuid4().hex for _ in pipelines]
+    Empty/None -> "/" (asset root). Preserves any {{dynamicTag}} placeholders verbatim (they are
+    resolved later by the template renderer); only the surrounding slashes are normalized. Traversal
+    and backslashes are already rejected by the request model."""
+    if not raw or raw.strip() in ("", "/"):
+        return "/"
+    trimmed = raw.strip().strip("/")
+    if not trimmed:
+        return "/"
+    return f"/{trimmed}/"
+
+
+#######################
+# Launch + persist
+#######################
+
+def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inputs, asset_records,
+                     output_asset, output_database_id, output_asset_id, run_bucket, metadata_envelope,
+                     trigger_type_stored, execution_group_id, executing_user, executing_request_context,
+                     output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/"):
+    """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
+    records. Run I/O (manifest, config files, output/aux prefixes) lives in run_bucket; input files
+    are read from their own asset buckets (carried per manifest entry). Returns the executionId."""
+    workflow_id = workflow["workflowId"]
+    workflow_database_id = workflow["databaseId"]
+    workflow_arn = workflow.get("workflow_arn", "")
+
+    execution_id = er.new_guid()
+    pipeline_execution_ids = [er.new_guid() for _ in pipeline_records]
     end_state_pipeline_execution_id = pipeline_execution_ids[-1] if pipeline_execution_ids else ""
 
-    # First pipeline job name: prefer the ASL-stored jobNames[0] so the manifest's output
-    # locations match the ASL's paths; fall back to the ASL convention for legacy workflows.
-    first_pipeline_name = pipelines[0]['name'] if pipelines else ""
-    if storedJobNames:
-        first_job_name = storedJobNames[0]
-    else:
-        first_job_name = (uuid.uuid1().hex[:5] + "-" + first_pipeline_name)[:80] if first_pipeline_name else ""
+    first_pipeline = pipeline_records[0]
+    # Output-path pipeline-name segment must match what the ASL baked in. The ASL derives it from
+    # the workflow ref's jobName (workflowAsl.to_asl_pipeline_dict: `job_name or pipelineId`), NOT the
+    # pipelineId — so a first pipeline whose ref jobName differs from its pipelineId would otherwise
+    # orphan its outputs (the end-state lambda lists the jobName-based folder).
+    first_pipeline_name = first_pipeline.get("_jobName", "") or first_pipeline.get("pipelineId", "")
+    stored_job_names = workflow.get("jobNames") or []
+    first_job_name = stored_job_names[0] if stored_job_names else first_pipeline.get("_jobName", "") \
+        or first_pipeline.get("pipelineId", "")
 
-    # Build pipeline 1's input file manifest entry. Locations are carried as relative keys plus
-    # the file's own bucket (never a pre-built s3:// URI): assetRootS3Key is the asset-root prefix
-    # within the bucket (relativePath is the key after that root), and each input file gets its own
-    # unique aux preview prefix ({databaseId}/{assetId}/{relativeFileKey}/preview).
-    base_key = inputAssetLocationKey or ""
-    relative_input = inputAssetFileKey[len(base_key):] if inputAssetFileKey.startswith(base_key) else inputAssetFileKey
-    # Aux preview prefix keyed on the FULL asset file key (location key + relative path) so a
-    # custom asset base prefix is preserved: {databaseId}/{assetFileKey}/preview.
-    first_aux_preview_prefix = er.aux_preview_file_prefix(database_id, inputAssetFileKey)
-    first_input_files = [er.build_manifest_entry(
-        relative_path=relative_input, bucket=inputAssetBucket, key=inputAssetFileKey,
-        version_id="", database_id=database_id, asset_id=asset_id,
-        asset_root_s3_key=base_key, aux_preview_prefix=first_aux_preview_prefix)]
-
-    # Build pipeline 1's full manifest envelope (output/aux locations + system config), using
-    # the ASL-stored job name so output locations match the ASL's paths. outputs carries the asset
-    # bucket + bucket-relative prefixes; the aux temp prefix is bucket-relative and scoped to this
-    # execution (pipelines/{pipelineName}/{executionId}/).
-    out_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, executionId) \
-        if pipelines else {"files": "", "previews": "", "metadata": "", "results": ""}
-    outputs = er.build_manifest_outputs(bucket=inputAssetBucket, **out_prefixes)
-    first_aux_temp_prefix = er.aux_pipeline_prefix(first_pipeline_name, executionId) if pipelines else ""
-    metadata_metadata_location = f"s3://{inputAssetBucket}/{er.execution_input_metadata_key(executionId)}"
+    # Pipeline 1's manifest: input entries (each from its own asset bucket) + run-bucket output/aux.
+    input_entries = _build_input_manifest_entries(selected_inputs, asset_records)
+    out_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, execution_id)
+    outputs = er.build_manifest_outputs(bucket=run_bucket, **out_prefixes)
+    first_aux_temp_prefix = er.aux_pipeline_prefix(first_pipeline_name, execution_id)
+    metadata_location = f"s3://{run_bucket}/{er.execution_input_metadata_key(execution_id)}"
     first_event_prefix = er.orchestration_event_prefix(
-        orchestration_event_source_prefix, executionId, pipeline_execution_ids[0]) \
+        orchestration_event_source_prefix, execution_id, pipeline_execution_ids[0]) \
         if (orchestration_event_source_prefix and pipeline_execution_ids) else ""
-    original_input_manifest = er.build_manifest_envelope(
-        input_files=first_input_files,
-        input_metadata_s3_location=metadata_metadata_location,
+    first_aux_preview_suffix = (first_pipeline.get("systemConfig", {}) or {}).get(
+        "auxPreviewPipelineSuffix", "")
+
+    # output_extension is the caller's (dynamic-tag-templated) output base path, already normalized
+    # to a single leading + trailing slash; it defaults to "/" (asset root).
+    first_manifest = er.build_manifest_envelope(
+        input_files=input_entries,
+        input_metadata_s3_location=metadata_location,
         outputs=outputs,
         aux_bucket=bucket_name_assetAuxiliary,
         aux_temp_prefix=first_aux_temp_prefix,
-        # Per-pipeline viewer subfolder appended to each input file's aux preview prefix; empty
-        # until sourced from the pipeline configuration.
-        aux_preview_pipeline_suffix="",
+        aux_preview_pipeline_suffix=first_aux_preview_suffix,
         system_config=er.build_manifest_system_config(
             orchestration_bus_arn=orchestration_bus_arn,
             orchestration_event_prefix=first_event_prefix),
-        # Output target == the input asset today (output location type 'asset').
         output_target=er.build_manifest_output_target(
-            location_type="asset", asset_id=asset_id, database_id=database_id,
-            file_base_execution_path_extension=output_file_base_execution_path_extension),
+            location_type=output_location_type, asset_id=output_asset_id,
+            database_id=output_database_id,
+            file_base_execution_path_extension=output_extension),
     )
 
-    # --- Template-tag rendering (pipeline 1 at launch; pipelines 2+ render in the interim lambda) ---
-    # A pipeline's input configuration (and the output base-execution path extension) may contain
-    # {{tag}} placeholders substituted per pipeline task from that task's manifest + execution
-    # context. Pipeline 1's manifest is the one built above. inputMetadata is in memory at launch,
-    # so the metadata loader returns it directly (no S3 read needed here).
-    def _launch_metadata_payload():
-        if isinstance(inputMetadata, str):
-            try:
-                return json.loads(inputMetadata) if inputMetadata else {}
-            except (json.JSONDecodeError, ValueError):
-                return {}
-        return inputMetadata or {}
-
+    # Render pipeline 1's resolved config against its manifest now; pipelines 2+ keep their resolved
+    # (but un-rendered-against-task-manifest) config text — the interim lambda re-renders per task.
     execution_start_ts = er.iso_now()
-    first_pexec_id = pipeline_execution_ids[0] if pipeline_execution_ids else ""
-    first_config_location = f"s3://{inputAssetBucket}/{er.pipeline_input_config_key(executionId, 1)}" \
-        if pipelines else ""
-    first_exec_context = {
-        "executionId": executionId,
+
+    # The renderer's metadata-content tags read the legacy {"VAMS": {...}} view; project the v2 grouped
+    # envelope onto it for this run's primary input file (the first selected input), so tags like
+    # {{assetMetadataObject}} resolve to real values rather than {}.
+    _first_input = selected_inputs[0] if selected_inputs else {}
+
+    def _metadata_payload():
+        return er.to_legacy_vams_view(
+            metadata_envelope or {}, _first_input.get("databaseId", ""),
+            _first_input.get("assetId", ""), _first_input.get("relativeFileKey", "/"))
+
+    first_context = {
+        "executionId": execution_id,
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,
-        "pipelineExecutionId": first_pexec_id,
-        "pipelineId": first_pipeline_name,
-        "pipelineDatabaseId": pipelines[0].get('databaseId', '') if pipelines else "",
+        "pipelineExecutionId": pipeline_execution_ids[0] if pipeline_execution_ids else "",
+        "pipelineId": first_pipeline.get("pipelineId", ""),
+        "pipelineDatabaseId": first_pipeline.get("databaseId", ""),
         "jobName": first_job_name,
-        "triggerType": triggerType,
-        "executingUserName": executingUserName,
+        "triggerType": trigger_type_stored,
+        "executingUserName": executing_user,
         "executionStartTimestamp": execution_start_ts,
-        "inputConfigurationS3Location": first_config_location,
+        "inputConfigurationS3Location": f"s3://{run_bucket}/{er.pipeline_input_config_key(execution_id, 1)}",
     }
 
-    # Render the output base-execution path extension (e.g. '/{{executionId}}/'), then reflect the
-    # rendered value into the manifest's outputTarget and the SFN input so all consumers agree.
-    output_file_base_execution_path_extension = tr.render_config(
-        output_file_base_execution_path_extension, original_input_manifest, first_exec_context,
-        metadata_loader=_launch_metadata_payload)
-    original_input_manifest["outputTarget"]["fileBaseExecutionPathExtension"] = \
-        output_file_base_execution_path_extension
-
-    # Per-pipeline configuration bodies: pipeline 1 is rendered now against its manifest; pipelines
-    # 2+ keep their raw text (the interim lambda re-renders + re-writes each against its own task
-    # manifest before that pipeline runs).
     pipeline_config_bodies = []
-    for idx, pipeline in enumerate(pipelines):
-        raw_cfg = _pipeline_input_configuration(pipeline)
+    for idx, record in enumerate(pipeline_records):
+        composite = er.pipeline_composite_key(record.get("databaseId", ""), record.get("pipelineId", ""))
+        rendered = (resolved_configs.get(composite) or {}).get("renderedConfig", "")
         if idx == 0:
             pipeline_config_bodies.append(tr.render_config(
-                raw_cfg, original_input_manifest, first_exec_context,
-                metadata_loader=_launch_metadata_payload))
+                rendered, first_manifest, first_context, metadata_loader=_metadata_payload))
         else:
-            pipeline_config_bodies.append(raw_cfg)
+            pipeline_config_bodies.append(rendered)
 
-    # Write the input-definition files to the asset bucket execution input folder.
-    input_locations = write_execution_input_files(
-        execution_id=executionId, asset_bucket=inputAssetBucket,
-        pipelines=pipelines, input_metadata=inputMetadata,
-        original_input_manifest=original_input_manifest,
-        pipeline_config_bodies=pipeline_config_bodies)
+    input_locations = _write_execution_input_files(
+        execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
+        pipeline_config_bodies)
 
-    # The SFN execution input carries only what the ASL ($.X) references: identity, the
-    # workflow-execution + auxiliary buckets, the output target, the per-pipeline execution ids,
-    # and the executing-user context. Per-input-file locations live in the manifest (addressed by
-    # per-pipeline computed S3 keys), so no single triggering file key is threaded here — the SFN
-    # layer is input-file-agnostic and multi-file-ready. Orchestration bus config is not threaded
-    # through the SFN input either: it belongs in the manifest (for pipelines) and in the interim
-    # lambda's environment (for the next-pipeline manifest build), each per its intended purpose.
+    # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
-        name=executionId,
+        name=execution_id,
         input=json.dumps({
-            # Workflow-execution identity
-            'workflowExecutionId': executionId,
-            'workflowDatabaseId': workflow_database_id,
-            'workflowId': workflow_id,
-            'endStatePipelineExecutionId': end_state_pipeline_execution_id,
-            'pipelineExecutionIds': pipeline_execution_ids,
-            # Workflow-execution I/O bucket: where the ASL pulls the manifest/config files from and
-            # where the shared output folder lives. The auxiliary bucket is NOT threaded here — it
-            # is resolved by the interim lambda and carried in each manifest (manifest.auxBucket).
-            'workflowExecutionS3InputOutputBucket': inputAssetBucket,
-            # Output target identity (where outputs are written; == the input asset today). Read
-            # only by the end-state process-output lambda, which has no manifest of its own.
-            'outputLocationType': "asset",
-            'outputAssetId': asset_id,
-            'outputDatabaseId': database_id,
-            'outputFileBaseExecutionPathExtension': output_file_base_execution_path_extension,
-            # Executing-user context
-            'executingUserName': executingUserName,
-            'executingRequestContext': executingRequestContext,
-        })
-    )
-    logger.info("Workflow Response: ")
-    logger.info(response)
+            "workflowExecutionId": execution_id,
+            "workflowDatabaseId": workflow_database_id,
+            "workflowId": workflow_id,
+            "endStatePipelineExecutionId": end_state_pipeline_execution_id,
+            "pipelineExecutionIds": pipeline_execution_ids,
+            "workflowExecutionS3InputOutputBucket": run_bucket,
+            "outputLocationType": output_location_type,
+            "outputAssetId": output_asset_id,
+            "outputDatabaseId": output_database_id,
+            "outputFileBaseExecutionPathExtension": output_extension,
+            "executingUserName": executing_user,
+            "executingRequestContext": executing_request_context,
+        }))
+    logger.info(f"Started workflow execution {execution_id}")
 
-    # Shared workflow SFN log group ARN recorded on the execution row (best-effort).
-    execution_log_group_arn = workflow_execution_log_group_arn
+    _persist_execution_records(
+        execution_id=execution_id, workflow_arn=workflow_arn,
+        workflow_execution_arn=response["executionArn"],
+        workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
+        selected_inputs=selected_inputs, asset_records=asset_records,
+        pipeline_execution_ids=pipeline_execution_ids, first_job_name=first_job_name,
+        run_bucket=run_bucket, metadata_envelope=metadata_envelope,
+        output_database_id=output_database_id, output_asset_id=output_asset_id,
+        output_extension=output_extension, trigger_type_stored=trigger_type_stored,
+        executing_user=executing_user, input_locations=input_locations,
+        execution_group_id=execution_group_id, output_location_type=output_location_type)
 
-    # Persist the V2 main row + workflow-level inputs/config + per-pipeline rows.
-    # Pass the pre-generated pipeline-execution ids so the end-state id matches the
-    # value threaded into the SFN input above.
-    persist_execution_records(
-        dynamo=dynamodb,
-        pipeline_execution_ids=pipeline_execution_ids,
-        execution_id=executionId,
-        workflow_arn=workflow_arn,
-        workflow_execution_arn=response['executionArn'],
-        database_id=database_id, asset_id=asset_id,
-        workflow_database_id=workflow_database_id, workflow_id=workflow_id,
-        input_asset_file_key=inputAssetFileKey,
-        asset_bucket=inputAssetBucket, aux_bucket=bucket_name_assetAuxiliary,
-        triggered_by_user_id=executingUserName, trigger_type=triggerType,
-        execution_log_group_arn=execution_log_group_arn,
-        pipelines=pipelines, first_job_name=first_job_name,
-        input_metadata=inputMetadata, input_configuration="",
-        input_config_keys=input_locations['configKeys'],
-        output_asset_id=asset_id, output_database_id=database_id,
-        output_file_base_execution_path_extension=output_file_base_execution_path_extension,
-        input_asset_root_s3_key=base_key,
-        input_metadata_asset_id=asset_id, input_metadata_database_id=database_id,
-        input_metadata_file_s3_key=input_locations['metadataFileS3Key'],
-    )
-
-    return executionId
+    return execution_id
 
 
-def get_asset(databaseId, assetId):
-    table = dynamodb.Table(asset_Database)
-    response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId)
-    )
-    return response['Items']
+def _persist_execution_records(execution_id, workflow_arn, workflow_execution_arn, workflow,
+                               pipeline_records, resolved_configs, selected_inputs, asset_records,
+                               pipeline_execution_ids, first_job_name, run_bucket, metadata_envelope,
+                               output_database_id, output_asset_id, output_extension,
+                               trigger_type_stored, executing_user, input_locations,
+                               execution_group_id, output_location_type=OUTPUT_LOCATION_TYPE_ASSET):
+    """Write the main execution row, per-input workflow-input rows, the workflow configuration row,
+    one PipelineExecutions row + config-snapshot per pipeline, and the output index rows."""
+    start_date = er.iso_now()
+    workflow_id = workflow["workflowId"]
+    workflow_database_id = workflow["databaseId"]
+    # Output-path pipeline-name segment mirrors the ASL (`ref.jobName or pipelineId`), so the recorded
+    # PipelineExecutions output prefixes match the folder the end-state lambda lists (see _launch_workflow).
+    first_pipeline_name = (pipeline_records[0].get("_jobName", "")
+                           or pipeline_records[0].get("pipelineId", "")) if pipeline_records else ""
+    output_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, execution_id) \
+        if pipeline_records else {"files": "", "previews": "", "metadata": "", "results": ""}
 
-
-def get_workflow(workflowDatabaseId, workflowId):
-    table = dynamodb.Table(workflow_database)
-    response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(workflowDatabaseId) & Key('workflowId').eq(workflowId)
-    )
-    return response['Items']
-
-
-def validate_pipelines(workflow, claims_and_roles):
-    for pipeline in workflow['specifiedPipelines']['functions']:
-        pipeline_state = get_pipelines(workflow['databaseId'], pipeline["name"])[0]
-        if not pipeline_state['enabled']:
-            logger.warning(f"Pipeline {pipeline['name']} is disabled")
-            return (False, pipeline["name"])
-
-        allowed = False
-        if pipeline_state:
-            # Add Casbin Enforcer to check if the current user has permissions to POST the pipeline (Tier 2):
-            pipeline_state.update({
-                "object__type": "pipeline"
-            })
-
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(pipeline_state, "POST"):
-                    allowed = True
-
-        if not allowed:
-            return (False, pipeline["name"])
-
-    return (True, '')
-
-def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId, file_key=None):
-    """Detect a currently-RUNNING execution on this asset (optionally filtered by
-    workflow + file key) before launching, to prevent duplicate runs.
-
-    Sourced from the V2 inputs GSI + V2 main table. The scan of candidate input
-    rows is bounded (newest-first) and, when a file key is given, restricted to
-    rows for that exact file before any main-row fetch / describe_execution. The
-    first confirmed-running match short-circuits the return."""
-    logger.info("Getting current executions (V2)")
-    inputs_table = dynamodb.Table(workflow_execution_inputs_table)
+    # 1) Main V2 row (+ optional group id).
     main_table = dynamodb.Table(workflow_execution_database_v2)
+    main_row = er.build_workflow_execution_record(
+        execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
+        workflow_arn=workflow_arn, workflow_execution_arn=workflow_execution_arn,
+        execution_start_date=start_date, execution_status="NEW",
+        triggered_by_user_id=executing_user, trigger_type=trigger_type_stored,
+        execution_log_group_arn=workflow_execution_log_group_arn,
+        execution_group_id=execution_group_id or "")
+    main_table.put_item(Item=main_row)
 
-    # Compare the file key symmetrically with how the writer stores it.
-    normalized_file_key = er.normalize_file_key(unquote_plus(file_key)) if file_key else None
-
-    partitionKey = f"{databaseId}:{assetId}"
-    query_kwargs = {
-        'IndexName': 'WorkflowExecInputsByAssetGSI',
-        'KeyConditionExpression': Key('databaseId:assetId').eq(partitionKey),
-        'ScanIndexForward': False,
-    }
-
-    # Collect candidate input rows newest-first, applying the file-key filter
-    # before accumulating, and stop once the bound is reached (no silent
-    # truncation -- warn instead).
-    candidate_items = []
-    bounded = False
-    resp = inputs_table.query(**query_kwargs)
-    while True:
-        for input_item in resp.get('Items', []):
-            if normalized_file_key and input_item.get('inputAssetFileKey', '') != normalized_file_key:
-                continue
-            candidate_items.append(input_item)
-            if len(candidate_items) >= MAX_CONCURRENCY_CANDIDATES_INSPECTED:
-                bounded = True
-                break
-        if bounded or 'LastEvaluatedKey' not in resp:
-            break
-        query_kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
-        resp = inputs_table.query(**query_kwargs)
-
-    if bounded:
-        logger.warning(
-            f"Concurrency check bounded at {MAX_CONCURRENCY_CANDIDATES_INSPECTED} candidate input rows; "
-            "older executions were not inspected.")
-
-    result = {"Items": []}
-
-    # Dedup execution ids (newest-first); fetch main row + confirm running only
-    # for executions on this specific file.
-    seen_execution_ids = set()
-    for input_item in candidate_items:
-        execution_id = input_item.get('workflowExecutionId', '')
-        if not execution_id or execution_id in seen_execution_ids:
-            continue
-        seen_execution_ids.add(execution_id)
-
-        # Fetch the V2 main row to get the workflow composite + arn
-        main_resp = main_table.query(
-            KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
-            ScanIndexForward=False,
-        )
-        main_rows = main_resp.get('Items', [])
-        if not main_rows:
-            continue
-        main_item = main_rows[0]
-
-        # Optional workflow filter
-        if workflowId:
-            if main_item.get('workflowDatabaseId:workflowId', '') != er.workflow_composite_key(workflowDatabaseId, workflowId):
-                continue
-
-        # Skip if already has a stop date
-        if main_item.get('executionStopDate'):
-            continue
-
-        # Confirm running via Step Functions
+    # 2) One workflow-input row per selected input (asset-scoped GET source of truth).
+    wf_inputs_table = dynamodb.Table(workflow_execution_inputs_table)
+    for item in selected_inputs:
+        database_id = item["databaseId"]
+        asset_id = item["assetId"]
+        asset = asset_records[(database_id, asset_id)]
+        root = _asset_root_key(asset)
+        relative = item["relativeFileKey"]
+        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
         try:
-            execution = sfn_client.describe_execution(
-                executionArn=main_item.get('workflow_execution_arn', '')
-            )
-            if not execution.get('stopDate'):
-                result["Items"].append({
-                    'workflowDatabaseId': main_item.get('workflowDatabaseId', ''),
-                    'workflowId': main_item.get('workflowId', ''),
-                    'workflowExecutionId': execution['name'],
-                    'executionStatus': execution['status'],
-                    'startDate': main_item.get('executionStartDate', ''),
-                })
-                # One running match is enough for the caller's concurrency guard.
-                logger.info(f"Found running execution on this file: {result}")
-                return result
-        except Exception as e:
-            logger.exception(e)
-            logger.info("Continuing with trying to fetch executions...")
+            asset_bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
+        except VAMSGeneralErrorResponse:
+            asset_bucket = ""
+        wf_inputs_table.put_item(Item=er.build_workflow_execution_input_record(
+            workflow_execution_id=execution_id, database_id=database_id, asset_id=asset_id,
+            input_asset_file_key=full_key, execution_start_date=start_date,
+            workflow_id=workflow_id, workflow_database_id=workflow_database_id,
+            s3_bucket=asset_bucket, asset_root_s3_key=root,
+            version_id=item.get("resolvedVersionId", "")))
 
-    logger.info(f"Returning existing running execution results: {result}")
-    return result
+    # 3) Workflow configuration row: pipeline snapshot + grouped metadata + output target.
+    wf_cfg_table = dynamodb.Table(workflow_execution_configuration_table)
+    wf_cfg_table.put_item(Item=er.build_workflow_configuration_record(
+        workflow_execution_id=execution_id, workflow_configuration="",
+        input_metadata=json.dumps(metadata_envelope),
+        specified_pipelines_snapshot=workflow.get("specifiedPipelines", []),
+        output_location_type=output_location_type, output_asset_id=output_asset_id,
+        output_database_id=output_database_id,
+        output_file_base_execution_path_extension=output_extension,
+        input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", "")))
+
+    # 4) One PipelineExecutions row + config-snapshot row per pipeline.
+    pexec_table = dynamodb.Table(pipeline_executions_table)
+    pin_cfg_table = dynamodb.Table(pipeline_execution_input_configuration_table)
+    config_keys = input_locations.get("configKeys", [])
+    prev_id = ""
+    for idx, record in enumerate(pipeline_records):
+        pexec_id = pipeline_execution_ids[idx]
+        is_end_state = (idx == len(pipeline_records) - 1)
+        pipeline_id = record.get("pipelineId", "")
+        composite = er.pipeline_composite_key(record.get("databaseId", ""), pipeline_id)
+        resolved = resolved_configs.get(composite, {}) or {}
+        cfg_key = config_keys[idx] if idx < len(config_keys) else ""
+        # Aux temp prefix mirrors the ASL's per-pipeline working folder (jobName-based name), so the
+        # recorded prefix matches where the interim lambda stages the pipeline's working files.
+        aux_pipeline_name = record.get("_jobName", "") or pipeline_id
+        aux_temp_prefix = er.aux_pipeline_prefix(aux_pipeline_name, execution_id)
+        event_prefix = er.orchestration_event_prefix(
+            orchestration_event_source_prefix, execution_id, pexec_id) \
+            if orchestration_event_source_prefix else ""
+
+        pexec_table.put_item(Item=er.build_pipeline_execution_record(
+            pipeline_execution_id=pexec_id, workflow_execution_id=execution_id,
+            pipeline_database_id=record.get("databaseId", ""), pipeline_id=pipeline_id,
+            end_state_pipeline=is_end_state, s3_asset_bucket=run_bucket,
+            s3_aux_bucket=bucket_name_assetAuxiliary, output_prefixes=output_prefixes,
+            input_metadata_file_prefix="", input_config_file_prefix=cfg_key,
+            aux_temp_prefix=aux_temp_prefix, aux_preview_prefix="",
+            pipeline_execution_type=_pipeline_exec_type(record),
+            wait_for_callback=_pipeline_wait_for_callback(record),
+            pipeline_resource_arn=_pipeline_resource_arn(record), from_pipeline_execution_id=prev_id,
+            orchestration_bus_event_prefix=event_prefix))
+
+        # Config snapshot: what the run was built from (traceable + re-runnable).
+        pin_cfg_table.put_item(Item=er.build_input_configuration_record(
+            pipeline_execution_id=pexec_id,
+            input_configuration=resolved.get("renderedConfig", ""),
+            input_configuration_file_s3_key=cfg_key,
+            template_id=resolved.get("templateId", ""),
+            template_schema_version=resolved.get("templateSchemaVersion", ""),
+            tag_schema_version=resolved.get("tagSchemaVersion", ""),
+            template_tags=resolved.get("templateTags", []),
+            custom_template_override_used=resolved.get("customTemplateOverrideUsed", False),
+            custom_template_override=resolved.get("customTemplateOverrideRaw", ""),
+            config_format=resolved.get("configFormat", "")))
+        prev_id = pexec_id
+
+    # 5) Output index row: 'this execution wrote to (outputDatabaseId, outputAssetId)'. Backs the
+    #    global execution access rule (a caller with access to the output asset may see the run).
+    #    Skipped for results-only runs — there is no output asset, and the index PK (databaseId:assetId)
+    #    would be a meaningless ":" ghost key.
+    if output_database_id and output_asset_id:
+        dynamodb.Table(workflow_execution_outputs_index_table).put_item(
+            Item=wr.build_execution_output_index_record(output_database_id, output_asset_id, execution_id))
 
 
-def build_pipeline_input_metadata(asset, databaseId, assetId, relative_file_path, event):
-    """Assemble the simplified `inputMetadata` payload (asset data + asset/file/
-    attribute metadata) passed to the workflow, via the metadata service."""
-    metadata_result = get_separate_metadata(databaseId, assetId, relative_file_path, event)
+#######################
+# Execute orchestration
+#######################
 
-    simplified_asset_metadata = simplify_metadata_array(
-        metadata_result.get("assetMetadata", {}).get("metadata", [])
-    )
-    simplified_file_metadata = simplify_metadata_array(
-        metadata_result.get("fileMetadata", {}).get("metadata", [])
-    )
-    simplified_file_attributes = simplify_metadata_array(
-        metadata_result.get("fileAttributes", {}).get("metadata", [])
-    )
+def execute_workflow(event, workflow_database_id, workflow_id, request_model):
+    """Validate, authorize, resolve templates, cross-validate, and launch an asset-less execution.
 
-    logger.info(f"Simplified metadata - Asset: {len(simplified_asset_metadata)} keys, "
-                f"File: {len(simplified_file_metadata)} keys, "
-                f"Attributes: {len(simplified_file_attributes)} keys")
-
-    return {
-        "VAMS": {
-            "assetData": {
-                "assetName": asset.get("assetName", ""),
-                "description": asset.get("description", ""),
-                "tags": asset.get("tags", [])
-            },
-            "assetMetadata": simplified_asset_metadata,
-            "fileMetadata": simplified_file_metadata,
-            "fileAttributes": simplified_file_attributes
-        },
-    }
-
-
-def execute_workflow(event, databaseId, assetId, workflowId, request_model):
-    """Validate, authorize, and launch a workflow execution on an asset.
-
-    Returns the API response (success with the new execution id, or an error).
-    `request_model` is the parsed ExecuteWorkflowRequestModel.
-    """
-    workflow_database_id = request_model.workflowDatabaseId
-    request_file_key = request_model.fileKey
-
-    # Workflow's database must be GLOBAL or match the asset's database.
-    if workflow_database_id != 'GLOBAL' and workflow_database_id != databaseId:
-        logger.error("Workflow database ID validation failed. Workflow can only be executed "
-                     "on assets from the same database or from global workflows.")
-        return validation_error(
-            body={'message': 'Workflow can only be executed on assets from the same database or from global workflows'},
-            event=event
-        )
-
-    # Asset must exist + Tier 2 authorization (POST on the asset); this is also the
-    # output-asset write-permission gate, since the asset is today the output target.
-    assetResponse = get_asset(databaseId, assetId)
-    logger.info(assetResponse)
-    if not bool(assetResponse):
-        return validation_error(status_code=404, body={'message': 'Asset does not exist'}, event=event)
-
-    asset = assetResponse[0]
-    asset.update({"object__type": "asset"})
-
-    executingUserName = ''
-    executingRequestContext = event['requestContext']
-    asset_allowed = False
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(asset, "POST"):
-            asset_allowed = True
-            executingUserName = claims_and_roles["tokens"][0]
-
-    if not asset_allowed:
+    Returns the API response (success with the new execution id + any warnings, or an error)."""
+    # 1) Resolve + authorize the workflow; gate enabled + not archived.
+    workflow = _get_workflow(workflow_database_id, workflow_id)
+    if not workflow:
+        return validation_error(status_code=404, body={"message": "Workflow does not exist"}, event=event)
+    if not _enforce(_with_name(workflow, "workflowName"), OBJECT_TYPE_WORKFLOW, "POST"):
         return authorization_error()
+    if workflow.get("archived"):
+        return validation_error(body={"message": "Workflow is archived and cannot be executed."}, event=event)
+    if workflow.get("enabled") is False:
+        return validation_error(body={"message": "Workflow is disabled and cannot be executed."}, event=event)
+    if not workflow.get("workflow_arn"):
+        logger.error(f"Workflow {workflow_database_id}:{workflow_id} has no deployed state machine")
+        return validation_error(body={"message": "Workflow has no deployed state machine."}, event=event)
 
-    # Workflow must exist + Tier 2 authorization (POST on the workflow).
-    workflowResponse = get_workflow(workflow_database_id, workflowId)
-    logger.info(workflowResponse)
-    if not bool(workflowResponse):
-        return validation_error(status_code=404, body={'message': 'Workflow does not exist'}, event=event)
+    # 2) Resolve + authorize referenced pipelines; gate enabled + not archived (also in the validator).
+    err, pipeline_records = _resolve_and_authorize_pipelines(workflow, workflow_database_id)
+    if err:
+        return err
 
-    workflow = workflowResponse[0]
-    workflow.update({"object__type": "workflow"})
-    workflow_allowed = False
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(workflow, "POST"):
-            workflow_allowed = True
+    # 3) Selected inputs (normalized dicts for the validators + downstream builders).
+    selected_inputs = [{
+        "databaseId": f.databaseId, "assetId": f.assetId,
+        "relativeFileKey": f.relativeFileKey, "versionId": f.versionId or "",
+    } for f in (request_model.inputFiles or [])]
 
-    if not workflow_allowed:
-        return authorization_error()
+    # 4) Resolve the output target. Three shapes:
+    #    - One input asset: output is locked to that asset; outputTarget.allowOverride is the SOLE gate
+    #      for redirecting it elsewhere (db falls back to the single input asset's db).
+    #    - Zero or multiple input assets: there is no single input asset to lock to, so an explicit
+    #      output (both ids) is honored regardless of allowOverride.
+    #    - Results-only ("none"): a workflow whose outputTarget.locationType is "none" (arity none) writes
+    #      no asset outputs — only results text + logs against the execution. No output asset is resolved.
+    output_target_cfg = (workflow.get("systemConfig", {}) or {}).get("outputTarget", {}) or {}
+    allow_override = bool(output_target_cfg.get("allowOverride", False))
+    declared_location_type = output_target_cfg.get("locationType") or OUTPUT_LOCATION_TYPE_ASSET
+    input_asset_keys = {(i["databaseId"], i["assetId"]) for i in selected_inputs}
 
-    # All pipelines in the workflow must be enabled + Tier 2 accessible.
-    (status, pipelineName) = validate_pipelines(workflow, claims_and_roles)
-    if not status:
-        logger.error("Not all pipelines are enabled/accessible")
-        return validation_error(body={'message': 'Pipeline is not enabled/accessible'}, event=event)
-
-    logger.info("All pipelines are enabled. Continuing to run workflow")
-
-    # Resolve the file key (asset base prefix, or a specific requested file).
-    asset_file_key = asset['assetLocation']['Key']
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
-    asset_bucket = bucketDetails['bucketName']
-
-    file_key = asset_file_key
-    relative_file_path = None
-    if request_file_key:
-        file_key = resolve_asset_file_path(file_key, request_file_key)
-        relative_file_path = request_file_key
-        logger.info(f"Using file key from request: {file_key}, relative path: {relative_file_path}")
+    requested_output_asset = request_model.outputAssetId
+    requested_output_db = request_model.outputDatabaseId
+    output_location_type = OUTPUT_LOCATION_TYPE_ASSET
+    if declared_location_type == OUTPUT_LOCATION_TYPE_NONE:
+        # Results-only: no asset output regardless of inputs. The workflow MAY still take input
+        # files (e.g. reading files to emit only results text + logs), so inputs are not rejected;
+        # outputs are the execution's results + logs. A supplied output asset is meaningless here,
+        # so reject it as a contradiction rather than silently ignoring it.
+        if requested_output_asset or requested_output_db:
+            return validation_error(body={"message":
+                "This workflow is results-only (outputTarget.locationType 'none'): it writes no asset "
+                "output. Omit outputAssetId/outputDatabaseId."}, event=event)
+        output_location_type = OUTPUT_LOCATION_TYPE_NONE
+        output_asset_id = ""
+        output_database_id = ""
+    elif len(input_asset_keys) == 1:
+        # Exactly one input asset: locked to it. allowOverride gates redirecting output away from it.
+        single_db, single_asset = next(iter(input_asset_keys))
+        if allow_override and requested_output_asset:
+            output_asset_id = requested_output_asset
+            output_database_id = requested_output_db or single_db
+        else:
+            output_database_id, output_asset_id = single_db, single_asset
     else:
-        logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
+        # 0 or multiple input assets with an asset output: honor the explicit output (both ids required).
+        output_asset_id = requested_output_asset or ""
+        output_database_id = requested_output_db or ""
+        if not output_asset_id or not output_database_id:
+            return validation_error(body={"message":
+                "This execution does not resolve to a single input asset; supply an explicit output "
+                "target (both outputAssetId and outputDatabaseId), or configure the workflow as "
+                "results-only (outputTarget.locationType 'none')."}, event=event)
 
-    # Verify every selected input exists in S3 before launching. Today this is a single key: a
-    # specific requested file (head_object) or, when no file is requested, the asset's base prefix
-    # treated as a folder (at least one object under it). Soon this becomes the multi-file/folder
-    # input set; verify_inputs_exist_in_s3 already takes a list so that extension is mechanical.
-    existence_check_key = file_key if request_file_key else (asset_file_key.rstrip('/') + '/')
-    missing_inputs = verify_inputs_exist_in_s3(asset_bucket, [existence_check_key])
-    if missing_inputs:
-        logger.error(f"Workflow input(s) not found in S3: {missing_inputs}")
-        return validation_error(
-            status_code=404,
-            body={'message': 'Workflow input file(s) do not exist: ' + ', '.join(missing_inputs)},
-            event=event)
+    # 5) Resolve + authorize input assets (GET) + output asset (POST). Results-only skips the output
+    #    asset (there is none); input assets are still authorized (there are none for arity-none).
+    if output_location_type == OUTPUT_LOCATION_TYPE_NONE:
+        err, asset_records, output_asset, _output_bucket = _resolve_and_authorize_assets(
+            selected_inputs, None, None)
+    else:
+        err, asset_records, output_asset, _output_bucket = _resolve_and_authorize_assets(
+            selected_inputs, output_asset_id, output_database_id)
+    if err:
+        return err
 
-    # Block duplicate concurrent runs of this workflow on the same file.
-    executionResults = get_workflow_executions(databaseId, assetId, workflow_database_id, workflowId, file_key)
-    if len(executionResults['Items']) > 0:
-        logger.error(f"Workflow has a currently running execution on the file: {file_key}")
-        return validation_error(body={'message': 'Workflow has a currently running execution on this file'}, event=event)
+    executing_user = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else ""
 
-    # Build the pipeline input metadata payload.
-    inputMetadata = build_pipeline_input_metadata(asset, databaseId, assetId, relative_file_path, event)
+    # 6) Verify every selected input exists in its own asset bucket.
+    missing = _verify_inputs_exist(selected_inputs, asset_records)
+    if missing:
+        logger.error(f"Workflow input(s) not found in S3: {missing}")
+        return validation_error(status_code=404,
+                                body={"message": "One or more selected input files do not exist."},
+                                event=event)
 
-    # Per-pipeline inputParameters override (by pipeline name) for this run only; the workflow
-    # definition is left untouched. A pipeline absent from the map keeps its stored value.
-    pipelines = workflow['specifiedPipelines']['functions']
-    overrides = request_model.pipelineInputParameters or {}
-    if overrides:
-        pipelines = [
-            {**pipeline, 'inputParameters': overrides[pipeline['name']]}
-            if overrides.get(pipeline['name']) else pipeline
-            for pipeline in pipelines
-        ]
+    # 7) Resolve the default run bucket (all run I/O lives here).
+    try:
+        run_bucket = _default_run_bucket()["bucketName"]
+    except DefaultBucketNotFoundError as de:
+        logger.exception(f"Default run bucket not resolved: {de}")
+        return internal_error(event=event)
 
-    # Optional override of the output file base-execution path extension for this run (defaults
-    # to "/"). Later this will fall back to a default stored on the workflow when not provided.
-    output_file_base_execution_path_extension = request_model.fileBaseExecutionPathExtension or "/"
+    # 8) Per-pipeline template resolution + tag validation.
+    pipeline_exec_params = request_model.pipelineExecutionParameters or {}
+    resolution_errors, resolved_configs = _resolve_pipeline_configs(
+        pipeline_records, pipeline_exec_params, run_bucket)
+    if resolution_errors:
+        return validation_error(body={"message": {"templateResolutionErrors": resolution_errors}},
+                                event=event)
 
-    logger.info("Launching Workflow:")
-    # Trigger type: auto-trigger callers pass triggerSource='auto-trigger-sqs'.
-    trigger_type = "File-Upload" if request_model.triggerSource == 'auto-trigger-sqs' else "Manual"
-    executionId = launchWorkflow(
-        asset_bucket, asset_file_key, file_key, workflow['workflow_arn'], databaseId,
-        assetId, workflow_database_id, workflow['workflowId'],
-        executingUserName, executingRequestContext, pipelines,
-        inputMetadata, trigger_type, storedJobNames=workflow.get('jobNames'),
-        outputFileBaseExecutionPathExtension=output_file_base_execution_path_extension)
-    return success(body={'message': executionId})
+    # 9) Cross-entity validation (arity, scope, filters, disabled/archived gate).
+    output_target = {"outputAssetId": output_asset_id, "outputDatabaseId": output_database_id}
+    validation_errors, _filtered = _run_cross_validation(
+        workflow, pipeline_records, resolved_configs, selected_inputs, output_target)
+    if validation_errors:
+        return validation_error(body={"message": {"executionValidationErrors": validation_errors}},
+                                event=event)
 
+    # 10) Concurrency guard per the workflow's concurrencyRestriction.
+    restriction = (workflow.get("systemConfig", {}) or {}).get("concurrencyRestriction", "none")
+    if _running_execution_exists(
+            workflow_database_id, workflow_id, selected_inputs, asset_records, restriction):
+        return validation_error(body={
+            "message": "A conflicting execution of this workflow is already running."}, event=event)
+
+    # 11) Grouped input metadata (honoring the workflow's metadataInputs gate).
+    metadata_inputs = (workflow.get("systemConfig", {}) or {}).get("metadataInputs", {})
+    metadata_envelope = _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, event)
+
+    # 12) Launch + persist.
+    trigger_type_stored = TRIGGER_TYPE_TO_STORED.get(request_model.triggerType, "Manual")
+    output_extension = _normalize_output_path_extension(
+        getattr(request_model, "outputFileBaseExecutionPathExtension", None))
+    execution_id = _launch_workflow(
+        workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
+        selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
+        output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
+        metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
+        execution_group_id=request_model.executionGroupId, executing_user=executing_user,
+        executing_request_context=event.get("requestContext"),
+        output_location_type=output_location_type, output_extension=output_extension)
+
+    return success(body={"message": ExecuteWorkflowResponseModel(
+        executionId=execution_id, executionGroupId=request_model.executionGroupId).dict()})
+
+
+#######################
+# Route handler
+#######################
 
 def handle_post_request(event):
     """Validate path params + request body, then execute the workflow."""
-    pathParams = event.get('pathParameters', {}) or {}
-    logger.info(pathParams)
+    path_params = event.get("pathParameters", {}) or {}
 
-    # Parse the request body to JSON first (a missing body is treated as {} so the
-    # model's validator later emits the same "workflowDatabaseId is a required field."
-    # message the prior handler returned). Malformed JSON is reported before path-param
-    # validation, matching the original handler's error precedence.
-    body = {}
-    if event.get('body'):
-        body = event['body']
-        if isinstance(body, str):
-            try:
-                body = json.loads(body)
-            except json.JSONDecodeError as e:
-                logger.exception(f"Invalid JSON in request body: {e}")
-                return validation_error(body={'message': 'Invalid JSON in request body'}, event=event)
-    logger.info(f"Request body: {body}")
+    required = ["workflowDatabaseId", "workflowId"]
+    missing = [p for p in required if not path_params.get(p)]
+    if missing:
+        return validation_error(
+            body={"message": f"Missing path parameter(s): {', '.join(missing)}"}, event=event)
 
-    # Required path parameters.
-    required_field_names = ['databaseId', 'workflowId', 'assetId']
-    missing_field_names = list(set(required_field_names).difference(pathParams))
-    if missing_field_names:
-        message = 'Missing path parameter(s) (%s) in API call' % (', '.join(missing_field_names))
-        return validation_error(body={'message': message}, event=event)
-
-    logger.info("Validating path parameters")
     (valid, message) = validate({
-        'databaseId': {'value': pathParams.get('databaseId', ''), 'validator': 'ID'},
-        'workflowId': {'value': pathParams.get('workflowId', ''), 'validator': 'ID'},
-        'assetId': {'value': pathParams.get('assetId', ''), 'validator': 'ASSET_ID'},
+        "workflowDatabaseId": {"value": path_params.get("workflowDatabaseId"), "validator": "ID",
+                               "allowGlobalKeyword": True},
+        "workflowId": {"value": path_params.get("workflowId"), "validator": "ID"},
     })
     if not valid:
-        logger.error(message)
-        return validation_error(body={'message': message}, event=event)
+        return validation_error(body={"message": message}, event=event)
 
-    # Validate the request body fields (workflowDatabaseId / fileKey) via the model.
-    request_model = parse(body, model=ExecuteWorkflowRequestModel)
+    body = {}
+    if event.get("body"):
+        raw = event["body"]
+        if isinstance(raw, str):
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+        else:
+            body = raw
 
+    request_model = parse(body, model=ExecuteWorkflowRequestV2Model)
     return execute_workflow(
-        event, pathParams['databaseId'], pathParams['assetId'], pathParams['workflowId'], request_model)
+        event, path_params["workflowDatabaseId"], path_params["workflowId"], request_model)
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
-    """Lambda handler for the execute-workflow API (POST)."""
+    """Lambda handler for the asset-less execute-workflow API (POST)."""
     global claims_and_roles
-    logger.info(event)
+    normalize_event(event)
     claims_and_roles = request_to_claims(event)
 
     try:
-        method = event['requestContext']['http']['method']
+        method = event["requestContext"]["http"]["method"]
 
-        # API-level authorization (Tier 1).
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforceAPI(event):
+            if CasbinEnforcer(claims_and_roles).enforceAPI(event):
                 method_allowed_on_api = True
-
         if not method_allowed_on_api:
             return authorization_error()
 
-        if method == 'POST':
+        if method == "POST":
             return handle_post_request(event)
-        else:
-            return validation_error(body={'message': "Method not allowed"}, event=event)
+        return validation_error(body={"message": "Method not allowed"}, event=event)
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': _clean_validation_message(v)}, event=event)
+        return validation_error(body={"message": _clean_validation_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={"message": str(v)}, event=event)
+    except DefaultBucketNotFoundError as de:
+        logger.exception(f"Default bucket not resolved: {de}")
+        return internal_error(event=event)
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] in ('LimitExceededException', 'ThrottlingException'):
+        code = err.response.get("Error", {}).get("Code")
+        if code in ("LimitExceededException", "ThrottlingException"):
             logger.exception("Throttling Error")
             return general_error(
-                status_code=err.response['ResponseMetadata']['HTTPStatusCode'],
-                body={'message': 'ThrottlingException: Too many requests within a given period.'},
-                event=event
-            )
-        elif err.response['Error']['Code'] == 'ExecutionLimitExceeded':
+                status_code=err.response["ResponseMetadata"]["HTTPStatusCode"],
+                body={"message": "ThrottlingException: Too many requests within a given period."},
+                event=event)
+        if code == "ExecutionLimitExceeded":
             logger.exception("ExecutionLimitExceeded")
             return general_error(
-                status_code=err.response['ResponseMetadata']['HTTPStatusCode'],
-                body={'message': 'ExecutionLimitExceeded: Reached the maximum state machine execution limit of 1,000,000'},
-                event=event
-            )
-        else:
-            logger.exception(err)
-            return internal_error(event=event)
-    except Exception as e:
-        logger.exception(e)
+                status_code=err.response["ResponseMetadata"]["HTTPStatusCode"],
+                body={"message": "ExecutionLimitExceeded: Reached the maximum state machine execution limit."},
+                event=event)
+        logger.exception(err)
         return internal_error(event=event)
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error(event=event)
+
+
+def _execution_running(main_table, execution_id, workflow_composite):
+    """True when the execution belongs to this workflow, has no stop date, and Step Functions
+    confirms it is still running."""
+    main_resp = main_table.query(
+        KeyConditionExpression=Key("workflowExecutionId").eq(execution_id), ScanIndexForward=False)
+    main_rows = main_resp.get("Items", [])
+    if not main_rows:
+        return False
+    main_item = main_rows[0]
+    if main_item.get("workflowDatabaseId:workflowId", "") != workflow_composite:
+        return False
+    if main_item.get("executionStopDate"):
+        return False
+    try:
+        execution = sfn_client.describe_execution(
+            executionArn=main_item.get("workflow_execution_arn", ""))
+        return not execution.get("stopDate")
+    except Exception as e:
+        logger.exception(f"Error confirming running execution {execution_id}: {e}")
+        return False

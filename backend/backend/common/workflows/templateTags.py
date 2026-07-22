@@ -114,3 +114,60 @@ DEADLINE_TAGS = (
     DEADLINE_QUEUE_ID,
     DEADLINE_STORAGE_PROFILE_ID,
 )
+
+
+# The complete set of reserved system tag names — every {{tag}} the renderer resolves itself. A
+# user-defined template tag key may NOT collide with any of these, and a caller may not supply a
+# value for one (the engine owns them). The shared tag-schema validator (common/templateTagSchema.py)
+# checks declared tag keys and caller-provided tag keys against this set. Metadata-content tags whose
+# names begin with the dynamic ``metadata_`` prefix are also reserved (see METADATA_DYNAMIC_TAG_PREFIX).
+SYSTEM_TAG_NAMES = frozenset(
+    {
+        # A. Execution & workflow identity
+        EXECUTION_ID, WORKFLOW_ID, WORKFLOW_DATABASE_ID, TRIGGER_TYPE, EXECUTING_USER_NAME,
+        # B. Pipeline-task identity
+        PIPELINE_EXECUTION_ID, PIPELINE_ID, PIPELINE_NAME, PIPELINE_DATABASE_ID, JOB_NAME,
+        # C. Timestamps
+        JOB_START_TIMESTAMP, JOB_START_TIMESTAMP_UNIX, JOB_START_DATE, EXECUTION_START_TIMESTAMP,
+        # D. First input file
+        FIRST_ASSET_FILE_DATABASE_ID, FIRST_ASSET_FILE_ASSET_ID, FIRST_ASSET_FILE_ASSET_BUCKET,
+        FIRST_ASSET_FILE_ASSET_ROOT_S3_KEY, FIRST_ASSET_FILE_RELATIVE_PATH, FIRST_ASSET_FILE_KEY,
+        FIRST_ASSET_FILE_VERSION_ID, FIRST_ASSET_FILE_AUX_PREVIEW_PREFIX, FIRST_ASSET_FILE_S3_URI,
+        FIRST_ASSET_FILE_AUX_PREVIEW_S3_URI, FIRST_ASSET_FILE_FILE_NAME,
+        FIRST_ASSET_FILE_FILE_NAME_NO_EXT, FIRST_ASSET_FILE_FILE_EXTENSION,
+        # E. Input-file collections
+        ASSET_FILE_KEY_ARRAY, ASSET_FILE_RELATIVE_PATH_ARRAY, ASSET_FILE_S3_URI_ARRAY,
+        ASSET_FILE_VERSION_ID_ARRAY, ASSET_FILE_OBJECT_ARRAY, ASSET_FILE_ASSET_ID_ARRAY,
+        ASSET_FILE_UNIQUE_ASSET_ID_ARRAY, ASSET_FILE_DATABASE_ID_ARRAY,
+        ASSET_FILE_UNIQUE_DATABASE_ID_ARRAY, ASSET_FILE_COUNT,
+        # F. Output locations
+        OUTPUT_BUCKET, OUTPUT_FILES_PREFIX, OUTPUT_FILES_S3_URI, OUTPUT_PREVIEWS_PREFIX,
+        OUTPUT_PREVIEWS_S3_URI, OUTPUT_METADATA_PREFIX, OUTPUT_METADATA_S3_URI, OUTPUT_RESULTS_PREFIX,
+        OUTPUT_RESULTS_S3_URI, OUTPUT_TARGET_ASSET_ID, OUTPUT_TARGET_DATABASE_ID,
+        OUTPUT_TARGET_LOCATION_TYPE, OUTPUT_TARGET_ASSET_ROOT_S3_KEY,
+        OUTPUT_FILE_BASE_EXECUTION_PATH_EXTENSION,
+        # G. Auxiliary locations
+        AUX_BUCKET, AUX_TEMP_PREFIX, AUX_TEMP_S3_URI, AUX_PREVIEW_PIPELINE_SUFFIX,
+        # H. Metadata / configuration locations
+        INPUT_METADATA_S3_LOCATION, INPUT_CONFIGURATION_S3_LOCATION,
+        # I. System / orchestration
+        ORCHESTRATION_BUS_ARN, ORCHESTRATION_EVENT_PREFIX,
+        # J. Metadata content
+        INPUT_METADATA_OBJECT, ASSET_METADATA_OBJECT, FILE_METADATA_OBJECT,
+        FILE_ATTRIBUTES_OBJECT, ASSET_DATA_OBJECT,
+        # K. Deadline Cloud
+        DEADLINE_FARM_ID, DEADLINE_QUEUE_ID, DEADLINE_STORAGE_PROFILE_ID,
+    }
+)
+
+# Reserved prefix for the future dynamic metadata tags ({{metadata_<key>}}). A user-defined tag key
+# may not start with this prefix.
+METADATA_DYNAMIC_TAG_PREFIX = "metadata_"
+
+
+def is_reserved_tag_key(tag_key: str) -> bool:
+    """True when a tag key collides with a system tag name or the reserved dynamic-metadata prefix.
+    User-defined template tag keys must be rejected when this returns True."""
+    if not tag_key:
+        return False
+    return tag_key in SYSTEM_TAG_NAMES or tag_key.startswith(METADATA_DYNAMIC_TAG_PREFIX)

@@ -45,6 +45,9 @@ def validate(params):
 
         # Type-specific validation
         if validator == 'ID':
+            allow_global = v.get('allowGlobalKeyword', False)
+            if allow_global and value == 'GLOBAL':
+                continue
             if not id_regex.fullmatch(value):
                 return (False, f"{k} is invalid. Must follow the regexp {id_pattern}")
         elif validator == 'USERID':
@@ -53,5 +56,22 @@ def validate(params):
         elif validator == 'STRING_256':
             if len(value) > 256:
                 return (False, f"{k} must be lower than 256 characters")
+        elif validator == 'ASSET_ID':
+            # Mirror the real ASSET_ID (filename) rule loosely: reject empty/oversized only.
+            if not value or len(value) > 256:
+                return (False, f"{k} is invalid asset id")
+        elif validator == 'RELATIVE_FILE_PATH':
+            # Mirror real validator: must start with "/", no "..", min length 3.
+            if not re.fullmatch(relative_file_path_pattern, value):
+                return (False, f"{k} is invalid. Must follow the regexp {relative_file_path_pattern}")
+            if value.count('..') > 0:
+                return (False, f"{k} cannot contain '..'")
+            if len(value) < 3:
+                return (False, f"{k} must be at least 3 characters long")
+        elif validator == 'ARN':
+            # Mirror real ARN validator: 6 colon-delimited segments, "arn" prefix, non-empty service.
+            segs = value.split(':')
+            if len(segs) < 6 or segs[0] != 'arn' or not segs[2]:
+                return (False, f"{k} is not a valid ARN")
 
     return (True, "")

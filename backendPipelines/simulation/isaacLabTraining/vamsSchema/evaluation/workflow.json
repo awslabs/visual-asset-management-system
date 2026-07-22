@@ -1,0 +1,18 @@
+{
+    "workflowName": "Isaac Lab RL Evaluation",
+    "category": "Simulation",
+    "description": "Automated workflow for evaluating trained RL policies using Isaac Lab simulation.",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.pt"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:isaaclab-evaluation": "isaaclab-evaluation-cartpole"
+            },
+            "enabled": false
+        }
+    ]
+}

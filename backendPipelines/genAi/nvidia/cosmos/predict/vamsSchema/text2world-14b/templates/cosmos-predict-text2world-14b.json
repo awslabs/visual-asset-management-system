@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos-predict-text2world-14b",
+    "templateName": "Text-to-World (14B)",
+    "description": "Generate a high-quality video world from a text prompt with the Cosmos Predict 14B model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_TYPE\":\"text2world\",\"MODEL_SIZE\":\"14B\",\"DISABLE_GUARDRAILS\":\"true\",\"OFFLOAD_TEXT_ENCODER\":\"true\",\"OFFLOAD_TOKENIZER\":\"true\",\"OFFLOAD_DIFFUSION_MODEL\":\"true\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Provide the generation prompt via the COSMOS_PREDICT_PROMPT asset metadata key (or PROMPT in the config)."
+}

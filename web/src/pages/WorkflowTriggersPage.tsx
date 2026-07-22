@@ -18,11 +18,9 @@ const WorkflowTriggersPage: React.FC = () => {
 
     if (!databaseId || !workflowId) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+            <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
-                    <p className="text-red-600 dark:text-red-400 text-xl">
-                        Missing Database ID or Workflow ID
-                    </p>
+                    <p className="text-vams-error text-xl">Missing Database ID or Workflow ID</p>
                 </div>
             </div>
         );
@@ -38,20 +36,22 @@ const WorkflowTriggersPage: React.FC = () => {
 
     if (!workflow) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+            <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
-                    <p className="text-red-600 dark:text-red-400 text-xl">Workflow not found</p>
+                    <p className="text-vams-error text-xl">Workflow not found</p>
                 </div>
             </div>
         );
     }
 
     return (
-        <TriggersEditor
-            databaseId={databaseId}
-            workflowId={workflowId}
-            pipelineRefs={workflow.specifiedPipelines || []}
-        />
+        <div className="orchestration-root p-6 bg-surface min-h-full">
+            <TriggersEditor
+                databaseId={databaseId}
+                workflowId={workflowId}
+                pipelineRefs={workflow.specifiedPipelines || []}
+            />
+        </div>
     );
 };
 

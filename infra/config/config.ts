@@ -477,9 +477,25 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
+    if (config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS == undefined) {
+        config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
+    }
 
     if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
         config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
+    }
+    if (
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS ==
+        undefined
+    ) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS = true;
+    }
+    if (
+        config.app.pipelines.useConversionCadMeshMetadataExtraction
+            .autoRegisterAutoTriggerOnFileUpload == undefined
+    ) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload =
+            false;
     }
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
@@ -1032,6 +1048,25 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    // Validate the default asset bucket (houses all VAMS-managed pipeline template + run I/O data).
+    // Exactly one bucket across the deployment is the default. An imported bucket marked
+    // isDefault=true is the default (and overrides the created bucket); otherwise the created bucket
+    // is the default. At most one external may be marked default, and when no bucket is created one
+    // external MUST be marked default.
+    const defaultExternalCount = (config.app.assetBuckets.externalAssetBuckets || []).filter(
+        (b) => b.isDefault
+    ).length;
+    if (defaultExternalCount > 1) {
+        throw new Error(
+            "Configuration Error: at most one app.assetBuckets.externalAssetBuckets entry may set isDefault=true"
+        );
+    }
+    if (!config.app.assetBuckets.createNewBucket && defaultExternalCount === 0) {
+        throw new Error(
+            "Configuration Error: exactly one app.assetBuckets.externalAssetBuckets entry must set isDefault=true when app.assetBuckets.createNewBucket is false"
+        );
+    }
+
     //Validate presigned URL network restriction configuration
     validatePresignedUrlRestrictions(
         config.app.assetBuckets.presignedUrlNetworkRestrictions,
@@ -1463,6 +1498,20 @@ export function getConfig(app: cdk.App): Config {
                 `Configuration Error: useCognito.useSaml is not supported in the '${config.env.partition}' partition. The Amazon Cognito hosted UI used for SAML federation is unavailable there.`
             );
         }
+    }
+
+    //AWS Deadline Cloud is unavailable in GovCloud (aws-us-gov) and EU Sovereign Cloud (aws-eusc),
+    //so the execution type (and its VPC interface endpoint) cannot be enabled there. This partition
+    //check is authoritative regardless of the app.govCloud.enabled flag — a deployment into a
+    //GovCloud/EU-Sovereign partition without that flag set is still blocked.
+    if (
+        config.app.pipelines.deadlineCloudExecutionTypeEnabled &&
+        (config.env.partition === "aws-us-gov" || config.env.partition === "aws-eusc")
+    ) {
+        throw new Error(
+            `Configuration Error: AWS Deadline Cloud is not available in the '${config.env.partition}' partition. ` +
+                "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
+        );
     }
 
     if (
@@ -1963,6 +2012,12 @@ export interface ConfigPublicAssetS3Buckets {
     bucketArn: string;
     baseAssetsPrefix: string;
     defaultSyncDatabaseId: string;
+    // Marks this imported bucket as the VAMS default asset bucket (houses all pipeline template
+    // data + execution-time run I/O under the pipelines/ prefix). At most one bucket across the
+    // deployment may be the default. When createNewBucket is false, exactly one external bucket
+    // must set this true; when createNewBucket is true, an external bucket set true overrides the
+    // created bucket as the default.
+    isDefault?: boolean;
     // Optional cross-account / encryption fields. Required for buckets that live
     // in a different account (bucketAccountId) or use a customer managed KMS key
     // (bucketKmsKeyArn). bucketRegion defaults to the deployment region.

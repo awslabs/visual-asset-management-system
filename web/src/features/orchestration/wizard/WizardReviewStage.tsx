@@ -30,17 +30,17 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
 
     return (
         <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Review & Launch</h3>
+            <h3 className="text-lg font-semibold text-text-primary">Review & Launch</h3>
 
             {/* Input summary */}
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded">
-                <h4 className="text-md font-semibold text-gray-900 dark:text-gray-100 mb-2">Inputs</h4>
+            <div className="p-3 bg-surface-secondary rounded">
+                <h4 className="text-md font-semibold text-text-primary mb-2">Inputs</h4>
                 {inputFiles.length === 0 ? (
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                    <p className="text-sm text-text-secondary">
                         No input files (results-only workflow)
                     </p>
                 ) : (
-                    <ul className="list-disc list-inside text-sm text-gray-700 dark:text-gray-300">
+                    <ul className="list-disc list-inside text-sm text-text-primary">
                         {inputFiles.map((file, idx) => (
                             <li key={idx}>
                                 {file.databaseId} / {file.assetId} / {file.relativeFileKey}
@@ -53,11 +53,9 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
 
             {/* Output target */}
             {(outputAssetId || outputDatabaseId) && (
-                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded">
-                    <h4 className="text-md font-semibold text-gray-900 dark:text-gray-100 mb-2">
-                        Output Target
-                    </h4>
-                    <p className="text-sm text-gray-700 dark:text-gray-300">
+                <div className="p-3 bg-surface-secondary rounded">
+                    <h4 className="text-md font-semibold text-text-primary mb-2">Output Target</h4>
+                    <p className="text-sm text-text-primary">
                         Asset: {outputDatabaseId || "(default)"} / {outputAssetId || "(default)"}
                     </p>
                 </div>
@@ -65,7 +63,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
 
             {/* Pipeline summaries */}
             <div className="space-y-2">
-                <h4 className="text-md font-semibold text-gray-900 dark:text-gray-100">Pipelines</h4>
+                <h4 className="text-md font-semibold text-text-primary">Pipelines</h4>
                 {workflow.specifiedPipelines.map((ref, idx) => {
                     const pipeline = pipelines[idx];
                     const data = pipelineData[ref.pipelineId];
@@ -74,23 +72,23 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                     return (
                         <div
                             key={ref.pipelineId}
-                            className="p-3 bg-gray-50 dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-600"
+                            className="p-3 bg-surface-secondary rounded border border-border-default"
                         >
-                            <h5 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                            <h5 className="text-sm font-semibold text-text-primary">
                                 {pipeline?.pipelineName || ref.pipelineId}
                             </h5>
                             {data?.templateId && (
-                                <p className="text-xs text-gray-600 dark:text-gray-400">
+                                <p className="text-xs text-text-secondary">
                                     Template: {data.templateId}
                                 </p>
                             )}
                             {data?.tags && data.tags.length > 0 && (
-                                <p className="text-xs text-gray-600 dark:text-gray-400">
+                                <p className="text-xs text-text-secondary">
                                     Tags: {data.tags.map((t) => `${t.key}=${t.value}`).join(", ")}
                                 </p>
                             )}
                             {data?.customTemplateOverride && (
-                                <p className="text-xs text-gray-600 dark:text-gray-400">
+                                <p className="text-xs text-text-secondary">
                                     Custom override enabled
                                 </p>
                             )}
@@ -115,8 +113,8 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
             {hasAnyErrors && (
                 <div className="p-4 bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 rounded">
                     <p className="text-sm font-semibold text-red-900 dark:text-red-200">
-                        Cannot launch: One or more pipelines have validation errors. Please go back and
-                        fix the issues.
+                        Cannot launch: One or more pipelines have validation errors. Please go back
+                        and fix the issues.
                     </p>
                 </div>
             )}

@@ -1,0 +1,39 @@
+{
+    "workflowName": "3D Preview Thumbnail",
+    "category": "Preview",
+    "description": "Automated workflow for 3D file preview thumbnail generation (GIF/JPG/PNG).",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": [
+                    "*.ply",
+                    "*.stl",
+                    "*.obj",
+                    "*.glb",
+                    "*.gltf",
+                    "*.fbx",
+                    "*.las",
+                    "*.laz",
+                    "*.e57",
+                    "*.ptx",
+                    "*.fls",
+                    "*.fws",
+                    "*.pcd",
+                    "*.drc",
+                    "*.stp",
+                    "*.step",
+                    "*.usd",
+                    "*.usda",
+                    "*.usdc",
+                    "*.usdz"
+                ],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:preview-3d-thumbnail": "preview-3d-thumbnail-default"
+            },
+            "enabled": false
+        }
+    ]
+}

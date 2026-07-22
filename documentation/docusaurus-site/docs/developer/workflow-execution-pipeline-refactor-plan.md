@@ -64,19 +64,19 @@ A pipeline's refactor therefore has two independent questions:
 Reading each pipeline confirms which questions apply. "Metadata flows past `vamsExecute`" means
 the pipeline forwards inline `inputMetadata` content into a downstream hop today.
 
-| Pipeline                      | Metadata flows past `vamsExecute`?   | Downstream consumer reads it?    | Work                                                                  |
-| ----------------------------- | ------------------------------------ | -------------------------------- | --------------------------------------------------------------------- |
-| `3dRecon/splatToolbox`        | Yes (Batch command + env)            | Yes — container                  | Thread location through; container reads from S3 in `__main__.py`     |
-| `genAi/metadata3dLabeling`    | Yes (Batch command)                  | Yes — downstream Lambda          | Thread location through; the metadata Lambda reads from S3            |
-| `multi/modelOps`              | Yes (into the lambda chain)          | No                               | Thread location through; no consumer change                           |
-| `multi/rapidPipeline`         | Yes (into the lambda chain)          | No                               | Thread location through; no consumer change                           |
-| `preview/3dThumbnail`         | Yes (openPipeline → nested SFN)      | No                               | Thread location through (done); no consumer change                    |
-| `preview/pcPotreeViewer`      | Yes (Batch command)                  | No                               | Thread location through; no consumer change                           |
-| `genAi/nvidia/gr00t`          | No — forces `inputMetadata=''`       | Lambda merges, pre-`vamsExecute` | Location-only; lambda already reads what it needs before the boundary |
-| `genAi/nvidia/cosmos/predict,reason,transfer` | No — forces `inputMetadata=''` | Lambda extracts prompt   | Location-only; prompt extraction stays in the lambda                  |
-| `genAi/nvidia/cosmos/3`       | No — extracts COSMOS3_* at boundary  | Yes — container reads config     | Thread locations; container reads `inputParameters` from S3          |
-| `multi/rapidPipelineEKS`      | No                                   | No                               | Location-only                                                         |
-| `simulation/isaacLabTraining` | Yes (Batch command via openPipeline) | No                               | Thread location through; no consumer change                           |
+| Pipeline                                      | Metadata flows past `vamsExecute`?    | Downstream consumer reads it?    | Work                                                                  |
+| --------------------------------------------- | ------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| `3dRecon/splatToolbox`                        | Yes (Batch command + env)             | Yes — container                  | Thread location through; container reads from S3 in `__main__.py`     |
+| `genAi/metadata3dLabeling`                    | Yes (Batch command)                   | Yes — downstream Lambda          | Thread location through; the metadata Lambda reads from S3            |
+| `multi/modelOps`                              | Yes (into the lambda chain)           | No                               | Thread location through; no consumer change                           |
+| `multi/rapidPipeline`                         | Yes (into the lambda chain)           | No                               | Thread location through; no consumer change                           |
+| `preview/3dThumbnail`                         | Yes (openPipeline → nested SFN)       | No                               | Thread location through (done); no consumer change                    |
+| `preview/pcPotreeViewer`                      | Yes (Batch command)                   | No                               | Thread location through; no consumer change                           |
+| `genAi/nvidia/gr00t`                          | No — forces `inputMetadata=''`        | Lambda merges, pre-`vamsExecute` | Location-only; lambda already reads what it needs before the boundary |
+| `genAi/nvidia/cosmos/predict,reason,transfer` | No — forces `inputMetadata=''`        | Lambda extracts prompt           | Location-only; prompt extraction stays in the lambda                  |
+| `genAi/nvidia/cosmos/3`                       | No — extracts COSMOS3\_\* at boundary | Yes — container reads config     | Thread locations; container reads `inputParameters` from S3           |
+| `multi/rapidPipelineEKS`                      | No                                    | No                               | Location-only                                                         |
+| `simulation/isaacLabTraining`                 | Yes (Batch command via openPipeline)  | No                               | Thread location through; no consumer change                           |
 
 The table above is about **metadata**. `genAi/metadata3dLabeling` needs its downstream **Lambda**
 to read metadata from S3; `3dRecon/splatToolbox`'s container reads metadata to build its config.
@@ -258,7 +258,7 @@ The task token still comes from the payload, not the manifest.
 
 5.  **`genAi/nvidia/cosmos/3` (Cosmos 3 omni)** (done). Brought to the standard when it merged in:
     vendored `manifestHelper.py` + a container `manifest_io.py`; `vamsExecute` resolves inputs via
-    the manifest, enforces single-file, extracts the COSMOS3_* generation fields (prompt, seed,
+    the manifest, enforces single-file, extracts the COSMOS3\_\* generation fields (prompt, seed,
     guidance, control-signal fields) at the boundary from S3-read metadata (inline fallback), and
     threads the metadata + input-configuration S3 locations + `orchestrationEventPrefix`;
     `openPipeline` threads the locations into the nested SFN input and registers its sub-SFN;
@@ -450,69 +450,69 @@ for a future Deadline Cloud integration).
 
 Scalar tags (substitute inside quotes):
 
-| Tag | Value |
-| --- | --- |
-| `{{executionId}}` | Workflow execution id |
-| `{{workflowId}}` / `{{workflowDatabaseId}}` | Workflow id / its database id |
-| `{{triggerType}}` | `Manual` / `File-Upload` |
-| `{{executingUserName}}` | Launching user (or `SYSTEM_USER`) |
-| `{{pipelineExecutionId}}` | This pipeline task's execution id |
-| `{{pipelineId}}` / `{{pipelineName}}` | Pipeline definition name (aliases) |
-| `{{pipelineDatabaseId}}` | Pipeline's database id |
-| `{{jobName}}` | ASL-generated per-pipeline job name |
-| `{{jobStartTimestamp}}` / `{{jobStartTimestampUnix}}` / `{{jobStartDate}}` | Render-time UTC timestamp (ISO-8601 / epoch seconds / `YYYY-MM-DD`) |
-| `{{executionStartTimestamp}}` | Workflow execution start (ISO-8601 UTC) |
-| `{{firstAssetFileDatabaseId}}` | First input file's database id |
-| `{{firstAssetFileAssetId}}` | First input file's asset id |
-| `{{firstAssetFileAssetBucket}}` | First input file's bucket |
-| `{{firstAssetFileAssetRootS3Key}}` | First input file's bucket-relative asset root key |
-| `{{firstAssetFileRelativePath}}` | First input file's asset-relative path |
-| `{{firstAssetFileKey}}` | First input file's full asset-bucket key |
-| `{{firstAssetFileVersionId}}` | First input file's S3 version id |
-| `{{firstAssetFileAuxPreviewPrefix}}` | First input file's bucket-relative aux preview prefix |
-| `{{firstAssetFileS3Uri}}` | `s3://{bucket}/{key}` of the first input file |
-| `{{firstAssetFileAuxPreviewS3Uri}}` | `s3://{auxBucket}/{auxPreviewPrefix}[/{suffix}]` of the first input file |
-| `{{firstAssetFileFileName}}` / `{{firstAssetFileFileNameNoExt}}` / `{{firstAssetFileFileExtension}}` | First input file's basename / stem / extension |
-| `{{outputBucket}}` | Output bucket name |
-| `{{outputFilesPrefix}}` / `{{outputFilesS3Uri}}` | Output files relative prefix / full s3:// |
-| `{{outputPreviewsPrefix}}` / `{{outputPreviewsS3Uri}}` | Output previews relative prefix / s3:// |
-| `{{outputMetadataPrefix}}` / `{{outputMetadataS3Uri}}` | Output metadata relative prefix / s3:// |
-| `{{outputResultsPrefix}}` / `{{outputResultsS3Uri}}` | Output results relative prefix / s3:// |
-| `{{outputTargetAssetId}}` / `{{outputTargetDatabaseId}}` | Output-target asset id / database id (the identity basis when there are no input files) |
-| `{{outputTargetLocationType}}` | Output-target location type (`asset`) |
-| `{{outputTargetAssetRootS3Key}}` | Output-target asset root key |
-| `{{outputFileBaseExecutionPathExtension}}` | Output base-execution path extension |
-| `{{auxBucket}}` | Auxiliary bucket name |
-| `{{auxTempPrefix}}` / `{{auxTempS3Uri}}` | Execution-scoped aux temp working prefix / s3:// |
-| `{{auxPreviewPipelineSuffix}}` | Per-pipeline aux preview viewer suffix |
-| `{{inputMetadataS3Location}}` | Shared input-metadata file s3:// |
-| `{{inputConfigurationS3Location}}` | This task's input-configuration file s3:// |
-| `{{orchestrationBusArn}}` / `{{orchestrationEventPrefix}}` | Orchestration bus ARN / per-execution+pipeline event prefix |
+| Tag                                                                                                  | Value                                                                                   |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `{{executionId}}`                                                                                    | Workflow execution id                                                                   |
+| `{{workflowId}}` / `{{workflowDatabaseId}}`                                                          | Workflow id / its database id                                                           |
+| `{{triggerType}}`                                                                                    | `Manual` / `File-Upload`                                                                |
+| `{{executingUserName}}`                                                                              | Launching user (or `SYSTEM_USER`)                                                       |
+| `{{pipelineExecutionId}}`                                                                            | This pipeline task's execution id                                                       |
+| `{{pipelineId}}` / `{{pipelineName}}`                                                                | Pipeline definition name (aliases)                                                      |
+| `{{pipelineDatabaseId}}`                                                                             | Pipeline's database id                                                                  |
+| `{{jobName}}`                                                                                        | ASL-generated per-pipeline job name                                                     |
+| `{{jobStartTimestamp}}` / `{{jobStartTimestampUnix}}` / `{{jobStartDate}}`                           | Render-time UTC timestamp (ISO-8601 / epoch seconds / `YYYY-MM-DD`)                     |
+| `{{executionStartTimestamp}}`                                                                        | Workflow execution start (ISO-8601 UTC)                                                 |
+| `{{firstAssetFileDatabaseId}}`                                                                       | First input file's database id                                                          |
+| `{{firstAssetFileAssetId}}`                                                                          | First input file's asset id                                                             |
+| `{{firstAssetFileAssetBucket}}`                                                                      | First input file's bucket                                                               |
+| `{{firstAssetFileAssetRootS3Key}}`                                                                   | First input file's bucket-relative asset root key                                       |
+| `{{firstAssetFileRelativePath}}`                                                                     | First input file's asset-relative path                                                  |
+| `{{firstAssetFileKey}}`                                                                              | First input file's full asset-bucket key                                                |
+| `{{firstAssetFileVersionId}}`                                                                        | First input file's S3 version id                                                        |
+| `{{firstAssetFileAuxPreviewPrefix}}`                                                                 | First input file's bucket-relative aux preview prefix                                   |
+| `{{firstAssetFileS3Uri}}`                                                                            | `s3://{bucket}/{key}` of the first input file                                           |
+| `{{firstAssetFileAuxPreviewS3Uri}}`                                                                  | `s3://{auxBucket}/{auxPreviewPrefix}[/{suffix}]` of the first input file                |
+| `{{firstAssetFileFileName}}` / `{{firstAssetFileFileNameNoExt}}` / `{{firstAssetFileFileExtension}}` | First input file's basename / stem / extension                                          |
+| `{{outputBucket}}`                                                                                   | Output bucket name                                                                      |
+| `{{outputFilesPrefix}}` / `{{outputFilesS3Uri}}`                                                     | Output files relative prefix / full s3://                                               |
+| `{{outputPreviewsPrefix}}` / `{{outputPreviewsS3Uri}}`                                               | Output previews relative prefix / s3://                                                 |
+| `{{outputMetadataPrefix}}` / `{{outputMetadataS3Uri}}`                                               | Output metadata relative prefix / s3://                                                 |
+| `{{outputResultsPrefix}}` / `{{outputResultsS3Uri}}`                                                 | Output results relative prefix / s3://                                                  |
+| `{{outputTargetAssetId}}` / `{{outputTargetDatabaseId}}`                                             | Output-target asset id / database id (the identity basis when there are no input files) |
+| `{{outputTargetLocationType}}`                                                                       | Output-target location type (`asset`)                                                   |
+| `{{outputTargetAssetRootS3Key}}`                                                                     | Output-target asset root key                                                            |
+| `{{outputFileBaseExecutionPathExtension}}`                                                           | Output base-execution path extension                                                    |
+| `{{auxBucket}}`                                                                                      | Auxiliary bucket name                                                                   |
+| `{{auxTempPrefix}}` / `{{auxTempS3Uri}}`                                                             | Execution-scoped aux temp working prefix / s3://                                        |
+| `{{auxPreviewPipelineSuffix}}`                                                                       | Per-pipeline aux preview viewer suffix                                                  |
+| `{{inputMetadataS3Location}}`                                                                        | Shared input-metadata file s3://                                                        |
+| `{{inputConfigurationS3Location}}`                                                                   | This task's input-configuration file s3://                                              |
+| `{{orchestrationBusArn}}` / `{{orchestrationEventPrefix}}`                                           | Orchestration bus ARN / per-execution+pipeline event prefix                             |
 
 Array / object tags (substitute a JSON literal, unquoted). All array tags reflect **every** input
 file in order; `Unique` variants de-duplicate:
 
-| Tag | Value |
-| --- | --- |
-| `{{assetFileKeyArray}}` | Full asset-bucket keys |
-| `{{assetFileRelativePathArray}}` | Asset-relative paths |
-| `{{assetFileS3UriArray}}` | `s3://bucket/key` per file |
-| `{{assetFileVersionIdArray}}` | Version ids per file |
-| `{{assetFileObjectArray}}` | Full manifest entry objects |
-| `{{assetFileAssetIdArray}}` / `{{assetFileUniqueAssetIdArray}}` | Asset ids per file / de-duplicated |
+| Tag                                                                   | Value                                 |
+| --------------------------------------------------------------------- | ------------------------------------- |
+| `{{assetFileKeyArray}}`                                               | Full asset-bucket keys                |
+| `{{assetFileRelativePathArray}}`                                      | Asset-relative paths                  |
+| `{{assetFileS3UriArray}}`                                             | `s3://bucket/key` per file            |
+| `{{assetFileVersionIdArray}}`                                         | Version ids per file                  |
+| `{{assetFileObjectArray}}`                                            | Full manifest entry objects           |
+| `{{assetFileAssetIdArray}}` / `{{assetFileUniqueAssetIdArray}}`       | Asset ids per file / de-duplicated    |
 | `{{assetFileDatabaseIdArray}}` / `{{assetFileUniqueDatabaseIdArray}}` | Database ids per file / de-duplicated |
-| `{{assetFileCount}}` | Integer count of input files |
+| `{{assetFileCount}}`                                                  | Integer count of input files          |
 
 Metadata-content tags (JSON object literals; trigger a lazy metadata read; empty object when
 absent):
 
-| Tag | Value |
-| --- | --- |
-| `{{inputMetadataObject}}` | Full metadata payload (envelope unwrapped) |
-| `{{assetMetadataObject}}` | Asset-level metadata k/v map |
-| `{{fileMetadataObject}}` | File-level metadata k/v map |
-| `{{fileAttributesObject}}` | File-attributes k/v map |
-| `{{assetDataObject}}` | Asset data block (assetName / description / tags) |
+| Tag                        | Value                                             |
+| -------------------------- | ------------------------------------------------- |
+| `{{inputMetadataObject}}`  | Full metadata payload (envelope unwrapped)        |
+| `{{assetMetadataObject}}`  | Asset-level metadata k/v map                      |
+| `{{fileMetadataObject}}`   | File-level metadata k/v map                       |
+| `{{fileAttributesObject}}` | File-attributes k/v map                           |
+| `{{assetDataObject}}`      | Asset data block (assetName / description / tags) |
 
 Deadline Cloud tags (scalar) — **defined now, empty until the pipeline configuration supplies
 them.** These are reserved so a Deadline Cloud OpenJD template can be authored against them today
@@ -520,10 +520,10 @@ them.** These are reserved so a Deadline Cloud OpenJD template can be authored a
 populates the pipeline's farm / queue / storage profile and the renderer fills these from that
 configuration:
 
-| Tag | Value |
-| --- | --- |
-| `{{deadlineFarmId}}` | Deadline Cloud farm id (empty until configured) |
-| `{{deadlineQueueId}}` | Deadline Cloud queue id (empty until configured) |
+| Tag                            | Value                                                      |
+| ------------------------------ | ---------------------------------------------------------- |
+| `{{deadlineFarmId}}`           | Deadline Cloud farm id (empty until configured)            |
+| `{{deadlineQueueId}}`          | Deadline Cloud queue id (empty until configured)           |
 | `{{deadlineStorageProfileId}}` | Deadline Cloud storage profile id (empty until configured) |
 
 ### Fields rendered today

@@ -4,16 +4,14 @@
  */
 
 import * as cdk from "aws-cdk-lib";
-import * as cr from "aws-cdk-lib/custom-resources";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
-import { LayerVersion, Runtime } from "aws-cdk-lib/aws-lambda";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { Stack } from "aws-cdk-lib";
 import * as logs from "aws-cdk-lib/aws-logs";
@@ -32,6 +30,7 @@ import {
     buildVamsExecuteCoordinateTransformFunction,
 } from "../lambdaBuilder/coordinateTransformFunctions";
 import { CoordinateTransformCodeBuildConstruct } from "./coordinateTransformCodeBuild-construct";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import path = require("path");
 
 export interface CoordinateTransformConstructProps extends cdk.StackProps {
@@ -43,7 +42,7 @@ export interface CoordinateTransformConstructProps extends cdk.StackProps {
     assetAuxiliaryBucket: s3.IBucket;
     storageResources: storageResources;
     kmsKey?: kms.IKey;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 export class CoordinateTransformConstruct extends Construct {
@@ -334,54 +333,36 @@ export class CoordinateTransformConstruct extends Construct {
 
         this.pipelineVamsLambdaFunctionName = vamsExecuteFunction.functionName;
 
-        // Auto-register with VAMS
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (
             props.config.app.pipelines.useConversionCoordinateTransform?.autoRegisterWithVAMS ===
             true
         ) {
-            const currentTimestamp = new Date().toISOString();
-
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            new cdk.CustomResource(this, "CoordinateTransformPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
+            new VamsSchemaRegistration(this, "CoordinateTransformRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "conversion",
+                    "coordinateTransform",
+                    "vamsSchema"
+                ),
+                resourceOverrides: { lambdaName: vamsExecuteFunction.functionName },
+                idOverrides: {
                     pipelineId: "conversion-coordinate-transform",
-                    pipelineDescription:
-                        "Coordinate Transform Pipeline - Reprojects E57, LAS, LAZ, and PLY point clouds between coordinate reference systems",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".laz",
-                    waitForCallback: "Enabled",
-                    lambdaName: vamsExecuteFunction.functionName,
-                    taskTimeout: "14400",
-                    taskHeartbeatTimeout: "",
-                    inputParameters: JSON.stringify({
-                        sourceCrs: "EPSG:4326",
-                        targetCrs: "EPSG:27700",
-                        outputFormats: ["laz"],
-                    }),
                     workflowId: "conversion-coordinate-transform",
-                    workflowDescription:
-                        "Coordinate transformation for point cloud data between CRS systems",
-                    autoTriggerOnFileExtensionsUpload:
-                        props.config.app.pipelines.useConversionCoordinateTransform
-                            ?.autoRegisterAutoTriggerOnFileUpload === true
-                            ? ".e57,.las,.laz,.ply"
-                            : "",
                 },
+                triggerEnabled:
+                    props.config.app.pipelines.useConversionCoordinateTransform
+                        ?.autoRegisterAutoTriggerOnFileUpload === true,
             });
         }
 

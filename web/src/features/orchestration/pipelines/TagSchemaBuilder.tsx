@@ -105,19 +105,49 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
     };
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-3">
+            {fields.length === 0 && (
+                <div className="rounded-lg border border-dashed border-border-default bg-surface-secondary p-6 text-center text-sm text-text-secondary">
+                    No tags yet. Add a tag for each <code>{"{{placeholder}}"}</code> in the config
+                    body — each becomes a field on the execute form.
+                </div>
+            )}
             {fields.map((field, index) => {
                 const error = getErrorForField(index);
                 return (
                     <div
                         key={index}
-                        className="border border-gray-300 dark:border-gray-700 rounded p-4 space-y-3"
+                        className="rounded-lg border border-border-default bg-surface-container p-4 space-y-3"
                     >
+                        <div className="flex items-center justify-between border-b border-border-default pb-2">
+                            <span className="text-sm font-semibold text-text-primary">
+                                {field.tagKey ? (
+                                    <code>{`{{${field.tagKey}}}`}</code>
+                                ) : (
+                                    `Tag ${index + 1}`
+                                )}
+                                <span className="ml-2 px-2 py-0.5 text-xs rounded bg-surface-secondary text-text-secondary">
+                                    {field.type}
+                                </span>
+                                {field.required && (
+                                    <span className="ml-1 px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                        required
+                                    </span>
+                                )}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => handleRemoveField(index)}
+                                className="text-sm text-red-600 dark:text-red-400 hover:underline"
+                            >
+                                Remove
+                            </button>
+                        </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label
                                     htmlFor={`tagKey-${index}`}
-                                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                    className="block text-sm font-medium text-text-primary mb-1"
                                 >
                                     Tag Key *
                                 </label>
@@ -128,19 +158,15 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                     onChange={(e) =>
                                         handleFieldChange(index, { tagKey: e.target.value })
                                     }
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                     placeholder="e.g., envName"
                                 />
-                                {error && (
-                                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                                        {error}
-                                    </p>
-                                )}
+                                {error && <p className="mt-1 text-sm text-vams-error">{error}</p>}
                             </div>
                             <div>
                                 <label
                                     htmlFor={`type-${index}`}
-                                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                    className="block text-sm font-medium text-text-primary mb-1"
                                 >
                                     Type *
                                 </label>
@@ -148,9 +174,11 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                     id={`type-${index}`}
                                     value={field.type}
                                     onChange={(e) =>
-                                        handleFieldChange(index, { type: e.target.value as TagType })
+                                        handleFieldChange(index, {
+                                            type: e.target.value as TagType,
+                                        })
                                     }
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 >
                                     {TAG_TYPES.map((type) => (
                                         <option key={type} value={type}>
@@ -165,7 +193,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                             <div>
                                 <label
                                     htmlFor={`label-${index}`}
-                                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                    className="block text-sm font-medium text-text-primary mb-1"
                                 >
                                     Label
                                 </label>
@@ -176,14 +204,14 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                     onChange={(e) =>
                                         handleFieldChange(index, { label: e.target.value })
                                     }
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                     placeholder="Display label"
                                 />
                             </div>
                             <div>
                                 <label
                                     htmlFor={`default-${index}`}
-                                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                    className="block text-sm font-medium text-text-primary mb-1"
                                 >
                                     Default Value
                                 </label>
@@ -194,7 +222,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                     onChange={(e) =>
                                         handleFieldChange(index, { default: e.target.value })
                                     }
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                     placeholder="Default value"
                                 />
                             </div>
@@ -203,7 +231,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                         <div>
                             <label
                                 htmlFor={`description-${index}`}
-                                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                className="block text-sm font-medium text-text-primary mb-1"
                             >
                                 Description
                             </label>
@@ -213,7 +241,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                 onChange={(e) =>
                                     handleFieldChange(index, { description: e.target.value })
                                 }
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 rows={2}
                                 placeholder="Field description"
                             />
@@ -223,7 +251,7 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                             <div>
                                 <label
                                     htmlFor={`enumValues-${index}`}
-                                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                                    className="block text-sm font-medium text-text-primary mb-1"
                                 >
                                     Enum Values (comma-separated)
                                 </label>
@@ -238,34 +266,23 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                             .filter((v) => v);
                                         handleFieldChange(index, { enumValues: values });
                                     }}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                     placeholder="e.g., dev, staging, prod"
                                 />
                             </div>
                         )}
 
-                        <div className="flex items-center justify-between">
-                            <label className="flex items-center space-x-2">
-                                <input
-                                    type="checkbox"
-                                    checked={field.required || false}
-                                    onChange={(e) =>
-                                        handleFieldChange(index, { required: e.target.checked })
-                                    }
-                                    className="w-4 h-4"
-                                />
-                                <span className="text-sm text-gray-700 dark:text-gray-300">
-                                    Required
-                                </span>
-                            </label>
-                            <button
-                                type="button"
-                                onClick={() => handleRemoveField(index)}
-                                className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
-                            >
-                                Remove
-                            </button>
-                        </div>
+                        <label className="flex items-center space-x-2">
+                            <input
+                                type="checkbox"
+                                checked={field.required || false}
+                                onChange={(e) =>
+                                    handleFieldChange(index, { required: e.target.checked })
+                                }
+                                className="w-4 h-4"
+                            />
+                            <span className="text-sm text-text-primary">Required</span>
+                        </label>
                     </div>
                 );
             })}
@@ -273,9 +290,9 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
             <button
                 type="button"
                 onClick={handleAddField}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-4 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
             >
-                Add Field
+                Add tag
             </button>
         </div>
     );

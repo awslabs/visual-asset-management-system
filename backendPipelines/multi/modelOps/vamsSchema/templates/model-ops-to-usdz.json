@@ -1,0 +1,8 @@
+{
+    "templateId": "model-ops-to-usdz",
+    "templateName": "Optimize to USDZ",
+    "description": "Optimize and convert a 3D model to USDZ using the VNTANA Intelligent 3D Optimization Engine.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".usdz\"}",
+    "allowCustomEdit": false
+}

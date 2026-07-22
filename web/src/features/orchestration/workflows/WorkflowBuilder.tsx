@@ -3,14 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useReducer, useEffect, useCallback, Suspense } from "react";
+import React, { useReducer, useEffect, useCallback, useState, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
-import { usePipelines, useWorkflow, useWorkflowMutations, useTemplates } from "../api/queries";
+import { useAllPipelines, useWorkflow, useWorkflowMutations, useTemplates } from "../api/queries";
 import PipelineOrderList from "./PipelineOrderList";
 import WorkflowSystemConfigFields from "./WorkflowSystemConfigFields";
 import WorkflowValidationPanel from "./WorkflowValidationPanel";
+import TriggersEditor from "./TriggersEditor";
+import Breadcrumb from "../components/Breadcrumb";
+import Stepper from "../components/Stepper";
+import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { validateWorkflow } from "./workflowValidation";
-import type { Workflow, SpecifiedPipelineRef, InputFileArity, ConcurrencyRestriction, OutputLocationType, Template } from "../types";
+import type {
+    Workflow,
+    SpecifiedPipelineRef,
+    InputFileArity,
+    ConcurrencyRestriction,
+    OutputLocationType,
+    Template,
+} from "../types";
 
 const DagPreview = React.lazy(() => import("./DagPreview"));
 
@@ -30,8 +41,8 @@ interface WorkflowFormState {
     inputFileArity: InputFileArity;
     assetScope: Record<string, boolean>;
     metadataInputs: Record<string, boolean>;
-    allowFilters: string;
-    excludeFilters: string;
+    allowFilters: string[];
+    excludeFilters: string[];
     concurrencyRestriction: ConcurrencyRestriction;
     locationType: OutputLocationType;
     allowOverride: boolean;
@@ -63,8 +74,8 @@ const initialState: WorkflowFormState = {
     inputFileArity: "one",
     assetScope: {},
     metadataInputs: {},
-    allowFilters: "",
-    excludeFilters: "",
+    allowFilters: [],
+    excludeFilters: [],
     concurrencyRestriction: "none",
     locationType: "asset",
     allowOverride: false,
@@ -77,7 +88,10 @@ const initialState: WorkflowFormState = {
     saveError: null,
 };
 
-function workflowFormReducer(state: WorkflowFormState, action: WorkflowFormAction): WorkflowFormState {
+function workflowFormReducer(
+    state: WorkflowFormState,
+    action: WorkflowFormAction
+): WorkflowFormState {
     switch (action.type) {
         case "SET_FIELD":
             return { ...state, [action.field]: action.value };
@@ -96,8 +110,8 @@ function workflowFormReducer(state: WorkflowFormState, action: WorkflowFormActio
                 inputFileArity: sc.inputFileArity || "one",
                 assetScope: sc.assetScope || {},
                 metadataInputs: sc.metadataInputs || {},
-                allowFilters: (sc.inputFileFilters?.allow || []).join(", "),
-                excludeFilters: (sc.inputFileFilters?.exclude || []).join(", "),
+                allowFilters: sc.inputFileFilters?.allow || [],
+                excludeFilters: sc.inputFileFilters?.exclude || [],
                 concurrencyRestriction: sc.concurrencyRestriction || "none",
                 locationType: sc.outputTarget?.locationType || "asset",
                 allowOverride: sc.outputTarget?.allowOverride ?? false,
@@ -106,7 +120,10 @@ function workflowFormReducer(state: WorkflowFormState, action: WorkflowFormActio
         case "SET_TEMPLATES":
             return {
                 ...state,
-                templatesByPipeline: { ...state.templatesByPipeline, [action.key]: action.templates },
+                templatesByPipeline: {
+                    ...state.templatesByPipeline,
+                    [action.key]: action.templates,
+                },
             };
         case "SET_VALIDATION":
             return {
@@ -144,11 +161,28 @@ const TemplatesFetcher: React.FC<{
 
 const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, workflowId }) => {
     const navigate = useNavigate();
-    const { data: pipelines = [] } = usePipelines(databaseId);
+    // Pipeline picker scope (mirrors the backend rule enforced in workflowService):
+    //   - GLOBAL workflow  -> only GLOBAL pipelines
+    //   - database workflow -> GLOBAL + that database's pipelines (the DB list endpoint returns only
+    //     the database's own pipelines, so GLOBAL is fetched separately and merged).
+    const isGlobalWorkflow = databaseId === "GLOBAL";
+    const { data: dbPipelines = [] } = useAllPipelines(databaseId);
+    const { data: globalPipelines = [] } = useAllPipelines("GLOBAL", undefined, !isGlobalWorkflow);
+    const pipelines = React.useMemo(() => {
+        if (isGlobalWorkflow) return dbPipelines;
+        const seen = new Set<string>();
+        return [...dbPipelines, ...globalPipelines].filter((p: any) => {
+            const key = `${p.databaseId}:${p.pipelineId}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }, [isGlobalWorkflow, dbPipelines, globalPipelines]);
     const { data: workflow } = useWorkflow(databaseId, workflowId || "");
     const { createWorkflow, updateWorkflow } = useWorkflowMutations();
 
     const [state, dispatch] = useReducer(workflowFormReducer, initialState);
+    const [wizardStep, setWizardStep] = useState<string>("basic");
 
     const handleTemplatesLoaded = useCallback((key: string, templates: Template[]) => {
         dispatch({ type: "SET_TEMPLATES", key, templates });
@@ -160,12 +194,19 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         }
     }, [mode, workflow]);
 
-    // HARD COUPLING: when locationType is "none", force inputFileArity to "none"
+    // When output writes to an asset but there are no input files (arity 'none'), there is no input
+    // asset to lock the output to — so an output asset must be selectable at execute time. Force
+    // allowOverride on in that case (the backend enforces the same rule at save). Results-only
+    // ('none') is NOT coupled to arity: it may take input files (e.g. metadata analysis).
     useEffect(() => {
-        if (state.locationType === "none" && state.inputFileArity !== "none") {
-            dispatch({ type: "SET_FIELD", field: "inputFileArity", value: "none" });
+        if (
+            state.locationType === "asset" &&
+            state.inputFileArity === "none" &&
+            !state.allowOverride
+        ) {
+            dispatch({ type: "SET_FIELD", field: "allowOverride", value: true });
         }
-    }, [state.locationType, state.inputFileArity]);
+    }, [state.locationType, state.inputFileArity, state.allowOverride]);
 
     const assembleWorkflow = useCallback((): Workflow => {
         return {
@@ -182,11 +223,14 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                 assetScope: state.assetScope,
                 metadataInputs: state.metadataInputs,
                 inputFileFilters: {
-                    allow: state.allowFilters.split(",").map(s => s.trim()).filter(Boolean),
-                    exclude: state.excludeFilters.split(",").map(s => s.trim()).filter(Boolean),
+                    allow: state.allowFilters,
+                    exclude: state.excludeFilters,
                 },
                 concurrencyRestriction: state.concurrencyRestriction,
-                outputTarget: { locationType: state.locationType, allowOverride: state.allowOverride },
+                outputTarget: {
+                    locationType: state.locationType,
+                    allowOverride: state.allowOverride,
+                },
             },
         };
     }, [
@@ -236,7 +280,11 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                 }
                 navigate(`/databases/${databaseId}/workflows`);
             } else {
-                const result = await updateWorkflow.mutateAsync({ databaseId, workflowId: state.workflowIdValue, body });
+                const result = await updateWorkflow.mutateAsync({
+                    databaseId,
+                    workflowId: state.workflowIdValue,
+                    body,
+                });
                 if (result?.warnings) {
                     dispatch({ type: "SET_BACKEND_WARNINGS", warnings: result.warnings });
                 }
@@ -250,36 +298,67 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         }
     };
 
-    const isArityDisabled = state.locationType === "none";
+    // Input file count is no longer locked by the output location — results-only workflows may take
+    // input files, so the arity selector is always editable.
+    const isArityDisabled = false;
     const isSaveDisabled = state.validationErrors.length > 0 || state.saving;
 
-    return (
-        <div className="space-y-6">
-            <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-                {mode === "create" ? "Create Workflow" : "Edit Workflow"}
-            </h1>
+    // Wizard steps. Each section is one step; Review is last. The optional Triggers step is only
+    // shown when editing — triggers are set through a separate endpoint keyed by an existing
+    // workflow, so a not-yet-created workflow has nothing to attach them to.
+    const WIZARD_STEPS = [
+        { id: "basic", label: "Basic information" },
+        { id: "execution", label: "Execution settings" },
+        { id: "pipelines", label: "Pipelines" },
+        ...(mode === "edit" ? [{ id: "triggers", label: "Triggers (optional)" }] : []),
+        { id: "review", label: "Review" },
+    ];
+    const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === wizardStep);
+    // Per-step validity gate: Basic needs a name; Pipelines needs at least one pipeline. Other steps
+    // impose no blocking requirement (full cross-field validation still gates Save on Review).
+    const stepValid = (() => {
+        if (wizardStep === "basic") return !!state.workflowName.trim();
+        if (wizardStep === "pipelines") return state.specifiedPipelines.length > 0;
+        return true;
+    })();
+    const goNext = () =>
+        setWizardStep(WIZARD_STEPS[Math.min(stepIndex + 1, WIZARD_STEPS.length - 1)].id);
+    const goBack = () => setWizardStep(WIZARD_STEPS[Math.max(stepIndex - 1, 0)].id);
 
-            <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Basic Information</h2>
+    return (
+        <div className="orchestration-root p-6 space-y-6 bg-surface min-h-full">
+            <div className="space-y-1">
+                <Breadcrumb
+                    items={[
+                        { label: "Workflows", to: `/databases/${databaseId}/workflows` },
+                        {
+                            label:
+                                mode === "create"
+                                    ? "Create Workflow"
+                                    : state.workflowName ||
+                                      state.workflowIdValue ||
+                                      "Edit Workflow",
+                        },
+                    ]}
+                />
+                <h1 className="text-2xl font-semibold text-text-primary">
+                    {mode === "create" ? "Create Workflow" : "Edit Workflow"}
+                </h1>
+            </div>
+
+            <Stepper steps={WIZARD_STEPS} current={wizardStep} />
+
+            {wizardStep === "basic" && (
                 <div className="space-y-4">
-                    {mode === "create" && (
-                        <div>
-                            <label htmlFor="workflowId" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
-                                Workflow ID
-                            </label>
-                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Unique identifier (3-63 chars, letters, numbers, hyphens, underscores)</p>
-                            <input
-                                id="workflowId"
-                                type="text"
-                                value={state.workflowIdValue}
-                                onChange={(e) => dispatch({ type: "SET_FIELD", field: "workflowIdValue", value: e.target.value })}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                            />
-                        </div>
-                    )}
+                    {/* Workflow ID is auto-generated by the backend on create (prevents collisions);
+                        it is not a user-entered field on the web. It is shown read-only when editing.
+                        The CLI keeps it as an optional override for CDK auto-registration. */}
                     {mode === "edit" && (
                         <div>
-                            <label htmlFor="workflowId" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                            <label
+                                htmlFor="workflowId"
+                                className="block text-sm font-medium mb-1 text-text-primary"
+                            >
                                 Workflow ID
                             </label>
                             <input
@@ -287,56 +366,92 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 type="text"
                                 value={state.workflowIdValue}
                                 disabled
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 opacity-50"
+                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
                             />
                         </div>
                     )}
                     <div>
-                        <label htmlFor="workflowName" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                        <label
+                            htmlFor="workflowName"
+                            className="block text-sm font-medium mb-1 text-text-primary"
+                        >
                             Workflow Name
                         </label>
                         <input
                             id="workflowName"
                             type="text"
                             value={state.workflowName}
-                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "workflowName", value: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            onChange={(e) =>
+                                dispatch({
+                                    type: "SET_FIELD",
+                                    field: "workflowName",
+                                    value: e.target.value,
+                                })
+                            }
+                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
-                        <label htmlFor="category" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                        <label
+                            htmlFor="category"
+                            className="block text-sm font-medium mb-1 text-text-primary"
+                        >
                             Category (optional)
                         </label>
                         <input
                             id="category"
                             type="text"
                             value={state.category}
-                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "category", value: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            onChange={(e) =>
+                                dispatch({
+                                    type: "SET_FIELD",
+                                    field: "category",
+                                    value: e.target.value,
+                                })
+                            }
+                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
-                        <label htmlFor="description" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                        <label
+                            htmlFor="description"
+                            className="block text-sm font-medium mb-1 text-text-primary"
+                        >
                             Description (optional)
                         </label>
                         <textarea
                             id="description"
                             value={state.description}
-                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "description", value: e.target.value })}
+                            onChange={(e) =>
+                                dispatch({
+                                    type: "SET_FIELD",
+                                    field: "description",
+                                    value: e.target.value,
+                                })
+                            }
                             rows={3}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
-                        <label htmlFor="subDashboardUrl" className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                        <label
+                            htmlFor="subDashboardUrl"
+                            className="block text-sm font-medium mb-1 text-text-primary"
+                        >
                             Sub-Dashboard URL (optional)
                         </label>
                         <input
                             id="subDashboardUrl"
                             type="text"
                             value={state.subDashboardUrl}
-                            onChange={(e) => dispatch({ type: "SET_FIELD", field: "subDashboardUrl", value: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                            onChange={(e) =>
+                                dispatch({
+                                    type: "SET_FIELD",
+                                    field: "subDashboardUrl",
+                                    value: e.target.value,
+                                })
+                            }
+                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
@@ -344,18 +459,23 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                             <input
                                 type="checkbox"
                                 checked={state.enabled}
-                                onChange={(e) => dispatch({ type: "SET_FIELD", field: "enabled", value: e.target.checked })}
+                                onChange={(e) =>
+                                    dispatch({
+                                        type: "SET_FIELD",
+                                        field: "enabled",
+                                        value: e.target.checked,
+                                    })
+                                }
                             />
-                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                            <span className="text-sm font-medium text-text-primary">
                                 {state.enabled ? "Enabled" : "Disabled"}
                             </span>
                         </label>
                     </div>
                 </div>
-            </div>
+            )}
 
-            <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">System Configuration</h2>
+            {wizardStep === "execution" && (
                 <WorkflowSystemConfigFields
                     inputFileArity={state.inputFileArity}
                     assetScope={state.assetScope}
@@ -366,19 +486,34 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     locationType={state.locationType}
                     allowOverride={state.allowOverride}
                     isArityDisabled={isArityDisabled}
-                    onInputFileArityChange={(value) => dispatch({ type: "SET_FIELD", field: "inputFileArity", value })}
-                    onAssetScopeChange={(value) => dispatch({ type: "SET_FIELD", field: "assetScope", value })}
-                    onMetadataInputsChange={(value) => dispatch({ type: "SET_FIELD", field: "metadataInputs", value })}
-                    onAllowFiltersChange={(value) => dispatch({ type: "SET_FIELD", field: "allowFilters", value })}
-                    onExcludeFiltersChange={(value) => dispatch({ type: "SET_FIELD", field: "excludeFilters", value })}
-                    onConcurrencyRestrictionChange={(value) => dispatch({ type: "SET_FIELD", field: "concurrencyRestriction", value })}
-                    onLocationTypeChange={(value) => dispatch({ type: "SET_FIELD", field: "locationType", value })}
-                    onAllowOverrideChange={(value) => dispatch({ type: "SET_FIELD", field: "allowOverride", value })}
+                    onInputFileArityChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "inputFileArity", value })
+                    }
+                    onAssetScopeChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "assetScope", value })
+                    }
+                    onMetadataInputsChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "metadataInputs", value })
+                    }
+                    onAllowFiltersChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "allowFilters", value })
+                    }
+                    onExcludeFiltersChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "excludeFilters", value })
+                    }
+                    onConcurrencyRestrictionChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "concurrencyRestriction", value })
+                    }
+                    onLocationTypeChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "locationType", value })
+                    }
+                    onAllowOverrideChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "allowOverride", value })
+                    }
                 />
-            </div>
+            )}
 
-            <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Pipeline Order</h2>
+            {wizardStep === "pipelines" && (
                 <div className="space-y-4">
                     {state.specifiedPipelines.map((ref, idx) => {
                         if (!ref.pipelineId || !ref.pipelineDatabaseId) return null;
@@ -395,16 +530,64 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         value={state.specifiedPipelines}
                         pipelineOptions={pipelines}
                         templatesByPipeline={state.templatesByPipeline}
-                        onChange={(value) => dispatch({ type: "SET_FIELD", field: "specifiedPipelines", value })}
+                        onChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "specifiedPipelines", value })
+                        }
                     />
                     {state.specifiedPipelines.length > 0 && (
-                        <Suspense fallback={<div className="text-sm text-gray-500 dark:text-gray-400">Loading preview...</div>}>
+                        <Suspense
+                            fallback={
+                                <div className="text-sm text-text-secondary">
+                                    Loading preview...
+                                </div>
+                            }
+                        >
                             <DagPreview refs={state.specifiedPipelines} />
                         </Suspense>
                     )}
                 </div>
-            </div>
+            )}
 
+            {wizardStep === "triggers" && mode === "edit" && (
+                <TriggersEditor
+                    databaseId={databaseId}
+                    workflowId={state.workflowIdValue}
+                    pipelineRefs={state.specifiedPipelines}
+                />
+            )}
+
+            {wizardStep === "review" && (
+                <div className="space-y-4">
+                    <div className="bg-surface-container border border-border-default rounded-lg p-4 space-y-2">
+                        <h2 className="text-base font-semibold text-text-primary">Review</h2>
+                        <div className="text-sm text-text-primary grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div>
+                                <span className="text-text-secondary">Name:</span>{" "}
+                                {state.workflowName || "—"}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Database:</span> {databaseId}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Input file count:</span>{" "}
+                                {state.inputFileArity}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Output:</span>{" "}
+                                {state.locationType === "none"
+                                    ? "Results only"
+                                    : "Asset" + (state.allowOverride ? " (override allowed)" : "")}
+                            </div>
+                            <div>
+                                <span className="text-text-secondary">Pipelines:</span>{" "}
+                                {state.specifiedPipelines.length}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Live validation is relevant on every step. */}
             <WorkflowValidationPanel
                 validationErrors={state.validationErrors}
                 validationWarnings={state.validationWarnings}
@@ -412,20 +595,32 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                 saveError={state.saveError}
             />
 
-            <div className="flex justify-end gap-2">
-                <button
-                    onClick={() => navigate(-1)}
-                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
-                >
+            {/* Wizard navigation. Save is only on the final (Review) step. */}
+            <div className="flex justify-between gap-2">
+                <button onClick={() => navigate(-1)} className={btnSecondary}>
                     Cancel
                 </button>
-                <button
-                    onClick={handleSave}
-                    disabled={isSaveDisabled}
-                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                >
-                    {state.saving ? "Saving..." : "Save"}
-                </button>
+                <div className="flex gap-2">
+                    {stepIndex > 0 && (
+                        <button onClick={goBack} className={btnSecondary}>
+                            Back
+                        </button>
+                    )}
+                    {stepIndex < WIZARD_STEPS.length - 1 && (
+                        <button onClick={goNext} disabled={!stepValid} className={btnPrimary}>
+                            Next
+                        </button>
+                    )}
+                    {stepIndex === WIZARD_STEPS.length - 1 && (
+                        <button
+                            onClick={handleSave}
+                            disabled={isSaveDisabled}
+                            className={btnPrimary}
+                        >
+                            {state.saving ? "Saving..." : "Save"}
+                        </button>
+                    )}
+                </div>
             </div>
         </div>
     );

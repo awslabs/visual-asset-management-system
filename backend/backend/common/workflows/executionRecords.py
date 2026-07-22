@@ -1,13 +1,13 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure helpers for the workflow-execution storage data model (Stage 1).
+"""Pure helpers for the workflow-execution storage data model.
 
 This module has NO AWS or environment dependencies so it can be imported and
 unit-tested in isolation. It centralizes:
   - clean composite-key construction (no legacy '$' prefix)
   - ISO-8601 UTC timestamps
-  - per-pipeline S3 prefix derivation (mirrors createWorkflow ASL paths)
+  - per-pipeline S3 prefix derivation (matching the workflow ASL output paths)
   - record-dict builders for each execution storage table
   - text parsing/truncation for results/logs within DynamoDB item limits
 """
@@ -22,7 +22,10 @@ MAX_LOG_FIELD_BYTES = 390 * 1024
 
 # Schema versions stamped on the VAMS-authored manifest and metadata files.
 MANIFEST_SCHEMA_VERSION = 1
+# v1: flat {schemaVersion, metadata} envelope (build_metadata_envelope). v2: grouped-by-asset
+# envelope (build_grouped_metadata_envelope) for multi-file execution.
 METADATA_SCHEMA_VERSION = 1
+METADATA_SCHEMA_VERSION_GROUPED = 2
 
 
 def new_guid() -> str:
@@ -92,7 +95,7 @@ _PIPELINE_OUTPUT_RESULTS_SEGMENT = "results"
 
 def pipeline_output_prefixes(first_pipeline_name: str, first_job_name: str, execution_id: str) -> dict:
     """Concrete per-execution output prefixes for the first pipeline's global
-    output location, matching the ASL paths in createWorkflow.generate_workflow_asl.
+    output location, matching the workflow ASL output paths.
     Returns a dict with keys: files, previews, metadata, results.
     """
     base = (f"{_PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}/"
@@ -251,12 +254,98 @@ def build_manifest_system_config(orchestration_bus_arn="", orchestration_event_p
 
 
 def build_metadata_envelope(metadata):
-    """The shared input-metadata file envelope (schemaVersion-stamped); the metadata payload
-    is preserved verbatim under 'metadata'."""
+    """The v1 shared input-metadata file envelope (schemaVersion-stamped); the metadata payload is
+    preserved verbatim under 'metadata'. Used by the current single-file execute path; the
+    multi-file overhaul moves to build_grouped_metadata_envelope."""
     return {
         "schemaVersion": METADATA_SCHEMA_VERSION,
         "metadata": metadata if metadata is not None else {},
     }
+
+
+def build_metadata_file_record(file_key, metadata=None, attributes=None):
+    """One uniform file/asset record for the v2 grouped metadata envelope.
+
+    file_key '/' is the asset-level record; '/name.ext' a file; '/folder/' a folder (folders carry
+    metadata=None). 'attributes' (file attributes) is omitted when None so asset/folder records stay
+    minimal. metadata is preserved verbatim (the VAMS-scoped dict) or None."""
+    record = {
+        "fileKey": normalize_file_key(file_key),
+        "metadata": metadata if metadata is not None else None,
+    }
+    if attributes is not None:
+        record["attributes"] = attributes
+    return record
+
+
+def build_metadata_asset_group(database_id, asset_id, asset_data=None, files=None):
+    """One assets[] entry for the v2 grouped metadata envelope: asset identity + assetData + its
+    ordered file/asset records (each from build_metadata_file_record)."""
+    return {
+        "databaseId": database_id or "",
+        "assetId": asset_id or "",
+        "assetData": asset_data or {},
+        "files": files or [],
+    }
+
+
+def build_grouped_metadata_envelope(assets):
+    """The v2 grouped-by-asset input-metadata file envelope (schemaVersion-stamped). 'assets' is a
+    list of build_metadata_asset_group(...) dicts — one per involved asset. Asset-level metadata is
+    the fileKey '/' record within an asset group; file metadata/attributes are per-file records."""
+    return {
+        "schemaVersion": METADATA_SCHEMA_VERSION_GROUPED,
+        "assets": assets or [],
+    }
+
+
+def get_asset_file_record(envelope, database_id, asset_id, file_key):
+    """Return the {fileKey, metadata, attributes?} record for a (databaseId, assetId, fileKey) from a
+    v2 envelope, or None when absent. Keeps pipeline read code a single call; file_key is normalized
+    before comparison so callers can pass either 'a.glb' or '/a.glb'."""
+    fk = normalize_file_key(file_key)
+    for asset in (envelope or {}).get("assets", []) or []:
+        if asset.get("databaseId") == database_id and asset.get("assetId") == asset_id:
+            for file_record in asset.get("files", []) or []:
+                if file_record.get("fileKey") == fk:
+                    return file_record
+    return None
+
+
+def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key=""):
+    """Project a metadata payload onto the legacy ``{"VAMS": {assetData, assetMetadata, fileMetadata,
+    fileAttributes}}`` view the config-template renderer's metadata-content tags read.
+
+    - A v2 grouped body (``{"schemaVersion": 2, "assets": [...]}``) is projected for the given
+      (databaseId, assetId, fileKey): assetData + assetMetadata come from the asset's '/' record,
+      fileMetadata/fileAttributes from the fileKey record. A fileKey of '/' (whole-asset selection)
+      resolves to the asset-level record only, leaving the file scopes empty — mirroring the writer,
+      which emits no per-file record for a whole-asset selection.
+    - A body already in the ``{"VAMS": {...}}`` shape (or any non-grouped dict) passes through
+      unchanged; ``{}`` when it is not a usable dict.
+
+    Mirrors the pipeline-side manifestHelper.to_legacy_vams_view so the backend render path and the
+    pipeline read path resolve metadata identically."""
+    body = metadata_body or {}
+    if not isinstance(body, dict):
+        return {}
+    if body.get("schemaVersion") == METADATA_SCHEMA_VERSION_GROUPED and "assets" in body:
+        asset_group = {}
+        for asset in body.get("assets", []) or []:
+            if asset.get("databaseId") == database_id and asset.get("assetId") == asset_id:
+                asset_group = asset
+                break
+        asset_record = get_asset_file_record(body, database_id, asset_id, "/") or {}
+        is_asset_level = normalize_file_key(file_key) == "/"
+        file_record = {} if is_asset_level else (
+            get_asset_file_record(body, database_id, asset_id, file_key) or {})
+        return {"VAMS": {
+            "assetData": asset_group.get("assetData") or {},
+            "assetMetadata": asset_record.get("metadata") or {},
+            "fileMetadata": file_record.get("metadata") or {},
+            "fileAttributes": file_record.get("attributes") or {},
+        }}
+    return body
 
 
 def truncate_text(text: str, limit: int = MAX_TEXT_FIELD_BYTES):
@@ -273,10 +362,16 @@ def build_workflow_execution_record(
     execution_id, workflow_database_id, workflow_id, workflow_arn,
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
-    last_sfn_sync_check_date="",
+    last_sfn_sync_check_date="", execution_group_id="",
 ):
-    """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling)."""
-    return {
+    """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
+
+    execution_group_id groups executions launched together (bulk / re-run). When set it is the PK of
+    the WorkflowExecutionsByGroupGSI (SK executionStartDate), so abort-by-group can enumerate a group's
+    executions. Empty when the execution is not part of a group (the attribute is omitted so it stays
+    out of the sparse GSI).
+    """
+    record = {
         "workflowExecutionId": execution_id,  # PK
         "workflowDatabaseId:workflowId": workflow_composite_key(workflow_database_id, workflow_id),  # SK
         "workflowId": workflow_id,
@@ -302,6 +397,11 @@ def build_workflow_execution_record(
         "executionError": "",
         "executionLog": "",
     }
+    # executionGroupId is a sparse GSI PK: set it only when the execution belongs to a group, so
+    # ungrouped executions do not populate the WorkflowExecutionsByGroupGSI.
+    if execution_group_id:
+        record["executionGroupId"] = execution_group_id
+    return record
 
 
 def build_pipeline_execution_record(
@@ -336,13 +436,11 @@ def build_pipeline_execution_record(
         "pipelineExecutionType": pipeline_execution_type,
         "waitForCallback": wait_for_callback,
         "pipelineResourceArn": pipeline_resource_arn or "",
-        # STS data-model fields (Stage 1: schema only, unpopulated)
+        # STS data-model fields
         "vendedRoleArn": "",
         "s3ReadOnlyScopes": [],
         "s3ReadWriteScopes": [],
         "credentialVendingState": "notVended",
-        # optional chain / sub-process fields
-        "from_pipeline_execution_id": from_pipeline_execution_id or "",
         # EventBridge source prefix the pipeline reports sub-process ARNs/logs under, plus the
         # typed lists it registers. Each registeredSubExecutions entry is typed by resourceType
         # ('stepFunctionsExecution' today; 'batchJob'/'ecsTask'/... later) so the abort path knows
@@ -352,6 +450,11 @@ def build_pipeline_execution_record(
         "registeredSubExecutions": [],
         "registeredLogs": [],
     }
+    # from_pipeline_execution_id is the PipelineExecChainGSI sort key; DynamoDB rejects an empty
+    # string for an indexed key attribute. Set it only when this pipeline chains from a prior one
+    # (a sparse GSI — first/unchained pipelines are simply absent from the chain index).
+    if from_pipeline_execution_id:
+        rec["from_pipeline_execution_id"] = from_pipeline_execution_id
     return rec
 
 
@@ -374,7 +477,7 @@ def build_pipeline_input_file_record(
 def build_workflow_execution_input_record(
     workflow_execution_id, database_id, asset_id, input_asset_file_key,
     execution_start_date, workflow_id, workflow_database_id,
-    s3_bucket="", asset_root_s3_key="",
+    s3_bucket="", asset_root_s3_key="", version_id="",
 ):
     """WorkflowExecutionInputsStorageTable row (asset-scoped GET source of truth).
 
@@ -382,7 +485,11 @@ def build_workflow_execution_input_record(
     bucket-relative asset-root prefix (no s3:// URI). Each input file may belong to a different
     asset (different bucket and base location key), so its root is stored per file rather than
     assumed shared; the interim lambda uses it to compute the asset-relative path for the rebuilt
-    manifest."""
+    manifest.
+
+    versionId is the concrete S3 VersionId the run read for this file (resolved at launch), captured
+    so the execution's history shows the exact version used, not the time-relative "latest". Empty
+    for folder/whole-asset selections (no single version)."""
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
         "databaseId:assetId:inputAssetFileKey": input_file_composite_key(
@@ -393,6 +500,7 @@ def build_workflow_execution_input_record(
         "inputAssetFileKey": normalize_file_key(input_asset_file_key),
         "s3Bucket": s3_bucket,
         "assetRootS3Key": asset_root_s3_key,
+        "versionId": version_id or "",
         "executionStartDate": execution_start_date,  # GSI SK
         "workflowId": workflow_id,
         "workflowDatabaseId": workflow_database_id,
@@ -418,16 +526,43 @@ def build_input_metadata_record(
 
 def build_input_configuration_record(
     pipeline_execution_id, input_configuration, input_configuration_file_s3_key,
+    template_id="", template_schema_version="", tag_schema_version="",
+    template_tags=None, custom_template_override_used=False, custom_template_override="",
+    config_format="",
 ):
-    """PipelineExecutionInputConfigurationStorageTable row (SK='configuration')."""
+    """PipelineExecutionInputConfigurationStorageTable row (SK='configuration').
+
+    Snapshots exactly what went into the run so it stays traceable and re-runnable even after the
+    source template + tag schema later change or are archived:
+      - inputConfiguration: the final rendered config actually sent to the pipeline (truncated
+        inline; the full body is the per-execution S3 file at inputConfigurationFileS3Key).
+      - templateId + templateSchemaVersion + tagSchemaVersion: the template/tag-schema versions
+        resolved at run time.
+      - templateTags: the resolved tag values passed.
+      - customTemplateOverrideUsed: whether a caller-supplied override body was rendered.
+      - customTemplateOverride: the RAW override body (pre-render, tags un-substituted) when one was
+        supplied, so a re-run can faithfully reconstruct a template-less override execution (there is
+        no templateId to re-resolve). Truncated inline; empty when no override was used.
+    """
     content, truncated = truncate_text(input_configuration or "")
+    override_content, override_truncated = truncate_text(custom_template_override or "")
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "recordType": "configuration",  # SK
         "inputConfiguration": content,
         "inputConfigurationTruncated": truncated,
         "inputConfigurationFileS3Key": input_configuration_file_s3_key or "",
-        "inputPortMappings": {},  # Stage 1: schema only
+        "inputPortMappings": {},
+        # Config snapshot: what the run was built from.
+        "templateId": template_id or "",
+        "templateSchemaVersion": template_schema_version or "",
+        "tagSchemaVersion": tag_schema_version or "",
+        "templateTags": template_tags or [],
+        "customTemplateOverrideUsed": bool(custom_template_override_used),
+        "customTemplateOverride": override_content,
+        "customTemplateOverrideTruncated": override_truncated,
+        # Format of the rendered config body, so the detail view highlights it correctly.
+        "configFormat": config_format or "",
     }
 
 
@@ -467,7 +602,7 @@ def build_output_metadata_record(
 def build_output_result_record(
     pipeline_execution_id, relative_file_path, results_content, s3_key,
 ):
-    """PipelineExecutionOutputResultsStorageTable row (Stage 1: schema only)."""
+    """PipelineExecutionOutputResultsStorageTable row."""
     content, truncated = truncate_text(results_content or "")
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
@@ -481,7 +616,7 @@ def build_output_result_record(
 def build_log_record(
     pipeline_execution_id, log_type, result_log, error_log, log_group_arn, log_stream_name,
 ):
-    """PipelineExecutionLogsStorageTable row (log_type='summary' in Stage 1)."""
+    """PipelineExecutionLogsStorageTable row (log_type='summary')."""
     result_content, result_truncated = truncate_text(result_log or "", limit=MAX_LOG_FIELD_BYTES)
     error_content, error_truncated = truncate_text(error_log or "", limit=MAX_LOG_FIELD_BYTES)
     return {

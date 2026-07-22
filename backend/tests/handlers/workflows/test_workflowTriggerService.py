@@ -1,0 +1,168 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unit tests for the workflow trigger handler (workflowTriggerService). Parent-workflow Tier-2 auth
++ trigger CRUD; CasbinEnforcer/request_to_claims/tables patched. IDs >=3 chars (isolation-safe)."""
+
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from backend.backend.handlers.workflows.workflowTriggerService import lambda_handler
+
+MOD = "backend.backend.handlers.workflows.workflowTriggerService"
+
+
+def _event(method, path, path_params, body=None):
+    return {
+        "requestContext": {"http": {"method": method, "path": path}},
+        "pathParameters": path_params,
+        "queryStringParameters": None,
+        "headers": {"authorization": "Bearer test-token"},
+        "body": json.dumps(body) if body is not None else None,
+    }
+
+
+def _enforcer(api=True, obj=True):
+    inst = MagicMock()
+    inst.enforceAPI.return_value = api
+    inst.enforce.return_value = obj
+    return inst
+
+
+WF_ITEM = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W"}
+BASE = "/database/db1/workflows/wflow1/triggers"
+PARAMS = {"databaseId": "db1", "workflowId": "wflow1"}
+TPARAMS = {"databaseId": "db1", "workflowId": "wflow1", "triggerType": "fileUpload"}
+
+
+@pytest.mark.unit
+class TestWorkflowTriggerService:
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_api_denied(self, mock_enforcer, mock_claims, mock_parent):
+        mock_claims.return_value = {"tokens": ["t"]}
+        mock_enforcer.return_value = _enforcer(api=False)
+        resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
+        assert resp["statusCode"] == 403
+
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_parent_workflow_not_found(self, mock_enforcer, mock_claims, mock_parent):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (False, None)
+        resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
+        assert resp["statusCode"] == 404
+
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_parent_object_denied(self, mock_enforcer, mock_claims, mock_parent):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (False, WF_ITEM)
+        resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
+        assert resp["statusCode"] == 403
+
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_set_trigger(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.get_item.return_value = {}  # no existing trigger
+        mock_table.return_value = table
+        body = {"inputFileFilters": {"allow": ["*.glb"], "exclude": []},
+                "defaultTemplateIds": {"db1:pipe1": "tmpl1"}}
+        resp = lambda_handler(_event("PUT", BASE + "/fileUpload", TPARAMS, body), MagicMock())
+        assert resp["statusCode"] == 200
+        saved = table.put_item.call_args.kwargs["Item"]
+        assert saved["triggerType"] == "fileUpload"
+        assert saved["triggerConfig"]["defaultTemplateIds"] == {"db1:pipe1": "tmpl1"}
+        assert saved["triggerConfig"]["inputFileFilters"]["allow"] == ["*.glb"]
+
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_set_trigger_preserves_datecreated_on_replace(self, mock_enforcer, mock_claims,
+                                                          mock_parent, mock_table):
+        # Re-setting an existing trigger keeps its original dateCreated (only dateModified advances).
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"triggerType": "fileUpload",
+                                               "dateCreated": "2020-01-01T00:00:00Z"}}
+        mock_table.return_value = table
+        body = {"inputFileFilters": {"allow": ["*.obj"], "exclude": []}, "defaultTemplateIds": {}}
+        resp = lambda_handler(_event("PUT", BASE + "/fileUpload", TPARAMS, body), MagicMock())
+        assert resp["statusCode"] == 200
+        saved = table.put_item.call_args.kwargs["Item"]
+        assert saved["dateCreated"] == "2020-01-01T00:00:00Z"  # original preserved
+
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_unsupported_trigger_type_rejected(self, mock_enforcer, mock_claims, mock_parent):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        params = {"databaseId": "db1", "workflowId": "wflow1", "triggerType": "bogusTrigger"}
+        resp = lambda_handler(_event("PUT", BASE + "/bogusTrigger", params, {}), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "Unsupported trigger type" in json.loads(resp["body"])["message"]
+
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_get_trigger_404(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.get_item.return_value = {}  # no trigger
+        mock_table.return_value = table
+        resp = lambda_handler(_event("GET", BASE + "/fileUpload", TPARAMS), MagicMock())
+        assert resp["statusCode"] == 404
+
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_list_triggers(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.query.return_value = {"Items": [
+            {"workflowDatabaseId": "db1", "workflowId": "wflow1", "triggerType": "fileUpload",
+             "triggerConfig": {}, "enabled": True}]}
+        mock_table.return_value = table
+        resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
+        assert resp["statusCode"] == 200
+        data = json.loads(resp["body"])["message"]
+        assert data["Items"][0]["triggerType"] == "fileUpload"
+
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_delete_trigger(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"triggerType": "fileUpload"}}
+        mock_table.return_value = table
+        resp = lambda_handler(_event("DELETE", BASE + "/fileUpload", TPARAMS), MagicMock())
+        assert resp["statusCode"] == 200
+        table.delete_item.assert_called_once()

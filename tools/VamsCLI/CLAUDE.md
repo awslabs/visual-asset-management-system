@@ -47,7 +47,9 @@ tools/VamsCLI/
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
       sync.py                # Directory sync (sync file push/pull)
-      workflow.py            # Workflow execution
+      pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
+      workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
+      execution.py           # Execution ops: list (global), details, logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
       industry/
@@ -79,19 +81,25 @@ tools/VamsCLI/
     test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
 ```
 
-### Command Groups (20 top-level)
+### Command Groups (22 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
-industry, user, role, api-key
+pipeline, execution, industry, user, role, api-key
 ```
 
 Sync has a nested sub-command group:
 
 -   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
+
+Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution APIs:
+
+-   `pipeline create|get|list|update|delete`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
+-   `workflow create|get|list|update|delete`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
 
 Industry has nested sub-command groups:
 

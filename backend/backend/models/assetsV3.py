@@ -311,6 +311,11 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     workflowId: Optional[str] = None
     workflowExecutionId: Optional[str] = None
     changeUserId: Optional[str] = None
+    # Bucket the tempKey source files live in when it differs from the asset's own (destination)
+    # bucket. Workflow-execution outputs are staged in the VAMS default run bucket while the output
+    # asset can live in another bucket; the copy reads from sourceBucket and writes to the asset
+    # bucket. Empty/omitted => same as the asset bucket (the normal single-bucket upload path).
+    sourceBucket: Optional[str] = None
 
     @root_validator
     def validate_fields(cls, values):

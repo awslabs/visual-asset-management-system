@@ -19,6 +19,7 @@ from handlers.databases.createDatabase import create_database
 from models.databases import CreateDatabaseRequestModel
 from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
+from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
 from common.s3MetadataKeys import (
@@ -33,6 +34,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY,
     VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
     VAMS_CHANGE_SOURCE_DIRECT,
+    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
     normalize_history_file_path,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
@@ -46,10 +48,15 @@ from common.assetHistory import (
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb')
 sns_client = boto3.client('sns')
-sqs_client = boto3.client('sqs')
 s3_client = boto3.client('s3')
 s3_resource = boto3.resource('s3')
 lambda_client = boto3.client('lambda')
+# Bounded timeouts on the EventBridge client so an unreachable endpoint (e.g. an isolated-subnet
+# deployment missing the events VPC endpoint) fails fast rather than blocking the ingestion hot
+# path for the full default connect timeout on every batch. The publish is best-effort.
+events_client = boto3.client(
+    'events',
+    config=BotoConfig(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
 dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="sqsBucketSync")
 
@@ -62,7 +69,10 @@ try:
     db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     database_id = os.environ.get('DEFAULT_DATABASE_ID')
     file_indexer_sns_topic_arn = os.environ.get("FILE_INDEXER_SNS_TOPIC_ARN", "")
-    workflow_auto_execute_sqs_url = os.environ.get("WORKFLOW_AUTO_EXECUTE_SQS_URL", "")
+    # Orchestration EventBridge bus + deployment event-source prefix for publishing file-upload
+    # trigger events (Phase 2 fileUpload delivery). Optional: empty disables the EventBridge publish.
+    orchestration_bus_name = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
     file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
     asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
@@ -1374,35 +1384,60 @@ def publish_to_file_indexer_sns(event):
         logger.exception(f"Error publishing to file indexer SNS topic: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
-def publish_to_workflow_execution_sqs(event):
-    """
-    Publish S3 event directly to workflow auto-execute SQS queue.
-    This triggers automatic workflow execution based on file uploads.
-    
-    Args:
-        event: The S3 event to publish
-    """
+def _is_workflow_sourced_record(record):
+    """True when an ingested S3 record was written by a workflow execution (vams-changesource=
+    workflowExecution). Such outputs must NOT re-fire fileUpload triggers (re-trigger loop guard).
+    Best-effort: a head failure returns False (do not silently drop a genuine user upload)."""
+    s3_info = record.get("s3", {}) or {}
+    bucket = (s3_info.get("bucket") or {}).get("name")
+    key = (s3_info.get("object") or {}).get("key")
+    if not bucket or not key:
+        return False
     try:
-        if not workflow_auto_execute_sqs_url:
-            logger.warning("WORKFLOW_AUTO_EXECUTE_SQS_URL not configured, skipping SQS publish")
-            return
-        
-        # Prepare payload with bucket information
-        event.update({
-            "ASSET_BUCKET_NAME": asset_bucket_name,
-            "ASSET_BUCKET_PREFIX": asset_bucket_prefix
-        })
-        
-        # Publish to SQS queue
-        response = sqs_client.send_message(
-            QueueUrl=workflow_auto_execute_sqs_url,
-            MessageBody=json.dumps(event, default=str)
-        )
-        
-        logger.info(f"Successfully published to workflow auto-execute SQS queue: {response['MessageId']}")
+        import urllib.parse
+        head = s3_client.head_object(Bucket=bucket, Key=urllib.parse.unquote_plus(key))
+        return (head.get("Metadata", {}) or {}).get(
+            VAMS_CHANGE_SOURCE_METADATA_KEY) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
     except Exception as e:
-        logger.exception(f"Error publishing to workflow auto-execute SQS queue: {e}")
-        # We don't re-raise the exception here to avoid stopping the process
+        logger.info(f"Could not read change-source for {key} (treating as user upload): {e}")
+        return False
+
+
+def publish_to_orchestration_bus(successful_records):
+    """Publish an asset.file.uploaded event to the VAMS orchestration EventBridge bus (Phase 2
+    fileUpload trigger delivery). A standing rule on the bus routes these to the SQS buffer the
+    workflowTriggerDispatch lambda consumes.
+
+    Publishes a CLEAN, flat detail — {"Records": [{"s3": {...}}], ASSET_BUCKET_*} — built from the
+    already-unwrapped S3 records, so the dispatcher does not re-implement the SQS->SNS->S3 unwrapping.
+    Records written by a workflow execution (vams-changesource=workflowExecution) are excluded so a
+    workflow's own file outputs cannot re-fire fileUpload triggers (re-trigger loop guard).
+
+    Best-effort: a publish failure is logged, not raised (auto-trigger is non-critical to the primary
+    ingestion path)."""
+    try:
+        if not orchestration_bus_name or not orchestration_event_source_prefix:
+            return
+        user_records = [
+            r for r in (successful_records or [])
+            if r.get("s3") and not _is_workflow_sourced_record(r)
+        ]
+        if not user_records:
+            return
+        detail = {
+            "Records": user_records,
+            "ASSET_BUCKET_NAME": asset_bucket_name,
+            "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
+        }
+        events_client.put_events(Entries=[{
+            "EventBusName": orchestration_bus_name,
+            "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
+            "DetailType": "asset.file.uploaded",
+            "Detail": json.dumps(detail, default=str),
+        }])
+        logger.info(f"Published asset.file.uploaded event ({len(user_records)} record(s)) to the orchestration bus")
+    except Exception as e:
+        logger.exception(f"Error publishing to orchestration bus: {e}")
 
 def build_history_record(database_id, asset_id, relative_file_path, version_id,
                          s3_metadata, s3_last_modified):
@@ -1921,13 +1956,14 @@ def lambda_handler_created(event, context):
                     logger.info(f"Publishing {len(successful_records)} records to file indexer SNS")
                     publish_to_file_indexer_sns(filtered_event)
 
-                    # Also publish to workflow auto-execute SQS for created events only
-                    logger.info(f"Publishing {len(successful_records)} records to workflow auto-execute SQS")
-                    publish_to_workflow_execution_sqs(filtered_event)
+                    # Publish to the orchestration EventBridge bus for the fileUpload trigger
+                    # dispatcher. Pass the flat S3 records so a clean detail is published
+                    # (workflow-sourced outputs are excluded).
+                    publish_to_orchestration_bus(successful_records)
                 else:
-                    logger.info("All records filtered out, skipping file indexer SNS and workflow SQS publish")
+                    logger.info("All records filtered out, skipping file indexer SNS publish")
             else:
-                logger.info("No records to publish, skipping file indexer SNS and workflow SQS publish")
+                logger.info("No records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:

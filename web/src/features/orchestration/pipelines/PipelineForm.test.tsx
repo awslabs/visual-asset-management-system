@@ -192,9 +192,12 @@ describe("PipelineForm", () => {
             },
         };
 
-        render(<PipelineForm mode="edit" databaseId="db1" initial={dcPipeline} onDone={jest.fn()} />, {
-            wrapper: createWrapper(),
-        });
+        render(
+            <PipelineForm mode="edit" databaseId="db1" initial={dcPipeline} onDone={jest.fn()} />,
+            {
+                wrapper: createWrapper(),
+            }
+        );
 
         const select = screen.getByLabelText(/Execution Type/);
         const options = Array.from((select as HTMLSelectElement).options).map((opt) => opt.value);
@@ -236,9 +239,12 @@ describe("PipelineForm", () => {
             },
         };
 
-        render(<PipelineForm mode="edit" databaseId="db1" initial={dcPipeline} onDone={jest.fn()} />, {
-            wrapper: createWrapper(),
-        });
+        render(
+            <PipelineForm mode="edit" databaseId="db1" initial={dcPipeline} onDone={jest.fn()} />,
+            {
+                wrapper: createWrapper(),
+            }
+        );
 
         const select = screen.getByLabelText(/Execution Type/);
         expect(select).not.toBeDisabled();

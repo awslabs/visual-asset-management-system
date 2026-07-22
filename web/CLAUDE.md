@@ -142,9 +142,9 @@ NEVER remove or modify these headers. Use the `2026` year for new files.
 
 The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** (the seed of the future design system) and is Cloudscape-free. This boundary is intentional:
 
-- **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
-- **`features/orchestration/**`** (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
-- **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+-   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
 
 Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
 
@@ -159,7 +159,7 @@ import { Button, Table } from "@cloudscape-design/components";
 
 // CORRECT (orchestration module)
 import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>
+<div className="flex gap-2">...</div>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
@@ -445,7 +445,7 @@ The orchestration module (`features/orchestration/`) implements **Tier-1 permiss
 ```typescript
 const { can } = useAllowedRoutes();
 const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
-<Button disabled={!canDelete}>Permanent Delete</Button>
+<Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
 **Admin-only actions** (Logs, Permanent-Delete) are hidden when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.

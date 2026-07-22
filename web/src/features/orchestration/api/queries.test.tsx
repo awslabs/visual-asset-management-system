@@ -70,16 +70,17 @@ describe("qk (query key factory)", () => {
     });
 
     it("generates stable keys for executions (all scopes)", () => {
-        expect(qk.executions({ kind: "global" })).toEqual([
+        expect(qk.executions({ kind: "global" })).toEqual(["executions", { kind: "global" }, null]);
+        expect(qk.executions({ kind: "workflow", databaseId: "db1", workflowId: "w1" })).toEqual([
             "executions",
-            { kind: "global" },
+            { kind: "workflow", databaseId: "db1", workflowId: "w1" },
             null,
         ]);
         expect(
-            qk.executions({ kind: "workflow", databaseId: "db1", workflowId: "w1" })
-        ).toEqual(["executions", { kind: "workflow", databaseId: "db1", workflowId: "w1" }, null]);
-        expect(
-            qk.executions({ kind: "asset", databaseId: "db1", assetId: "a1" }, { status: "RUNNING" })
+            qk.executions(
+                { kind: "asset", databaseId: "db1", assetId: "a1" },
+                { status: "RUNNING" }
+            )
         ).toEqual([
             "executions",
             { kind: "asset", databaseId: "db1", assetId: "a1" },

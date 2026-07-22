@@ -88,7 +88,12 @@ const DynamicTagForm: React.FC<DynamicTagFormProps> = ({
     onSubmit,
 }) => {
     const { schema, uiSchema } = tagSchemaToJsonSchema(tagSchema);
-    const finalUiSchema = externalUiSchema || uiSchema;
+    // Hide RJSF's built-in Submit button when this is a read-only preview (no onSubmit handler) —
+    // the preview only shows the fields, not a submittable form.
+    const finalUiSchema = externalUiSchema || {
+        ...uiSchema,
+        ...(onSubmit ? {} : { "ui:submitButtonOptions": { norender: true } }),
+    };
 
     const handleSubmit = (data: any) => {
         if (onSubmit) {

@@ -120,7 +120,11 @@ def lambda_handler(event, context):
             
             # Check if bucket has versioning enabled
             is_versioning_enabled = check_bucket_versioning(bucket_name)
-            
+
+            # Whether this bucket record is the VAMS default (houses all pipeline template + run
+            # I/O data). Resolved at synth time per bucket record; exactly one record is default.
+            is_default = bool(bucket.get('isDefault'))
+
             # Create or update the record in DynamoDB
             table.put_item(
                 Item={
@@ -128,10 +132,11 @@ def lambda_handler(event, context):
                     'bucketName:baseAssetsPrefix': sort_key,
                     'bucketName': bucket_name,
                     'baseAssetsPrefix': prefix,
-                    'isVersioningEnabled': is_versioning_enabled
+                    'isVersioningEnabled': is_versioning_enabled,
+                    'isDefault': is_default
                 }
             )
-            logger.info(f"Successfully added/updated record for bucket: {bucket_name} with versioning status: {is_versioning_enabled}")
+            logger.info(f"Successfully added/updated record for bucket: {bucket_name} (versioning: {is_versioning_enabled}, default: {is_default})")
         
         return {
             'PhysicalResourceId': 'S3AssetBucketsTablePopulator',
@@ -159,11 +164,14 @@ def lambda_handler(event, context):
 
     suppressCdkNagLambda(populateS3AssetBucketsTableLambda);
 
-    // Prepare bucket data for the custom resource
+    // Prepare bucket data for the custom resource. isDefault is resolved per bucket record at synth
+    // time (exactly one record is the VAMS default), so the Lambda writes the flag directly with no
+    // name/ARN matching.
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     const bucketData = bucketRecords.map((record) => ({
         bucketName: record.bucket.bucketName,
         prefix: record.prefix || "/",
+        isDefault: !!record.isDefault,
     }));
 
     // Create the custom resource provider

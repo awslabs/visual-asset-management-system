@@ -4093,9 +4093,17 @@ paths:
                       $ref: '#/components/schemas/id_regex'
             security:
                 - DefaultCognitoAuthorizer: []
-    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
+    /workflows/{workflowDatabaseId}/{workflowId}/execute:
         post:
-            summary: "Execute a workflow using an asset as the input source."
+            summary: "Execute a workflow (asset-less, multi-file input)."
+            description: >
+                Launch a workflow execution over a selected set of input files (which may span
+                assets). When the input files resolve to a single input asset the output is locked to
+                that asset unless the workflow's outputTarget allows override; when they resolve to zero
+                or multiple assets an explicit output target (both outputAssetId and outputDatabaseId)
+                is honored regardless, or the workflow may be configured as results-only. Per-pipeline
+                template parameters (templateId + templateTags, or a customTemplateOverride) resolve the
+                config for each pipeline.
             requestBody:
                 required: true
                 content:
@@ -4103,34 +4111,80 @@ paths:
                         schema:
                             type: object
                             properties:
-                                workflowDatabaseId:
+                                inputFiles:
+                                    type: array
+                                    description: "Selected input files (0..N; arity enforced against the workflow/pipeline config)."
+                                    items:
+                                        type: object
+                                        properties:
+                                            databaseId:
+                                                $ref: "#/components/schemas/id_regex"
+                                            assetId:
+                                                $ref: "#/components/schemas/id_regex"
+                                            relativeFileKey:
+                                                type: string
+                                                description: "Asset-relative file key (leading /); '/' selects the whole asset, '/folder/' a folder."
+                                            versionId:
+                                                type: string
+                                                description: "Optional asset file version (latest when empty)."
+                                        required:
+                                            - databaseId
+                                            - assetId
+                                            - relativeFileKey
+                                outputAssetId:
                                     $ref: "#/components/schemas/id_regex"
-                                    description: "Database ID of the workflow (use GLOBAL for global workflows)"
-                                fileKey:
-                                    $ref: "#/components/schemas/asset_path_pattern_regex"
-                                    description: "Optional file key to specify which file to use for workflow execution"
-                                pipelineInputParameters:
-                                    type: object
-                                    additionalProperties:
-                                        type: string
-                                    description: "Optional per-pipeline inputParameters override for this run, keyed by pipeline name. Each value is a JSON string."
-                                fileBaseExecutionPathExtension:
+                                    description: >
+                                        Output asset. Honored whenever the input files do not resolve to a single
+                                        input asset (regardless of override); for a single input asset only when the
+                                        workflow's outputTarget allows override, otherwise locked to the input asset.
+                                        Omit for a results-only workflow (outputTarget.locationType 'none').
+                                outputDatabaseId:
+                                    $ref: "#/components/schemas/id_regex"
+                                    description: >
+                                        Output database. When inputs resolve to zero or multiple assets, supply it
+                                        together with outputAssetId. For a single-input-asset override it falls back
+                                        to the input asset's database when omitted.
+                                outputFileBaseExecutionPathExtension:
                                     type: string
-                                    pattern: "^\\/.*$"
-                                    description: "Optional asset-relative path segment (leading /) inserted between the output asset location key and each output file's relative path. Defaults to / (no extra segment)."
-                            required:
-                                - workflowDatabaseId
+                                    maxLength: 1024
+                                    description: >
+                                        Optional base path (under the output asset) that output files are written
+                                        beneath. May contain dynamic tag placeholders (e.g.
+                                        {{firstAssetFileFileNameNoExt}}) resolved at launch. Omitted/empty writes to
+                                        the asset root ('/'). Must not contain '..' or backslashes; normalized to a
+                                        single leading and trailing '/'.
+                                pipelineExecutionParameters:
+                                    type: object
+                                    description: "Per-pipeline execution parameters, keyed by pipelineId."
+                                    additionalProperties:
+                                        type: object
+                                        properties:
+                                            templateId:
+                                                type: string
+                                            templateTags:
+                                                type: array
+                                                items:
+                                                    type: object
+                                            customTemplateOverride:
+                                                type: string
+                                executionGroupId:
+                                    type: string
+                                    description: "Optional group id for bulk grouping / abort-by-group."
+                                triggerType:
+                                    type: string
+                                    enum: [manual, fileUpload]
+                                    description: "Trigger type (default manual; set by trigger dispatch otherwise)."
             responses:
                 "200":
                     description: Workflow execution started.
-                "403":
-                    description: Not authorized.
+                "400":
+                    description: Validation, template-resolution, or cross-entity validation error.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset does not exist.
+                "403":
+                    description: Not authorized.
                     content:
                         application/json:
                             schema:
@@ -4142,15 +4196,9 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - name: databaseId
+              - name: workflowDatabaseId
                 in: path
-                description: Database ID.
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: assetId
-                in: path
-                description: Asset ID.
+                description: Workflow database ID (use GLOBAL for global workflows).
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -4243,7 +4291,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipeline'
+                                $ref: '#/components/schemas/pipelineV2'
                 "404":
                     description: Database OR Pipeline not found.
                     content:
@@ -4272,11 +4320,70 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-        delete:
-            summary: "Delete a pipeline."
+              - name: includeArchived
+                in: query
+                description: "Include the pipeline when it is archived. Archived pipelines are hidden by default."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
+        put:
+            summary: "Update a pipeline."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updatePipelineRequest"
             responses:
                 "200":
-                    description: Pipeline deleted.
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineV2'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        delete:
+            summary: "Archive a pipeline (soft-delete)."
+            responses:
+                "200":
+                    description: Pipeline archived (archived set to true).
                 "400":
                     description: Invalid parameters.
                     content:
@@ -4348,6 +4455,59 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - name: includeArchived
+                in: query
+                description: "Include archived workflows. Archived workflows are hidden by default."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
+        post:
+            summary: "Create a workflow."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createWorkflowRequest"
+            responses:
+                "200":
+                    description: Workflow created.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/workflowV2'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
     /database/{databaseId}/workflows/{workflowId}:
         get:
             summary: "Get a workflow."
@@ -4357,7 +4517,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/workflow"
+                                $ref: "#/components/schemas/workflowV2"
                 "404":
                     description: Database OR Workflow not found.
                     content:
@@ -4374,6 +4534,65 @@ paths:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: includeArchived
+                in: query
+                description: "Include the workflow when it is archived. Archived workflows are hidden by default."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
+        put:
+            summary: "Update a workflow."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateWorkflowRequest"
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/workflowV2'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -4387,10 +4606,10 @@ paths:
                 schema:
                     $ref: '#/components/schemas/id_regex'
         delete:
-            summary: "Delete a workflow."
+            summary: "Archive a workflow (soft-delete)."
             responses:
                 "200":
-                    description: Workflow deleted.
+                    description: Workflow archived (archived set to true).
                 "404":
                     description: Database OR Workflow not found.
                     content:
@@ -4419,6 +4638,214 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/workflows/{workflowId}/triggers:
+        get:
+            summary: "List a workflow's triggers."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                  triggers:
+                                    type: array
+                                    items:
+                                        $ref: "#/components/schemas/workflowTrigger"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}:
+        get:
+            summary: "Get a workflow trigger."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/workflowTrigger"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, Workflow, OR Trigger not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: triggerType
+                in: path
+                description: "Trigger type. Supported value: fileUpload."
+                required: true
+                schema:
+                    type: string
+                    enum:
+                        - fileUpload
+        put:
+            summary: "Set or replace a workflow trigger."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/setWorkflowTriggerRequest"
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/workflowTrigger'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: triggerType
+                in: path
+                description: "Trigger type. Supported value: fileUpload."
+                required: true
+                schema:
+                    type: string
+                    enum:
+                        - fileUpload
+        delete:
+            summary: "Delete a workflow trigger."
+            responses:
+                "200":
+                    description: Trigger deleted.
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, Workflow, OR Trigger not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: triggerType
+                in: path
+                description: "Trigger type. Supported value: fileUpload."
+                required: true
+                schema:
+                    type: string
+                    enum:
+                        - fileUpload
     /ingest-asset:
         post:
             summary: "Ingest a new asset into the database."
@@ -5458,35 +5885,6 @@ paths:
             security:
                 - DefaultCognitoAuthorizer: []
     /pipelines:
-        put:
-            summary: "Create or update a pipeline."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/pipeline"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
         get:
             summary: "List all pipelines."
             responses:
@@ -5542,6 +5940,406 @@ paths:
               - name: databaseId
                 in: path
                 description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: includeArchived
+                in: query
+                description: "Include archived pipelines. Archived pipelines are hidden by default."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
+        post:
+            summary: "Create a pipeline."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createPipelineRequest"
+            responses:
+                "200":
+                    description: Pipeline created.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineV2'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/pipelines/{pipelineId}/templates:
+        get:
+            summary: "List a pipeline's templates."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    templates:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/pipelineTemplate"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        post:
+            summary: "Create a pipeline template."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createPipelineTemplateRequest"
+            responses:
+                "200":
+                    description: Template created.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineTemplate'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}:
+        get:
+            summary: "Get a pipeline template."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineTemplate'
+                "404":
+                    description: Database, Pipeline, OR Template not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: templateId
+                in: path
+                description: Template ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        put:
+            summary: "Update a pipeline template."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updatePipelineTemplateRequest"
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineTemplate'
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, Pipeline, OR Template not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: templateId
+                in: path
+                description: Template ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        delete:
+            summary: "Delete a pipeline template."
+            responses:
+                "200":
+                    description: Template deleted.
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, Pipeline, OR Template not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: templateId
+                in: path
+                description: Template ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSchema:
+        get:
+            summary: "Get a template's tag schema."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineTagSchema'
+                "404":
+                    description: Database, Pipeline, OR Template not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: templateId
+                in: path
+                description: Template ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        put:
+            summary: "Set or replace a template's tag schema."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/pipelineTagSchema"
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipelineTagSchema'
+                "400":
+                    description: Invalid parameters, reserved tag key, or reserved metadata_ prefix.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database, Pipeline, OR Template not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: templateId
+                in: path
+                description: Template ID.
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -6454,29 +7252,6 @@ paths:
                 - DefaultCognitoAuthorizer: []
     
     /workflows:
-        put:
-            summary: "Create or update a workflow."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/workflow"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "403":
-                    description: Not authorized to read pipeline.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
         get:
             summary: "List all workflows."
             responses:
@@ -6498,10 +7273,63 @@ paths:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
+    /workflows/executions:
+        get:
+            summary: "List workflow executions across all assets (global)."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on any of its input assets or its output asset. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination."
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - in: query
+                name: workflowId
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: workflowDatabaseId
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: status
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: triggerType
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: groupId
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: triggeredByUserId
+                required: false
+                schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /workflows/executions/{executionId}:
         delete:
-            summary: "Abort a running workflow execution."
-            description: "Stops any still-running inner pipeline executions first, then the outer Step Functions execution, and marks the unfinished pipeline records and the overall execution as ABORTED. Requires GET on the execution's workflow and POST on every input-file asset tied to the execution."
+            summary: "Abort a running workflow execution (or a whole group)."
+            description: "Stops any still-running inner pipeline executions first, then the outer Step Functions execution, and marks the unfinished pipeline records and the overall execution as ABORTED. Requires GET on the execution's workflow and POST on every input-file asset tied to the execution. With the optional ?groupId= query parameter, aborts every active execution in the group the caller is authorized on (inaccessible members are skipped)."
             parameters:
               - in: path
                 name: executionId
@@ -6509,6 +7337,12 @@ paths:
                 schema:
                     type: string
                 description: Identifier of the execution to abort.
+              - in: query
+                name: groupId
+                required: false
+                schema:
+                    type: string
+                description: When set, abort all active executions in this group instead of the single execution.
             responses:
                 "200":
                     description: OK
@@ -6539,7 +7373,7 @@ paths:
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status and timing, plus names/descriptions cross-fetched from the pipeline definitions), input files, input metadata, input configurations, and a listing of all outputs (files, metadata, results). Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and the exact rendered configuration each pipeline received as renderedConfig), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata, input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
             parameters:
               - in: path
                 name: executionId
@@ -6577,7 +7411,7 @@ paths:
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. mode=full runs a live Amazon CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents (registered logs plus, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group). Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
             parameters:
               - in: path
                 name: executionId
@@ -6647,6 +7481,104 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: Execution (or specified pipeline execution) not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/rerun:
+        post:
+            summary: "Re-run an execution."
+            description: "Reconstructs the execute request from the stored execution records and launches a new execution (new executionId). The caller must be able to view the original execution; the re-launch re-validates the caller's permissions against every referenced asset/workflow/pipeline. Optionally reuses or supplies an executionGroupId."
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    type: string
+                description: Identifier of the execution to re-run.
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                executionGroupId:
+                                    type: string
+                                    description: "Optional group id for the new execution."
+            responses:
+                "200":
+                    description: New execution started.
+                "400":
+                    description: Invalid request or the reconstructed execution failed validation.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/permanent:
+        delete:
+            summary: "Permanently delete an execution's records (admin)."
+            description: "Removes only the DynamoDB rows across all execution sub-tables; does not touch the Step Functions execution history. Guarded: the execution must not be in progress (abort it first). Requires confirmDelete=true in the body. Admin-only (granted only to admin permission templates)."
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    type: string
+                description: Identifier of the execution to permanently delete.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                confirmDelete:
+                                    type: boolean
+                                    description: "Must be true to permanently delete the execution records."
+                            required:
+                                - confirmDelete
+            responses:
+                "200":
+                    description: Execution records permanently deleted.
+                "400":
+                    description: Missing confirmDelete, or the execution is in progress.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
                     content:
                         application/json:
                             schema:
@@ -8225,6 +9157,587 @@ components:
                 - description
                 - assetType
                 - outputType
+
+        # Pipeline execution and system configuration
+        pipelineExecutionConfig:
+            type: object
+            description: "Execution binding for a pipeline. The nested block matching executionType supplies the target resource."
+            properties:
+                executionType:
+                    type: string
+                    description: "How the pipeline is invoked."
+                    enum:
+                        - Lambda
+                        - SQS
+                        - EventBridge
+                        - DeadlineCloud
+                waitForCallback:
+                    type: string
+                    description: "'Enabled' to have Step Functions wait for a task token callback; 'Disabled' otherwise. Mandatory 'Enabled' for DeadlineCloud."
+                    enum:
+                        - Enabled
+                        - Disabled
+                    default: Disabled
+                taskTimeout:
+                    type: string
+                    description: "Timeout in seconds (string) for a callback (max 604800 = 1 week). Applies when waitForCallback is Enabled."
+                taskHeartbeatTimeout:
+                    type: string
+                    description: "Heartbeat timeout in seconds (string). Must be smaller than taskTimeout."
+                lambda:
+                    type: object
+                    description: "Target for Lambda execution type."
+                    properties:
+                        resourceId:
+                            type: string
+                            description: "Lambda function name or ARN."
+                sqs:
+                    type: object
+                    description: "Target for SQS execution type."
+                    properties:
+                        queueUrl:
+                            type: string
+                            description: "Amazon SQS queue URL."
+                eventBridge:
+                    type: object
+                    description: "Target for EventBridge execution type."
+                    properties:
+                        busArn:
+                            type: string
+                            description: "Amazon EventBridge bus ARN."
+                        source:
+                            type: string
+                            description: "Event source string."
+                        detailType:
+                            type: string
+                            description: "Event detail-type string."
+                deadlineCloud:
+                    type: object
+                    description: "Target for DeadlineCloud execution type."
+            required:
+                - executionType
+        pipelineAssetScope:
+            type: object
+            description: "Controls which asset selections a pipeline accepts as input."
+            properties:
+                crossAssetAllowed:
+                    type: boolean
+                singleAssetOnly:
+                    type: boolean
+                wholeAssetAllowed:
+                    type: boolean
+                folderAllowed:
+                    type: boolean
+        pipelineMetadataInputs:
+            type: object
+            description: "Controls which metadata sources are supplied to the pipeline as input."
+            properties:
+                assetMetadata:
+                    type: boolean
+                fileMetadata:
+                    type: boolean
+                fileAttributes:
+                    type: boolean
+        pipelineInputFileFilters:
+            type: object
+            description: >-
+                Filters applied to pipeline input selection. Each allow/exclude entry matches by
+                extension ("*.glb", with ".glb" also accepted as shorthand), exact relative path,
+                file name, or wildcard ("*.previewFile.*", "/models/*"). Matching is case-insensitive.
+                A non-empty allow restricts inputs to matching files; exclude removes matches and takes
+                precedence over allow.
+            properties:
+                allow:
+                    type: array
+                    items:
+                        type: string
+                    description: 'Patterns eligible as inputs (e.g. ["*.glb", "*.obj"]). Empty means allow all.'
+                exclude:
+                    type: array
+                    items:
+                        type: string
+                    description: 'Patterns removed from the input set (applied after allow).'
+        pipelineSystemConfig:
+            type: object
+            description: "Input handling and templating defaults for a pipeline."
+            properties:
+                inputFileArity:
+                    type: string
+                    description: "Number of input files the pipeline consumes."
+                    enum:
+                        - none
+                        - one
+                        - multi
+                assetScope:
+                    $ref: "#/components/schemas/pipelineAssetScope"
+                metadataInputs:
+                    $ref: "#/components/schemas/pipelineMetadataInputs"
+                requireTemplate:
+                    type: boolean
+                    description: "When true, an execution must reference a template."
+                allowCustomTemplateOverride:
+                    type: boolean
+                    description: "When true, executions may override the template config inline."
+                auxPreviewPipelineSuffix:
+                    type: string
+                    description: "Suffix used to associate an auxiliary preview pipeline."
+                inputFileFilters:
+                    $ref: "#/components/schemas/pipelineInputFileFilters"
+        pipelineV2:
+            type: object
+            description: "A database-scoped pipeline definition, including its templates and execution/system configuration."
+            properties:
+                databaseId:
+                    $ref: "#/components/schemas/id_regex"
+                pipelineId:
+                    $ref: "#/components/schemas/id_regex"
+                pipelineName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                category:
+                    type: string
+                    description: "Optional grouping label for the pipeline."
+                description:
+                    type: string
+                executionConfig:
+                    $ref: "#/components/schemas/pipelineExecutionConfig"
+                systemConfig:
+                    $ref: "#/components/schemas/pipelineSystemConfig"
+                enabled:
+                    type: boolean
+                    description: "Whether the pipeline is enabled."
+                    default: true
+                archived:
+                    type: boolean
+                    description: "Whether the pipeline is archived (soft-deleted). Archived pipelines are hidden by default."
+                    default: false
+                templates:
+                    type: array
+                    description: "Lightweight descriptors of the templates that belong to this pipeline."
+                    items:
+                        $ref: "#/components/schemas/pipelineTemplateDescriptor"
+            required:
+                - databaseId
+                - pipelineId
+                - pipelineName
+                - executionConfig
+        createPipelineRequest:
+            type: object
+            description: "Request body for creating a pipeline. The pipeline is scoped to the databaseId path parameter."
+            properties:
+                pipelineId:
+                    $ref: "#/components/schemas/id_regex"
+                pipelineName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                category:
+                    type: string
+                description:
+                    type: string
+                executionConfig:
+                    $ref: "#/components/schemas/pipelineExecutionConfig"
+                systemConfig:
+                    $ref: "#/components/schemas/pipelineSystemConfig"
+                enabled:
+                    type: boolean
+                    default: true
+            required:
+                - pipelineName
+                - executionConfig
+        updatePipelineRequest:
+            type: object
+            description: "Request body for updating a pipeline. Supply any subset of the mutable fields; set enabled to toggle enable/disable."
+            properties:
+                pipelineName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                category:
+                    type: string
+                description:
+                    type: string
+                executionConfig:
+                    $ref: "#/components/schemas/pipelineExecutionConfig"
+                systemConfig:
+                    $ref: "#/components/schemas/pipelineSystemConfig"
+                enabled:
+                    type: boolean
+        pipelineTemplateDescriptor:
+            type: object
+            description: "Lightweight template descriptor returned inline with a pipeline."
+            properties:
+                templateId:
+                    $ref: "#/components/schemas/id_regex"
+                templateName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    type: string
+                configFormat:
+                    $ref: "#/components/schemas/pipelineTemplateConfigFormat"
+        pipelineTemplateConfigFormat:
+            type: string
+            description: "Format of the template config body."
+            enum:
+                - json
+                - yaml
+                - openjd
+                - xml
+                - raw
+            default: json
+        pipelineTemplateTagField:
+            type: object
+            description: "A single tag definition in a template's tag schema."
+            properties:
+                tagKey:
+                    type: string
+                    description: "Tag key. Reserved system tag keys and the metadata_ prefix are not allowed."
+                type:
+                    type: string
+                    enum:
+                        - string
+                        - integer
+                        - number
+                        - boolean
+                        - string-list
+                        - enum
+                required:
+                    type: boolean
+                    default: false
+                default:
+                    description: "Default value for the tag. Type matches the field type."
+                label:
+                    type: string
+                    description: "Human-readable label shown in forms."
+                description:
+                    type: string
+                enumValues:
+                    type: array
+                    description: "Allowed values (required when type is enum)."
+                    items:
+                        type: string
+            required:
+                - tagKey
+                - type
+        pipelineTagSchema:
+            type: object
+            description: "A template's tag schema."
+            properties:
+                fields:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/pipelineTemplateTagField"
+            required:
+                - fields
+        pipelineTemplateOverrides:
+            type: object
+            description: >
+                Per-template overrides of the owning pipeline's systemConfig. May contain only the
+                four keys below (any other key is rejected at save); each is optional and, when
+                omitted, inherits the pipeline's value. Validated at save time. This does not edit the
+                config body — it changes how an execution's inputs are accepted/validated and what
+                metadata is provided when this template is chosen.
+            properties:
+                inputFileArity:
+                    type: string
+                    enum:
+                        - none
+                        - one
+                        - multi
+                metadataInputs:
+                    $ref: "#/components/schemas/pipelineMetadataInputs"
+                assetScope:
+                    $ref: "#/components/schemas/pipelineAssetScope"
+                inputFileFilters:
+                    $ref: "#/components/schemas/pipelineInputFileFilters"
+        pipelineTemplate:
+            type: object
+            description: "A pipeline template. configBody and webFormJson are returned inline; large bodies are transparently offloaded to Amazon S3 and rehydrated on read."
+            properties:
+                databaseId:
+                    $ref: "#/components/schemas/id_regex"
+                pipelineId:
+                    $ref: "#/components/schemas/id_regex"
+                templateId:
+                    $ref: "#/components/schemas/id_regex"
+                templateName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    type: string
+                configFormat:
+                    $ref: "#/components/schemas/pipelineTemplateConfigFormat"
+                configBody:
+                    type: string
+                    description: "The template text. May contain {{tagName}} placeholders resolved from tags at execution time."
+                webFormJson:
+                    type: string
+                    description: "Opaque web form markup used to render the template's input form."
+                allowCustomEdit:
+                    type: boolean
+                    description: "Whether the template config may be edited inline at execution time."
+                isDefault:
+                    type: boolean
+                    description: "Whether this template is the pipeline's default (pre-selected on the execute form and auto-selected when a require-template pipeline runs without a templateId). At most one template per pipeline is the default."
+                inputInstructions:
+                    type: string
+                    description: "Guidance shown to the user when supplying template inputs."
+                overrides:
+                    $ref: "#/components/schemas/pipelineTemplateOverrides"
+                tagSchema:
+                    type: array
+                    description: "The template's tag schema fields."
+                    items:
+                        $ref: "#/components/schemas/pipelineTemplateTagField"
+            required:
+                - templateName
+        createPipelineTemplateRequest:
+            type: object
+            description: "Request body for creating a pipeline template. Send configBody/webFormJson inline; the service offloads large bodies to Amazon S3."
+            properties:
+                templateId:
+                    $ref: "#/components/schemas/id_regex"
+                templateName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    type: string
+                configFormat:
+                    $ref: "#/components/schemas/pipelineTemplateConfigFormat"
+                configBody:
+                    type: string
+                    description: "The template text. May contain {{tagName}} placeholders."
+                webFormJson:
+                    type: string
+                    description: "Opaque web form markup."
+                allowCustomEdit:
+                    type: boolean
+                isDefault:
+                    type: boolean
+                    description: "Mark this template as the pipeline's default. Setting it clears the flag on any other template of the same pipeline."
+                inputInstructions:
+                    type: string
+                overrides:
+                    $ref: "#/components/schemas/pipelineTemplateOverrides"
+                tagSchema:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/pipelineTemplateTagField"
+            required:
+                - templateName
+        updatePipelineTemplateRequest:
+            type: object
+            description: "Request body for updating a pipeline template. Supply any subset of the mutable fields."
+            properties:
+                templateName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    type: string
+                configFormat:
+                    $ref: "#/components/schemas/pipelineTemplateConfigFormat"
+                configBody:
+                    type: string
+                webFormJson:
+                    type: string
+                allowCustomEdit:
+                    type: boolean
+                isDefault:
+                    type: boolean
+                    description: "Mark this template as the pipeline's default. Setting it clears the flag on any other template of the same pipeline."
+                inputInstructions:
+                    type: string
+                overrides:
+                    $ref: "#/components/schemas/pipelineTemplateOverrides"
+                tagSchema:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/pipelineTemplateTagField"
+        specifiedPipelineRef:
+            type: object
+            description: "Reference to a pipeline in a workflow's ordered pipeline list."
+            properties:
+                pipelineId:
+                    $ref: "#/components/schemas/id_regex"
+                pipelineDatabaseId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Database that owns the referenced pipeline. Defaults to the workflow's database when omitted."
+                jobName:
+                    type: string
+                    description: "Optional label for this pipeline step within the workflow."
+            required:
+                - pipelineId
+        workflowOutputTarget:
+            type: object
+            description: "Where a workflow writes its output."
+            properties:
+                locationType:
+                    type: string
+                    description: >
+                        'asset' (default) writes asset files and metadata to a VAMS asset. 'none' is
+                        results-only: the workflow writes no asset files or metadata and records only
+                        results text and logs against the execution. A results-only ('none') workflow
+                        may still take input files (inputFileArity none/one/multi) and its executions
+                        omit outputAssetId/outputDatabaseId. When locationType is 'asset' and
+                        inputFileArity is 'none', allowOverride must be true so an output asset can be
+                        chosen at execution time.
+                    enum:
+                        - asset
+                        - none
+                allowOverride:
+                    type: boolean
+                    description: >
+                        Gates redirecting the output when an execution resolves to a single input asset:
+                        when true the execute request may redirect via outputAssetId/outputDatabaseId,
+                        when false the output is locked to that asset. When inputs resolve to zero or
+                        multiple assets an explicit output target is honored regardless of this flag.
+        workflowSystemConfig:
+            type: object
+            description: "Input handling, asset-scope gating, and output defaults for a workflow."
+            properties:
+                inputFileArity:
+                    type: string
+                    description: "Number of input files the workflow consumes."
+                    enum:
+                        - none
+                        - one
+                        - multi
+                assetScope:
+                    $ref: "#/components/schemas/pipelineAssetScope"
+                metadataInputs:
+                    $ref: "#/components/schemas/pipelineMetadataInputs"
+                inputFileFilters:
+                    $ref: "#/components/schemas/pipelineInputFileFilters"
+                concurrencyRestriction:
+                    type: string
+                    description: "How concurrent executions of the workflow are limited."
+                    enum:
+                        - none
+                        - perAsset
+                        - perInputFile
+                outputTarget:
+                    $ref: "#/components/schemas/workflowOutputTarget"
+        workflowV2:
+            type: object
+            description: "A database-scoped workflow definition, including its ordered pipelines, triggers, and system configuration. GLOBAL workflows reference only GLOBAL pipelines; database workflows reference GLOBAL or same-database pipelines."
+            properties:
+                databaseId:
+                    $ref: "#/components/schemas/id_regex"
+                workflowId:
+                    $ref: "#/components/schemas/id_regex"
+                workflowName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                category:
+                    type: string
+                    description: "Optional grouping label for the workflow."
+                description:
+                    type: string
+                specifiedPipelines:
+                    type: array
+                    description: "Ordered list of pipelines the workflow runs."
+                    items:
+                        $ref: "#/components/schemas/specifiedPipelineRef"
+                systemConfig:
+                    $ref: "#/components/schemas/workflowSystemConfig"
+                subDashboardUrl:
+                    type: string
+                    description: "Optional URL of an external dashboard associated with the workflow."
+                enabled:
+                    type: boolean
+                    description: "Whether the workflow is enabled."
+                    default: true
+                archived:
+                    type: boolean
+                    description: "Whether the workflow is archived (soft-deleted). Archived workflows are hidden by default."
+                    default: false
+                triggers:
+                    type: array
+                    description: "The workflow's configured triggers."
+                    items:
+                        $ref: "#/components/schemas/workflowTrigger"
+                warnings:
+                    type: array
+                    description: "Non-fatal workflow-to-pipeline consistency warnings surfaced on create and update (for example, a pipeline requires metadata the workflow gate has disabled, or a multi-file workflow references a single-file pipeline)."
+                    items:
+                        type: string
+            required:
+                - databaseId
+                - workflowId
+                - workflowName
+                - specifiedPipelines
+        createWorkflowRequest:
+            type: object
+            description: "Request body for creating a workflow. The workflow is scoped to the databaseId path parameter."
+            properties:
+                workflowId:
+                    $ref: "#/components/schemas/id_regex"
+                workflowName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                category:
+                    type: string
+                description:
+                    type: string
+                specifiedPipelines:
+                    type: array
+                    description: "Ordered list of pipelines the workflow runs. Must contain at least one pipeline."
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/specifiedPipelineRef"
+                systemConfig:
+                    $ref: "#/components/schemas/workflowSystemConfig"
+                subDashboardUrl:
+                    type: string
+                enabled:
+                    type: boolean
+                    default: true
+            required:
+                - workflowName
+                - specifiedPipelines
+        updateWorkflowRequest:
+            type: object
+            description: "Request body for updating a workflow. Supply any subset of the mutable fields; set enabled to toggle enable/disable."
+            properties:
+                workflowName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                category:
+                    type: string
+                description:
+                    type: string
+                specifiedPipelines:
+                    type: array
+                    minItems: 1
+                    items:
+                        $ref: "#/components/schemas/specifiedPipelineRef"
+                systemConfig:
+                    $ref: "#/components/schemas/workflowSystemConfig"
+                subDashboardUrl:
+                    type: string
+                enabled:
+                    type: boolean
+        workflowTrigger:
+            type: object
+            description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded."
+            properties:
+                triggerType:
+                    type: string
+                    enum:
+                        - fileUpload
+                inputFileFilters:
+                    $ref: "#/components/schemas/pipelineInputFileFilters"
+                defaultTemplateIds:
+                    type: object
+                    description: "Maps each included pipeline to the template used when the trigger auto-launches, keyed by the composite '<pipelineDatabaseId>:<pipelineId>'."
+                    additionalProperties:
+                        $ref: "#/components/schemas/id_regex"
+                enabled:
+                    type: boolean
+                    description: "Whether the trigger is enabled."
+                    default: true
+        setWorkflowTriggerRequest:
+            type: object
+            description: "Request body for setting or replacing a workflow trigger."
+            properties:
+                inputFileFilters:
+                    $ref: "#/components/schemas/pipelineInputFileFilters"
+                defaultTemplateIds:
+                    type: object
+                    description: "Maps each included pipeline to the template used when the trigger auto-launches, keyed by the composite '<pipelineDatabaseId>:<pipelineId>'."
+                    additionalProperties:
+                        $ref: "#/components/schemas/id_regex"
+                enabled:
+                    type: boolean
         role:
             type: object
             properties:
@@ -9750,6 +11263,9 @@ components:
                 dateModified:
                     type: string
                     description: "Last modification timestamp"
+                executionCount:
+                    type: integer
+                    description: "Total number of executions for this workflow. Returned on list responses (computed per page); omitted/null when not computed."
             required:
                 - workflowId
                 - databaseId

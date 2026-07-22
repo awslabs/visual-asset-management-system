@@ -1,0 +1,9 @@
+{
+    "templateId": "coordinate-transform-wgs84-to-osgb36-laz",
+    "templateName": "WGS84 to OSGB36 (LAZ output)",
+    "description": "Reproject point clouds from EPSG:4326 (WGS84) to EPSG:27700 (OSGB36) and write compressed LAZ output.",
+    "configFormat": "json",
+    "configBody": "{\"sourceCrs\":\"EPSG:4326\",\"targetCrs\":\"EPSG:27700\",\"outputFormats\":[\"laz\"]}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Set sourceCrs / targetCrs (EPSG codes) and outputFormats (e57, las, laz, ply). Asset metadata keys (sourceCrs, targetCrs, outputFormats, ...) override these values at run time."
+}

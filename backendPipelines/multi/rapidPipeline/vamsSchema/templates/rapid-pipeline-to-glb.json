@@ -1,0 +1,8 @@
+{
+    "templateId": "rapid-pipeline-to-glb",
+    "templateName": "Optimize to GLB",
+    "description": "Optimize and convert a 3D model to GLB using DGG RapidPipeline.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".glb\"}",
+    "allowCustomEdit": false
+}

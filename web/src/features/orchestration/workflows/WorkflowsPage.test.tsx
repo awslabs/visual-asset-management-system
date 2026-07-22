@@ -14,6 +14,9 @@ import WorkflowsPage from "./WorkflowsPage";
 jest.mock("../api/queries", () => ({
     useWorkflows: jest.fn(),
     useWorkflowMutations: jest.fn(),
+    // DatabasePickerDialog (create-in-database picker) calls useDatabases; default to an empty,
+    // idle result so the page renders without opening the picker.
+    useDatabases: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 // Mock useAllowedRoutes
@@ -34,6 +37,17 @@ jest.mock("../wizard/ExecuteWizard", () => ({
     default: () => null,
 }));
 
+// useWorkflows is now a useInfiniteQuery — the component reads data.pages[].Items plus the
+// fetchNextPage/hasNextPage fields. Build that shape from a flat array of workflows.
+const infinite = (items: any[]) => ({
+    data: { pages: [{ Items: items }], pageParams: [undefined] },
+    isLoading: false,
+    error: null,
+    fetchNextPage: jest.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+});
+
 describe("WorkflowsPage", () => {
     const mockWorkflows = [
         {
@@ -45,6 +59,7 @@ describe("WorkflowsPage", () => {
             archived: false,
             subDashboardUrl: "https://example.com/dashboard",
             specifiedPipelines: [{ pipelineId: "p1" }, { pipelineId: "p2" }],
+            executionCount: 42,
         },
         {
             workflowId: "wf-2",
@@ -79,11 +94,7 @@ describe("WorkflowsPage", () => {
         const { useWorkflows, useWorkflowMutations } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
 
-        useWorkflows.mockReturnValue({
-            data: mockWorkflows,
-            isLoading: false,
-            error: null,
-        });
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
 
         useWorkflowMutations.mockReturnValue({
             archiveWorkflow: { mutateAsync: jest.fn() },
@@ -111,17 +122,16 @@ describe("WorkflowsPage", () => {
         expect(screen.getByText("Workflow Alpha")).toBeInTheDocument();
         expect(screen.getByText("Workflow Beta")).toBeInTheDocument();
         expect(screen.getByText("Workflow Gamma")).toBeInTheDocument();
+
+        // Execution count from the list response is shown when present (Alpha has 42).
+        expect(screen.getByText("Executions: 42")).toBeInTheDocument();
     });
 
     it("shows Dashboard link with target=_blank when subDashboardUrl is set", async () => {
         const { useWorkflows, useWorkflowMutations } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
 
-        useWorkflows.mockReturnValue({
-            data: mockWorkflows,
-            isLoading: false,
-            error: null,
-        });
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
 
         useWorkflowMutations.mockReturnValue({
             archiveWorkflow: { mutateAsync: jest.fn() },
@@ -154,11 +164,7 @@ describe("WorkflowsPage", () => {
         const { useWorkflows, useWorkflowMutations } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
 
-        useWorkflows.mockReturnValue({
-            data: mockWorkflows,
-            isLoading: false,
-            error: null,
-        });
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
 
         useWorkflowMutations.mockReturnValue({
             archiveWorkflow: { mutateAsync: jest.fn() },
@@ -185,11 +191,7 @@ describe("WorkflowsPage", () => {
         const { useWorkflows, useWorkflowMutations } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
 
-        useWorkflows.mockReturnValue({
-            data: mockWorkflows,
-            isLoading: false,
-            error: null,
-        });
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
 
         useWorkflowMutations.mockReturnValue({
             archiveWorkflow: { mutateAsync: jest.fn() },
@@ -208,16 +210,11 @@ describe("WorkflowsPage", () => {
             </QueryClientProvider>
         );
 
-        // Right-click the first workflow card to open context menu
-        const firstCard = screen.getByText("Workflow Alpha").closest("div[class*='flex items-center']");
-        expect(firstCard).toBeInTheDocument();
-        if (!firstCard) throw new Error("Card not found");
+        // Open the first workflow card's actions menu via its kebab (⋮) button.
+        const actionsButton = screen.getByRole("button", { name: "Actions for Workflow Alpha" });
+        await userEvent.click(actionsButton);
 
-        await userEvent.pointer([
-            { keys: "[MouseRight>]", target: firstCard },
-        ]);
-
-        // Click "View Executions" in the context menu
+        // Click "View Executions" in the actions menu
         await waitFor(() => {
             const viewExecutionsButton = screen.getByText("View Executions");
             expect(viewExecutionsButton).toBeInTheDocument();

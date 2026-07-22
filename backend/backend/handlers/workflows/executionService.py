@@ -7,7 +7,7 @@ import os
 import boto3
 import botocore
 from datetime import datetime, timedelta, timezone
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.validators import validate
@@ -21,6 +21,9 @@ from common.workflows import executionRecords as er
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION_RERUN,
+    API_WORKFLOW_EXECUTION_PERMANENT,
+    API_WORKFLOW_EXECUTIONS_GLOBAL,
 )
 from models.common import (
     APIGatewayProxyResponseV2,
@@ -31,7 +34,11 @@ from models.common import (
     general_error,
     VAMSGeneralErrorResponse
 )
-from models.workflows import ListExecutionsRequestModel
+from models.executions import (
+    ListExecutionsRequestModel,
+    RerunExecutionRequestModel,
+    PermanentDeleteRequestModel,
+)
 
 logger = safeLogger(service="ExecutionService")
 
@@ -69,8 +76,14 @@ try:
     pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
     pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
-    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
-    pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    # Global-list source of truth for output-asset access: 'executions that wrote to this asset'.
+    workflow_execution_outputs_index_table = get_table_name(
+        ResourceKeys.WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE)
+    # Re-run delegates to the asset-less V2 execute handler (invoked as a lambda cross-call so the
+    # caller's identity + a reconstructed execute body drive a fresh execution).
+    execute_workflow_v2_function = os.environ.get("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "")
     # Asset file version-history table, used to enrich asset-output files with the
     # authoritative S3 version each execution produced. Best-effort: unresolvable ->
     # the enrichment is skipped and outputs surface the relative path only.
@@ -82,6 +95,8 @@ try:
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
+
+lambda_client = boto3.client('lambda')
 
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_version_history_table = (
@@ -97,6 +112,11 @@ MAX_EXECUTIONS_INSPECTED = 200
 # Default listing window: executions whose START date is on or after this many days before now.
 # The caller can override the lower bound with an explicit `filterStartDate` query parameter.
 DEFAULT_EXECUTION_LOOKBACK_DAYS = 90
+
+# Upper bound on the global-list DynamoDB scan page size, so a single request cannot drive the
+# per-candidate authorization fan-out (input/output asset reads + Casbin enforce) over an
+# unbounded page. Excess is paged via NextToken.
+MAX_GLOBAL_LIST_PAGE_SIZE = 100
 
 
 def _resolve_filter_start_date(query_params):
@@ -274,8 +294,17 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'workflowId': main_item.get('workflowId', ''),
             'workflowExecutionId': execution_id,
             'executionStatus': status,
+            # triggerType + executionGroupId are surfaced so the asset-scoped board can apply the
+            # same status/trigger/group filters as the global board.
+            'triggerType': main_item.get('triggerType', ''),
+            'executionGroupId': main_item.get('executionGroupId', ''),
             'startDate': start_date,
             'stopDate': stop_date,
+            # Alias the dates under the same keys the global/workflow lists use, so the shared web
+            # ExecutionsBoard (which reads executionStartDate/executionStopDate for the Started,
+            # Stopped, Duration columns and sort) renders them on the asset Workflows tab too.
+            'executionStartDate': start_date,
+            'executionStopDate': stop_date,
             'inputAssetFileKey': input_item.get('inputAssetFileKey', ''),
             'databaseId': input_item.get('databaseId', ''),
             'assetId': input_item.get('assetId', ''),
@@ -433,6 +462,17 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
         )
+
+        # Apply the optional status/triggerType/groupId filters (same semantics as the global
+        # board) so the asset Workflows tab's filters work. workflowId/workflowDatabaseId are
+        # already applied inside build_execution_items via workflow_id_filter.
+        extra_filters = {
+            "status": (query_params.get("status") or "").strip(),
+            "triggerType": (query_params.get("triggerType") or "").strip(),
+            "groupId": (query_params.get("groupId") or "").strip(),
+        }
+        if any(extra_filters.values()):
+            items = [it for it in items if _global_list_matches_filters(it, extra_filters)]
 
         # Surface the effective start-date filter that was applied (the caller's filterStartDate
         # or the default 90-days-before-now), so the response is self-describing.
@@ -688,6 +728,17 @@ LOG_MODE_FULL = "full"
 # Upper bound on CloudWatch events returned by a single full-search logs call.
 MAX_LOG_EVENTS_PER_CALL = 1000
 
+# Upper bound on rows collected per sub-collection (output files/metadata/results, input files/metadata)
+# in the execution-details view, so an output-heavy execution's assembled response cannot exceed the
+# Lambda synchronous-response limit. A collection hitting the cap is flagged truncated in the response.
+MAX_DETAIL_ROWS_PER_COLLECTION = 2000
+
+# Upper bound on the number of active executions abort_group aborts per request. Each abort is a
+# multi-round-trip synchronous operation (per-member auth + SFN StopExecution + row writes), so a
+# very large group is processed in bounded passes: the response flags moreRemaining=true and the
+# caller re-invokes to continue (no silent partial abort, and no 15-min Lambda timeout at scale).
+MAX_GROUP_ABORT_PER_REQUEST = 200
+
 
 def _query_all(table_name, key_condition):
     """Query a DynamoDB table fully (following pagination) for a key condition."""
@@ -702,6 +753,25 @@ def _query_all(table_name, key_condition):
         kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
         resp = table.query(**kwargs)
     return items
+
+
+def _query_capped(table_name, key_condition, max_items):
+    """Query a table for a key condition but stop once max_items rows are collected. Returns
+    (items, truncated) where truncated is True when more rows exist beyond the cap. Used by the
+    execution-details assembly to bound each output/input sub-collection so the assembled response
+    cannot exceed the Lambda synchronous-response limit for an output-heavy execution."""
+    table = dynamodb.Table(table_name)
+    items = []
+    kwargs = {'KeyConditionExpression': key_condition, 'Limit': max_items}
+    resp = table.query(**kwargs)
+    while True:
+        items.extend(resp.get('Items', []))
+        if len(items) >= max_items:
+            return items[:max_items], (len(items) > max_items or 'LastEvaluatedKey' in resp)
+        if 'LastEvaluatedKey' not in resp:
+            return items, False
+        kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+        resp = table.query(**kwargs)
 
 
 def get_workflow_definition(workflow_database_id, workflow_id):
@@ -724,33 +794,54 @@ def get_pipeline_definition(pipeline_database_id, pipeline_id):
     return resp.get('Item', {}) or {}
 
 
-def _scrub_pipeline_detail(prow, pipeline_def):
+def _scrub_pipeline_detail(prow, pipeline_def, rendered_config="", rendered_config_truncated=False,
+                           config_snapshot=None):
     """Public-facing per-pipeline detail. Cross-fetches a human-readable name/description
-    from the pipeline definition and exposes only non-internal status/timing/type fields.
+    from the pipeline definition and exposes only non-internal status/timing/type fields, plus
+    the exact rendered input configuration body that was sent to this pipeline and the template
+    snapshot (which template/tags/override + config format the run used).
 
     Deliberately omitted as internal: every S3 bucket/prefix field (input/output/aux/temp),
     all ARNs (pipelineResourceArn, sub-execution arns), and the STS/vended-role fields."""
-    name = pipeline_def.get('pipelineId', '') or prow.get('pipelineId', '')
+    # V2 pipeline records carry a human-readable pipelineName; fall back to category, then the id.
+    name = (pipeline_def.get('pipelineName', '') or pipeline_def.get('pipelineId', '')
+            or prow.get('pipelineId', ''))
+    snapshot = config_snapshot or {}
     return {
         "pipelineId": prow.get('pipelineId', ''),
         "pipelineDatabaseId": prow.get('pipelineDatabaseId', ''),
+        # Per-pipeline-execution id: the log endpoint's pipelineExecutionId parameter, letting the
+        # detail view request logs scoped to this one step. Validated back against the execution
+        # server-side before any of its logs are returned.
+        "pipelineExecutionId": prow.get('pipelineExecutionId', ''),
         "name": name,
         "description": pipeline_def.get('description', ''),
-        "pipelineType": pipeline_def.get('pipelineType', ''),
+        "pipelineType": pipeline_def.get('category', ''),
         "pipelineExecutionType": prow.get('pipelineExecutionType', ''),
         "endStatePipeline": prow.get('endStatePipeline', 'false') == 'true',
         "executionStatus": prow.get('executionStatus', ''),
         "executionStartDate": prow.get('executionStartDate', ''),
         "executionStopDate": prow.get('executionStopDate', ''),
+        # The exact configuration body delivered to this pipeline at run time (empty if none / not
+        # yet recorded). truncated flags an offloaded/oversized body the detail view capped.
+        "renderedConfig": rendered_config,
+        "renderedConfigTruncated": rendered_config_truncated,
+        # Template snapshot the run resolved from (from the input-configuration row).
+        "templateId": snapshot.get('templateId', ''),
+        "templateTags": snapshot.get('templateTags', []),
+        "customTemplateOverrideUsed": bool(snapshot.get('customTemplateOverrideUsed', False)),
+        "configFormat": snapshot.get('configFormat', ''),
     }
 
 
 def _scrub_input_file(row):
-    """Public-facing input-file record (asset-relative locator only; no S3 internals)."""
+    """Public-facing input-file record (asset-relative locator only; no S3 internals). versionId is
+    the concrete S3 version the run read (resolved at launch); empty for folder/whole-asset inputs."""
     return {
         "databaseId": row.get('databaseId', ''),
         "assetId": row.get('assetId', ''),
         "inputAssetFileKey": row.get('inputAssetFileKey', ''),
+        "versionId": row.get('versionId', ''),
     }
 
 
@@ -775,7 +866,12 @@ def _scrub_output_file(row):
         "fileType": row.get('fileType', ''),
     }
     if row.get('fileSize') not in (None, ""):
-        out["fileSize"] = row.get('fileSize')
+        # fileSize is stored as a DynamoDB Number (Decimal); coerce to int so the response is
+        # JSON-serializable (json.dumps cannot encode Decimal).
+        try:
+            out["fileSize"] = int(row.get('fileSize'))
+        except (ValueError, TypeError):
+            out["fileSize"] = row.get('fileSize')
     if row.get('contentType'):
         out["contentType"] = row.get('contentType')
     if row.get('s3VersionId'):
@@ -897,45 +993,80 @@ def assemble_execution_details(execution_id, main_item):
     input_files = []
     input_metadata = []
     input_configurations = []
+    # Track which sub-collections were capped so the response can flag partial data (no silent cap).
+    truncated = set()
+
+    def _collect(target, table_name, pexec, scrub, name, pipeline_id=""):
+        """Append up to the per-collection cap (across all pipelines) from a pexec-keyed table,
+        recording truncation. Stamps each scrubbed row with the producing pipelineId so the UI can
+        attribute outputs/metadata to the pipeline that produced them. Bounds the assembled response
+        for output-heavy executions."""
+        remaining = MAX_DETAIL_ROWS_PER_COLLECTION - len(target)
+        if remaining <= 0:
+            truncated.add(name)
+            return
+        rows, was_truncated = _query_capped(table_name, Key('pipelineExecutionId').eq(pexec), remaining)
+        for r in rows:
+            scrubbed = scrub(r)
+            scrubbed["pipelineId"] = pipeline_id
+            target.append(scrubbed)
+        if was_truncated:
+            truncated.add(name)
+
     for prow in pipeline_rows:
         pexec_id = prow.get('pipelineExecutionId', '')
         pkey = (prow.get('pipelineDatabaseId', ''), prow.get('pipelineId', ''))
         if pkey not in pipeline_def_cache:
             pipeline_def_cache[pkey] = get_pipeline_definition(pkey[0], pkey[1])
-        pipelines.append(_scrub_pipeline_detail(prow, pipeline_def_cache[pkey]))
+
+        # Resolve this pipeline's rendered input configuration (the exact config body sent to the
+        # pipeline). It is per-pipeline-execution (one small row); attach it to the pipeline detail
+        # so the UI can show each pipeline's config inline, and also keep it in the flat list.
+        pipeline_config = ""
+        pipeline_config_truncated = False
+        # The template snapshot (which template/tags/override the run used, and the config format)
+        # lives on the same configuration row; carry it onto the pipeline detail so the UI's
+        # per-pipeline template section renders and the config editor highlights the right format.
+        config_snapshot = {}
+        if pexec_id:
+            for row in _query_all(pipeline_execution_input_configuration_table,
+                                  Key('pipelineExecutionId').eq(pexec_id)):
+                pipeline_config = row.get('inputConfiguration', '')
+                pipeline_config_truncated = row.get('inputConfigurationTruncated', False)
+                config_snapshot = row
+                input_configurations.append({
+                    "pipelineId": prow.get('pipelineId', ''),
+                    "inputConfiguration": pipeline_config,
+                    "inputConfigurationTruncated": pipeline_config_truncated,
+                })
+
+        pipelines.append(_scrub_pipeline_detail(
+            prow, pipeline_def_cache[pkey], pipeline_config, pipeline_config_truncated,
+            config_snapshot))
 
         if not pexec_id:
             continue
 
-        # Input configuration is per-pipeline.
-        for row in _query_all(pipeline_execution_input_configuration_table,
-                              Key('pipelineExecutionId').eq(pexec_id)):
-            input_configurations.append({
-                "pipelineId": prow.get('pipelineId', ''),
-                "inputConfiguration": row.get('inputConfiguration', ''),
-                "inputConfigurationTruncated": row.get('inputConfigurationTruncated', False),
-            })
-
-        # Input metadata is recorded once per execution; gather then dedupe below.
-        for row in _query_all(pipeline_execution_input_metadata_table,
-                              Key('pipelineExecutionId').eq(pexec_id)):
-            input_metadata.append(_scrub_input_metadata(row))
-
-        # Outputs per pipeline execution (files / metadata / results).
-        for row in _query_all(pipeline_execution_output_files_table,
-                              Key('pipelineExecutionId').eq(pexec_id)):
-            output_files.append(_scrub_output_file(row))
-        for row in _query_all(pipeline_execution_output_metadata_table,
-                              Key('pipelineExecutionId').eq(pexec_id)):
-            output_metadata.append(_scrub_output_metadata(row))
-        for row in _query_all(pipeline_execution_output_results_table,
-                              Key('pipelineExecutionId').eq(pexec_id)):
-            output_results.append(_scrub_output_result(row))
+        _pid = prow.get('pipelineId', '')
+        # Input metadata is recorded once per execution; gather (capped) then dedupe below.
+        _collect(input_metadata, pipeline_execution_input_metadata_table, pexec_id,
+                 _scrub_input_metadata, "inputMetadata", _pid)
+        # Outputs per pipeline execution (files / metadata / results), each capped and tagged
+        # with the producing pipelineId for per-pipeline attribution in the UI.
+        _collect(output_files, pipeline_execution_output_files_table, pexec_id,
+                 _scrub_output_file, "outputs.files", _pid)
+        _collect(output_metadata, pipeline_execution_output_metadata_table, pexec_id,
+                 _scrub_output_metadata, "outputs.metadata", _pid)
+        _collect(output_results, pipeline_execution_output_results_table, pexec_id,
+                 _scrub_output_result, "outputs.results", _pid)
 
     # Input files are tracked at the workflow-execution level (not per-pipeline).
-    for row in _query_all(workflow_execution_inputs_table,
-                          Key('workflowExecutionId').eq(execution_id)):
-        input_files.append(_scrub_input_file(row))
+    _input_rows, _input_trunc = _query_capped(
+        workflow_execution_inputs_table, Key('workflowExecutionId').eq(execution_id),
+        MAX_DETAIL_ROWS_PER_COLLECTION)
+    input_files = [_scrub_input_file(row) for row in _input_rows]
+    if _input_trunc:
+        truncated.add("inputFiles")
 
     # Dedupe input metadata by (assetId, filePath).
     deduped_md = {}
@@ -946,13 +1077,15 @@ def assemble_execution_details(execution_id, main_item):
     # For asset-output executions, join each output file to the authoritative S3 asset file
     # version it produced (via the version-history table). Best-effort: leaves entries
     # path-only when no history record exists (e.g. legacy runs).
-    output_files = _enrich_output_files_with_asset_versions(
-        output_files, execution_id, get_workflow_execution_configuration_row(execution_id))
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    output_files = _enrich_output_files_with_asset_versions(output_files, execution_id, config_row)
 
     return {
         "workflowExecutionId": execution_id,
         "workflowId": main_item.get('workflowId', ''),
         "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
+        # Human-readable name for UI display (breadcrumbs/headers); falls back to the id downstream.
+        "workflowName": workflow_def.get('workflowName', ''),
         "workflowDescription": workflow_def.get('description', ''),
         "executionStatus": main_item.get('executionStatus', ''),
         "executionStartDate": main_item.get('executionStartDate', ''),
@@ -960,6 +1093,14 @@ def assemble_execution_details(execution_id, main_item):
         "triggerType": main_item.get('triggerType', ''),
         "triggeredByUserId": main_item.get('triggeredByUserId', ''),
         "executionError": main_item.get('executionError', ''),
+        # Output target of the run: where outputs were written. locationType 'none' = results-only
+        # (no asset outputs); 'asset' carries the destination asset/database ids.
+        "outputLocationType": (config_row or {}).get('outputLocationType', '') or 'asset',
+        "outputDatabaseId": (config_row or {}).get('outputDatabaseId', ''),
+        "outputAssetId": (config_row or {}).get('outputAssetId', ''),
+        # The (dynamic-tag-templated) output base path this run wrote under; '/' = asset root.
+        "outputFileBaseExecutionPathExtension":
+            (config_row or {}).get('outputFileBaseExecutionPathExtension', '') or '/',
         "pipelines": pipelines,
         "inputFiles": input_files,
         "inputMetadata": input_metadata,
@@ -969,6 +1110,9 @@ def assemble_execution_details(execution_id, main_item):
             "metadata": output_metadata,
             "results": output_results,
         },
+        # Names of any sub-collections capped at MAX_DETAIL_ROWS_PER_COLLECTION (empty when complete).
+        # A non-empty list signals the detail view is partial for this output-heavy execution.
+        "truncatedCollections": sorted(truncated),
     }
 
 
@@ -1011,9 +1155,13 @@ def _full_log_search(log_group_arn, filter_terms, query_params):
     # is on the literal id; this is what guarantees a pipeline-scoped search returns only
     # that pipeline execution's events.
     terms = [f'"{t}"' for t in filter_terms if t]
-    caller_pattern = (query_params.get('filterPattern') or '').strip()
+    # The caller's filterPattern is treated as a single LITERAL term (a substring to match),
+    # NOT raw CloudWatch filter-pattern syntax. Embedded double-quotes are stripped so it cannot
+    # break out of the quoted term and inject OR (`?`)/negation that would neutralize the AND-ed
+    # execution-scope terms above and surface other executions' events from the shared log group.
+    caller_pattern = (query_params.get('filterPattern') or '').strip().replace('"', '')
     if caller_pattern:
-        terms.append(caller_pattern)
+        terms.append(f'"{caller_pattern}"')
     filter_pattern = " ".join(terms)
 
     kwargs = {
@@ -1085,6 +1233,103 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     ]
 
 
+# A small set of Step Functions history event types that summarize what an execution did, kept
+# concise so the whole-execution view reads as a state-transition timeline rather than raw history.
+_SFN_HISTORY_SUMMARY_TYPES = (
+    "ExecutionStarted", "ExecutionSucceeded", "ExecutionFailed", "ExecutionAborted",
+    "ExecutionTimedOut",
+    "TaskStateEntered", "TaskStateExited", "TaskSucceeded", "TaskFailed", "TaskTimedOut",
+    "TaskScheduled", "TaskStarted",
+    "MapStateEntered", "MapStateExited", "ParallelStateEntered", "ParallelStateExited",
+    "PassStateEntered", "PassStateExited", "ChoiceStateEntered", "ChoiceStateExited",
+    "WaitStateEntered", "WaitStateExited", "SucceedStateEntered", "FailStateEntered",
+)
+
+
+def _sfn_history_event_line(ev):
+    """One human-readable timeline line for a Step Functions history event: the state/resource name
+    when the event carries one, plus a failure error/cause when present. Returns "" to skip an event
+    that has no useful summary detail."""
+    ev_type = ev.get("type", "")
+    # State name lives on the *StateEntered/*StateExited detail blocks.
+    for detail_key in ("stateEnteredEventDetails", "stateExitedEventDetails"):
+        detail = ev.get(detail_key)
+        if detail and detail.get("name"):
+            return f"{ev_type}: {detail['name']}"
+    # Task events carry resource + resourceType.
+    for detail_key in ("taskScheduledEventDetails", "taskStartedEventDetails",
+                       "taskSucceededEventDetails", "taskFailedEventDetails",
+                       "taskTimedOutEventDetails"):
+        detail = ev.get(detail_key)
+        if detail:
+            resource = detail.get("resource", "") or detail.get("resourceType", "")
+            err = detail.get("error", "")
+            cause = detail.get("cause", "")
+            suffix = f" — {err}: {cause}" if err else ""
+            return f"{ev_type}{(' ' + resource) if resource else ''}{suffix}"
+    # Execution-level failure/abort/timeout carry an error + cause.
+    for detail_key in ("executionFailedEventDetails", "executionAbortedEventDetails",
+                       "executionTimedOutEventDetails"):
+        detail = ev.get(detail_key)
+        if detail:
+            err = detail.get("error", "")
+            cause = detail.get("cause", "")
+            return f"{ev_type}{(' — ' + err + ': ' + cause) if err else ''}"
+    return ev_type
+
+
+def _sfn_execution_history_events(execution_arn, query_params):
+    """The Step Functions execution history as a formatted, chronological event list — the
+    authoritative record of what the whole workflow execution did, available immediately (no
+    CloudWatch ingestion lag). Returns {"events": [{timestamp, message}], "nextToken": ...}; empty
+    on any failure (best-effort, never raises). Only summary-worthy event types are kept."""
+    if not execution_arn:
+        return {"events": [], "nextToken": None}
+    kwargs = {
+        "executionArn": execution_arn,
+        "maxResults": min(int(query_params.get("limit", 100) or 100), MAX_LOG_EVENTS_PER_CALL),
+        "includeExecutionData": False,
+    }
+    if query_params.get("nextToken"):
+        kwargs["nextToken"] = query_params["nextToken"]
+    try:
+        resp = sfn.get_execution_history(**kwargs)
+    except Exception as e:
+        logger.info(f"SFN get_execution_history failed (non-critical): {e}")
+        return {"events": [], "nextToken": None}
+    events = []
+    for ev in resp.get("events", []):
+        if ev.get("type", "") not in _SFN_HISTORY_SUMMARY_TYPES:
+            continue
+        line = _sfn_history_event_line(ev)
+        if not line:
+            continue
+        ts = ev.get("timestamp")
+        # describe/history timestamps are datetimes; expose epoch millis like CloudWatch events.
+        ts_ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else ts
+        events.append({"timestamp": ts_ms, "message": line})
+    return {"events": events, "nextToken": resp.get("nextToken")}
+
+
+def _resolve_sfn_log_group_arn(state_machine_arn):
+    """Resolve a Step Functions state machine's CloudWatch log group ARN from its logging
+    configuration, so a registered sub-SFN's logs can be read even when the pipeline reported only
+    the state-machine/execution ARN (no explicit logGroupArn). Returns "" when the state machine has
+    no CloudWatch logging destination or on any failure (best-effort, never raises)."""
+    if not state_machine_arn:
+        return ""
+    try:
+        desc = sfn.describe_state_machine(stateMachineArn=state_machine_arn)
+    except Exception as e:
+        logger.info(f"describe_state_machine failed for {state_machine_arn} (non-critical): {e}")
+        return ""
+    for dest in (desc.get("loggingConfiguration", {}) or {}).get("destinations", []) or []:
+        arn = (dest.get("cloudWatchLogsLogGroup", {}) or {}).get("logGroupArn", "")
+        if arn:
+            return arn
+    return ""
+
+
 def get_execution_logs(event, execution_id, query_params):
     """Return execution logs in one of two modes (404 if the execution is unknown):
 
@@ -1134,16 +1379,50 @@ def get_execution_logs(event, execution_id, query_params):
             for row in log_rows:
                 result_log = result_log or row.get('resultLog', '')
                 error_log = error_log or row.get('errorLog', '')
+            # The end-state lambda captures the stored logs synchronously as the run completes,
+            # before CloudWatch has finished ingesting the run's events, so the stored resultLog
+            # can be empty even for a succeeded pipeline. Fall back to a live pipeline-scoped search
+            # so a caller always gets whatever CloudWatch holds now (logsSource flags the origin).
+            logs_source = "stored"
+            if not result_log and not error_log:
+                live = _full_log_search(
+                    main_item.get('executionLogGroupArn', ''),
+                    [execution_id, pipeline_execution_id], query_params)
+                if live["events"]:
+                    result_log = "\n".join(e.get('message', '') for e in live["events"])
+                    logs_source = "live"
             return success(body={'message': {
                 "mode": LOG_MODE_TRUNCATED,
                 "pipelineExecutionId": pipeline_execution_id,
                 "resultLog": result_log,
                 "errorLog": error_log,
+                "logsSource": logs_source,
             }})
+        # Whole-execution truncated logs. The stored executionLog is captured before CloudWatch
+        # ingestion completes and is frequently empty. Fall back first to a live execution-scoped
+        # CloudWatch search, then to the Step Functions execution history — the authoritative record
+        # of what the whole execution did, available immediately with no ingestion lag. (The Step
+        # Functions state machine's own CloudWatch logs do not reliably carry the executionId as a
+        # filterable literal, which is why the CloudWatch search is often empty for the whole run.)
+        execution_log = main_item.get('executionLog', '')
+        logs_source = "stored"
+        if not execution_log:
+            live = _full_log_search(
+                main_item.get('executionLogGroupArn', ''), [execution_id], query_params)
+            if live["events"]:
+                execution_log = "\n".join(e.get('message', '') for e in live["events"])
+                logs_source = "live"
+            else:
+                history = _sfn_execution_history_events(
+                    main_item.get('workflow_execution_arn', ''), query_params)
+                if history["events"]:
+                    execution_log = "\n".join(e.get('message', '') for e in history["events"])
+                    logs_source = "sfnHistory"
         return success(body={'message': {
             "mode": LOG_MODE_TRUNCATED,
-            "executionLog": main_item.get('executionLog', ''),
+            "executionLog": execution_log,
             "executionError": main_item.get('executionError', ''),
+            "logsSource": logs_source,
         }})
 
     # mode == full: live CloudWatch search, strictly scoped to this execution (and pipeline).
@@ -1158,6 +1437,7 @@ def get_execution_logs(event, execution_id, query_params):
     sub_process_events = []
     warnings = []
     if pipeline_row is not None:
+        # Explicitly-registered log locations (logGroupArn reported by the pipeline).
         for log in pipeline_row.get('registeredLogs', []) or []:
             log_arn = (log or {}).get('logGroupArn', '')
             stream = (log or {}).get('logStreamName', '')
@@ -1171,12 +1451,40 @@ def get_execution_logs(event, execution_id, query_params):
             else:
                 warnings.append(f"Sub-process log retrieval failed for {log_arn}: {events_or_err}")
 
+        # A registered Step Functions sub-execution: surface ITS execution history (the sub-SFN's
+        # own state timeline) and, when the sub state machine has a CloudWatch logging destination
+        # that was not explicitly registered, its resolved log group too. This lets a pipeline that
+        # runs its own nested state machine expose that machine's logs without reporting a log ARN.
+        for sub in pipeline_row.get('registeredSubExecutions', []) or []:
+            if (sub or {}).get('resourceType') != RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
+                continue
+            sub_exec_arn = sub.get('executionArn', '')
+            if sub_exec_arn:
+                sub_hist = _sfn_execution_history_events(sub_exec_arn, query_params)
+                sub_process_events.extend(sub_hist["events"])
+            resolved_arn = _resolve_sfn_log_group_arn(sub.get('stateMachineArn', ''))
+            if resolved_arn:
+                ok, events_or_err = _fetch_registered_log_events(resolved_arn, "", query_params)
+                if ok:
+                    sub_process_events.extend(events_or_err)
+                else:
+                    warnings.append(
+                        f"Sub-SFN log retrieval failed for {resolved_arn}: {events_or_err}")
+
     message = {
         "mode": LOG_MODE_FULL,
         "pipelineExecutionId": pipeline_execution_id,
         "events": search["events"],
         "nextToken": search["nextToken"],
     }
+    # For the WHOLE execution (no single pipeline in scope), include the Step Functions execution
+    # history — the authoritative timeline of the run's state transitions, present even when the
+    # CloudWatch text search returns nothing.
+    if not pipeline_execution_id:
+        history = _sfn_execution_history_events(
+            main_item.get('workflow_execution_arn', ''), query_params)
+        if history["events"]:
+            message["sfnHistoryEvents"] = history["events"]
     if sub_process_events:
         message["subProcessEvents"] = sub_process_events
     if warnings:
@@ -1327,13 +1635,533 @@ def handle_get_request(event):
         workflow_database_id, workflowId, queryParameters)
 
 
+# ---------------------------------------------------------------------------
+# Global (asset-less) execution list
+# ---------------------------------------------------------------------------
+
+def _execution_visible_to_caller(execution_id, main_item):
+    """True when the caller may see an execution under the global access rule: workflow GET AND
+    (GET on ANY input-file asset OR GET on the output asset). A caller with data access to what the
+    run reads from or writes to may see it; access to neither hides it. Empty tokens -> not visible."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+
+    workflow_obj = {
+        "object__type": "workflow",
+        "workflowId": main_item.get("workflowId", ""),
+        "databaseId": main_item.get("workflowDatabaseId", ""),
+    }
+    if not casbin_enforcer.enforce(workflow_obj, "GET"):
+        return False
+
+    # Any input-file asset the caller can GET.
+    for database_id, asset_id in get_execution_input_assets(execution_id):
+        asset = get_asset_details(database_id, asset_id)
+        if not asset:
+            continue
+        asset.update({"object__type": "asset"})
+        if casbin_enforcer.enforce(asset, "GET"):
+            return True
+
+    # Or the output asset.
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    output_database_id = config_row.get("outputDatabaseId", "")
+    output_asset_id = config_row.get("outputAssetId", "")
+    if output_database_id and output_asset_id:
+        output_asset = get_asset_details(output_database_id, output_asset_id)
+        if output_asset:
+            output_asset.update({"object__type": "asset"})
+            if casbin_enforcer.enforce(output_asset, "GET"):
+                return True
+
+    # Results-only execution (outputLocationType 'none'): no input or output asset to gate on, so the
+    # workflow GET (already passed above) is the sole access control — such a run is visible to any
+    # caller who can see its workflow.
+    if (config_row.get("outputLocationType") or "asset") == "none" and not output_asset_id:
+        return True
+    return False
+
+
+def _global_list_matches_filters(main_item, filters):
+    """Apply the optional global-list query filters to a main row. Supported filters (all AND-ed):
+    workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId."""
+    if filters.get("workflowId") and main_item.get("workflowId", "") != filters["workflowId"]:
+        return False
+    if filters.get("workflowDatabaseId") and main_item.get("workflowDatabaseId", "") != filters["workflowDatabaseId"]:
+        return False
+    if filters.get("status") and main_item.get("executionStatus", "") != filters["status"]:
+        return False
+    if filters.get("triggerType") and main_item.get("triggerType", "") != filters["triggerType"]:
+        return False
+    if filters.get("groupId") and main_item.get("executionGroupId", "") != filters["groupId"]:
+        return False
+    if filters.get("triggeredByUserId") and main_item.get("triggeredByUserId", "") != filters["triggeredByUserId"]:
+        return False
+    return True
+
+
+def _global_list_row(main_item):
+    """Public-facing global-list row (no S3/ARN internals)."""
+    return {
+        "workflowExecutionId": main_item.get("workflowExecutionId", ""),
+        "workflowId": main_item.get("workflowId", ""),
+        "workflowDatabaseId": main_item.get("workflowDatabaseId", ""),
+        "executionStatus": main_item.get("executionStatus", ""),
+        "executionStartDate": main_item.get("executionStartDate", ""),
+        "executionStopDate": main_item.get("executionStopDate", ""),
+        "triggerType": main_item.get("triggerType", ""),
+        "triggeredByUserId": main_item.get("triggeredByUserId", ""),
+        "executionGroupId": main_item.get("executionGroupId", ""),
+    }
+
+
+def get_global_executions(event, query_params):
+    """List executions across all assets (asset-less), permission-filtered by the caller's access to
+    each execution's input and/or output assets. Scans the V2 main table page by page, applies the
+    optional query filters, then the per-execution visibility check, and returns a NextToken page.
+
+    Bounded by the pagination page size; a NextToken continues from the last-scanned key so the
+    caller can page without the handler accumulating an unbounded in-memory set (Rule 15)."""
+    filters = {
+        "workflowId": (query_params.get("workflowId") or "").strip(),
+        "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
+        "status": (query_params.get("status") or "").strip(),
+        "triggerType": (query_params.get("triggerType") or "").strip(),
+        "groupId": (query_params.get("groupId") or "").strip(),
+        "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
+    }
+    # pageSize/maxItems were normalized to valid ints by validate_pagination_info in the handler;
+    # cap the scan Limit so a single request cannot drive the per-candidate authorization fan-out
+    # (input-asset + output-asset reads + Casbin enforce per row) over an unbounded page.
+    try:
+        page_size = int(query_params.get("pageSize") or query_params.get("maxItems") or 50)
+    except (TypeError, ValueError):
+        page_size = 50
+    page_size = min(max(1, page_size), MAX_GLOBAL_LIST_PAGE_SIZE)
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+
+    scan_kwargs = {"Limit": page_size}
+    # Push the equality filters server-side as a DynamoDB FilterExpression so scanned-but-unmatched
+    # rows are dropped before they reach Python (and before the per-row visibility fan-out) — a sparse
+    # filter (e.g. status=FAILED) no longer authorizes every scanned row. The Python filter below stays
+    # as a safety net. (DynamoDB applies Limit before the filter, so a page may return fewer matches.)
+    _filter_attr = {
+        "workflowId": "workflowId", "workflowDatabaseId": "workflowDatabaseId",
+        "status": "executionStatus", "triggerType": "triggerType",
+        "groupId": "executionGroupId", "triggeredByUserId": "triggeredByUserId",
+    }
+    filter_expr = None
+    for fkey, attr_name in _filter_attr.items():
+        if filters.get(fkey):
+            cond = Attr(attr_name).eq(filters[fkey])
+            filter_expr = cond if filter_expr is None else (filter_expr & cond)
+    if filter_expr is not None:
+        scan_kwargs["FilterExpression"] = filter_expr
+    starting_token = query_params.get("startingToken") or query_params.get("NextToken")
+    if starting_token:
+        try:
+            scan_kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(starting_token).decode("utf-8"))
+        except Exception as e:
+            logger.exception(f"Invalid startingToken: {e}")
+
+    # Dedup by executionExecutionId across the main table's (PK, SK) rows (there is one main row per
+    # execution, but a scan is on the base table so guard anyway).
+    items = []
+    seen = set()
+    resp = main_table.scan(**scan_kwargs)
+    for main_item in resp.get("Items", []):
+        execution_id = main_item.get("workflowExecutionId", "")
+        if not execution_id or execution_id in seen:
+            continue
+        seen.add(execution_id)
+        if not _global_list_matches_filters(main_item, filters):
+            continue
+        if not _execution_visible_to_caller(execution_id, main_item):
+            continue
+        items.append(_global_list_row(main_item))
+
+    result = {"Items": items}
+    if "LastEvaluatedKey" in resp:
+        result["NextToken"] = base64.b64encode(
+            json.dumps(resp["LastEvaluatedKey"]).encode("utf-8")).decode("utf-8")
+    return success(body={"message": result})
+
+
+# ---------------------------------------------------------------------------
+# Re-run
+# ---------------------------------------------------------------------------
+
+def _to_asset_relative_key(full_key, asset_root_s3_key):
+    """Convert a stored FULL asset-bucket key (assetRootS3Key + relative) back to the asset-relative
+    key the execute request expects (leading '/'; '/' = whole asset). Strips the asset root prefix
+    when present; a whole-asset root ('/assetId/') collapses back to '/'."""
+    fk = "/" + (full_key or "").lstrip("/")
+    root = (asset_root_s3_key or "").strip("/")
+    if root:
+        body = fk.lstrip("/")
+        if body == root or body == root + "/":
+            return "/"
+        if body.startswith(root + "/"):
+            return "/" + body[len(root) + 1:]
+    return fk
+
+
+def _reconstruct_execute_request(execution_id, main_item, config_row):
+    """Rebuild the asset-less execute request body from an execution's stored records.
+
+    inputFiles come from the workflow-input rows (databaseId/assetId/relativeFileKey); the output
+    target from the configuration row; per-pipeline template parameters from each pipeline's
+    input-configuration snapshot (templateId + templateTags + customTemplateOverrideUsed). The output
+    is the V2 execute body shape (see models.executions.ExecuteWorkflowRequestV2Model)."""
+    input_files = []
+    for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
+        # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
+        # relativeFileKey must be asset-relative, so strip the stored asset root before re-emitting.
+        full_key = row.get("inputAssetFileKey", "/")
+        asset_root = row.get("assetRootS3Key", "") or ""
+        input_files.append({
+            "databaseId": row.get("databaseId", ""),
+            "assetId": row.get("assetId", ""),
+            "relativeFileKey": _to_asset_relative_key(full_key, asset_root),
+        })
+
+    pipeline_execution_parameters = {}
+    for prow in get_pipeline_execution_rows(execution_id):
+        pexec_id = prow.get("pipelineExecutionId", "")
+        pipeline_id = prow.get("pipelineId", "")
+        if not pexec_id or not pipeline_id:
+            continue
+        cfg_rows = _query_all(pipeline_execution_input_configuration_table,
+                              Key("pipelineExecutionId").eq(pexec_id))
+        cfg = cfg_rows[0] if cfg_rows else {}
+        params = {}
+        if cfg.get("templateId"):
+            params["templateId"] = cfg.get("templateId")
+        if cfg.get("templateTags"):
+            params["templateTags"] = cfg.get("templateTags")
+        # A template-less override run has no templateId; re-run needs the raw override body, which
+        # is snapshotted (inline) on the config record. When that body was truncated at capture, it
+        # cannot be faithfully reproduced: rather than silently launching a divergent run (a
+        # template-less pipeline would fall through to an empty config), fail the re-run explicitly.
+        if cfg.get("customTemplateOverrideUsed") and cfg.get("customTemplateOverride"):
+            if cfg.get("customTemplateOverrideTruncated") and not cfg.get("templateId"):
+                raise VAMSGeneralErrorResponse(
+                    "This execution's custom configuration was too large to store in full, so the "
+                    "run cannot be reproduced exactly. Start a new execution with the configuration "
+                    "instead of re-running.")
+            if not cfg.get("customTemplateOverrideTruncated"):
+                params["customTemplateOverride"] = cfg.get("customTemplateOverride")
+        if params:
+            pipeline_execution_parameters[pipeline_id] = params
+
+    body = {
+        "inputFiles": input_files,
+        "outputAssetId": config_row.get("outputAssetId", ""),
+        "outputDatabaseId": config_row.get("outputDatabaseId", ""),
+        "pipelineExecutionParameters": pipeline_execution_parameters,
+        "triggerType": "manual",
+    }
+    # Preserve the original run's output base path extension so a re-run writes to the same layout.
+    ext = config_row.get("outputFileBaseExecutionPathExtension")
+    if ext and ext != "/":
+        body["outputFileBaseExecutionPathExtension"] = ext
+    return body
+
+
+def rerun_execution(event, execution_id, request_model):
+    """Reconstruct the execute request from the stored records and launch a NEW execution via the
+    asset-less V2 execute handler (lambda cross-call). Re-validation of the caller's permissions on
+    every referenced asset/workflow/pipeline happens inside the execute handler itself, so this only
+    resolves the original execution + reconstructs the body. Returns the new execution response."""
+    main_item = get_execution_main_row(execution_id)
+    if not main_item:
+        return validation_error(status_code=404, body={"message": "Execution not found"}, event=event)
+
+    # The caller must be able to see the original execution (workflow GET + input/output asset GET).
+    if not _execution_visible_to_caller(execution_id, main_item):
+        logger.info(f"Re-run not authorized for execution {execution_id}")
+        return authorization_error()
+
+    if not execute_workflow_v2_function:
+        logger.error("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME not configured; cannot re-run")
+        return general_error(body={"message": "Re-run is not available in this deployment."}, event=event)
+
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    body = _reconstruct_execute_request(execution_id, main_item, config_row)
+    if request_model.executionGroupId:
+        body["executionGroupId"] = request_model.executionGroupId
+
+    workflow_database_id = main_item.get("workflowDatabaseId", "")
+    workflow_id = main_item.get("workflowId", "")
+    # Invoke the V2 execute handler as the CALLING user (propagate identity so its two-tier auth runs
+    # against the caller, not a system principal). Build the execute handler's event shape.
+    username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
+    invoke_event = {
+        "requestContext": {
+            "http": {"method": "POST",
+                     "path": f"/workflows/{workflow_database_id}/{workflow_id}/execute"},
+            "authorizer": event.get("requestContext", {}).get("authorizer"),
+        },
+        "pathParameters": {"workflowDatabaseId": workflow_database_id, "workflowId": workflow_id},
+        "queryStringParameters": {},
+        "body": json.dumps(body),
+        # Propagate the caller's REAL MFA state so the delegated execute handler does not activate
+        # MFA-gated roles for a non-MFA session (a re-run must not exceed a direct execute's rights).
+        "lambdaCrossCall": {"userName": username,
+                            "mfaEnabled": bool(claims_and_roles.get("mfaEnabled", False))},
+    }
+    response = lambda_client.invoke(
+        FunctionName=execute_workflow_v2_function,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(invoke_event).encode("utf-8"))
+    payload = response.get("Payload")
+    if payload:
+        inner = json.loads(payload.read().decode("utf-8"))
+        status_code = inner.get("statusCode", 500)
+        inner_body = json.loads(inner["body"]) if inner.get("body") else {}
+        if status_code == 200:
+            return success(body=inner_body)
+        return validation_error(status_code=status_code, body=inner_body, event=event)
+    return internal_error(event=event)
+
+
+# ---------------------------------------------------------------------------
+# Permanent delete (DynamoDB rows only)
+# ---------------------------------------------------------------------------
+
+def _delete_all_rows(table_name, key_condition, key_attrs):
+    """Delete every row matching key_condition from a table. key_attrs is the ordered (PK, SK) attr
+    name list used to build each delete Key. Paginates the query and deletes through a batch_writer
+    (batches of 25 with auto-retry) rather than one delete_item per row, so an output-heavy execution
+    with many sub-rows deletes in far fewer round-trips."""
+    table = dynamodb.Table(table_name)
+    with table.batch_writer() as batch:
+        for row in _query_all(table_name, key_condition):
+            batch.delete_item(Key={attr: row[attr] for attr in key_attrs if attr in row})
+
+
+def permanent_delete_execution(event, execution_id):
+    """Permanently delete an execution's DynamoDB rows across all sub-tables (admin-gated at the
+    route/permission level; not-in-progress guarded here). Does NOT touch Step Functions history.
+
+    Removes: main row, workflow inputs, workflow configuration, output index, and — per pipeline —
+    the PipelineExecutions row plus its input/output/log/config sub-rows."""
+    main_item = get_execution_main_row(execution_id)
+    if not main_item:
+        return validation_error(status_code=404, body={"message": "Execution not found"}, event=event)
+
+    # Authorize like an abort (workflow GET + POST on every input asset — a destructive op).
+    allowed, reason = authorize_abort(execution_id, main_item)
+    if not allowed:
+        logger.info(f"Permanent delete not authorized for execution {execution_id}: {reason}")
+        return authorization_error()
+
+    # Guard: the execution must not be in progress (reconcile against SFN when not yet terminal).
+    status = main_item.get("executionStatus", "")
+    if not main_item.get("executionStopDate") and status not in TERMINAL_STATUSES:
+        arn = main_item.get("workflow_execution_arn", "")
+        if arn:
+            try:
+                described = sfn.describe_execution(executionArn=arn)
+                if not described.get("stopDate"):
+                    return validation_error(body={
+                        "message": "Execution is in progress; abort it before permanent delete."},
+                        event=event)
+            except Exception as e:
+                logger.info(f"Could not confirm execution terminal state (continuing to guard): {e}")
+                return validation_error(body={
+                    "message": "Execution is in progress; abort it before permanent delete."}, event=event)
+
+    # Per-pipeline sub-rows.
+    for prow in get_pipeline_execution_rows(execution_id):
+        pexec_id = prow.get("pipelineExecutionId", "")
+        if not pexec_id:
+            continue
+        _delete_all_rows(pipeline_execution_input_configuration_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "recordType"])
+        _delete_all_rows(pipeline_execution_input_metadata_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "databaseId:assetId:filePath"])
+        _delete_all_rows(pipeline_execution_input_files_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "databaseId:assetId:inputAssetFileKey"])
+        _delete_all_rows(pipeline_execution_output_files_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "fileType:relativeFilePath"])
+        _delete_all_rows(pipeline_execution_output_metadata_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "targetFilePath:metadataKey"])
+        _delete_all_rows(pipeline_execution_output_results_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "relativeFilePath"])
+        _delete_all_rows(pipeline_execution_logs_table,
+                         Key("pipelineExecutionId").eq(pexec_id),
+                         ["pipelineExecutionId", "logType"])
+        dynamodb.Table(pipeline_executions_table).delete_item(
+            Key={"pipelineExecutionId": pexec_id, "workflowExecutionId": execution_id})
+
+    # Capture the output-target ids from the configuration row BEFORE deleting it, so the
+    # output-index row can be removed afterward (re-reading a deleted config row would return {}).
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    output_database_id = config_row.get("outputDatabaseId", "")
+    output_asset_id = config_row.get("outputAssetId", "")
+
+    # Workflow-level rows.
+    _delete_all_rows(workflow_execution_inputs_table,
+                     Key("workflowExecutionId").eq(execution_id),
+                     ["workflowExecutionId", "databaseId:assetId:inputAssetFileKey"])
+    dynamodb.Table(workflow_execution_configuration_table).delete_item(
+        Key={"workflowExecutionId": execution_id, "recordType": "configuration"})
+
+    # Output index row (keyed on the captured output asset).
+    if output_database_id and output_asset_id:
+        dynamodb.Table(workflow_execution_outputs_index_table).delete_item(
+            Key={"databaseId:assetId": f"{output_database_id}:{output_asset_id}",
+                 "workflowExecutionId": execution_id})
+
+    # Main row (query for the SK, then delete).
+    dynamodb.Table(workflow_execution_database_v2).delete_item(
+        Key={"workflowExecutionId": execution_id,
+             "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId", "")})
+
+    logger.info(f"Permanently deleted execution records for {execution_id}")
+    return success(body={"message": "Execution records permanently deleted"})
+
+
+# ---------------------------------------------------------------------------
+# Abort-by-group
+# ---------------------------------------------------------------------------
+
+def _executions_in_group(group_id):
+    """All execution main rows in a group, via the sparse WorkflowExecutionsByGroupGSI (paginated)."""
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    items = []
+    kwargs = {
+        "IndexName": "WorkflowExecutionsByGroupGSI",
+        "KeyConditionExpression": Key("executionGroupId").eq(group_id),
+        "ScanIndexForward": False,
+    }
+    resp = main_table.query(**kwargs)
+    while True:
+        items.extend(resp.get("Items", []))
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+        resp = main_table.query(**kwargs)
+    return items
+
+
+def abort_group(event, group_id):
+    """Abort every active execution in a group. A group is enumerated via the ByGroupGSI (all members
+    regardless of the caller's access), so authorization is checked FIRST on each member: members the
+    caller cannot access are NOT reported by id (that would leak the existence/ids/count of other
+    users' executions) — they are counted opaquely. Only authorized members appear in `results`."""
+    executions = _executions_in_group(group_id)
+    if not executions:
+        return validation_error(status_code=404, body={"message": "No executions found for group"}, event=event)
+
+    results = []
+    skipped_inaccessible = 0
+    aborted_this_pass = 0
+    more_remaining = False
+    for main_item in executions:
+        execution_id = main_item.get("workflowExecutionId", "")
+        if not execution_id:
+            continue
+        # Authorize BEFORE anything else so an inaccessible member never surfaces its id/status.
+        allowed, _reason = authorize_abort(execution_id, main_item)
+        if not allowed:
+            skipped_inaccessible += 1
+            continue
+        # Authorized: terminal members are reported (the caller can already see them via details).
+        if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
+            results.append({"executionId": execution_id, "status": "skipped-terminal"})
+            continue
+        # Bound the number of (expensive, multi-round-trip) aborts per request. Once the cap is hit,
+        # stop and signal moreRemaining so the caller re-invokes to continue — rather than risk a
+        # 15-min Lambda timeout mid-group with no way to resume.
+        if aborted_this_pass >= MAX_GROUP_ABORT_PER_REQUEST:
+            more_remaining = True
+            break
+        resp = abort_execution(event, execution_id)
+        aborted_this_pass += 1
+        results.append({"executionId": execution_id,
+                        "status": "aborted" if resp.get("statusCode") == 200 else "error"})
+    message = {"groupId": group_id, "results": results}
+    if skipped_inaccessible:
+        message["skippedInaccessibleCount"] = skipped_inaccessible
+    if more_remaining:
+        # More active, authorized members remain beyond this request's cap; re-invoke to continue.
+        message["moreRemaining"] = True
+    return success(body={"message": message})
+
+
+# ---------------------------------------------------------------------------
+# New route handlers
+# ---------------------------------------------------------------------------
+
+def handle_global_list_request(event):
+    """GET /workflows/executions — global (asset-less), permission-filtered list."""
+    query_params = event.get("queryStringParameters", {}) or {}
+    # Coerce non-numeric/negative pageSize/maxItems to a valid default (mirrors the asset-scoped
+    # list) so a bad value returns a graceful page rather than a 500.
+    validate_pagination_info(query_params, 50)
+    if not _enforce_api(event):
+        return authorization_error()
+    return get_global_executions(event, query_params)
+
+
+def handle_rerun_request(event):
+    """POST /workflows/executions/{executionId}/rerun."""
+    path_params = event.get("pathParameters", {}) or {}
+    execution_id = path_params.get("executionId", "")
+    (valid, message) = validate({"executionId": {"value": execution_id, "validator": "ASSET_ID"}})
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+    if not _enforce_api(event):
+        return authorization_error()
+    body = {}
+    if event.get("body"):
+        try:
+            body = json.loads(event["body"])
+        except json.JSONDecodeError:
+            return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+    request_model = parse(body, model=RerunExecutionRequestModel)
+    return rerun_execution(event, execution_id, request_model)
+
+
+def handle_permanent_delete_request(event):
+    """DELETE /workflows/executions/{executionId}/permanent."""
+    path_params = event.get("pathParameters", {}) or {}
+    execution_id = path_params.get("executionId", "")
+    (valid, message) = validate({"executionId": {"value": execution_id, "validator": "ASSET_ID"}})
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+    if not _enforce_api(event):
+        return authorization_error()
+    body = {}
+    if event.get("body"):
+        try:
+            body = json.loads(event["body"])
+        except json.JSONDecodeError:
+            return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+    # Confirmation guard (confirmDelete must be true).
+    parse(body, model=PermanentDeleteRequestModel)
+    return permanent_delete_execution(event, execution_id)
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for the workflow execution service API.
 
     GET .../executions[/{workflowId}]              -> list an asset's workflow executions.
+    GET /workflows/executions                       -> global (asset-less) permission-filtered list.
     GET /workflows/executions/{executionId}/details -> full execution detail/traceability.
     GET /workflows/executions/{executionId}/logs    -> execution logs (truncated | full).
-    DELETE /workflows/executions/{executionId}       -> abort a running execution."""
+    POST /workflows/executions/{executionId}/rerun  -> re-run (new execution from stored records).
+    DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).
+    DELETE /workflows/executions/{executionId}/permanent -> permanent delete of the DynamoDB rows."""
     global claims_and_roles
     logger.info(event)
     # Normalize the REST (v1) proxy event before the first requestContext.http /
@@ -1348,14 +2176,30 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if method == 'GET':
             # Dispatch GETs by matching the master route templates (never hard-coded
-            # path fragments) so the detail/log reads are routed before the list view.
+            # path fragments) so the detail/log/global reads are routed before the asset list view.
             if API_WORKFLOW_EXECUTION_DETAILS.matches(path):
                 return handle_details_request(event)
             elif API_WORKFLOW_EXECUTION_LOGS.matches(path):
                 return handle_logs_request(event)
+            elif API_WORKFLOW_EXECUTIONS_GLOBAL.matches(path):
+                return handle_global_list_request(event)
             else:
                 return handle_get_request(event)
+        elif method == 'POST':
+            if API_WORKFLOW_EXECUTION_RERUN.matches(path):
+                return handle_rerun_request(event)
+            return validation_error(body={'message': "Method not allowed"}, event=event)
         elif method == 'DELETE':
+            # Permanent delete is a distinct sub-resource; the bare execution DELETE is the abort
+            # (which also accepts ?groupId= to abort a whole group).
+            if API_WORKFLOW_EXECUTION_PERMANENT.matches(path):
+                return handle_permanent_delete_request(event)
+            query_params = event.get('queryStringParameters', {}) or {}
+            group_id = (query_params.get('groupId') or '').strip()
+            if group_id:
+                if not _enforce_api(event):
+                    return authorization_error()
+                return abort_group(event, group_id)
             return handle_delete_request(event)
         else:
             return validation_error(body={'message': "Method not allowed"}, event=event)

@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import PipelinesPage from "./PipelinesPage";
@@ -15,6 +15,9 @@ import * as useAllowedRoutesModule from "../permissions/useAllowedRoutes";
 jest.mock("../api/queries", () => ({
     usePipelines: jest.fn(),
     useArchivePipeline: jest.fn(),
+    // DatabasePickerDialog (create-in-database picker) calls useDatabases; default to an empty,
+    // idle result so the page renders without opening the picker.
+    useDatabases: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 // Mock the useAllowedRoutes hook
@@ -37,6 +40,17 @@ const queryClient = new QueryClient({
             retry: false,
         },
     },
+});
+
+// usePipelines is now a useInfiniteQuery — the component reads data.pages[].Items and the
+// fetchNextPage/hasNextPage fields. Build that shape from a flat array of pipelines.
+const infinite = (items: any[]) => ({
+    data: { pages: [{ Items: items }], pageParams: [undefined] },
+    isLoading: false,
+    error: null,
+    fetchNextPage: jest.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
 });
 
 const mockPipelines = [
@@ -84,11 +98,7 @@ describe("PipelinesPage", () => {
     });
 
     it("renders pipelines grouped by category", () => {
-        (queries.usePipelines as jest.Mock).mockReturnValue({
-            data: mockPipelines,
-            isLoading: false,
-            error: null,
-        });
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite(mockPipelines));
 
         (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
             loading: false,
@@ -113,12 +123,31 @@ describe("PipelinesPage", () => {
         expect(screen.getByText("Pipeline Three")).toBeInTheDocument();
     });
 
-    it("hides Create button when user lacks POST permission", () => {
-        (queries.usePipelines as jest.Mock).mockReturnValue({
-            data: mockPipelines,
-            isLoading: false,
-            error: null,
+    it("groups by database when Group by = Database", () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite(mockPipelines));
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
         });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        fireEvent.change(screen.getByLabelText("Group by"), { target: { value: "database" } });
+
+        // All mock pipelines are in db1 → a single "db1" group header replaces the category headers.
+        expect(screen.getByText("db1")).toBeInTheDocument();
+        expect(screen.queryByText("conversion")).not.toBeInTheDocument();
+        expect(screen.getByText("Pipeline One")).toBeInTheDocument();
+    });
+
+    it("hides Create button when user lacks POST permission", () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite(mockPipelines));
 
         (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
             loading: false,
@@ -155,11 +184,7 @@ describe("PipelinesPage", () => {
             },
         };
 
-        (queries.usePipelines as jest.Mock).mockReturnValue({
-            data: [dcPipeline],
-            isLoading: false,
-            error: null,
-        });
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite([dcPipeline]));
 
         (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
             loading: false,
@@ -195,11 +220,7 @@ describe("PipelinesPage", () => {
             },
         };
 
-        (queries.usePipelines as jest.Mock).mockReturnValue({
-            data: [dcPipeline],
-            isLoading: false,
-            error: null,
-        });
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite([dcPipeline]));
 
         (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
             loading: false,

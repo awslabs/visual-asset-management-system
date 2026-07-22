@@ -1,0 +1,16 @@
+{
+    "workflowName": "Point Cloud Potree Viewer",
+    "category": "Preview",
+    "description": "Automated workflow for LAZ, LAS, E57, and PLY point cloud preview generation using the PotreeViewer Pipeline.",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.laz", "*.las", "*.e57", "*.ply"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {},
+            "enabled": false
+        }
+    ]
+}

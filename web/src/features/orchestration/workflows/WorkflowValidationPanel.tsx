@@ -25,8 +25,8 @@ const WorkflowValidationPanel: React.FC<WorkflowValidationPanelProps> = ({
         backendWarnings.length > 0;
 
     return (
-        <div className="border border-gray-300 dark:border-gray-600 rounded p-6 bg-white dark:bg-gray-900">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-4">Validation</h2>
+        <div className="border border-border-default rounded p-6 bg-surface-container">
+            <h2 className="text-xl font-semibold text-text-primary mb-4">Validation</h2>
             <div className="space-y-4">
                 {saveError && (
                     <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded">
@@ -34,7 +34,7 @@ const WorkflowValidationPanel: React.FC<WorkflowValidationPanelProps> = ({
                     </div>
                 )}
                 {validationErrors.length > 0 && (
-                    <div className="text-red-700 dark:text-red-400">
+                    <div className="text-vams-error">
                         <strong>Errors (blocking save):</strong>
                         <ul className="list-disc list-inside">
                             {validationErrors.map((e, i) => (
@@ -44,7 +44,7 @@ const WorkflowValidationPanel: React.FC<WorkflowValidationPanelProps> = ({
                     </div>
                 )}
                 {validationWarnings.length > 0 && (
-                    <div className="text-orange-700 dark:text-orange-400">
+                    <div className="text-vams-warning">
                         <strong>Warnings:</strong>
                         <ul className="list-disc list-inside">
                             {validationWarnings.map((w, i) => (
@@ -54,7 +54,7 @@ const WorkflowValidationPanel: React.FC<WorkflowValidationPanelProps> = ({
                     </div>
                 )}
                 {backendWarnings.length > 0 && (
-                    <div className="text-orange-700 dark:text-orange-400">
+                    <div className="text-vams-warning">
                         <strong>Backend Warnings:</strong>
                         <ul className="list-disc list-inside">
                             {backendWarnings.map((w, i) => (
@@ -63,9 +63,7 @@ const WorkflowValidationPanel: React.FC<WorkflowValidationPanelProps> = ({
                         </ul>
                     </div>
                 )}
-                {!hasAnyMessages && (
-                    <div className="text-green-700 dark:text-green-400">All validations passed</div>
-                )}
+                {!hasAnyMessages && <div className="text-vams-success">All validations passed</div>}
             </div>
         </div>
     );

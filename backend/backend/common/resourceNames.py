@@ -67,6 +67,13 @@ class ResourceKeys:
     PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE = ResourceParamKey("dynamoTables/pipelineExecutionOutputMetadataStorage", ("PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME",))
     PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE = ResourceParamKey("dynamoTables/pipelineExecutionOutputResultsStorage", ("PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME",))
     PIPELINE_EXECUTION_LOGS_STORAGE_TABLE = ResourceParamKey("dynamoTables/pipelineExecutionLogsStorage", ("PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME",))
+    # Pipeline + workflow V2 data model tables
+    PIPELINE_STORAGE_TABLE_V2 = ResourceParamKey("dynamoTables/pipelineStorageV2", ("PIPELINE_STORAGE_TABLE_V2_NAME",))
+    PIPELINE_TEMPLATES_STORAGE_TABLE = ResourceParamKey("dynamoTables/pipelineTemplatesStorage", ("PIPELINE_TEMPLATES_STORAGE_TABLE_NAME",))
+    PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = ResourceParamKey("dynamoTables/pipelineTemplateTagSchemaStorage", ("PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE_NAME",))
+    WORKFLOW_STORAGE_TABLE_V2 = ResourceParamKey("dynamoTables/workflowStorageV2", ("WORKFLOW_STORAGE_TABLE_V2_NAME",))
+    WORKFLOW_TRIGGERS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowTriggersStorage", ("WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME",))
+    WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE = ResourceParamKey("dynamoTables/workflowExecutionOutputsIndex", ("WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE_NAME",))
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = ResourceParamKey("s3Buckets/assetAuxiliary", ("S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME", "S3_ASSETAUXILIARY_STORAGE_BUCKET"))
     ARTEFACTS_BUCKET = ResourceParamKey("s3Buckets/artefacts", ("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET",))

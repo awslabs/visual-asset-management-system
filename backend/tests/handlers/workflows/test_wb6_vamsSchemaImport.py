@@ -1,0 +1,314 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unit tests for WB6: the pure vamsSchema -> V2 cross-call request builder
+(common/workflows/vamsSchemaImport.py) and the import CR handler upsert flow."""
+
+import json
+import os
+import sys
+import types
+
+import pytest
+from unittest.mock import MagicMock, patch
+
+from backend.backend.common.workflows import vamsSchemaImport as vsi
+
+
+# ============================ pure request builder ============================
+
+@pytest.mark.unit
+class TestVamsSchemaImport:
+    def _bundle(self, **over):
+        b = {
+            "pipeline": {
+                "pipelineId": "conv", "pipelineName": "Converter", "category": "conversion",
+                "executionConfig": {"executionType": "Lambda", "lambda": {}},
+                "systemConfig": {"requireTemplate": False},
+            },
+            "workflow": {
+                "workflowId": "conv", "workflowName": "Convert WF", "category": "conversion",
+                "triggers": [{"triggerType": "fileUpload", "inputFileFilters": {"allow": [".glb"]},
+                              "defaultTemplateIds": {"GLOBAL:conv": "to-obj"}}],
+            },
+            "templates": [{"templateId": "to-obj", "templateName": "To OBJ", "configFormat": "json",
+                           "configBody": "{\"to\":\"obj\"}"}],
+        }
+        b.update(over)
+        return b
+
+    def test_pipeline_required(self):
+        with pytest.raises(vsi.VamsSchemaError):
+            vsi.build_import_requests({})
+        with pytest.raises(vsi.VamsSchemaError):
+            vsi.build_import_requests({"pipeline": {"pipelineId": "x"}})  # missing pipelineName
+
+    def test_request_order_and_targets(self):
+        reqs = vsi.build_import_requests(self._bundle())
+        kinds = [(r["kind"], r["target"]) for r in reqs]
+        # pipeline -> template -> workflow -> trigger, in that order.
+        assert kinds == [
+            ("pipeline", vsi.TARGET_PIPELINE_SERVICE),
+            ("template", vsi.TARGET_TEMPLATE_SERVICE),
+            ("workflow", vsi.TARGET_WORKFLOW_SERVICE),
+            ("trigger", vsi.TARGET_TRIGGER_SERVICE),
+        ]
+
+    def test_lambda_resource_injected(self):
+        reqs = vsi.build_import_requests(
+            self._bundle(), resource_overrides={"lambdaName": "vams-conv-fn"})
+        pipe = reqs[0]
+        assert pipe["createBody"]["executionConfig"]["lambda"]["resourceId"] == "vams-conv-fn"
+
+    def test_sqs_and_eventbridge_injection(self):
+        b = self._bundle()
+        b["pipeline"]["executionConfig"] = {"executionType": "SQS", "sqs": {}}
+        reqs = vsi.build_import_requests(b, resource_overrides={"sqsQueueUrl": "https://q/1"})
+        assert reqs[0]["createBody"]["executionConfig"]["sqs"]["queueUrl"] == "https://q/1"
+
+        b["pipeline"]["executionConfig"] = {"executionType": "EventBridge", "eventBridge": {}}
+        reqs = vsi.build_import_requests(b, resource_overrides={
+            "eventBridgeBusArn": "arn:bus", "eventBridgeSource": "vams.x", "eventBridgeDetailType": "run"})
+        eb = reqs[0]["createBody"]["executionConfig"]["eventBridge"]
+        assert eb["busArn"] == "arn:bus" and eb["source"] == "vams.x" and eb["detailType"] == "run"
+
+    def test_id_overrides(self):
+        reqs = vsi.build_import_requests(
+            self._bundle(), id_overrides={"pipelineId": "conv-override", "workflowId": "wf-override"})
+        assert reqs[0]["createBody"]["pipelineId"] == "conv-override"
+        wf = next(r for r in reqs if r["kind"] == "workflow")
+        assert wf["createBody"]["workflowId"] == "wf-override"
+        # The workflow's default specifiedPipelines references the overridden pipeline id.
+        assert wf["createBody"]["specifiedPipelines"][0]["pipelineId"] == "conv-override"
+
+    def test_minimal_pipeline_only(self):
+        reqs = vsi.build_import_requests({"pipeline": {"pipelineId": "p", "pipelineName": "P"}})
+        assert [r["kind"] for r in reqs] == ["pipeline"]  # no workflow/templates required
+
+    def test_update_body_reenables(self):
+        reqs = vsi.build_import_requests(self._bundle())
+        assert reqs[0]["updateBody"]["enabled"] is True  # re-register unarchives/enables
+        wf = next(r for r in reqs if r["kind"] == "workflow")
+        assert wf["updateBody"]["enabled"] is True
+
+    def test_trigger_enabled_from_schema_by_default(self):
+        # No override -> the trigger's schema `enabled` (default True) is preserved.
+        reqs = vsi.build_import_requests(self._bundle())
+        trig = next(r for r in reqs if r["kind"] == "trigger")
+        assert trig["setBody"]["enabled"] is True
+
+    def test_trigger_enabled_override_disables(self):
+        # Deploy-time override False forces the trigger disabled even though the schema says enabled.
+        reqs = vsi.build_import_requests(self._bundle(), trigger_enabled_override=False)
+        trig = next(r for r in reqs if r["kind"] == "trigger")
+        assert trig["setBody"]["enabled"] is False
+        # Filters + default templates still ship regardless of enable state.
+        assert trig["setBody"]["inputFileFilters"] == {"allow": [".glb"]}
+        assert trig["setBody"]["defaultTemplateIds"] == {"GLOBAL:conv": "to-obj"}
+
+    def test_trigger_enabled_override_enables(self):
+        b = self._bundle()
+        b["workflow"]["triggers"][0]["enabled"] = False  # schema default disabled
+        reqs = vsi.build_import_requests(b, trigger_enabled_override=True)
+        trig = next(r for r in reqs if r["kind"] == "trigger")
+        assert trig["setBody"]["enabled"] is True  # deploy-time opt-in wins
+
+    def test_workflow_defaults_to_pipeline_ref(self):
+        b = self._bundle()
+        b["workflow"].pop("workflowId", None)  # workflow id defaults to pipeline id
+        reqs = vsi.build_import_requests(b)
+        wf = next(r for r in reqs if r["kind"] == "workflow")
+        assert wf["id"] == "conv"
+
+    def test_collect_ids(self):
+        ids = vsi.collect_ids(self._bundle())
+        assert ids == {"pipelineDatabaseId": "GLOBAL", "pipelineId": "conv",
+                       "workflowDatabaseId": "GLOBAL", "workflowId": "conv"}
+
+    def test_template_requires_id(self):
+        b = self._bundle()
+        b["templates"] = [{"templateName": "No Id"}]
+        with pytest.raises(vsi.VamsSchemaError):
+            vsi.build_import_requests(b)
+
+    def test_external_hardcoded_resource_preserved(self):
+        # No override supplied -> a schema-hardcoded resourceId is left intact (external self-register).
+        b = self._bundle()
+        b["pipeline"]["executionConfig"] = {"executionType": "Lambda", "lambda": {"resourceId": "ext-fn"}}
+        reqs = vsi.build_import_requests(b, resource_overrides={})
+        assert reqs[0]["createBody"]["executionConfig"]["lambda"]["resourceId"] == "ext-fn"
+
+
+# ============================ import CR handler ============================
+
+os.environ.setdefault("PIPELINE_SERVICE_V2_FUNCTION_NAME", "t-pipe-v2")
+os.environ.setdefault("PIPELINE_TEMPLATE_SERVICE_FUNCTION_NAME", "t-tpl")
+os.environ.setdefault("WORKFLOW_SERVICE_V2_FUNCTION_NAME", "t-wf-v2")
+os.environ.setdefault("WORKFLOW_TRIGGER_SERVICE_FUNCTION_NAME", "t-trig")
+os.environ.setdefault("VAMS_SCHEMA_BUCKET", "t-artefacts")
+
+# handlers.workflows __init__ imports get_task_builder at import; stub it.
+if "common.workflows.stepfunctions_builder" not in sys.modules:
+    _stub = types.ModuleType("common.workflows.stepfunctions_builder")
+    _stub.get_task_builder = lambda *a, **k: None
+    sys.modules["common.workflows.stepfunctions_builder"] = _stub
+
+from backend.backend.handlers.workflows import importGlobalPipelineWorkflow as imp
+
+IMOD = "backend.backend.handlers.workflows.importGlobalPipelineWorkflow"
+
+
+def _resp(status_code, body=None):
+    class _P:
+        def read(self):
+            return json.dumps({"statusCode": status_code,
+                               "body": json.dumps(body or {})}).encode()
+    return {"Payload": _P()}
+
+
+@pytest.mark.unit
+class TestImportCrHandler:
+    def _inline_props(self):
+        return {"inlineBundle": {
+            "pipeline": {"pipelineId": "conv", "pipelineName": "Converter",
+                         "executionConfig": {"executionType": "Lambda", "lambda": {}}},
+            "workflow": {"workflowId": "conv", "workflowName": "Convert WF"},
+        }, "resourceOverrides": {"lambdaName": "vams-conv-fn"}}
+
+    def test_register_creates_when_absent(self):
+        # Every exists-probe returns 404 (absent) -> create (POST 200).
+        calls = []
+
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            method = ev["requestContext"]["http"]["method"]
+            calls.append((FunctionName, method, ev["requestContext"]["http"]["path"]))
+            if method == "GET":
+                return _resp(404)
+            return _resp(200, {"message": "ok"})
+
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            result = imp.register_bundle(self._inline_props())
+        assert result["ids"]["pipelineId"] == "conv"
+        # A POST create happened for both pipeline and workflow.
+        posts = [c for c in calls if c[1] == "POST"]
+        assert any("/pipelines" in c[2] for c in posts)
+        assert any("/workflows" in c[2] for c in posts)
+
+    def test_register_updates_when_present(self):
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            method = ev["requestContext"]["http"]["method"]
+            if method == "GET":
+                return _resp(200, {"message": "exists"})  # already present -> update
+            return _resp(200, {"message": "ok"})
+
+        applied = []
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            result = imp.register_bundle(self._inline_props())
+            applied = result["applied"]
+        assert any("updated" in a for a in applied)
+
+    def test_register_raises_on_service_error(self):
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            if ev["requestContext"]["http"]["method"] == "GET":
+                return _resp(404)
+            return _resp(400, {"message": "bad config"})  # create fails
+
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            with pytest.raises(imp.ImportError_):
+                imp.register_bundle(self._inline_props())
+
+    def test_archive_bundle_best_effort(self):
+        def _invoke(FunctionName, InvocationType, Payload):
+            return _resp(200, {"message": "archived"})
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            result = imp.archive_bundle(self._inline_props())
+        assert result["ids"]["pipelineId"] == "conv"
+        assert result["warnings"] == []
+
+    def test_delete_never_fails_teardown(self):
+        # A Delete whose archive raises still returns SUCCESS to CloudFormation.
+        event = {"RequestType": "Delete", "ResourceProperties": self._inline_props(),
+                 "StackId": "s", "RequestId": "r", "LogicalResourceId": "l",
+                 "ResponseURL": "https://cfn", "PhysicalResourceId": "conv"}
+        ctx = MagicMock(); ctx.log_stream_name = "log"
+        with patch.object(imp, "lambda_client") as m, patch(f"{IMOD}.send_cfn_response") as m_send:
+            m.invoke.side_effect = RuntimeError("boom")
+            resp = imp.lambda_handler(event, ctx)
+        assert resp["statusCode"] == 200
+        # CFN response was SUCCESS despite the archive error.
+        assert m_send.call_args.args[2] == "SUCCESS"
+
+    def test_bundle_from_s3_keys(self):
+        props = {"bundleS3Keys": {"pipeline": "vamsSchema/conv/pipeline.json",
+                                  "workflow": "vamsSchema/conv/workflow.json",
+                                  "templates": ["vamsSchema/conv/templates/to-obj.json"]}}
+        files = {
+            "vamsSchema/conv/pipeline.json": {"pipelineId": "conv", "pipelineName": "C",
+                                              "executionConfig": {"executionType": "Lambda", "lambda": {}}},
+            "vamsSchema/conv/workflow.json": {"workflowId": "conv", "workflowName": "W"},
+            "vamsSchema/conv/templates/to-obj.json": {"templateId": "to-obj", "templateName": "T"},
+        }
+        with patch(f"{IMOD}._read_s3_json", side_effect=lambda k: files[k]):
+            bundle = imp.assemble_bundle(props)
+        assert bundle["pipeline"]["pipelineId"] == "conv"
+        assert bundle["templates"][0]["templateId"] == "to-obj"
+
+
+# ============ built-in schema files validate against the request models ============
+
+@pytest.mark.unit
+class TestBuiltInSchemasValidate:
+    """Every shipped backendPipelines/*/vamsSchema bundle must produce create bodies that pass the
+    pipeline / workflow / template request-model validators — the same validation the import
+    custom-resource hits at deploy time. Guards against a malformed built-in schema shipping."""
+
+    def _schema_root(self):
+        here = os.path.dirname(__file__)
+        return os.path.normpath(os.path.join(here, "..", "..", "..", "..", "backendPipelines"))
+
+    def _pipeline_files(self):
+        import glob
+        root = self._schema_root()
+        found = set()
+        for pat in ("/**/vamsSchema/**/pipeline.json", "/**/vamsSchema/pipeline.json"):
+            for f in glob.glob(root + pat, recursive=True):
+                found.add(os.path.normpath(f))
+        return sorted(found)
+
+    def test_all_built_in_pipeline_bundles_validate(self):
+        from backend.backend.models.pipelines import (
+            CreatePipelineRequestModel, CreateTemplateRequestModel)
+        from backend.backend.models.workflows import CreateWorkflowRequestModel
+
+        pipeline_files = self._pipeline_files()
+        # Sanity: the built-in pipelines exist and are being checked.
+        assert len(pipeline_files) >= 20
+
+        for pf in pipeline_files:
+            d = os.path.dirname(pf)
+            pipeline = json.load(open(pf))
+            pid = pipeline.get("pipelineId") or "placeholder-id"
+            exec_cfg = vsi._inject_execution_resources(
+                pipeline.get("executionConfig", {}), {"lambdaName": "dummy-fn"})
+            body = vsi._pipeline_create_body(pipeline, "GLOBAL", pid, exec_cfg)
+            CreatePipelineRequestModel(**body)  # raises on invalid
+
+            wf = os.path.join(d, "workflow.json")
+            if os.path.exists(wf):
+                w = json.load(open(wf))
+                wbody = vsi._workflow_create_body(
+                    w, "GLOBAL", w.get("workflowId") or pid, "GLOBAL", pid)
+                CreateWorkflowRequestModel(**wbody)
+
+            import glob
+            for tf in glob.glob(d + "/template*.json"):
+                t = json.load(open(tf))
+                CreateTemplateRequestModel(
+                    **vsi._template_create_body(t, t.get("templateId") or "tid"))

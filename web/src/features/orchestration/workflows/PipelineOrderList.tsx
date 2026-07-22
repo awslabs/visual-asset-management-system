@@ -58,7 +58,9 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
     };
 
     const selectedPipeline = pipelineOptions.find(
-        (p) => p.pipelineId === pipelineRef.pipelineId && p.databaseId === pipelineRef.pipelineDatabaseId
+        (p) =>
+            p.pipelineId === pipelineRef.pipelineId &&
+            p.databaseId === pipelineRef.pipelineDatabaseId
     );
 
     const handlePipelineChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -88,25 +90,39 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
 
     return (
         <div ref={setNodeRef} style={style}>
-            <div className="border border-gray-300 dark:border-gray-600 rounded p-4 mb-2 bg-white dark:bg-gray-800">
+            <div className="border border-border-default rounded p-4 mb-2 bg-surface-container">
                 <div className="flex items-start gap-3">
-                    <div {...attributes} {...listeners} className="cursor-grab pt-2 text-gray-500 dark:text-gray-400">
+                    <div
+                        {...attributes}
+                        {...listeners}
+                        className="cursor-grab pt-2 text-text-secondary"
+                    >
                         ☰
                     </div>
                     <div className="flex-1 space-y-3">
                         <div>
-                            <label htmlFor={`pipeline-${index}`} className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                            <label
+                                htmlFor={`pipeline-${index}`}
+                                className="block text-sm font-medium mb-1 text-text-primary"
+                            >
                                 Pipeline
                             </label>
                             <select
                                 id={`pipeline-${index}`}
-                                value={selectedPipeline ? `${selectedPipeline.databaseId}:${selectedPipeline.pipelineId}` : ""}
+                                value={
+                                    selectedPipeline
+                                        ? `${selectedPipeline.databaseId}:${selectedPipeline.pipelineId}`
+                                        : ""
+                                }
                                 onChange={handlePipelineChange}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                             >
                                 <option value="">Select a pipeline</option>
                                 {pipelineOptions.map((p) => (
-                                    <option key={`${p.databaseId}:${p.pipelineId}`} value={`${p.databaseId}:${p.pipelineId}`}>
+                                    <option
+                                        key={`${p.databaseId}:${p.pipelineId}`}
+                                        value={`${p.databaseId}:${p.pipelineId}`}
+                                    >
                                         {p.pipelineName}
                                     </option>
                                 ))}
@@ -114,14 +130,17 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                         </div>
                         {templateOptions.length > 0 && (
                             <div>
-                                <label htmlFor={`template-${index}`} className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                                <label
+                                    htmlFor={`template-${index}`}
+                                    className="block text-sm font-medium mb-1 text-text-primary"
+                                >
                                     Default Template (optional)
                                 </label>
                                 <select
                                     id={`template-${index}`}
                                     value={pipelineRef.defaultTemplateId || ""}
                                     onChange={handleTemplateChange}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 >
                                     <option value="">Select a template</option>
                                     {templateOptions.map((t) => (
@@ -133,7 +152,10 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                             </div>
                         )}
                         <div>
-                            <label htmlFor={`jobName-${index}`} className="block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100">
+                            <label
+                                htmlFor={`jobName-${index}`}
+                                className="block text-sm font-medium mb-1 text-text-primary"
+                            >
                                 Job Name (optional)
                             </label>
                             <input
@@ -142,14 +164,14 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                                 value={pipelineRef.jobName || ""}
                                 onChange={handleJobNameChange}
                                 placeholder="Enter job name"
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                             />
                         </div>
                     </div>
                     <button
                         onClick={() => onRemove(index)}
                         aria-label="Remove pipeline"
-                        className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                        className="text-text-secondary hover:text-gray-700 dark:hover:text-gray-200"
                     >
                         ×
                     </button>
@@ -211,8 +233,8 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
             <div className="space-y-4">
                 <div className="text-center py-8">
                     <div className="space-y-2">
-                        <div className="font-semibold text-gray-900 dark:text-gray-100">No pipelines added</div>
-                        <div className="text-gray-600 dark:text-gray-400">
+                        <div className="font-semibold text-text-primary">No pipelines added</div>
+                        <div className="text-text-secondary">
                             Add a pipeline to start building your workflow
                         </div>
                         <button
@@ -234,7 +256,10 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
                 collisionDetection={closestCenter}
                 onDragEnd={handleDragEnd}
             >
-                <SortableContext items={value.map((_, i) => i.toString())} strategy={verticalListSortingStrategy}>
+                <SortableContext
+                    items={value.map((_, i) => i.toString())}
+                    strategy={verticalListSortingStrategy}
+                >
                     {value.map((pipelineRef, index) => {
                         const compositeKey = `${pipelineRef.pipelineDatabaseId}:${pipelineRef.pipelineId}`;
                         const templateOptions = templatesByPipeline[compositeKey] || [];

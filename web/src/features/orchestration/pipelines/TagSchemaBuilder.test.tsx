@@ -17,7 +17,7 @@ describe("TagSchemaBuilder", () => {
         render(<TagSchemaBuilder value={[]} onChange={onChange} />);
 
         // Add a field
-        const addButton = screen.getByRole("button", { name: /add field/i });
+        const addButton = screen.getByRole("button", { name: /add tag/i });
         await user.click(addButton);
 
         // Set tagKey to a reserved key
@@ -53,7 +53,7 @@ describe("TagSchemaBuilder", () => {
         render(<TagSchemaBuilder value={initialValue} onChange={onChange} />);
 
         // Add another field
-        const addButton = screen.getByRole("button", { name: /add field/i });
+        const addButton = screen.getByRole("button", { name: /add tag/i });
         await user.click(addButton);
 
         // Set the new field's tagKey to the same as existing
@@ -75,7 +75,7 @@ describe("TagSchemaBuilder", () => {
         render(<TagSchemaBuilder value={[]} onChange={onChange} />);
 
         // Add a field
-        const addButton = screen.getByRole("button", { name: /add field/i });
+        const addButton = screen.getByRole("button", { name: /add tag/i });
         await user.click(addButton);
 
         // Set tagKey to a normal key

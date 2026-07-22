@@ -38,7 +38,20 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
     stub.get_task_builder = lambda exec_type, partition="aws": _Builder()
     sys.modules["common.workflows.stepfunctions_builder"] = stub
 
-from backend.backend.handlers.workflows.createWorkflow import generate_workflow_asl
+from backend.backend.common.workflows.workflowAslBuilder import (
+    generate_workflow_asl as _generate_workflow_asl,
+)
+
+
+def generate_workflow_asl(pipelines, database_id, workflow_id):
+    """3-arg wrapper over the shared generator, supplying the fixed Lambda names (matching the env
+    values set above) so the tests read as they did against the former createWorkflow wrapper."""
+    return _generate_workflow_asl(
+        pipelines, database_id, workflow_id,
+        process_workflow_output_function="t-po",
+        interim_tracking_function="t-interim",
+        error_handler_function="t-err",
+    )
 
 
 @pytest.mark.unit
@@ -59,6 +72,9 @@ def test_process_output_payload_threads_execution_ids():
     body = po_states[0]["Parameters"]["Payload"]["body"]
     assert body["workflowExecutionId.$"] == "$.workflowExecutionId"
     assert body["endStatePipelineExecutionId.$"] == "$.endStatePipelineExecutionId"
+    # The process-output lambda LISTs produced files from the run I/O bucket (where the pipelines
+    # staged them), so the ASL must thread it — else a multi-bucket output asset yields zero outputs.
+    assert body["workflowExecutionS3InputOutputBucket.$"] == "$.workflowExecutionS3InputOutputBucket"
     # The workflow log group is a single shared group provided to processWorkflowExecutionOutput
     # via env var (not baked into each workflow's ASL definition), so it must NOT appear in the
     # process-output payload.

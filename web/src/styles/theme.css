@@ -22,6 +22,12 @@
     --vams-bg-input: #ffffff;
     --vams-bg-container: #ffffff;
 
+    /* Orchestration page surface — matched to Amazon Cloudscape's own light layout/container
+     * background colors so the new pages match the rest of the app exactly (the --vams-bg-primary
+     * value reads as a slightly mismatched hue against Cloudscape's content area). */
+    --vams-orch-page-bg: #f2f3f3;
+    --vams-orch-container-bg: #ffffff;
+
     /* Text */
     --vams-text-primary: #000716;
     --vams-text-secondary: #5f6b7a;
@@ -119,6 +125,12 @@
     --vams-bg-hover: #1a2b3c;
     --vams-bg-input: #192534;
     --vams-bg-container: #192534;
+
+    /* Orchestration page surface — Amazon Cloudscape's measured dark layout/container background
+     * colors (layout #161d26, container #1b2530), NOT the bluer --vams-bg-primary navy, so the
+     * pages match the rest of the app in dark mode. */
+    --vams-orch-page-bg: #161d26;
+    --vams-orch-container-bg: #1b2530;
 
     /* Text */
     --vams-text-primary: #d1d5db;

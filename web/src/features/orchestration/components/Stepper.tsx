@@ -32,8 +32,8 @@ const Stepper: React.FC<StepperProps> = ({ steps, current }) => {
                                     isCurrent
                                         ? "bg-blue-600 text-white"
                                         : isCompleted
-                                          ? "bg-green-600 text-white"
-                                          : "bg-gray-300 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
+                                        ? "bg-green-600 text-white"
+                                        : "bg-gray-300 dark:bg-gray-700 text-text-secondary"
                                 }`}
                             >
                                 {isCompleted ? "✓" : index + 1}
@@ -41,10 +41,10 @@ const Stepper: React.FC<StepperProps> = ({ steps, current }) => {
                             <span
                                 className={`text-sm ${
                                     isCurrent
-                                        ? "font-semibold text-gray-900 dark:text-gray-100"
+                                        ? "font-semibold text-text-primary"
                                         : isCompleted
-                                          ? "text-gray-700 dark:text-gray-300"
-                                          : "text-gray-500 dark:text-gray-500"
+                                        ? "text-text-primary"
+                                        : "text-text-secondary"
                                 }`}
                             >
                                 {step.label}
@@ -52,7 +52,9 @@ const Stepper: React.FC<StepperProps> = ({ steps, current }) => {
                         </div>
                         {index < steps.length - 1 && (
                             <div
-                                className={`w-8 h-0.5 ${isCompleted ? "bg-green-600" : "bg-gray-300 dark:bg-gray-700"}`}
+                                className={`w-8 h-0.5 ${
+                                    isCompleted ? "bg-green-600" : "bg-gray-300 dark:bg-gray-700"
+                                }`}
                             />
                         )}
                     </React.Fragment>

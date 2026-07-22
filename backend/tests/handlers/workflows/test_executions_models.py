@@ -8,6 +8,7 @@ from backend.backend.models.executions import (
     PipelineExecutionInputFileRecord,
     WorkflowExecutionInputRecord,
     WorkflowExecutionConfigurationRecord,
+    ExecuteWorkflowRequestV2Model,
 )
 
 
@@ -21,7 +22,7 @@ class TestExecutionModels:
             triggerType="Manual",
         )
         assert m.workflowExecutionId == "E1"
-        assert m.triggeredByUserId == "system"  # default
+        assert m.triggeredByUserId == "SYSTEM_USER"  # default (reserved system identity)
         assert m.executionStopDate == ""  # default
 
     def test_workflow_execution_record_rejects_bad_trigger_type(self):
@@ -55,3 +56,32 @@ class TestExecutionModels:
         assert wi.assetId == "a1"
         wc = WorkflowExecutionConfigurationRecord(workflowExecutionId="E1")
         assert wc.specifiedPipelinesSnapshot == []
+        # Output base path extension defaults to root.
+        assert wc.outputFileBaseExecutionPathExtension == "/"
+
+
+@pytest.mark.unit
+class TestExecuteRequestOutputPathExtension:
+    """Validation for the optional output base path extension on the execute request."""
+
+    def test_accepts_plain_path(self):
+        m = ExecuteWorkflowRequestV2Model(outputFileBaseExecutionPathExtension="runs/2026")
+        assert m.outputFileBaseExecutionPathExtension == "runs/2026"
+
+    def test_accepts_dynamic_tag_placeholders(self):
+        # Placeholders are preserved verbatim (resolved later by the template renderer).
+        m = ExecuteWorkflowRequestV2Model(
+            outputFileBaseExecutionPathExtension="out/{{firstAssetFileFileNameNoExt}}/")
+        assert "{{firstAssetFileFileNameNoExt}}" in m.outputFileBaseExecutionPathExtension
+
+    def test_none_is_allowed(self):
+        m = ExecuteWorkflowRequestV2Model()
+        assert m.outputFileBaseExecutionPathExtension is None
+
+    def test_rejects_traversal(self):
+        with pytest.raises(Exception):
+            ExecuteWorkflowRequestV2Model(outputFileBaseExecutionPathExtension="../escape")
+
+    def test_rejects_backslash(self):
+        with pytest.raises(Exception):
+            ExecuteWorkflowRequestV2Model(outputFileBaseExecutionPathExtension="out\\win")

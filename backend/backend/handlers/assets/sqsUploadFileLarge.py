@@ -680,6 +680,9 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
     """
     try:
         bucket_name = file_info['bucketName']
+        # Source bucket the temp file is read from; defaults to the destination bucket, but a
+        # workflow-execution output stages its temp file in the VAMS default run bucket.
+        source_bucket = file_info.get('sourceBucketName') or bucket_name
         temp_s3_key = file_info['tempS3Key']
         final_s3_key = file_info['finalS3Key']
         relative_key = file_info['relativeKey']
@@ -690,11 +693,11 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
 
         logger.info(f"Validating and moving file {relative_key} from {temp_s3_key} to {final_s3_key}")
 
-        # Validate file content type and check for malicious executables
-        if not validateS3AssetExtensionsAndContentType(bucket_name, temp_s3_key):
+        # Validate file content type and check for malicious executables (in the source bucket).
+        if not validateS3AssetExtensionsAndContentType(source_bucket, temp_s3_key):
             logger.error(f"File {relative_key} contains a potentially malicious executable type object")
             # Delete the uploaded file
-            delete_s3_object(bucket_name, temp_s3_key)
+            delete_s3_object(source_bucket, temp_s3_key)
             return False
 
         # Additional validation for preview files
@@ -703,7 +706,7 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             if not validate_preview_file_extension(relative_key):
                 logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
                 # Delete the uploaded file
-                delete_s3_object(bucket_name, temp_s3_key)
+                delete_s3_object(source_bucket, temp_s3_key)
                 return False
 
         # Check if this is a preview file in an assetFile upload
@@ -712,7 +715,7 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             if not validate_preview_file_extension(relative_key):
                 logger.error(f"Preview file {relative_key} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
                 # Delete the uploaded file
-                delete_s3_object(bucket_name, temp_s3_key)
+                delete_s3_object(source_bucket, temp_s3_key)
                 return False
 
             # For preview files, we need to validate that the base file exists
@@ -720,11 +723,11 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
 
-        # Copy file from temporary to final location
+        # Copy file from temporary (source bucket) to final (destination asset bucket) location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")
 
         copy_success = copy_s3_object(
-            bucket_name,
+            source_bucket,
             temp_s3_key,
             bucket_name,
             final_s3_key,
@@ -732,13 +735,13 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
             asset_id,
             user_id=change_user_id
         )
-        
+
         if not copy_success:
             logger.error(f"Failed to copy file from {temp_s3_key} to {final_s3_key}")
             return False
-        
-        # Delete temporary file after successful copy
-        delete_s3_object(bucket_name, temp_s3_key)
+
+        # Delete temporary source file after successful copy
+        delete_s3_object(source_bucket, temp_s3_key)
         
         # Update asset record if this is an assetFile upload
         if upload_type == "assetFile":

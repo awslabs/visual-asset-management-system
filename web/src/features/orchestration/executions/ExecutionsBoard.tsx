@@ -11,6 +11,8 @@ import StatusBadge from "../components/StatusBadge";
 import Dialog from "../components/Dialog";
 import ExecutionRowActions from "./ExecutionRowActions";
 import ExecutionQuickView from "./ExecutionQuickView";
+import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
+import { control, btnSecondary } from "../components/controlStyles";
 import { useExecutions, useExecutionActions, type ExecutionScope } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import type { Execution } from "../types";
@@ -28,26 +30,31 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     } | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [deleteTypedValue, setDeleteTypedValue] = useState("");
-    const [includeArchived, setIncludeArchived] = useState(false);
+    const [statusFilter, setStatusFilter] = useState("");
+    const [triggerFilter, setTriggerFilter] = useState("");
+    const [groupFilter, setGroupFilter] = useState("");
+
+    // Server-side filters (the global-list handler AND-s these; empty values are omitted).
+    const filters = useMemo(() => {
+        const f: Record<string, string> = {};
+        if (statusFilter) f.status = statusFilter;
+        if (triggerFilter) f.triggerType = triggerFilter;
+        if (groupFilter.trim()) f.groupId = groupFilter.trim();
+        return f;
+    }, [statusFilter, triggerFilter, groupFilter]);
 
     const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useExecutions(
         scope,
-        {}, // Backend doesn't support includeArchived yet - filter client-side below
+        filters,
         {}
     );
     const { abortExecution, rerunExecution, permanentDeleteExecution } = useExecutionActions();
     const { can } = useAllowedRoutes();
 
-    // Flatten pages and filter by archived status client-side (backend doesn't support includeArchived param yet)
-    const executions = React.useMemo(() => {
-        const allExecutions = data?.pages?.flatMap((page: any) => page.Items) ?? [];
-        if (includeArchived) {
-            return allExecutions;
-        }
-        // Filter out archived executions (assuming archived flag or status indicates archived state)
-        // For now, show all since backend doesn't have archived flag; this is a placeholder for future backend support
-        return allExecutions;
-    }, [data, includeArchived]);
+    const executions = React.useMemo(
+        () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
+        [data]
+    );
 
     // Sort: non-terminal first, then by start date descending
     const sortedExecutions = useMemo(() => {
@@ -123,147 +130,205 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         }
     };
 
-    const columns: ColumnDef<Execution>[] = useMemo(() => [
-        {
-            accessorKey: "executionStatus",
-            header: "Status",
-            cell: ({ row }) => <StatusBadge status={row.original.executionStatus} />,
-        },
-        {
-            accessorKey: "workflowExecutionId",
-            header: "Execution ID",
-            cell: ({ row }) => (
-                <span className="font-mono text-xs">{row.original.workflowExecutionId}</span>
-            ),
-        },
-        {
-            accessorKey: "workflowId",
-            header: "Workflow",
-            cell: ({ row }) => (
-                <span className="text-sm">{row.original.workflowId}</span>
-            ),
-        },
-        {
-            accessorKey: "triggerType",
-            header: "Trigger",
-            cell: ({ row }) => (
-                <div className="text-sm">
-                    <div>{row.original.triggerType || "—"}</div>
-                    {row.original.triggeredByUserId && (
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                            {row.original.triggeredByUserId}
-                        </div>
-                    )}
-                </div>
-            ),
-        },
-        {
-            accessorKey: "executionStartDate",
-            header: "Started",
-            cell: ({ row }) => (
-                <span className="text-sm">{formatDate(row.original.executionStartDate)}</span>
-            ),
-        },
-        {
-            accessorKey: "executionStopDate",
-            header: "Stopped",
-            cell: ({ row }) => (
-                <span className="text-sm">{formatDate(row.original.executionStopDate)}</span>
-            ),
-        },
-        {
-            header: "Duration",
-            cell: ({ row }) => (
-                <span className="text-sm">
-                    {calculateDuration(
-                        row.original.executionStartDate,
-                        row.original.executionStopDate
-                    )}
-                </span>
-            ),
-        },
-        {
-            accessorKey: "executionGroupId",
-            header: "Group",
-            cell: ({ row }) => (
-                <span className="text-xs font-mono text-gray-600 dark:text-gray-400">
-                    {row.original.executionGroupId || "—"}
-                </span>
-            ),
-        },
-        {
-            header: "Actions",
-            cell: ({ row }) => (
-                <ExecutionRowActions
-                    execution={row.original}
-                    can={can}
-                    onView={() => setQuickViewExecutionId(row.original.workflowExecutionId)}
-                    onAbort={() =>
-                        setAbortConfirm({
-                            executionId: row.original.workflowExecutionId,
-                            isGroup: false,
-                        })
-                    }
-                    onAbortGroup={
-                        row.original.executionGroupId
-                            ? () =>
-                                  setAbortConfirm({
-                                      executionId: row.original.workflowExecutionId,
-                                      isGroup: true,
-                                  })
-                            : undefined
-                    }
-                    onRerun={() =>
-                        handleRerun(
-                            row.original.workflowExecutionId,
-                            row.original.executionGroupId
-                        )
-                    }
-                    onLogs={() => {
-                        navigate(`/executions/${row.original.workflowExecutionId}`);
-                    }}
-                    onPermanentDelete={() => setDeleteConfirm(row.original.workflowExecutionId)}
-                    onOpenDetails={() => navigate(`/executions/${row.original.workflowExecutionId}`)}
-                />
-            ),
-        },
-    ], [can, navigate, handleRerun, setQuickViewExecutionId, setAbortConfirm, setDeleteConfirm]);
+    const columns: ColumnDef<Execution>[] = useMemo(
+        () => [
+            {
+                accessorKey: "executionStatus",
+                header: "Status",
+                cell: ({ row }) => <StatusBadge status={row.original.executionStatus} />,
+            },
+            {
+                accessorKey: "workflowExecutionId",
+                header: "Execution ID",
+                cell: ({ row }) => (
+                    <span className="font-mono text-xs">{row.original.workflowExecutionId}</span>
+                ),
+            },
+            {
+                accessorKey: "workflowId",
+                header: "Workflow",
+                cell: ({ row }) => <span className="text-sm">{row.original.workflowId}</span>,
+            },
+            {
+                accessorKey: "workflowDatabaseId",
+                header: "Database",
+                cell: ({ row }) => (
+                    <span className="text-sm">{row.original.workflowDatabaseId || "—"}</span>
+                ),
+            },
+            {
+                accessorKey: "triggerType",
+                header: "Trigger",
+                cell: ({ row }) => (
+                    <div className="text-sm">
+                        <div>{row.original.triggerType || "—"}</div>
+                        {row.original.triggeredByUserId && (
+                            <div className="text-xs text-text-secondary">
+                                {row.original.triggeredByUserId}
+                            </div>
+                        )}
+                    </div>
+                ),
+            },
+            {
+                accessorKey: "executionStartDate",
+                header: "Started",
+                cell: ({ row }) => (
+                    <span className="text-sm">{formatDate(row.original.executionStartDate)}</span>
+                ),
+            },
+            {
+                accessorKey: "executionStopDate",
+                header: "Stopped",
+                cell: ({ row }) => (
+                    <span className="text-sm">{formatDate(row.original.executionStopDate)}</span>
+                ),
+            },
+            {
+                header: "Duration",
+                cell: ({ row }) => (
+                    <span className="text-sm">
+                        {calculateDuration(
+                            row.original.executionStartDate,
+                            row.original.executionStopDate
+                        )}
+                    </span>
+                ),
+            },
+            {
+                accessorKey: "executionGroupId",
+                header: "Group",
+                cell: ({ row }) => (
+                    <span className="text-xs font-mono text-text-secondary">
+                        {row.original.executionGroupId || "—"}
+                    </span>
+                ),
+            },
+            {
+                header: "Actions",
+                cell: ({ row }) => (
+                    // Stop propagation so opening the actions menu doesn't also trigger the
+                    // row-click quick-view.
+                    <div onClick={(e) => e.stopPropagation()}>
+                        <ExecutionRowActions
+                            execution={row.original}
+                            can={can}
+                            onView={() => setQuickViewExecutionId(row.original.workflowExecutionId)}
+                            onAbort={() =>
+                                setAbortConfirm({
+                                    executionId: row.original.workflowExecutionId,
+                                    isGroup: false,
+                                })
+                            }
+                            onAbortGroup={
+                                row.original.executionGroupId
+                                    ? () =>
+                                          setAbortConfirm({
+                                              executionId: row.original.workflowExecutionId,
+                                              isGroup: true,
+                                          })
+                                    : undefined
+                            }
+                            onRerun={() =>
+                                handleRerun(
+                                    row.original.workflowExecutionId,
+                                    row.original.executionGroupId
+                                )
+                            }
+                            onLogs={() => {
+                                navigate(
+                                    `/executions/${row.original.workflowExecutionId}?tab=logs`
+                                );
+                            }}
+                            onPermanentDelete={() =>
+                                setDeleteConfirm(row.original.workflowExecutionId)
+                            }
+                            onOpenDetails={() =>
+                                navigate(`/executions/${row.original.workflowExecutionId}`)
+                            }
+                        />
+                    </div>
+                ),
+            },
+        ],
+        [can, navigate, handleRerun, setQuickViewExecutionId, setAbortConfirm, setDeleteConfirm]
+    );
 
     return (
-        <div className="p-6 space-y-4 bg-white dark:bg-gray-900">
+        <div className="orchestration-root p-6 space-y-4 bg-surface">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">
-                    Executions
-                </h1>
-                <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                        <input
-                            type="checkbox"
-                            checked={includeArchived}
-                            onChange={(e) => setIncludeArchived(e.target.checked)}
-                        />
-                        Show archived
-                    </label>
-                </div>
+                <h1 className="text-2xl font-semibold text-text-primary">Executions</h1>
+                {/* Execute sits in the header row (matching Pipelines/Workflows) and is available
+                    wherever the board is shown (global page + asset tab). */}
+                <ExecuteWorkflowButton scope={scope} />
             </div>
 
-            {isLoading && (
-                <div className="text-gray-600 dark:text-gray-400">Loading executions...</div>
-            )}
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+                <select
+                    aria-label="Filter by status"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className={control}
+                >
+                    <option value="">All statuses</option>
+                    <option value="RUNNING">Running</option>
+                    <option value="SUCCEEDED">Succeeded</option>
+                    <option value="FAILED">Failed</option>
+                    <option value="ABORTED">Aborted</option>
+                    <option value="TIMED_OUT">Timed out</option>
+                </select>
+                <select
+                    aria-label="Filter by trigger"
+                    value={triggerFilter}
+                    onChange={(e) => setTriggerFilter(e.target.value)}
+                    className={control}
+                >
+                    <option value="">All triggers</option>
+                    <option value="Manual">Manual</option>
+                    <option value="fileUpload">File upload</option>
+                </select>
+                <input
+                    type="text"
+                    aria-label="Filter by group ID"
+                    placeholder="Group ID"
+                    value={groupFilter}
+                    onChange={(e) => setGroupFilter(e.target.value)}
+                    className={control}
+                />
+                {(statusFilter || triggerFilter || groupFilter) && (
+                    <button
+                        onClick={() => {
+                            setStatusFilter("");
+                            setTriggerFilter("");
+                            setGroupFilter("");
+                        }}
+                        className="px-2 py-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                        Clear
+                    </button>
+                )}
+            </div>
+
+            {isLoading && <div className="text-text-secondary">Loading executions...</div>}
 
             {!isLoading && sortedExecutions.length === 0 && (
-                <div className="text-gray-600 dark:text-gray-400">No executions found.</div>
+                <div className="text-text-secondary">No executions found.</div>
             )}
 
             {!isLoading && sortedExecutions.length > 0 && (
                 <>
-                    <DataTable columns={columns} rows={sortedExecutions} pageSize={20} />
+                    <DataTable
+                        columns={columns}
+                        rows={sortedExecutions}
+                        paginate={false}
+                        onRowClick={(row) => setQuickViewExecutionId(row.workflowExecutionId)}
+                    />
                     {hasNextPage && (
                         <div className="flex justify-center mt-4">
                             <button
                                 onClick={() => fetchNextPage()}
                                 disabled={isFetchingNextPage}
-                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                                className={btnSecondary}
                             >
                                 {isFetchingNextPage ? "Loading more..." : "Load more"}
                             </button>
@@ -289,19 +354,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     title={abortConfirm.isGroup ? "Abort Execution Group" : "Abort Execution"}
                     footer={
                         <>
-                            <button
-                                onClick={() => setAbortConfirm(null)}
-                                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded"
-                            >
+                            <button onClick={() => setAbortConfirm(null)} className={btnSecondary}>
                                 Cancel
                             </button>
                             <button
                                 onClick={() => {
                                     if (abortConfirm.isGroup) {
                                         const exec = executions.find(
-                                            (e) => e.workflowExecutionId === abortConfirm.executionId
+                                            (e) =>
+                                                e.workflowExecutionId === abortConfirm.executionId
                                         );
-                                        handleAbort(abortConfirm.executionId, exec?.executionGroupId);
+                                        handleAbort(
+                                            abortConfirm.executionId,
+                                            exec?.executionGroupId
+                                        );
                                     } else {
                                         handleAbort(abortConfirm.executionId);
                                     }
@@ -333,10 +399,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     title="Permanent Delete"
                     footer={
                         <>
-                            <button
-                                onClick={() => setDeleteConfirm(null)}
-                                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded"
-                            >
+                            <button onClick={() => setDeleteConfirm(null)} className={btnSecondary}>
                                 Cancel
                             </button>
                             <button
@@ -354,15 +417,14 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         undone.
                     </p>
                     <p className="font-semibold">
-                        Type <code className="bg-gray-100 dark:bg-gray-800 px-1">CONFIRM</code> to
-                        proceed:
+                        Type <code className="bg-surface-secondary px-1">CONFIRM</code> to proceed:
                     </p>
                     <input
                         type="text"
                         placeholder="CONFIRM"
                         value={deleteTypedValue}
                         onChange={(e) => setDeleteTypedValue(e.target.value)}
-                        className="mt-2 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                        className="mt-2 w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
                             if (e.key === "Enter" && deleteTypedValue === "CONFIRM") {
                                 handlePermanentDelete(deleteConfirm);

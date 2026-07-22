@@ -45,10 +45,13 @@ from common.workflows.stepfunctions_builder import (
 logger = safeLogger(service="DeadlineCloudJobCallback")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# The events client publishes a best-effort next-status event; bound its connect/read timeouts so an
+# unreachable events endpoint fails fast rather than blocking the callback (matches sqsBucketSync).
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
 
 deadline_client = boto3.client('deadline', config=retry_config)
 sfn_client = boto3.client('stepfunctions', config=retry_config)
-events_client = boto3.client('events', config=retry_config)
+events_client = boto3.client('events', config=events_retry_config)
 
 try:
     # Orchestration bus + event source prefix for sub-process registration (optional:

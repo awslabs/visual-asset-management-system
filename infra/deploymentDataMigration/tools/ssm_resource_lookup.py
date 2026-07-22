@@ -81,6 +81,13 @@ class ResourceParamKeys:
     PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE = "dynamoTables/pipelineExecutionOutputMetadataStorage"
     PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE = "dynamoTables/pipelineExecutionOutputResultsStorage"
     PIPELINE_EXECUTION_LOGS_STORAGE_TABLE = "dynamoTables/pipelineExecutionLogsStorage"
+    # Pipeline + workflow V2 data model tables
+    PIPELINE_STORAGE_TABLE_V2 = "dynamoTables/pipelineStorageV2"
+    PIPELINE_TEMPLATES_STORAGE_TABLE = "dynamoTables/pipelineTemplatesStorage"
+    PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
+    WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
+    WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
+    WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE = "dynamoTables/workflowExecutionOutputsIndex"
 
     # Deprecated tables retained for data migration only
     LEGACY_ASSET_VERSIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/assetVersionsStorageV1"

@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos-predict-video2world-2b",
+    "templateName": "Video-to-World (2B)",
+    "description": "Extend a video world from an input video plus a text prompt with the Cosmos Predict 2B model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_TYPE\":\"video2world\",\"MODEL_SIZE\":\"2B\",\"DISABLE_GUARDRAILS\":\"true\",\"OFFLOAD_TEXT_ENCODER\":\"true\",\"OFFLOAD_TOKENIZER\":\"true\",\"OFFLOAD_DIFFUSION_MODEL\":\"true\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Supply an input video; provide the guiding prompt via the COSMOS_PREDICT_PROMPT file metadata key (or PROMPT in the config)."
+}

@@ -107,7 +107,10 @@ describe("pipelineValidation", () => {
     it("accepts valid SQS with queueUrl", () => {
         const r = validatePipeline({
             pipelineName: "x",
-            executionConfig: { executionType: "SQS", sqs: { queueUrl: "https://sqs.us-east-1.amazonaws.com/123/queue" } },
+            executionConfig: {
+                executionType: "SQS",
+                sqs: { queueUrl: "https://sqs.us-east-1.amazonaws.com/123/queue" },
+            },
         } as any);
         expect(r.ok).toBe(true);
     });
@@ -115,7 +118,10 @@ describe("pipelineValidation", () => {
     it("EventBridge requires busArn", () => {
         const r = validatePipeline({
             pipelineName: "x",
-            executionConfig: { executionType: "EventBridge", eventBridge: { source: "test", detailType: "test" } },
+            executionConfig: {
+                executionType: "EventBridge",
+                eventBridge: { source: "test", detailType: "test" },
+            },
         } as any);
         expect(r.ok).toBe(false);
     });
@@ -123,7 +129,10 @@ describe("pipelineValidation", () => {
     it("EventBridge requires source", () => {
         const r = validatePipeline({
             pipelineName: "x",
-            executionConfig: { executionType: "EventBridge", eventBridge: { busArn: "arn:aws:events:...", detailType: "test" } },
+            executionConfig: {
+                executionType: "EventBridge",
+                eventBridge: { busArn: "arn:aws:events:...", detailType: "test" },
+            },
         } as any);
         expect(r.ok).toBe(false);
     });
@@ -131,7 +140,10 @@ describe("pipelineValidation", () => {
     it("EventBridge requires detailType", () => {
         const r = validatePipeline({
             pipelineName: "x",
-            executionConfig: { executionType: "EventBridge", eventBridge: { busArn: "arn:aws:events:...", source: "test" } },
+            executionConfig: {
+                executionType: "EventBridge",
+                eventBridge: { busArn: "arn:aws:events:...", source: "test" },
+            },
         } as any);
         expect(r.ok).toBe(false);
     });
@@ -141,7 +153,7 @@ describe("pipelineValidation", () => {
             pipelineName: "x",
             executionConfig: {
                 executionType: "EventBridge",
-                eventBridge: { busArn: "arn:aws:events:...", source: "test", detailType: "test" }
+                eventBridge: { busArn: "arn:aws:events:...", source: "test", detailType: "test" },
             },
         } as any);
         expect(r.ok).toBe(true);
@@ -161,7 +173,7 @@ describe("pipelineValidation", () => {
             executionConfig: {
                 executionType: "DeadlineCloud",
                 waitForCallback: "Enabled",
-                deadlineCloud: { queueId: "queue-123" }
+                deadlineCloud: { queueId: "queue-123" },
             },
         } as any);
         expect(r.ok).toBe(false);
@@ -173,7 +185,7 @@ describe("pipelineValidation", () => {
             executionConfig: {
                 executionType: "DeadlineCloud",
                 waitForCallback: "Enabled",
-                deadlineCloud: { farmId: "farm-123" }
+                deadlineCloud: { farmId: "farm-123" },
             },
         } as any);
         expect(r.ok).toBe(false);
@@ -185,7 +197,7 @@ describe("pipelineValidation", () => {
             executionConfig: {
                 executionType: "DeadlineCloud",
                 waitForCallback: "Enabled",
-                deadlineCloud: { farmId: "farm-123", queueId: "queue-123" }
+                deadlineCloud: { farmId: "farm-123", queueId: "queue-123" },
             },
         } as any);
         expect(r.ok).toBe(true);

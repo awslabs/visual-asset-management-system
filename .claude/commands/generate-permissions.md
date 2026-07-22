@@ -31,19 +31,19 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 
 ### Object Types and Their Key Fields
 
-| ObjectType       | Key Fields                                                     | Notes                                                |
-| ---------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
-| `web`            | `route__path`                                                  | UI page visibility, only needs GET                   |
-| `api`            | `route__path`                                                  | API endpoint access, needs relevant HTTP methods     |
-| `database`       | `databaseId`                                                   | Database entity only (not assets within it)          |
-| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                 | **Must be constrained separately from database**     |
-| `pipeline`       | `databaseId`, `pipelineId`, `pipelineType`                     | Needs scoped + GLOBAL constraints                    |
-| `workflow`       | `databaseId`, `workflowId`                                     | Needs scoped + GLOBAL constraints                    |
-| `metadataSchema` | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName` | Needs scoped + GLOBAL constraints                    |
-| `tag`            | `tagName`                                                      | Global, use `contains .*` wildcard for all tags      |
-| `tagType`        | `tagTypeName`                                                  | Global, use `contains .*` wildcard for all tag types |
-| `role`           | `roleName`                                                     | Role management (super admin only)                   |
-| `userRole`       | `roleName`, `userId`                                           | User-role assignment (super admin only)              |
+| ObjectType       | Key Fields                                                                              | Notes                                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `web`            | `route__path`                                                                           | UI page visibility, only needs GET                                                                           |
+| `api`            | `route__path`                                                                           | API endpoint access, needs relevant HTTP methods                                                             |
+| `database`       | `databaseId`                                                                            | Database entity only (not assets within it)                                                                  |
+| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                                          | **Must be constrained separately from database**                                                             |
+| `pipeline`       | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name` | Needs scoped + GLOBAL constraints; covers pipeline templates + tag schemas (enforced on the owning pipeline) |
+| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                                          | Needs scoped + GLOBAL constraints; covers workflow triggers + executions                                     |
+| `metadataSchema` | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName`                          | Needs scoped + GLOBAL constraints                                                                            |
+| `tag`            | `tagName`                                                                               | Global, use `contains .*` wildcard for all tags                                                              |
+| `tagType`        | `tagTypeName`                                                                           | Global, use `contains .*` wildcard for all tag types                                                         |
+| `role`           | `roleName`                                                                              | Role management (super admin only)                                                                           |
+| `userRole`       | `roleName`, `userId`                                                                    | User-role assignment (super admin only)                                                                      |
 
 ### Constraint Operators
 
@@ -157,6 +157,15 @@ Choose between two strategies based on the access level:
 -   POST: only asset creation, workflow execution, and non-mutating queries
 -   PUT: only asset/comment/link updates (excludes pipelines, workflows, schemas)
 -   DELETE: only archive paths (excludes permanent delete paths)
+
+### Workflow Execution Routes: Everyday vs. Administrative
+
+The workflow-execution API surface splits into everyday operations and two administrative-only routes:
+
+-   **Everyday (grant to standard users):** execute (`POST /workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`), list (`GET /workflows/executions`), details (`GET /workflows/executions/\{executionId\}/details`), abort (`DELETE /workflows/executions/\{executionId\}`), and re-run (`POST /workflows/executions/\{executionId\}/rerun`).
+-   **Administrative-only:** detailed execution **logs** (`GET /workflows/executions/\{executionId\}/logs`, full CloudWatch logs) and execution **permanent delete** (`DELETE /workflows/executions/\{executionId\}/permanent`).
+
+Because the everyday routes are granted via broad `/workflows` prefixes, withhold the two administrative routes with an explicit **`deny`** API constraint on paths ending in `/logs` (GET) and `/permanent` (DELETE) — a `deny` overrides the broad `allow`. Read-only roles that grant `/workflows` GET should likewise layer a GET `deny` on `/logs`. Only `database-admin.json` grants these two routes (via its single all-methods `/workflows` constraint).
 
 ### Tags and Tag Types: Recommended Approach
 

@@ -246,7 +246,10 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
 
     def _metadata_payload():
         # The shared metadata file is loaded from its manifest location only if a metadata-content
-        # tag is actually used; unwrap the {schemaVersion, metadata} envelope to the inner payload.
+        # tag is actually used. It is written as one of two envelopes: the v1 {schemaVersion, metadata}
+        # wrapper (unwrap to the inner VAMS payload) or the v2 grouped-by-asset envelope
+        # ({schemaVersion: 2, assets: [...]}), which is projected to the legacy {"VAMS": {...}} view the
+        # renderer's metadata-content tags read, for this run's primary input file.
         location = manifest.get("inputMetadataS3Location", "")
         if not location or not location.startswith("s3://"):
             return {}
@@ -258,9 +261,16 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
             payload = json.loads(resp["Body"].read().decode("utf-8"))
         except Exception:  # nosec B110 - best-effort; an unreadable metadata file yields {}
             return {}
-        if isinstance(payload, dict) and "metadata" in payload and "schemaVersion" in payload:
+        if not isinstance(payload, dict):
+            return {}
+        if payload.get("schemaVersion") == er.METADATA_SCHEMA_VERSION_GROUPED and "assets" in payload:
+            first = (manifest.get("inputFiles") or [{}])[0] or {}
+            return er.to_legacy_vams_view(
+                payload, first.get("databaseId", ""), first.get("assetId", ""),
+                first.get("relativePath", "/"))
+        if "metadata" in payload and "schemaVersion" in payload:
             return payload.get("metadata") or {}
-        return payload if isinstance(payload, dict) else {}
+        return payload
 
     rendered = tr.render_config(raw_cfg, manifest, exec_context, metadata_loader=_metadata_payload)
     s3c.put_object(Bucket=wf_exec_bucket, Key=next_config_key,

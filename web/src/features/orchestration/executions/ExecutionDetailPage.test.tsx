@@ -60,11 +60,11 @@ describe("ExecutionDetailPage", () => {
             pipelines: [
                 {
                     pipelineId: "pipe-1",
-                    pipelineName: "Test Pipeline",
+                    name: "Test Pipeline",
                     executionStatus: "SUCCEEDED",
                     executionStartDate: "2026-07-18T10:05:00Z",
                     executionStopDate: "2026-07-18T10:25:00Z",
-                    renderedConfigBody: '{"key": "value"}',
+                    renderedConfig: '{"key": "value"}',
                     configFormat: "json",
                     templateId: "template-1",
                     templateTags: { tag1: "value1" },
@@ -107,7 +107,8 @@ describe("ExecutionDetailPage", () => {
 
         // Check header elements
         expect(screen.getByText("Succeeded")).toBeInTheDocument();
-        expect(screen.getByText(/e1/)).toBeInTheDocument();
+        // The execution id appears in both the breadcrumb and the header field.
+        expect(screen.getAllByText(/e1/).length).toBeGreaterThan(0);
 
         // Navigate to Pipelines tab
         const pipelinesTab = screen.getByRole("button", { name: /Pipelines/i });
@@ -145,11 +146,11 @@ describe("ExecutionDetailPage", () => {
             pipelines: [
                 {
                     pipelineId: "pipe-1",
-                    pipelineName: "Test Pipeline",
+                    name: "Test Pipeline",
                     executionStatus: "SUCCEEDED",
                     executionStartDate: "2026-07-18T10:05:00Z",
                     executionStopDate: "2026-07-18T10:25:00Z",
-                    renderedConfigBody: '{"key": "value"}',
+                    renderedConfig: '{"key": "value"}',
                     configFormat: "json",
                     templateId: "template-1",
                     templateTags: { tag1: "value1" },

@@ -7,17 +7,39 @@ import { apiClient } from "../../../services/apiClient";
 import { toTuple, pageAll } from "./client";
 import type { Workflow, WorkflowTrigger } from "../types";
 
+/**
+ * One server page of workflows. Returns the raw page object { Items, NextToken? } so the
+ * caller (useInfiniteQuery) can page via the backend's maxItems/pageSize/startingToken params.
+ */
 export async function listWorkflows(
+    databaseId?: string,
+    params?: Record<string, string>
+): Promise<[boolean, { Items: Workflow[]; NextToken?: string } | string]> {
+    return toTuple(async () => {
+        const path = databaseId ? `database/${databaseId}/workflows` : "workflows";
+        const opts = params ? { queryStringParameters: params } : {};
+        return apiClient.get(path, opts);
+    });
+}
+
+/**
+ * All workflows, draining every server page. Used where the complete set is required;
+ * NOT for the paginated list view, which uses listWorkflows + useInfiniteQuery.
+ */
+export async function listAllWorkflows(
     databaseId?: string,
     includeArchived?: boolean
 ): Promise<[boolean, Workflow[] | string]> {
     return toTuple(async () => {
         const path = databaseId ? `database/${databaseId}/workflows` : "workflows";
-        const opts = includeArchived
-            ? { queryStringParameters: { includeArchived: "true" } }
-            : {};
+        const opts = includeArchived ? { queryStringParameters: { includeArchived: "true" } } : {};
         return pageAll((token) =>
-            apiClient.get(path, { ...opts, ...(token && { queryStringParameters: { ...opts.queryStringParameters, startingToken: token } }) })
+            apiClient.get(path, {
+                ...opts,
+                ...(token && {
+                    queryStringParameters: { ...opts.queryStringParameters, startingToken: token },
+                }),
+            })
         );
     });
 }
@@ -30,9 +52,7 @@ export async function getWorkflow(
 }
 
 export async function createWorkflow(body: Workflow): Promise<[boolean, any]> {
-    return toTuple(() =>
-        apiClient.post(`database/${body.databaseId}/workflows`, { body })
-    );
+    return toTuple(() => apiClient.post(`database/${body.databaseId}/workflows`, { body }));
 }
 
 export async function updateWorkflow(
@@ -40,9 +60,7 @@ export async function updateWorkflow(
     workflowId: string,
     body: Partial<Workflow>
 ): Promise<[boolean, any]> {
-    return toTuple(() =>
-        apiClient.put(`database/${databaseId}/workflows/${workflowId}`, { body })
-    );
+    return toTuple(() => apiClient.put(`database/${databaseId}/workflows/${workflowId}`, { body }));
 }
 
 export async function archiveWorkflow(
@@ -57,11 +75,19 @@ export async function listTriggers(
     workflowId: string
 ): Promise<[boolean, WorkflowTrigger[] | string]> {
     return toTuple(async () => {
-        return pageAll((token) =>
+        const items = await pageAll((token) =>
             apiClient.get(`database/${databaseId}/workflows/${workflowId}/triggers`, {
                 ...(token && { queryStringParameters: { startingToken: token } }),
             })
         );
+        // The response nests the fileUpload settings under `triggerConfig`; flatten them to the
+        // top level so a trigger reads back in the same flat shape the set request sends.
+        return (items || []).map((t: any) => ({
+            triggerType: t.triggerType,
+            enabled: t.enabled,
+            inputFileFilters: t.triggerConfig?.inputFileFilters ?? t.inputFileFilters,
+            defaultTemplateIds: t.triggerConfig?.defaultTemplateIds ?? t.defaultTemplateIds,
+        }));
     });
 }
 

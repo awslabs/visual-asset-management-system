@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos3-super-text2video",
+    "templateName": "Text-to-Video (Super)",
+    "description": "Generate high-quality video from a text prompt with the Cosmos 3 Super (64B) omni model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_VARIANT\":\"super\",\"TASK_MODE\":\"text2video\",\"DISABLE_GUARDRAILS\":\"true\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Provide the generation prompt via the COSMOS3_PROMPT asset/file metadata key. TASK_MODE may be switched (e.g. transfer on capable variants)."
+}

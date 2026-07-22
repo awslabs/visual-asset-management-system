@@ -1,634 +1,277 @@
-import pytest
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unit tests for the workflow V2 CRUD handler (workflowServiceV2). REST v1 event shape;
+CasbinEnforcer + request_to_claims + tables + pipeline resolution are patched. IDs are >=3 chars so
+the shared ID validator passes under both the real and mock validators (test-isolation safe)."""
+
 import json
-import boto3
-import botocore
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-@pytest.fixture(scope="function")
-def get_workflows_event():
-    """
-    Generates an event for getting workflows
-    
-    Returns:
-        dict: Lambda event dictionary for getting workflows
-    """
+import pytest
+
+from backend.backend.handlers.workflows.workflowService import lambda_handler
+
+MOD = "backend.backend.handlers.workflows.workflowService"
+
+
+def _event(method, path, path_params=None, body=None, query=None):
     return {
-        "requestContext": {
-            "http": {
-                "method": "GET"
-            }
-        },
-        "pathParameters": {
-            "databaseId": "test-database-id"
-        },
-        "queryStringParameters": {
-            "maxItems": "10",
-            "pageSize": "10",
-            "startingToken": ""
-        }
+        "requestContext": {"http": {"method": method, "path": path}},
+        "pathParameters": path_params,
+        "queryStringParameters": query,
+        "headers": {"authorization": "Bearer test-token"},
+        "body": json.dumps(body) if body is not None else None,
     }
 
-@pytest.fixture(scope="function")
-def get_workflow_event():
-    """
-    Generates an event for getting a specific workflow
-    
-    Returns:
-        dict: Lambda event dictionary for getting a specific workflow
-    """
-    return {
-        "requestContext": {
-            "http": {
-                "method": "GET"
-            }
-        },
-        "pathParameters": {
-            "databaseId": "test-database-id",
-            "workflowId": "test-workflow-id"
-        },
-        "queryStringParameters": {
-            "maxItems": "10",
-            "pageSize": "10",
-            "startingToken": ""
-        }
-    }
 
-@pytest.fixture(scope="function")
-def get_all_workflows_event():
-    """
-    Generates an event for getting all workflows
-    
-    Returns:
-        dict: Lambda event dictionary for getting all workflows
-    """
-    return {
-        "requestContext": {
-            "http": {
-                "method": "GET"
-            }
-        },
-        "queryStringParameters": {
-            "maxItems": "10",
-            "pageSize": "10",
-            "startingToken": ""
-        }
-    }
+def _enforcer(api=True, obj=True):
+    inst = MagicMock()
+    inst.enforceAPI.return_value = api
+    inst.enforce.return_value = obj
+    return inst
 
-@pytest.fixture(scope="function")
-def delete_workflow_event():
-    """
-    Generates an event for deleting a workflow
-    
-    Returns:
-        dict: Lambda event dictionary for deleting a workflow
-    """
-    return {
-        "requestContext": {
-            "http": {
-                "method": "DELETE"
-            }
-        },
-        "pathParameters": {
-            "databaseId": "test-database-id",
-            "workflowId": "test-workflow-id"
-        }
-    }
 
-@pytest.fixture(scope="function")
-def mock_claims_and_roles():
-    """
-    Mock for claims and roles
-    
-    Returns:
-        dict: Mock claims and roles
-    """
-    return {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
+PIPELINE_REC = {"databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P",
+                "enabled": True, "archived": False, "systemConfig": {}}
 
-@pytest.fixture(scope="function")
-def mock_casbin_enforcer():
-    """
-    Mock for CasbinEnforcer
-    
-    Returns:
-        MagicMock: Mock for CasbinEnforcer
-    """
-    mock_enforcer = MagicMock()
-    mock_enforcer.enforce.return_value = True
-    mock_enforcer.enforceAPI.return_value = True
-    return mock_enforcer
 
-@pytest.fixture(scope="function")
-def mock_dynamodb_paginator():
-    """
-    Mock for DynamoDB paginator
-    
-    Returns:
-        MagicMock: Mock for DynamoDB paginator
-    """
-    mock_paginator = MagicMock()
-    
-    # Mock the paginate method to return a result with items
-    mock_paginate = MagicMock()
-    mock_paginate.build_full_result.return_value = {
-        "Items": [
-            {
-                "databaseId": {"S": "test-database-id"},
-                "workflowId": {"S": "test-workflow-id"},
-                "workflowName": {"S": "Test Workflow"},
-                "workflow_arn": {"S": "arn:aws:states:us-east-1:123456789012:stateMachine:test-workflow"},
-                "createdOn": {"S": "2023-07-06T21:32:15.066148"}
-            }
-        ]
-    }
-    
-    mock_paginator.paginate.return_value = mock_paginate
-    return mock_paginator
+@pytest.mark.unit
+class TestWorkflowServiceV2:
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_api_denied(self, mock_enforcer, mock_claims):
+        mock_claims.return_value = {"tokens": ["t"]}
+        mock_enforcer.return_value = _enforcer(api=False)
+        resp = lambda_handler(_event("GET", "/workflows"), MagicMock())
+        assert resp["statusCode"] == 403
 
-@pytest.fixture(scope="function")
-def mock_dynamodb_query():
-    """
-    Mock for DynamoDB query operation
-    
-    Returns:
-        MagicMock: Mock for DynamoDB query
-    """
-    mock_query = MagicMock()
-    mock_query.return_value = {
-        "Items": [
-            {
-                "databaseId": "test-database-id",
-                "workflowId": "test-workflow-id",
-                "workflowName": "Test Workflow",
-                "workflow_arn": "arn:aws:states:us-east-1:123456789012:stateMachine:test-workflow",
-                "createdOn": "2023-07-06T21:32:15.066148"
-            }
-        ]
-    }
-    return mock_query
+    @patch(f"{MOD}.workflowAsl")
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_workflow_success(self, mock_enforcer, mock_claims, mock_table,
+                                     mock_get_pipe, mock_asl):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_get_pipe.return_value = PIPELINE_REC
+        mock_asl.ASL_SCHEMA_VERSION = 1
+        mock_asl.deploy_state_machine.return_value = ("", [])
+        table = MagicMock()
+        table.get_item.return_value = {}  # no existing workflow
+        mock_table.return_value = table
+        body = {"databaseId": "db1", "workflowName": "My WF", "category": "conv",
+                "specifiedPipelines": [{"pipelineId": "pipe1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 200
+        saved = table.put_item.call_args.kwargs["Item"]
+        assert saved["databaseId"] == "db1" and saved["workflowName"] == "My WF"
+        assert saved["enabled"] is True and saved["archived"] is False
+        assert len(saved["workflowId"]) == 32  # generated GUID
+        assert saved["specifiedPipelines"][0]["pipelineDatabaseId:pipelineId"] == "db1:pipe1"
+        data = json.loads(resp["body"])["message"]
+        assert "warnings" in data
 
-@pytest.fixture(scope="function")
-def mock_workflow_table():
-    """
-    Mock for workflow table
-    
-    Returns:
-        MagicMock: Mock for workflow table
-    """
-    mock_table = MagicMock()
-    mock_table.get_item.return_value = {
-        "Item": {
-            "databaseId": "test-database-id",
-            "workflowId": "test-workflow-id",
-            "workflowName": "Test Workflow",
-            "workflow_arn": "arn:aws:states:us-east-1:123456789012:stateMachine:test-workflow",
-            "createdOn": "2023-07-06T21:32:15.066148"
-        }
-    }
-    return mock_table
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_global_workflow_rejects_db_pipeline(self, mock_enforcer, mock_claims,
+                                                        mock_table, mock_get_pipe):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        _t = MagicMock()
+        _t.get_item.return_value = {}
+        mock_table.return_value = _t
+        body = {"databaseId": "GLOBAL", "workflowName": "W",
+                "specifiedPipelines": [{"pipelineId": "pipe1", "pipelineDatabaseId": "db1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/GLOBAL/workflows", {"databaseId": "GLOBAL"}, body), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "GLOBAL" in json.loads(resp["body"])["message"]
 
-def test_get_workflows(get_workflows_event, mock_dynamodb_query, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler with a GET request for workflows in a database
-    
-    Args:
-        get_workflows_event: Lambda event dictionary for getting workflows
-        mock_dynamodb_query: Mock for DynamoDB query
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb = MagicMock()
-    mock_meta = MagicMock()
-    mock_meta.client.get_paginator.return_value = mock_dynamodb_query
-    mock_dynamodb.meta = mock_meta
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Patch the imports
-    with patch("boto3.resource", return_value=mock_dynamodb), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.dynamodb.validate_pagination_info"), \
-         patch("common.validators.validate", return_value=(True, "")):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflows_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 200
-        message = json.loads(response["body"])["message"]
-        assert "Items" in message
-        assert len(message["Items"]) > 0
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
-        mock_casbin_enforcer.enforce.assert_called()
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_rejects_missing_pipeline(self, mock_enforcer, mock_claims, mock_table, mock_get_pipe):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_get_pipe.return_value = None  # pipeline not found
+        _t = MagicMock()
+        _t.get_item.return_value = {}
+        mock_table.return_value = _t
+        body = {"databaseId": "db1", "workflowName": "W", "specifiedPipelines": [{"pipelineId": "pipe1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 404
 
-def test_get_workflow(get_workflow_event, mock_workflow_table, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler with a GET request for a specific workflow
-    
-    Args:
-        get_workflow_event: Lambda event dictionary for getting a specific workflow
-        mock_workflow_table: Mock for workflow table
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb = MagicMock()
-    mock_dynamodb.Table.return_value = mock_workflow_table
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Patch the imports
-    with patch("boto3.resource", return_value=mock_dynamodb), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.dynamodb.validate_pagination_info"), \
-         patch("common.validators.validate", return_value=(True, "")):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 200
-        message = json.loads(response["body"])["message"]
-        assert message["workflowId"] == "test-workflow-id"
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
-        mock_casbin_enforcer.enforce.assert_called_once()
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_rejects_archived_pipeline(self, mock_enforcer, mock_claims, mock_table, mock_get_pipe):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        archived = dict(PIPELINE_REC, archived=True)
+        mock_get_pipe.return_value = archived
+        _t = MagicMock()
+        _t.get_item.return_value = {}
+        mock_table.return_value = _t
+        body = {"databaseId": "db1", "workflowName": "W", "specifiedPipelines": [{"pipelineId": "pipe1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "archived" in json.loads(resp["body"])["message"]
 
-def test_get_all_workflows(get_all_workflows_event, mock_dynamodb_paginator, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler with a GET request for all workflows
-    
-    Args:
-        get_all_workflows_event: Lambda event dictionary for getting all workflows
-        mock_dynamodb_paginator: Mock for DynamoDB paginator
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb_client = MagicMock()
-    mock_dynamodb_client.get_paginator.return_value = mock_dynamodb_paginator
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Patch the imports
-    with patch("boto3.client", return_value=mock_dynamodb_client), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.dynamodb.validate_pagination_info"):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_all_workflows_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 200
-        message = json.loads(response["body"])["message"]
-        assert "Items" in message
-        assert len(message["Items"]) > 0
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
-        mock_casbin_enforcer.enforce.assert_called()
+    @patch(f"{MOD}.workflowAsl")
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_workflow_denied_does_not_probe(self, mock_enforcer, mock_claims, mock_table,
+                                                   mock_get_pipe, mock_asl):
+        # The workflow Tier-2 POST auth runs BEFORE both the existence probe AND referenced-pipeline
+        # resolution, so a workflow-denied caller cannot use either as an existence oracle.
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer(api=True, obj=False)  # workflow POST denied
+        mock_asl.deploy_state_machine.return_value = ("", [])
+        table = MagicMock()
+        mock_table.return_value = table
+        body = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W",
+                "specifiedPipelines": [{"pipelineId": "pipe1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 403
+        table.get_item.assert_not_called()  # no workflow existence probe before auth
+        mock_get_pipe.assert_not_called()   # no pipeline probe before workflow auth (no info leak)
 
-def test_delete_workflow(delete_workflow_event, mock_workflow_table, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler with a DELETE request
-    
-    Args:
-        delete_workflow_event: Lambda event dictionary for deleting a workflow
-        mock_workflow_table: Mock for workflow table
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb = MagicMock()
-    mock_dynamodb.Table.return_value = mock_workflow_table
-    
-    mock_sf_client = MagicMock()
-    mock_sf_client.delete_state_machine.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Patch the imports
-    with patch("boto3.resource", return_value=mock_dynamodb), \
-         patch("boto3.client", return_value=mock_sf_client), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.validators.validate", return_value=(True, "")):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(delete_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 200
-        assert json.loads(response["body"])["message"] == "Workflow deleted"
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
-        mock_casbin_enforcer.enforce.assert_called_once()
-        
-        # Verify Step Functions client was called to delete the state machine
-        mock_sf_client.delete_state_machine.assert_called_once_with(
-            stateMachineArn="arn:aws:states:us-east-1:123456789012:stateMachine:test-workflow"
-        )
+    @patch(f"{MOD}.workflowAsl")
+    @patch(f"{MOD}.ev")
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_blocks_on_save_errors(self, mock_enforcer, mock_claims, mock_table,
+                                          mock_get_pipe, mock_ev, mock_asl):
+        # A hard error from validate_workflow_save blocks the save (does not silently 200).
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_get_pipe.return_value = PIPELINE_REC
+        mock_ev.validate_workflow_save.return_value = (["some hard error"], [])
+        mock_asl.ASL_SCHEMA_VERSION = 1
+        _t = MagicMock()
+        _t.get_item.return_value = {}
+        mock_table.return_value = _t
+        body = {"databaseId": "db1", "workflowName": "W", "specifiedPipelines": [{"pipelineId": "pipe1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "saveErrors" in json.loads(resp["body"])["message"]
+        _t.put_item.assert_not_called()  # not persisted when a hard error blocks
 
-def test_workflow_not_found(get_workflow_event, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler when a workflow is not found
-    
-    Args:
-        get_workflow_event: Lambda event dictionary for getting a specific workflow
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb = MagicMock()
-    mock_table = MagicMock()
-    mock_table.get_item.return_value = {}  # No item found
-    mock_dynamodb.Table.return_value = mock_table
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Patch the imports
-    with patch("boto3.resource", return_value=mock_dynamodb), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.dynamodb.validate_pagination_info"), \
-         patch("common.validators.validate", return_value=(True, "")):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 404
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
+    @patch(f"{MOD}.get_workflow_triggers")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_get_single_workflow_with_triggers(self, mock_enforcer, mock_claims, mock_table, mock_triggers):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1",
+                                                "workflowName": "W", "enabled": True, "archived": False}}
+        mock_table.return_value = table
+        mock_triggers.return_value = [{"triggerType": "fileUpload", "triggerConfig": {}, "enabled": True}]
+        resp = lambda_handler(
+            _event("GET", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"}),
+            MagicMock())
+        assert resp["statusCode"] == 200
+        data = json.loads(resp["body"])["message"]
+        assert data["workflowId"] == "wflow1"
+        assert data["triggers"][0]["triggerType"] == "fileUpload"
 
-def test_workflow_unauthorized(get_workflow_event, mock_workflow_table, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler with an unauthorized request
-    
-    Args:
-        get_workflow_event: Lambda event dictionary for getting a specific workflow
-        mock_workflow_table: Mock for workflow table
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb = MagicMock()
-    mock_dynamodb.Table.return_value = mock_workflow_table
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["user"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Mock the CasbinEnforcer class to deny access
-    mock_enforcer = MagicMock()
-    mock_enforcer.enforceAPI.return_value = False
-    
-    # Patch the imports
-    with patch("boto3.resource", return_value=mock_dynamodb), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_enforcer), \
-         patch("common.dynamodb.validate_pagination_info"), \
-         patch("common.validators.validate", return_value=(True, "")):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 403
-        assert json.loads(response["body"])["message"] == "Not Authorized"
-        
-        # Verify the enforcer was called
-        mock_enforcer.enforceAPI.assert_called_once()
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_get_archived_hidden_by_default(self, mock_enforcer, mock_claims, mock_table):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1", "archived": True}}
+        mock_table.return_value = table
+        resp = lambda_handler(
+            _event("GET", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"}),
+            MagicMock())
+        assert resp["statusCode"] == 404
 
-def test_workflow_validation_error(get_workflow_event, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler with invalid input
-    
-    Args:
-        get_workflow_event: Lambda event dictionary for getting a specific workflow
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Modify the event to have invalid parameters
-    get_workflow_event["pathParameters"]["workflowId"] = "invalid-id-with-special-chars!@#"
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Mock the validate function to return an error
-    mock_validate = MagicMock()
-    mock_validate.return_value = (False, "Invalid workflow ID format")
-    
-    # Patch the imports
-    with patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.validators.validate", mock_validate):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 400
-        assert json.loads(response["body"])["message"] == "Invalid workflow ID format"
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
+    @patch(f"{MOD}._resolve_snapshot_pipeline_records")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_update_enable_disable(self, mock_enforcer, mock_claims, mock_table, mock_snapshot):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1",
+                                                "enabled": True, "systemConfig": {}}}
+        mock_table.return_value = table
+        mock_snapshot.return_value = []
+        resp = lambda_handler(
+            _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
+                   {"enabled": False}), MagicMock())
+        assert resp["statusCode"] == 200
+        assert table.put_item.call_args.kwargs["Item"]["enabled"] is False
 
-def test_workflow_error(get_workflow_event, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler when an error occurs
-    
-    Args:
-        get_workflow_event: Lambda event dictionary for getting a specific workflow
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock the request_to_claims function to raise an exception
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.side_effect = Exception("Test error")
-    
-    # Patch the imports
-    with patch("handlers.auth.request_to_claims", mock_request_to_claims):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 500
-        assert json.loads(response["body"])["message"] == "Internal Server Error"
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_archive_workflow(self, mock_enforcer, mock_claims, mock_table):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1", "enabled": True}}
+        mock_table.return_value = table
+        resp = lambda_handler(
+            _event("DELETE", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"}),
+            MagicMock())
+        assert resp["statusCode"] == 200
+        saved = table.put_item.call_args.kwargs["Item"]
+        assert saved["archived"] is True and saved["enabled"] is False
 
-def test_workflow_throttling_error(get_workflow_event, mock_casbin_enforcer, monkeypatch):
-    pytest.skip("Test failing with 'AttributeError: <backend.conftest.setup_mock_imports.<locals>.MockModule object> does not have the attribute 'request_to_claims''. Will need to be fixed later as unit tests are new and may not have correct logic.")
-    """
-    Test the workflowService lambda handler when a throttling error occurs
-    
-    Args:
-        get_workflow_event: Lambda event dictionary for getting a specific workflow
-        mock_casbin_enforcer: Mock for CasbinEnforcer
-        monkeypatch: Pytest monkeypatch fixture
-    """
-    # Set up environment variables
-    monkeypatch.setenv("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
-    
-    # Mock boto3 clients and resources
-    mock_dynamodb = MagicMock()
-    mock_table = MagicMock()
-    
-    # Create a throttling exception
-    throttling_exception = botocore.exceptions.ClientError(
-        {
-            "Error": {
-                "Code": "ThrottlingException",
-                "Message": "Rate exceeded"
-            },
-            "ResponseMetadata": {
-                "HTTPStatusCode": 429
-            }
-        },
-        "GetItem"
-    )
-    
-    mock_table.get_item.side_effect = throttling_exception
-    mock_dynamodb.Table.return_value = mock_table
-    
-    # Mock the request_to_claims function
-    mock_request_to_claims = MagicMock()
-    mock_request_to_claims.return_value = {
-        "tokens": ["test-token"],
-        "roles": ["admin"],
-        "sub": "test-user",
-        "email": "test@example.com"
-    }
-    
-    # Patch the imports
-    with patch("boto3.resource", return_value=mock_dynamodb), \
-         patch("handlers.auth.request_to_claims", mock_request_to_claims), \
-         patch("handlers.authz.CasbinEnforcer", return_value=mock_casbin_enforcer), \
-         patch("common.dynamodb.validate_pagination_info"), \
-         patch("common.validators.validate", return_value=(True, "")):
-        
-        # Import the module here to ensure our mocks are in place
-        from handlers.workflows import workflowService
-        
-        # Call the lambda handler
-        response = workflowService.lambda_handler(get_workflow_event, None)
-        
-        # Verify the response
-        assert response["statusCode"] == 429
-        assert "ThrottlingException" in json.loads(response["body"])["message"]
-        
-        # Verify the enforcer was called
-        mock_casbin_enforcer.enforceAPI.assert_called_once()
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_empty_pipelines_rejected(self, mock_enforcer, mock_claims):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        body = {"databaseId": "db1", "workflowName": "W", "specifiedPipelines": []}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 400
+
+
+@pytest.mark.unit
+class TestExecutionCountEnrichment:
+    """The workflow list enriches each authorized item with an executionCount (bounded COUNT query
+    on the by-workflow GSI). _execution_count is patched so no real DynamoDB is needed."""
+
+    def test_filtered_page_sets_execution_count(self):
+        from backend.backend.handlers.workflows import workflowService as ws
+        page = {"Items": [
+            {"databaseId": "db1", "workflowId": "wf-a", "workflowName": "A"},
+            {"databaseId": "db1", "workflowId": "wf-b", "workflowName": "B", "archived": True},
+        ]}
+        with patch.object(ws, "_enforce_workflow", return_value=True), \
+             patch.object(ws, "_execution_count", side_effect=lambda db, wid: {"wf-a": 7}.get(wid, 0)):
+            result = ws._filtered_page(page, include_archived=False, claims_and_roles={"tokens": ["u"]})
+        # Archived hidden by default; the visible workflow carries its execution count.
+        assert len(result.Items) == 1
+        assert result.Items[0].workflowId == "wf-a"
+        assert result.Items[0].executionCount == 7
+
+    def test_execution_count_returns_none_on_error(self):
+        # Best-effort: a count query failure must not break the listing — returns None.
+        from backend.backend.handlers.workflows import workflowService as ws
+        with patch.object(ws.dynamodb, "Table", side_effect=Exception("boom")):
+            assert ws._execution_count("db1", "wf-a") is None

@@ -1,0 +1,9 @@
+{
+    "templateId": "cosmos3-super-text2image",
+    "templateName": "Text-to-Image (Super)",
+    "description": "Generate an image from a text prompt with the Cosmos 3 Super (64B) omni model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_VARIANT\":\"super-text2image\",\"TASK_MODE\":\"text2image\",\"DISABLE_GUARDRAILS\":\"true\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Provide the generation prompt via the COSMOS3_PROMPT asset/file metadata key."
+}

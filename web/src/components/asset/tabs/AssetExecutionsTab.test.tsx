@@ -14,7 +14,7 @@ import * as permissions from "../../../features/orchestration/permissions/useAll
 // Mock orchestration query hooks
 jest.mock("../../../features/orchestration/api/queries", () => ({
     useExecutions: jest.fn(),
-    useWorkflows: jest.fn(),
+    useAllWorkflows: jest.fn(),
     useExecutionActions: jest.fn(),
 }));
 
@@ -40,7 +40,7 @@ describe("AssetExecutionsTab", () => {
         jest.clearAllMocks();
 
         // Default mocks
-        (queries.useWorkflows as jest.Mock).mockReturnValue({
+        (queries.useAllWorkflows as jest.Mock).mockReturnValue({
             data: [
                 {
                     workflowId: "wf1",

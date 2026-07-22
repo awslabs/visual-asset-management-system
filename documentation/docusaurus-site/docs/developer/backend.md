@@ -411,22 +411,22 @@ if not valid:
 
 ### Available Validators
 
-| Validator          | Pattern                      | Use For                |
-| ------------------ | ---------------------------- | ---------------------- |
-| `ID`               | `^[-_a-zA-Z0-9]{3,63}$`      | databaseId, pipelineId |
-| `ASSET_ID`         | filename pattern, max 256    | assetId                |
-| `UUID`             | Standard UUID format         | Unique identifiers     |
-| `OBJECT_NAME`      | `^[a-zA-Z0-9\-._\s]{1,256}$` | assetName, dbName      |
-| `EMAIL`            | Email regex                  | Email addresses        |
-| `USERID`           | `^[\w\-\.\+\@]{3,256}$`      | User identifiers       |
-| `FILE_NAME`        | No special characters        | File names             |
-| `STRING_256`       | Max 256 chars                | Medium strings         |
-| `ID_ARRAY`         | Array of IDs                 | Multiple IDs           |
-| `STRING_256_ARRAY` | Array of max-256 strings     | Tags, lists            |
-| `ARN`                      | Partition-aware AWS ARN        | Any AWS resource ARN (sub-process registration)        |
-| `CLOUDWATCH_LOG_GROUP_ARN` | Partition-aware log-group ARN  | Registered CloudWatch log-group locations              |
-| `CLOUDWATCH_LOG_GROUP_NAME`| 1-512 chars (`-_./#` + alnum)  | Registered CloudWatch log-group names                  |
-| `LOG_STREAM_NAME`          | 1-512 chars, no `:` or `*`     | Registered log-stream names / prefixes                 |
+| Validator                   | Pattern                       | Use For                                         |
+| --------------------------- | ----------------------------- | ----------------------------------------------- |
+| `ID`                        | `^[-_a-zA-Z0-9]{3,63}$`       | databaseId, pipelineId                          |
+| `ASSET_ID`                  | filename pattern, max 256     | assetId                                         |
+| `UUID`                      | Standard UUID format          | Unique identifiers                              |
+| `OBJECT_NAME`               | `^[a-zA-Z0-9\-._\s]{1,256}$`  | assetName, dbName                               |
+| `EMAIL`                     | Email regex                   | Email addresses                                 |
+| `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                |
+| `FILE_NAME`                 | No special characters         | File names                                      |
+| `STRING_256`                | Max 256 chars                 | Medium strings                                  |
+| `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                    |
+| `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                     |
+| `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration) |
+| `CLOUDWATCH_LOG_GROUP_ARN`  | Partition-aware log-group ARN | Registered CloudWatch log-group locations       |
+| `CLOUDWATCH_LOG_GROUP_NAME` | 1-512 chars (`-_./#` + alnum) | Registered CloudWatch log-group names           |
+| `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes          |
 
 All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
 

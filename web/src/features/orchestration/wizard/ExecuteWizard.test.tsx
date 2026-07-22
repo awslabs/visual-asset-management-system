@@ -12,9 +12,15 @@ import type { Workflow, Pipeline, Template } from "../types";
 // Mock the API queries
 jest.mock("../api/queries", () => ({
     useWorkflow: jest.fn(),
-    usePipelines: jest.fn(),
+    useAllPipelines: jest.fn(),
     useTemplates: jest.fn(),
     useExecuteWorkflow: jest.fn(),
+    // WizardInputStage's cascading selectors call these; default to idle/empty so the wizard
+    // renders. Individual tests can override if they exercise the input selectors.
+    useDatabases: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+    useAssets: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+    useAssetFiles: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+    useAssetVersions: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 // Mock Monaco editor
@@ -88,14 +94,19 @@ describe("ExecuteWizard", () => {
             isPending: false,
         };
 
-        const { useWorkflow, usePipelines, useTemplates, useExecuteWorkflow } = require("../api/queries");
+        const {
+            useWorkflow,
+            useAllPipelines,
+            useTemplates,
+            useExecuteWorkflow,
+        } = require("../api/queries");
 
         useWorkflow.mockReturnValue({
             data: mockWorkflow,
             isLoading: false,
         });
 
-        usePipelines.mockReturnValue({
+        useAllPipelines.mockReturnValue({
             data: [mockPipeline],
             isLoading: false,
             isSuccess: true,
@@ -119,7 +130,12 @@ describe("ExecuteWizard", () => {
 
         render(
             <QueryClientProvider client={queryClient}>
-                <ExecuteWizard open={true} onClose={onClose} workflow={mockWorkflow} databaseId="db1" />
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
             </QueryClientProvider>
         );
 
@@ -139,7 +155,12 @@ describe("ExecuteWizard", () => {
 
         render(
             <QueryClientProvider client={queryClient}>
-                <ExecuteWizard open={true} onClose={onClose} workflow={mockWorkflow} databaseId="db1" />
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
             </QueryClientProvider>
         );
 
@@ -191,8 +212,10 @@ describe("ExecuteWizard", () => {
             ],
         };
 
-        const { useTemplates: mockUseTemplates, useExecuteWorkflow: mockUseExecuteWorkflow } =
-            require("../api/queries");
+        const {
+            useTemplates: mockUseTemplates,
+            useExecuteWorkflow: mockUseExecuteWorkflow,
+        } = require("../api/queries");
 
         mockUseTemplates.mockReturnValue({
             data: [templateWithDefault],
@@ -204,7 +227,12 @@ describe("ExecuteWizard", () => {
 
         render(
             <QueryClientProvider client={queryClient}>
-                <ExecuteWizard open={true} onClose={onClose} workflow={mockWorkflow} databaseId="db1" />
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
             </QueryClientProvider>
         );
 
@@ -284,9 +312,9 @@ describe("ExecuteWizard", () => {
             },
         };
 
-        const { usePipelines, useTemplates, useExecuteWorkflow } = require("../api/queries");
+        const { useAllPipelines, useTemplates, useExecuteWorkflow } = require("../api/queries");
 
-        usePipelines.mockReturnValue({
+        useAllPipelines.mockReturnValue({
             data: [pipelineWithOverride],
             isLoading: false,
             isSuccess: true,
@@ -302,7 +330,12 @@ describe("ExecuteWizard", () => {
 
         render(
             <QueryClientProvider client={queryClient}>
-                <ExecuteWizard open={true} onClose={onClose} workflow={mockWorkflow} databaseId="db1" />
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
             </QueryClientProvider>
         );
 
@@ -315,8 +348,8 @@ describe("ExecuteWizard", () => {
             expect(pipelineHeader).toBeInTheDocument();
         });
 
-        // Enable custom override mode
-        const overrideCheckbox = screen.getByLabelText(/Use custom config override/i);
+        // Enable the unified "Customize configuration" toggle (sends the edited body as override).
+        const overrideCheckbox = screen.getByLabelText(/Customize configuration before running/i);
         fireEvent.click(overrideCheckbox);
 
         // Navigate to Review and Launch

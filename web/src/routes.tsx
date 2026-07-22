@@ -19,6 +19,9 @@ const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
 const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
 const WorkflowsPage2 = React.lazy(() => import("./pages/WorkflowsPage2"));
 const WorkflowBuilderPage = React.lazy(() => import("./pages/WorkflowBuilderPage"));
+const PipelineBuilderPage = React.lazy(() => import("./pages/PipelineBuilderPage"));
+const TemplateListPage = React.lazy(() => import("./pages/TemplateListPage"));
+const TemplateBuilderPage = React.lazy(() => import("./pages/TemplateBuilderPage"));
 const WorkflowTriggersPage = React.lazy(() => import("./pages/WorkflowTriggersPage"));
 const ExecutionsPage = React.lazy(() => import("./pages/ExecutionsPage"));
 const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
@@ -91,6 +94,31 @@ export const routeTable: RouteOption[] = [
         active: "#/pipelines/",
     },
     { path: "/pipelines", Page: PipelinesPage2, active: "#/pipelines/" },
+    {
+        path: "/databases/:databaseId/pipelines/create",
+        Page: PipelineBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates/create",
+        Page: TemplateBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates/:templateId",
+        Page: TemplateBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates",
+        Page: TemplateListPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId",
+        Page: PipelineBuilderPage,
+        active: "#/pipelines/",
+    },
     {
         path: "/databases/:databaseId/workflows",
         Page: WorkflowsPage2,

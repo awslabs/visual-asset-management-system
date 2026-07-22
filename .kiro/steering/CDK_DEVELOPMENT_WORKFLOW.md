@@ -1148,25 +1148,82 @@ export class [ConstructName]Construct extends Construct {
 
 #### **WAF Construct Example**
 
+The Web ACL rules come from `config/policy/wafPolicyConfig.json` (loaded into `config.wafPolicyJSON` in `getConfig()` and passed through `cf-waf-stack.ts` as `props.wafPolicy`). Rule precedence is `props.rules` (explicit) > `buildRulesFromPolicy(props.wafPolicy)` (config-driven) > `legacyDefaultRules` (count-only Common Rule Set when no policy is supplied).
+
 ```typescript
 // ✅ CORRECT - Real VAMS construct example
+export interface WafPolicyConfig {
+    managedRuleGroups?: Array<{
+        name: string;
+        vendorName: string;
+        managedRuleGroupName: string;
+        priority: number;
+        block?: boolean; // true => group's own block actions apply; false => count-only
+        // Per-rule overrides within the group: set one rule to count/allow/block without
+        // disabling the group (e.g. SizeRestrictions_BODY -> count so large upload bodies pass).
+        ruleActionOverrides?: Array<{ name: string; action: "count" | "block" | "allow" }>;
+    }>;
+    rateBasedRules?: Array<{
+        name: string;
+        priority: number;
+        limit: number; // per 5-min window per aggregate key
+        aggregateKeyType?: string; // "IP" (default) or "FORWARDED_IP"
+        forwardedIPConfig?: { headerName?: string; fallbackBehavior?: string }; // for FORWARDED_IP
+        blockResponseCode?: number; // default 429 (throttle), with a JSON custom-response body
+    }>;
+}
+
+function buildRulesFromPolicy(policy: WafPolicyConfig): Array<wafv2.CfnWebACL.RuleProperty> {
+    const rules: Array<wafv2.CfnWebACL.RuleProperty> = [];
+    for (const group of policy.managedRuleGroups || []) {
+        const ruleActionOverrides = (group.ruleActionOverrides || []).map((o) => ({
+            name: o.name,
+            actionToUse:
+                o.action === "count"
+                    ? { count: {} }
+                    : o.action === "allow"
+                    ? { allow: {} }
+                    : { block: {} },
+        }));
+        rules.push({
+            name: group.name,
+            priority: group.priority,
+            overrideAction: group.block === false ? { count: {} } : { none: {} },
+            statement: {
+                managedRuleGroupStatement: {
+                    vendorName: group.vendorName,
+                    name: group.managedRuleGroupName,
+                    ...(ruleActionOverrides.length ? { ruleActionOverrides } : {}),
+                },
+            },
+            visibilityConfig: {
+                sampledRequestsEnabled: true,
+                cloudWatchMetricsEnabled: true,
+                metricName: group.name,
+            },
+        });
+    }
+    // ... rateBasedRules omitted for brevity
+    return rules;
+}
+
 export class Wafv2BasicConstruct extends Construct {
     public webacl: wafv2.CfnWebACL;
 
     constructor(parent: Construct, name: string, props: Wafv2BasicConstructProps) {
         super(parent, name);
-
-        // Merge with defaults
         props = { ...defaultProps, ...props };
-
-        // Validate scope and region
         const wafScopeString = props.wafScope!.toString();
 
-        // Create WAF WebACL
+        // Precedence: explicit props.rules > policy config > legacy default.
+        const resolvedRules =
+            props.rules ||
+            (props.wafPolicy ? buildRulesFromPolicy(props.wafPolicy) : legacyDefaultRules);
+
         const webacl = new wafv2.CfnWebACL(this, "webacl", {
-            description: "Basic WAF for VAMS",
+            description: "Basic WAF",
             defaultAction: { allow: {} },
-            rules: props.rules,
+            rules: resolvedRules,
             scope: wafScopeString,
             visibilityConfig: {
                 cloudWatchMetricsEnabled: true,
@@ -1179,6 +1236,10 @@ export class Wafv2BasicConstruct extends Construct {
     }
 }
 ```
+
+The shipped `wafPolicyConfig.json` overrides the Common Rule Set's `SizeRestrictions_BODY` rule to `count` — it is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking.
+
+The shipped `VAMS-RateLimit` rate-based rule uses `aggregateKeyType: FORWARDED_IP` (with `forwardedIPConfig` on `X-Forwarded-For`, `NO_MATCH` fallback) so it counts the real client IP behind CloudFront, an ALB, or a shared NAT/VPN egress — the same policy applies to both the CloudFront-scoped and regional web ACLs. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/wafRateLimit.test.ts`.
 
 ### **Security Helper Integration**
 

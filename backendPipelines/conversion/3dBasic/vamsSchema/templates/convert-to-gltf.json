@@ -1,0 +1,8 @@
+{
+    "templateId": "convert-to-gltf",
+    "templateName": "Convert to GLTF",
+    "description": "Convert a 3D mesh to GLTF format using the Trimesh library.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".gltf\"}",
+    "allowCustomEdit": false
+}

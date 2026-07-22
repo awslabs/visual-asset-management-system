@@ -1,0 +1,5 @@
+{
+    "workflowName": "3D Gaussian Splat Toolbox",
+    "category": "3D Reconstruction",
+    "description": "3D Gaussian Splat Pipeline - auto process images and videos into 3D splats (objects and 360 environments)."
+}

@@ -445,6 +445,28 @@ export const RULES: Rule[] = [
         message:
             "Must define a new asset bucket and/or at least one app.assetBuckets.externalAssetBuckets.",
     },
+    {
+        id: "assetbucket-default-too-many",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) =>
+            ((g(c, "app.assetBuckets.externalAssetBuckets") || []) as any[]).filter(
+                (b) => b && b.isDefault
+            ).length > 1,
+        message: "At most one app.assetBuckets.externalAssetBuckets entry may set isDefault=true.",
+    },
+    {
+        id: "assetbucket-default-required",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets", "app.assetBuckets.createNewBucket"],
+        appliesWhen: (c) =>
+            !g(c, "app.assetBuckets.createNewBucket") &&
+            ((g(c, "app.assetBuckets.externalAssetBuckets") || []) as any[]).filter(
+                (b) => b && b.isDefault
+            ).length === 0,
+        message:
+            "Exactly one app.assetBuckets.externalAssetBuckets entry must set isDefault=true when createNewBucket is false.",
+    },
 
     // ----- Global VPC subnets / CIDR (config.ts:665-718, 758-777) -----
     {
