@@ -566,46 +566,43 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.env.partition !== "aws-eusc" &&
                 !props.config.env.partition.startsWith("aws-iso");
             if (props.config.app.authProvider.useCognito.enabled && cognitoVpcEndpointsSupported) {
-                // Cognito User Pools (cognito-idp)
-                new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // Cognito Identity Pools (cognito-identity) — no CDK enum member, so use the
-                // generic service constructor. Omit the prefix argument so CDK derives the
-                // partition-aware default (e.g. "cn.com.amazonaws" + ".cn" suffix in China);
-                // passing "com.amazonaws" explicitly would override that and break China.
-                new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity"),
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // FIPS variants for FIPS or GovCloud deployments
-                if (props.config.app.useFips) {
-                    new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint_FIPS", {
-                        vpc: this.vpc,
-                        privateDnsEnabled: true,
-                        service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP_FIPS,
-                        subnets: { subnets: this.isolatedSubnets },
-                        securityGroups: [vpceSecurityGroup],
-                    });
-
-                    new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint_FIPS", {
-                        vpc: this.vpc,
-                        privateDnsEnabled: true,
-                        // Omit the prefix so CDK derives the partition-aware default.
-                        service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity-fips"),
-                        subnets: { subnets: this.isolatedSubnets },
-                        securityGroups: [vpceSecurityGroup],
-                    });
-                }
+                // // Cognito User Pools (cognito-idp)
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                // // Cognito Identity Pools (cognito-identity) — no CDK enum member, so use the
+                // // generic service constructor. Omit the prefix argument so CDK derives the
+                // // partition-aware default (e.g. "cn.com.amazonaws" + ".cn" suffix in China);
+                // // passing "com.amazonaws" explicitly would override that and break China.
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity"),
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                // // FIPS variants for FIPS or GovCloud deployments
+                // if (props.config.app.useFips) {
+                //     new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint_FIPS", {
+                //         vpc: this.vpc,
+                //         privateDnsEnabled: true,
+                //         service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP_FIPS,
+                //         subnets: { subnets: this.isolatedSubnets },
+                //         securityGroups: [vpceSecurityGroup],
+                //     });
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint_FIPS", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     // Omit the prefix so CDK derives the partition-aware default.
+                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity-fips"),
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                //}
             }
 
             //Add for all endpoints if using KMS

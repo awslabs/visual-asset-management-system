@@ -246,30 +246,27 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 
 #### VPC Interface Endpoints
 
-| Endpoint                              | Created When                                                             | Subnet Type                     |
-| ------------------------------------- | ------------------------------------------------------------------------ | ------------------------------- |
-| API Gateway                           | `addVpcEndpoints=true`                                                   | Isolated                        |
-| SSM                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
-| Lambda                                | `addVpcEndpoints=true`                                                   | Isolated                        |
-| STS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
-| CloudWatch Logs                       | `addVpcEndpoints=true`                                                   | Isolated                        |
-| Step Functions                        | `addVpcEndpoints=true`                                                   | Isolated                        |
-| SNS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
-| SQS                                   | `addVpcEndpoints=true`                                                   | Isolated                        |
-| Cognito IDP (`cognito-idp`)           | `useCognito.enabled=true` (not GovCloud / EU Sovereign)                  | Isolated                        |
-| Cognito Identity (`cognito-identity`) | `useCognito.enabled=true` (not GovCloud / EU Sovereign)                  | Isolated                        |
-| Cognito IDP/Identity FIPS             | `useCognito.enabled=true` + `useFips=true` (not GovCloud / EU Sovereign) | Isolated                        |
-| KMS                                   | `useKmsCmkEncryption.enabled=true`                                       | Isolated                        |
-| KMS FIPS                              | `useKmsCmkEncryption.enabled=true` + `useFips=true`                      | Isolated                        |
-| AWS Batch                             | Any pipeline enabled                                                     | Isolated                        |
-| ECR API                               | Any pipeline enabled                                                     | Isolated                        |
-| ECR Docker                            | Any pipeline enabled                                                     | Isolated                        |
-| EFS                                   | `useNvidiaCosmos.enabled=true`                                           | Isolated                        |
-| ECS                                   | Pipelines with Batch compute                                             | Private (preferred) or Isolated |
-| ECS Agent                             | `useIsaacLabTraining.enabled=true`                                       | Isolated                        |
-| ECS Telemetry                         | `useIsaacLabTraining.enabled=true`                                       | Isolated                        |
-| Bedrock Runtime                       | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`      | Isolated                        |
-| Rekognition                           | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`      | Isolated                        |
+| Endpoint        | Created When                                                        | Subnet Type                     |
+| --------------- | ------------------------------------------------------------------- | ------------------------------- |
+| API Gateway     | `addVpcEndpoints=true`                                              | Isolated                        |
+| SSM             | `addVpcEndpoints=true`                                              | Isolated                        |
+| Lambda          | `addVpcEndpoints=true`                                              | Isolated                        |
+| STS             | `addVpcEndpoints=true`                                              | Isolated                        |
+| CloudWatch Logs | `addVpcEndpoints=true`                                              | Isolated                        |
+| Step Functions  | `addVpcEndpoints=true`                                              | Isolated                        |
+| SNS             | `addVpcEndpoints=true`                                              | Isolated                        |
+| SQS             | `addVpcEndpoints=true`                                              | Isolated                        |
+| KMS             | `useKmsCmkEncryption.enabled=true`                                  | Isolated                        |
+| KMS FIPS        | `useKmsCmkEncryption.enabled=true` + `useFips=true`                 | Isolated                        |
+| AWS Batch       | Any pipeline enabled                                                | Isolated                        |
+| ECR API         | Any pipeline enabled                                                | Isolated                        |
+| ECR Docker      | Any pipeline enabled                                                | Isolated                        |
+| EFS             | `useNvidiaCosmos.enabled=true`                                      | Isolated                        |
+| ECS             | Pipelines with Batch compute                                        | Private (preferred) or Isolated |
+| ECS Agent       | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
+| ECS Telemetry   | `useIsaacLabTraining.enabled=true`                                  | Isolated                        |
+| Bedrock Runtime | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
+| Rekognition     | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true` | Isolated                        |
 
 #### Gateway Endpoints (Always Created)
 
@@ -282,8 +279,8 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled. VAMS consolidates ECS endpoint subnets across pipeline types, with private subnets taking priority over isolated subnets when both are needed.
 :::
 
-:::warning[Manually created endpoints must include Cognito for in-VPC MFA]
-When `addVpcEndpoints=false` (you create the VPC endpoints by hand, for example under an organizational policy that prohibits the solution from creating them), include the `cognito-idp` and `cognito-identity` interface endpoints from the table above whenever Amazon Cognito is the auth provider. VAMS keeps the Cognito MFA check enabled in this configuration on the assumption that those endpoints exist; if they are omitted, in-VPC Lambda functions cannot reach Amazon Cognito and the MFA check will fail. (Amazon Cognito PrivateLink is not available in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions, where VAMS disables the MFA check automatically.)
+:::warning[Cognito MFA requires the authorizer to run outside the VPC]
+VAMS does not create Amazon Cognito VPC interface endpoints. When Lambda functions run in the VPC (`useForAllLambdas=true`), the API Gateway authorizer has no path to Amazon Cognito, so VAMS disables the Cognito MFA check and `mfaRequired` on a role has no effect. The MFA check and MFA-aware role enforcement apply only when the authorizer runs outside the VPC.
 :::
 
 ## Amazon OpenSearch Service (`app.openSearch`)

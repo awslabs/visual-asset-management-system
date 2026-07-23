@@ -66,7 +66,7 @@ A role is a named permission group. Users are assigned to roles, and roles have 
 :::note[MFA-aware roles]
 Roles can be configured with `mfaRequired: true`. When MFA is required, the role's constraints are only active when the user's session includes a valid MFA claim. If MFA is not present, the role is treated as if it does not exist for that session.
 
-MFA enforcement requires the authorization Lambda functions to reach Amazon Cognito. VAMS creates `cognito-idp` and `cognito-identity` VPC interface endpoints when Cognito is enabled, so in-VPC Lambda functions (including in isolated subnets) can reach Amazon Cognito and MFA-aware roles are enforced in VPC deployments. The check is disabled only when Lambda functions run in the VPC in the AWS GovCloud (US) or AWS European Sovereign Cloud partition, where Amazon Cognito PrivateLink is not available, in which case `mfaRequired` has no effect. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for the exact conditions.
+MFA enforcement requires the API Gateway authorizer to reach Amazon Cognito. VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer running inside the VPC has no path to Amazon Cognito. MFA-aware roles are enforced only when the authorizer runs outside the VPC; when Lambda functions run in the VPC (`useForAllLambdas`), the Cognito MFA check is disabled and `mfaRequired` has no effect. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for the exact conditions.
 :::
 
 ### Constraints

@@ -77,6 +77,40 @@ export const getSecureConfig = async () => {
     return apiClient.get(`secure-config`, {});
 };
 
+/**
+ * Fetch the backend VAMS version from the anonymous "/api/version" endpoint.
+ * This route requires no authorization, so it is fetched directly (bypassing
+ * apiClient's auth header injection), mirroring getAmplifyConfig's addressing.
+ * @returns {Promise<string | null>} The backend version string, or null on failure.
+ */
+export const getVamsVersion = async (): Promise<string | null> => {
+    let versionUrl: URL;
+    try {
+        if (vamsConfig.DEV_API_ENDPOINT === "") {
+            versionUrl = new URL("/api/version", window.location.origin);
+        } else {
+            const stagedBase = ensureApiStage(vamsConfig.DEV_API_ENDPOINT);
+            versionUrl = new URL("api/version", stagedBase);
+        }
+    } catch (error: any) {
+        console.log("getVamsVersion: Invalid base URL", error?.message);
+        return null;
+    }
+
+    try {
+        const response = await fetch(versionUrl);
+        if (!response.ok) {
+            console.log("getVamsVersion: HTTP error", response.status, response.statusText);
+            return null;
+        }
+        const data = await response.json();
+        return data?.version ?? null;
+    } catch (error: any) {
+        console.log("getVamsVersion: Fetch error", error?.message);
+        return null;
+    }
+};
+
 export const webRoutes = async (body: any) => {
     console.log("webRoutes");
     try {

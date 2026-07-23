@@ -148,32 +148,16 @@ const auditLogSuppressedStacks = new Set<string>();
  * handler Lambdas through the authorizer context), so only the authorizer's own VPC
  * placement matters.
  *
- * VAMS creates cognito-idp / cognito-identity VPC interface endpoints when Cognito is
- * enabled, so an in-VPC authorizer (including isolated subnets) can reach Amazon Cognito.
- * The only case where the check must be disabled is when the authorizer runs in the VPC
- * AND the deployment is in a partition where Amazon Cognito PrivateLink is not available
- * at all — AWS GovCloud (US), AWS European Sovereign Cloud, or the ISO partitions. VAMS
- * cannot create the Cognito interface endpoints there and there is no in-VPC path to
- * Cognito. This is expressed as a deny-list (not an allow-list of `aws`) because Cognito
- * PrivateLink IS available in the AWS China partition (`aws-cn`), which must stay enabled.
- *
- * Note: `useGlobalVpc.addVpcEndpoints = false` does NOT disable the check. That option
- * means the operator creates the required VPC endpoints by hand (e.g. under
- * organizational restrictions that forbid the solution creating them). The Cognito
- * endpoints are expected to exist in that case, so Cognito remains reachable — see the
- * documented list of required endpoints.
+ * VAMS does not create Cognito VPC interface endpoints, so an authorizer running inside
+ * the VPC has no in-VPC path to Amazon Cognito. The check is therefore enabled only when
+ * the authorizer runs outside the VPC — that is, when Lambda functions are not placed in
+ * the VPC (`useForAllLambdas`). When the authorizer runs in the VPC the check is disabled
+ * regardless of partition, and `mfaRequired` on a role has no effect.
  */
 export function isCognitoMfaCheckEnabled(config: Config.Config): boolean {
     const authorizerInVpc =
         config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
-    const cognitoPrivateLinkUnavailable =
-        config.env.partition === "aws-us-gov" ||
-        config.env.partition === "aws-eusc" ||
-        config.env.partition.startsWith("aws-iso");
-    return (
-        config.app.authProvider.useCognito.enabled &&
-        !(authorizerInVpc && cognitoPrivateLinkUnavailable)
-    );
+    return config.app.authProvider.useCognito.enabled && !authorizerInVpc;
 }
 
 export function globalLambdaEnvironmentsAndPermissions(
