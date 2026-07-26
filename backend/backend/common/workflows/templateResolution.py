@@ -40,7 +40,7 @@ class TemplateResolutionError(Exception):
 
 def _filled_from_raw_tags(provided_tags):
     """Build a {key: value} map from caller-provided [{key, value}] tags with NO schema (the
-    override-without-template case). Reserved system tag keys are rejected (comment 5d); every other
+    override-without-template case). Reserved system tag keys are rejected; every other
     provided value is taken as-is. Returns (errors, filled)."""
     errors = []
     filled = {}

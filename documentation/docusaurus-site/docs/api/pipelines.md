@@ -22,12 +22,12 @@ GET /pipelines
 
 ### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                     |
-| --------------- | ------ | -------- | ------- | ----------------------------------------------- |
-| `maxItems`      | number | No       | `10000` | Maximum number of items to return               |
-| `pageSize`      | number | No       | `10000` | Number of items per page                        |
-| `startingToken` | string | No       | `null`  | Pagination token from previous response         |
-| `showDeleted`   | string | No       | `false` | Include soft-deleted pipelines (`true`/`false`) |
+| Parameter         | Type   | Required | Default | Description                                 |
+| ----------------- | ------ | -------- | ------- | ------------------------------------------- |
+| `maxItems`        | number | No       | `100`   | Maximum number of items to return           |
+| `pageSize`        | number | No       | `100`   | Number of items per page                    |
+| `startingToken`   | string | No       | `null`  | Pagination token from previous response     |
+| `includeArchived` | string | No       | `false` | Include archived pipelines (`true`/`false`) |
 
 ### Response
 
@@ -53,6 +53,7 @@ GET /pipelines
                 },
                 "enabled": true,
                 "archived": false,
+                "templateCount": 2,
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-15T10:30:00Z"
             }
@@ -89,10 +90,9 @@ GET /database/{databaseId}/pipelines
 
 | Parameter         | Type   | Required | Default | Description                             |
 | ----------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`        | number | No       | `10000` | Maximum number of items to return       |
-| `pageSize`        | number | No       | `10000` | Number of items per page                |
+| `maxItems`        | number | No       | `100`   | Maximum number of items to return       |
+| `pageSize`        | number | No       | `100`   | Number of items per page                |
 | `startingToken`   | string | No       | `null`  | Pagination token from previous response |
-| `showDeleted`     | string | No       | `false` | Include soft-deleted pipelines          |
 | `includeArchived` | string | No       | `false` | Include archived pipelines              |
 
 :::note[Archived pipelines]
@@ -138,7 +138,7 @@ GET /database/{databaseId}/pipelines/{pipelineId}
 Archived pipelines are hidden by default. Set `includeArchived=true` to retrieve a pipeline whose `archived` flag is set.
 :::
 
-The response includes the pipeline's `executionConfig` and `systemConfig`, the optional `category` label, the `archived` flag, and a `templates` array of lightweight descriptors for the templates that belong to the pipeline.
+The response includes the pipeline's `executionConfig` and `systemConfig`, the optional `category` label, the `archived` flag, a `templateCount` of saved templates, and a `templates` array of lightweight descriptors for the templates that belong to the pipeline. `templateCount` is also present on each entry of the list responses.
 
 ### Response
 
@@ -179,12 +179,13 @@ The response includes the pipeline's `executionConfig` and `systemConfig`, the o
         },
         "enabled": true,
         "archived": false,
+        "templateCount": 1,
         "templates": [
             {
                 "templateId": "high-quality",
                 "templateName": "High quality",
-                "description": "High-fidelity conversion preset",
-                "configFormat": "json"
+                "configFormat": "json",
+                "allowCustomEdit": false
             }
         ]
     }
@@ -256,7 +257,7 @@ POST /database/{databaseId}/pipelines
 
 ### Response
 
-Returns the created pipeline, in the same shape as [Get a pipeline](#get-a-pipeline).
+Returns the created pipeline, in the same shape as [Get a pipeline](#get-a-pipeline), plus an optional `warnings` array. See [Trigger consistency warnings](#trigger-consistency-warnings).
 
 ### Error responses
 
@@ -310,7 +311,7 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 
 ### Response
 
-Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipeline).
+Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipeline), plus an optional `warnings` array. See [Trigger consistency warnings](#trigger-consistency-warnings).
 
 ### Error responses
 
@@ -321,6 +322,23 @@ Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipel
 | `404`  | Pipeline not found    |
 | `500`  | Internal server error |
 
+### Trigger consistency warnings
+
+Creating or updating a pipeline succeeds (`200`) even when it is inconsistent with an auto-trigger that references it, returning a non-blocking `warnings` array alongside `message`. When a pipeline requires a template (`systemConfig.requireTemplate` is `true`) and is part of an auto-triggered workflow whose trigger has chosen no default template for it, the save succeeds with a warning: triggered executions of that workflow fail until the trigger picks a default template for this pipeline. The warning (rather than a rejection) avoids an ordering problem between saving a workflow's triggers and updating its pipelines.
+
+```json
+{
+    "message": {
+        "databaseId": "my-database",
+        "pipelineId": "my-conversion-pipeline",
+        "pipelineName": "Convert to glTF"
+    },
+    "warnings": [
+        "pipeline 'Convert to glTF' requires a template and is part of auto-triggered workflow 'my-database:convert-and-preview' (trigger 'fileUpload'), but that trigger has not chosen a default template for it. Triggered executions will fail until the trigger picks a default template for this pipeline."
+    ]
+}
+```
+
 ---
 
 ## Delete a pipeline
@@ -330,10 +348,6 @@ Archives a pipeline. The delete is a soft-delete that sets the pipeline's `archi
 ```
 DELETE /database/{databaseId}/pipelines/{pipelineId}
 ```
-
-:::warning[Workflow dependency check]
-A pipeline cannot be deleted if it is referenced by any active workflow. You must first remove the pipeline from all workflows before deleting it. The API returns a `400` error with a list of referencing workflows if this constraint is violated.
-:::
 
 ### Path parameters
 
@@ -346,18 +360,17 @@ A pipeline cannot be deleted if it is referenced by any active workflow. You mus
 
 ```json
 {
-    "message": "Pipeline deleted"
+    "message": "Pipeline archived"
 }
 ```
 
 ### Error responses
 
-| Status | Description                                 |
-| ------ | ------------------------------------------- |
-| `400`  | Pipeline is in use by one or more workflows |
-| `403`  | Not authorized                              |
-| `404`  | Pipeline not found                          |
-| `500`  | Internal server error                       |
+| Status | Description           |
+| ------ | --------------------- |
+| `403`  | Not authorized        |
+| `404`  | Pipeline not found    |
+| `500`  | Internal server error |
 
 ---
 
@@ -380,26 +393,25 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates
 | `databaseId` | string | Yes      | Database identifier |
 | `pipelineId` | string | Yes      | Pipeline identifier |
 
-#### Query parameters
-
-| Parameter       | Type   | Required | Default | Description                             |
-| --------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`      | number | No       | `10000` | Maximum number of items to return       |
-| `pageSize`      | number | No       | `10000` | Number of items per page                |
-| `startingToken` | string | No       | `null`  | Pagination token from previous response |
-
 #### Response
 
 ```json
 {
-    "templates": [
-        {
-            "templateId": "high-quality",
-            "templateName": "High quality",
-            "description": "High-fidelity conversion preset",
-            "configFormat": "json"
-        }
-    ]
+    "message": {
+        "Items": [
+            {
+                "templateId": "high-quality",
+                "templateName": "High quality",
+                "configFormat": "json",
+                "allowCustomEdit": false,
+                "isDefault": false,
+                "inputInstructions": "Choose the conversion quality preset.",
+                "dateCreated": "2026-03-15T10:30:00Z",
+                "dateModified": "2026-03-15T10:30:00Z"
+            }
+        ],
+        "NextToken": null
+    }
 }
 ```
 
@@ -469,14 +481,29 @@ POST /database/{databaseId}/pipelines/{pipelineId}/templates
 
 Returns the created template with `configBody` and `webFormJson` inline.
 
+:::note[Templates used as a trigger default must be headless-runnable]
+When a template is referenced by a workflow trigger as a default (see [Set a trigger](workflows.md#set-a-trigger)) and its tag schema has a required tag with no default value, the save is rejected with `400` and a `triggerTemplateErrors` list under `message`. A trigger fires headless executions, which cannot supply template tags interactively, so each required tag on a trigger-default template needs a default value or must be optional. A template not referenced by any trigger is unaffected — a missing required tag is instead caught at run time for an interactive execution.
+
+```json
+{
+    "message": {
+        "triggerTemplateErrors": [
+            "this template is a trigger default for workflow(s) [my-database:convert-and-preview] and has required tag(s) with no default value: scale. Give each a default value or make it optional."
+        ]
+    }
+}
+```
+
+:::
+
 #### Error responses
 
-| Status | Description                    |
-| ------ | ------------------------------ |
-| `400`  | Validation error               |
-| `403`  | Not authorized                 |
-| `404`  | Database or pipeline not found |
-| `500`  | Internal server error          |
+| Status | Description                                                                                                                 |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, or the template is a trigger default with a required tag with no default value (`triggerTemplateErrors`). |
+| `403`  | Not authorized                                                                                                              |
+| `404`  | Database or pipeline not found                                                                                              |
+| `500`  | Internal server error                                                                                                       |
 
 #### Template overrides
 
@@ -526,25 +553,27 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
 
 ```json
 {
-    "databaseId": "my-database",
-    "pipelineId": "my-conversion-pipeline",
-    "templateId": "high-quality",
-    "templateName": "High quality",
-    "description": "High-fidelity conversion preset",
-    "configFormat": "json",
-    "configBody": "{\"quality\": \"{{quality}}\", \"draco\": true}",
-    "allowCustomEdit": false,
-    "inputInstructions": "Choose the conversion quality preset.",
-    "tagSchema": [
-        {
-            "tagKey": "quality",
-            "type": "enum",
-            "required": true,
-            "default": "high",
-            "label": "Quality",
-            "enumValues": ["low", "medium", "high"]
-        }
-    ]
+    "message": {
+        "pipelineDatabaseId": "my-database",
+        "pipelineId": "my-conversion-pipeline",
+        "templateId": "high-quality",
+        "templateName": "High quality",
+        "description": "High-fidelity conversion preset",
+        "configFormat": "json",
+        "configBody": "{\"quality\": \"{{quality}}\", \"draco\": true}",
+        "allowCustomEdit": false,
+        "inputInstructions": "Choose the conversion quality preset.",
+        "tagSchema": [
+            {
+                "tagKey": "quality",
+                "type": "enum",
+                "required": true,
+                "default": "high",
+                "label": "Quality",
+                "enumValues": ["low", "medium", "high"]
+            }
+        ]
+    }
 }
 ```
 
@@ -580,14 +609,18 @@ Any subset of `templateName`, `description`, `configFormat`, `configBody`, `webF
 
 Returns the updated template with `configBody` and `webFormJson` inline.
 
+:::note[Templates used as a trigger default must be headless-runnable]
+As with [Create a template](#create-a-template), when the template is referenced by a workflow trigger as a default and its tag schema has a required tag with no default value, the update is rejected with `400` and a `triggerTemplateErrors` list under `message`. Give each such tag a default value or make it optional.
+:::
+
 #### Error responses
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Validation error                          |
-| `403`  | Not authorized                            |
-| `404`  | Database, pipeline, or template not found |
-| `500`  | Internal server error                     |
+| Status | Description                                                                                                                 |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, or the template is a trigger default with a required tag with no default value (`triggerTemplateErrors`). |
+| `403`  | Not authorized                                                                                                              |
+| `404`  | Database, pipeline, or template not found                                                                                   |
+| `500`  | Internal server error                                                                                                       |
 
 ### Delete a template
 
@@ -641,16 +674,24 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSche
 
 ```json
 {
-    "fields": [
-        {
-            "tagKey": "quality",
-            "type": "enum",
-            "required": true,
-            "default": "high",
-            "label": "Quality",
-            "enumValues": ["low", "medium", "high"]
-        }
-    ]
+    "message": {
+        "pipelineDatabaseId": "my-database",
+        "pipelineId": "my-conversion-pipeline",
+        "templateId": "high-quality",
+        "tagSchemaId": "a1b2c3d4",
+        "fields": [
+            {
+                "tagKey": "quality",
+                "type": "enum",
+                "required": true,
+                "default": "high",
+                "label": "Quality",
+                "enumValues": ["low", "medium", "high"]
+            }
+        ],
+        "dateCreated": "2026-03-15T10:30:00Z",
+        "dateModified": "2026-03-15T10:30:00Z"
+    }
 }
 ```
 
@@ -708,7 +749,7 @@ Reserved system tag keys (the built-in template tags, such as `executionId` and 
 
 #### Response
 
-Returns the stored tag schema (`{ "fields": [ ... ] }`).
+Returns the stored tag schema wrapped in `message`, alongside `pipelineDatabaseId`, `pipelineId`, `templateId`, `tagSchemaId`, and the create/modify timestamps — the same shape as [Get a template's tag schema](#get-a-templates-tag-schema).
 
 #### Error responses
 
@@ -782,15 +823,15 @@ VAMS pipelines support several execution types, each suited for different integr
 
 The default execution type. VAMS invokes an AWS Lambda function synchronously as a Step Functions task.
 
--   If you provide a `lambdaName`, VAMS uses your existing Lambda function.
--   If you omit `lambdaName`, VAMS auto-creates a sample Lambda function with a unique name.
--   Auto-created Lambda functions are deleted when the pipeline is deleted.
+-   If you provide `executionConfig.lambda.resourceId`, VAMS uses your existing Lambda function.
+-   If you omit `executionConfig.lambda.resourceId`, VAMS auto-creates a sample Lambda function with a unique name.
+-   Deleting a pipeline is a soft-archive; any auto-created Lambda function is left in place.
 
 ### SQS
 
 VAMS sends a message to an Amazon SQS queue. This is ideal for integrating with external processing systems that poll an SQS queue.
 
--   Requires `sqsQueueUrl` in the pipeline definition.
+-   Requires `executionConfig.sqs.queueUrl` in the pipeline definition.
 -   The SQS queue must be pre-created and accessible. VAMS does not create SQS queues.
 -   Supports `waitForCallback` for asynchronous processing with task token callback.
 
@@ -798,8 +839,8 @@ VAMS sends a message to an Amazon SQS queue. This is ideal for integrating with 
 
 VAMS publishes an event to an Amazon EventBridge bus. This is ideal for event-driven architectures and fan-out patterns.
 
--   Optionally accepts `eventBridgeBusArn` (defaults to the account's default event bus).
--   Optionally accepts `eventBridgeSource` and `eventBridgeDetailType` for event filtering.
+-   Optionally accepts `executionConfig.eventBridge.busArn` (defaults to the account's default event bus).
+-   Optionally accepts `executionConfig.eventBridge.source` and `executionConfig.eventBridge.detailType` for event filtering.
 -   Supports `waitForCallback` for asynchronous processing with task token callback.
 
 ### DeadlineCloud

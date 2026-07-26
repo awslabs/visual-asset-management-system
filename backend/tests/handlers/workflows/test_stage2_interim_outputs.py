@@ -38,6 +38,38 @@ from backend.backend.handlers.workflows.sfn import handleExecutionError as heh
 # ============================ executionOutputs (pure) ============================
 
 @pytest.mark.unit
+class TestRunningStatusHelpers:
+    """set_main_status_running / set_pipeline_status_running perform a conditional NEW->RUNNING
+    update (ConditionExpression on executionStatus=NEW) so they never clobber a terminal status,
+    and swallow the ConditionalCheckFailed a fast-finishing run raises."""
+
+    def test_set_main_status_running_conditional_update(self):
+        table = MagicMock()
+        dynamo = MagicMock(Table=MagicMock(return_value=table))
+        eo.set_main_status_running(dynamo, "main-tbl", "E1", "db", "wf")
+        kwargs = table.update_item.call_args.kwargs
+        assert kwargs["ExpressionAttributeValues"][":st"] == "RUNNING"
+        assert kwargs["ExpressionAttributeValues"][":new"] == "NEW"
+        assert "executionStatus = :new" in kwargs["ConditionExpression"]
+
+    def test_set_main_status_running_swallows_conditional_failure(self):
+        table = MagicMock()
+        table.update_item.side_effect = Exception("ConditionalCheckFailedException")
+        dynamo = MagicMock(Table=MagicMock(return_value=table))
+        # Must not raise (a run that already finished/started is expected to fail the condition).
+        eo.set_main_status_running(dynamo, "main-tbl", "E1", "db", "wf")
+
+    def test_set_pipeline_status_running_conditional_update(self):
+        table = MagicMock()
+        dynamo = MagicMock(Table=MagicMock(return_value=table))
+        eo.set_pipeline_status_running(dynamo, "pexec-tbl", "P2", "E1")
+        kwargs = table.update_item.call_args.kwargs
+        assert kwargs["Key"] == {"pipelineExecutionId": "P2", "workflowExecutionId": "E1"}
+        assert kwargs["ExpressionAttributeValues"][":st"] == "RUNNING"
+        assert "executionStatus = :new" in kwargs["ConditionExpression"]
+
+
+@pytest.mark.unit
 class TestOutputAttribution:
     def test_attribute_new_and_changed_versions(self):
         snapshot = {"k/a": "v1", "k/b": "v1"}
@@ -145,6 +177,34 @@ class TestInterimPipelineTracking:
         assert put_object.call_args.kwargs["Key"] == body["nextPipelineManifestS3Key"]
         assert result["inputManifestS3Location"].endswith("pipeline2/manifest.json")
         assert result["inputConfigurationS3Location"].endswith("pipeline2/config.json")
+
+    def test_next_pipeline_marked_running(self):
+        # When the interim step carries a nextPipelineExecutionId, it flips that pipeline NEW->RUNNING
+        # (via set_pipeline_status_running) as the previous one is marked SUCCEEDED, so the
+        # per-pipeline progress indicator advances through the chain.
+        body = {
+            "workflowExecutionId": "EXEC1",
+            "workflowDatabaseId": "wdb", "workflowId": "wf",
+            "outputFilesPrefix": "pipelines/p1/job/output/EXEC1/files/",
+            "fromPipelineExecutionId": "P1",
+            "priorPipelineExecutionIds": ["P1"],
+            "nextPipelineExecutionId": "P2",
+            "nextPipelineManifestS3Key": "pipelines/p1/job/input/EXEC1/pipeline2/manifest.json",
+            "nextPipelineConfigS3Key": "pipelines/p1/job/input/EXEC1/pipeline2/config.json",
+        }
+        run_status = MagicMock()
+        with patch.object(ipt.s3c, "put_object", MagicMock()), \
+             patch.object(ipt.eo, "recorded_output_versions", return_value={}), \
+             patch.object(ipt.eo, "list_current_output_files", return_value=[]), \
+             patch.object(ipt.eo, "record_pipeline_output_files", MagicMock()), \
+             patch.object(ipt.eo, "set_pipeline_status", MagicMock()), \
+             patch.object(ipt.eo, "set_pipeline_status_running", run_status), \
+             patch.object(ipt, "_get_original_input_entries", return_value=[]):
+            ipt.lambda_handler(self._event(body), MagicMock())
+        run_status.assert_called_once()
+        # (dynamo, table, pipeline_execution_id, workflow_execution_id)
+        assert run_status.call_args.args[2] == "P2"
+        assert run_status.call_args.args[3] == "EXEC1"
 
     def test_original_input_relativepath_is_stripped_to_asset_relative(self):
         # The stored inputAssetFileKey is the FULL asset-ID-prefixed key; _get_original_input_entries

@@ -9,6 +9,7 @@ import { useTemplates, useTemplateMutations, usePipeline } from "../api/queries"
 import type { Template, ConfigFormat, TagSchemaField } from "../types";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm from "../components/DynamicTagForm";
+import SystemTagHelp from "../components/SystemTagHelp";
 import TagSchemaBuilder from "./TagSchemaBuilder";
 import TemplateOverridesEditor from "./TemplateOverridesEditor";
 import Stepper from "../components/Stepper";
@@ -116,8 +117,8 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     };
 
     return (
-        <div className="orchestration-root p-6 space-y-6 bg-surface min-h-full">
-            <div className="space-y-1">
+        <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+            <div className="space-y-2">
                 <Breadcrumb
                     items={[
                         { label: "Pipelines", to: `/databases/${databaseId}/pipelines` },
@@ -230,6 +231,9 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 onChange={(val) => setConfigBody(val || "")}
                                 height="300px"
                             />
+                            <div className="mt-2">
+                                <SystemTagHelp />
+                            </div>
                         </div>
                         <div>
                             <label className="flex items-center space-x-2">
@@ -310,7 +314,9 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
 
                 {saveError && (
                     <div className="p-3 bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 rounded">
-                        <p className="text-sm text-red-800 dark:text-red-200">{saveError}</p>
+                        <p className="text-sm text-red-800 dark:text-red-200 whitespace-pre-line">
+                            {saveError}
+                        </p>
                     </div>
                 )}
             </div>

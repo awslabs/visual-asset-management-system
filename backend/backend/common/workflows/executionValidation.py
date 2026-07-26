@@ -19,7 +19,7 @@ the base; a chosen template's `overrides` replaces, per key, only `inputFileArit
 
 import fnmatch
 
-# Keys a template may override on the pipeline systemConfig (comment 2e).
+# Keys a template may override on the pipeline systemConfig.
 TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inputFileFilters")
 
 _METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes")
@@ -185,7 +185,7 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
         label = f"pipeline '{pdb}:{pid}'" if pdb else f"pipeline '{pid}'"
         psc = pipeline.get("systemConfig") or {}
 
-        # Disabled / archived gate (comment 5c).
+        # Disabled / archived gate.
         if pipeline.get("enabled") is False:
             errors.append(f"{label} is disabled and cannot run in this workflow.")
         if pipeline.get("archived") is True:
@@ -194,7 +194,7 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
         arity = psc.get("inputFileArity", "one")
 
         # A 'none' pipeline never consumes files: it receives no inputs regardless of what the
-        # workflow selected (matrix row: single/multi file + pipeline none -> pass no files, soft).
+        # workflow selected.
         if arity == "none":
             filtered[pid] = []
             continue
@@ -203,7 +203,7 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
         pipeline_inputs = apply_input_file_filters(selected_inputs, psc.get("inputFileFilters"))
         filtered[pid] = pipeline_inputs
 
-        # Filter-to-empty on a file-requiring pipeline is a HARD error (locked decision 7).
+        # A file-requiring pipeline whose filters exclude all selected inputs is a hard error.
         if selected_inputs and not pipeline_inputs:
             errors.append(
                 f"{label} requires input files but its input-file filters exclude all selected inputs."

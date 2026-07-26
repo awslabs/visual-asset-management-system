@@ -14,7 +14,7 @@ interface AssetExecutionsTabProps {
 }
 
 /**
- * Asset "Workflows" tab — shows this asset's executions. The "Execute workflow" action lives in the
+ * Asset "Executions" tab — shows this asset's executions. The "Execute workflow" action lives in the
  * ExecutionsBoard toolbar (shared with the global Executions page), so there is no separate control
  * here; launching from the board presets this asset as the input.
  */

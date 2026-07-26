@@ -49,6 +49,7 @@ from models.pipelines import (
     GetPipelinesResponseModel,
 )
 from common.workflows import pipelineRecords as pr
+from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
 
 logger = safeLogger(service_name="PipelineService")
 
@@ -58,6 +59,8 @@ lambda_client = boto3.client("lambda")
 try:
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
     templates_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATES_STORAGE_TABLE)
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    workflow_triggers_table_name = get_table_name(ResourceKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
@@ -100,6 +103,31 @@ def _templates_table():
     return dynamodb.Table(templates_table_name)
 
 
+def _workflow_table():
+    return dynamodb.Table(workflow_table_name)
+
+
+def _get_fileupload_trigger_row(workflow_database_id, workflow_id):
+    """The fileUpload trigger row for a workflow (or None). Used to warn when a require-template
+    pipeline is in an auto-triggered workflow whose trigger picked no default template for it."""
+    composite = f"{workflow_database_id}:{workflow_id}"
+    try:
+        return dynamodb.Table(workflow_triggers_table_name).get_item(
+            Key={"workflowDatabaseId:workflowId": composite, "triggerType": "fileUpload"}
+        ).get("Item")
+    except Exception:
+        return None
+
+
+def _pipeline_save_warnings(item):
+    """Non-blocking warnings for a saved pipeline (empty list when none). Today: a require-template
+    pipeline that is part of an auto-triggered workflow with no default template chosen for it."""
+    require_template = bool((item.get("systemConfig") or {}).get("requireTemplate"))
+    return pipeline_trigger_template_warnings(
+        _workflow_table(), _get_fileupload_trigger_row,
+        item.get("databaseId", ""), item.get("pipelineId", ""), require_template)
+
+
 def _casbin_object(item):
     """The Tier-2 Casbin object for a pipeline row: the record + object__type + the flat ABAC
     constraint fields (name from pipelineName; pipelineExecutionType from executionConfig)."""
@@ -109,7 +137,33 @@ def _casbin_object(item):
     return obj
 
 
-def _item_to_response(item, templates=None):
+def _template_count(database_id, pipeline_id):
+    """Number of saved templates for one pipeline via a COUNT query on the templates table (no item
+    read, no scan). Pages through Count (DynamoDB caps a COUNT query at 1MB of scanned index per
+    page). Best-effort: returns None on any error so a count failure never breaks the pipeline
+    listing."""
+    composite = pr.pipeline_composite_key(database_id, pipeline_id)
+    try:
+        table = _templates_table()
+        total = 0
+        kwargs = {
+            "KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite),
+            "Select": "COUNT",
+        }
+        while True:
+            resp = table.query(**kwargs)
+            total += resp.get("Count", 0)
+            lek = resp.get("LastEvaluatedKey")
+            if not lek:
+                break
+            kwargs["ExclusiveStartKey"] = lek
+        return total
+    except Exception as e:
+        logger.warning(f"Template count failed for {composite}: {e}")
+        return None
+
+
+def _item_to_response(item, templates=None, template_count=None):
     return PipelineResponseModel(
         databaseId=item.get("databaseId", ""),
         pipelineId=item.get("pipelineId", ""),
@@ -125,6 +179,7 @@ def _item_to_response(item, templates=None):
         createdBy=item.get("createdBy", ""),
         modifiedBy=item.get("modifiedBy", ""),
         schemaVersion=item.get("schemaVersion", 1),
+        templateCount=template_count,
         templates=templates,
     )
 
@@ -240,7 +295,10 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles):
         if not include_archived and item.get("archived"):
             continue
         if _enforce(claims_and_roles, item, "GET"):
-            items.append(_item_to_response(item))
+            # Template count is a bounded COUNT query per authorized pipeline on this page
+            # (page size caps the fan-out, so no unbounded N+1). Best-effort — None on failure.
+            count = _template_count(item.get("databaseId", ""), item.get("pipelineId", ""))
+            items.append(_item_to_response(item, template_count=count))
     result = GetPipelinesResponseModel(Items=items)
     if "NextToken" in page_iterator:
         result.NextToken = page_iterator["NextToken"]
@@ -248,9 +306,13 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles):
 
 
 def get_all_pipelines(query_params, include_archived, claims_and_roles):
-    paginator = dynamodb.meta.client.get_paginator("scan")
+    # Query the by-date GSI (constant partition, newest-first) instead of scanning the whole table.
+    paginator = dynamodb.meta.client.get_paginator("query")
     page_iterator = paginator.paginate(
         TableName=pipeline_table_name,
+        IndexName="PipelinesByDateGSI",
+        KeyConditionExpression=Key("allListPartition").eq(pr.ALL_PIPELINES_LIST_PARTITION),
+        ScanIndexForward=False,
         PaginationConfig=_pagination_config(query_params),
     ).build_full_result()
     return _filtered_page(page_iterator, include_archived, claims_and_roles)
@@ -330,7 +392,13 @@ def create_pipeline(database_id, request, username, claims_and_roles):
         record.get("executionConfig"), pipeline_id)
 
     table.put_item(Item=record)
-    return success(body={"message": _item_to_response(record).dict()})
+    body = {"message": _item_to_response(record).dict()}
+    # Non-blocking save warnings (e.g. require-template pipeline in an auto-trigger with no default
+    # template chosen). Included only when present so a clean save is unchanged.
+    warnings = _pipeline_save_warnings(record)
+    if warnings:
+        body["warnings"] = warnings
+    return success(body=body)
 
 
 def update_pipeline(database_id, pipeline_id, request, username, claims_and_roles):
@@ -362,7 +430,11 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
     item["modifiedBy"] = username
 
     _pipeline_table().put_item(Item=item)
-    return success(body={"message": _item_to_response(item).dict()})
+    body = {"message": _item_to_response(item).dict()}
+    warnings = _pipeline_save_warnings(item)
+    if warnings:
+        body["warnings"] = warnings
+    return success(body=body)
 
 
 def archive_pipeline(database_id, pipeline_id, username, claims_and_roles):
@@ -437,7 +509,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 if not _enforce(claims_and_roles, item, "GET"):
                     return authorization_error()
                 templates = get_pipeline_templates(database_id, pipeline_id)
-                return success(body={"message": _item_to_response(item, templates=templates).dict()})
+                return success(body={"message": _item_to_response(
+                    item, templates=templates, template_count=len(templates)).dict()})
             if database_id:
                 result = get_database_pipelines(database_id, query_parameters, include_archived, claims_and_roles)
                 return success(body={"message": result.dict()})

@@ -15,26 +15,32 @@ use [`workflow execute`](workflows.md#workflow-execute); for a single asset's ex
 ## execution list
 
 List workflow executions globally, permission-filtered. You only see executions whose workflow you
-can read and whose input or output asset you can read. Supports rich filters and pagination.
+can read and whose input or output asset you can read. Supports rich filters and pagination. By
+default only recent executions — those started within the last 90 days — are listed; use
+`--filter-start-date` and `--filter-end-date` to query an explicit date range. The applied window is
+returned as `filterStartDate` (and `filterEndDate` when supplied) in the response.
 
 ```bash
 vamscli execution list
 vamscli execution list -w my-workflow --status RUNNING
+vamscli execution list --filter-start-date 2026-01-01T00:00:00Z --filter-end-date 2026-02-01T00:00:00Z
 vamscli execution list --group-id batch-2026-01 --auto-paginate
 vamscli execution list --triggered-by user@example.com --json-output
 ```
 
-| Option                            | Description                                                        |
-| --------------------------------- | ------------------------------------------------------------------ |
-| `-w, --workflow-id`               | Filter by workflow ID                                              |
-| `--workflow-database-id`          | Filter by workflow database ID                                     |
-| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`) |
-| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                  |
-| `--group-id`                      | Filter by `executionGroupId`                                       |
-| `--triggered-by`                  | Filter by the user ID that triggered the execution                 |
-| `--page-size`                     | Items per page (max 100)                                           |
-| `--auto-paginate` / `--max-items` | Fetch all pages (up to max-items)                                  |
-| `--starting-token`                | Continuation token for manual pagination                           |
+| Option                            | Description                                                                      |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| `-w, --workflow-id`               | Filter by workflow ID                                                            |
+| `--workflow-database-id`          | Filter by workflow database ID                                                   |
+| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`)               |
+| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                |
+| `--group-id`                      | Filter by `executionGroupId`                                                     |
+| `--triggered-by`                  | Filter by the user ID that triggered the execution                               |
+| `--filter-start-date`             | Only executions started on/after this ISO-8601 date-time (default: 90 days ago)  |
+| `--filter-end-date`               | Only executions started on/before this ISO-8601 date-time (optional upper bound) |
+| `--page-size`                     | Items per page (max 100)                                                         |
+| `--auto-paginate` / `--max-items` | Fetch all pages (up to max-items)                                                |
+| `--starting-token`                | Continuation token for manual pagination                                         |
 
 ---
 
@@ -57,6 +63,10 @@ log is often empty (it is captured before CloudWatch finishes ingesting the run'
 to a live CloudWatch search for the same scope when the stored copy is empty. `full` mode always runs a
 live CloudWatch search scoped to the execution (and optionally a single pipeline execution). The output
 reports `Source: stored` or `Source: live` so you can tell which was returned.
+
+Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS
+access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and
+`SessionToken` — are replaced with `<redacted>` before the logs are stored or returned.
 
 ```bash
 vamscli execution logs my-execution-id

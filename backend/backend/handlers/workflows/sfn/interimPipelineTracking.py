@@ -137,6 +137,12 @@ def record_previous_pipeline_outputs(body):
             from_pipeline_execution_id, workflow_execution_id,
             "SUCCEEDED", stop_date=er.iso_now())
 
+    # Advance the next pipeline NEW -> RUNNING (pipeline 1 is set RUNNING at launch).
+    to_pipeline_execution_id = body.get('nextPipelineExecutionId', '') or body.get('toPipelineExecutionId', '')
+    if to_pipeline_execution_id:
+        eo.set_pipeline_status_running(
+            dynamodb, pipeline_executions_table, to_pipeline_execution_id, workflow_execution_id)
+
     return current_files
 
 

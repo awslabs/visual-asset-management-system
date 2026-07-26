@@ -18,12 +18,12 @@ GET /workflows
 
 ### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                             |
-| --------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`      | number | No       | `10000` | Maximum number of items to return       |
-| `pageSize`      | number | No       | `10000` | Number of items per page                |
-| `startingToken` | string | No       | `null`  | Pagination token from previous response |
-| `showDeleted`   | string | No       | `false` | Include soft-deleted workflows          |
+| Parameter         | Type   | Required | Default | Description                             |
+| ----------------- | ------ | -------- | ------- | --------------------------------------- |
+| `maxItems`        | number | No       | `100`   | Maximum number of items to return       |
+| `pageSize`        | number | No       | `100`   | Number of items per page                |
+| `startingToken`   | string | No       | `null`  | Pagination token from previous response |
+| `includeArchived` | string | No       | `false` | Include archived workflows              |
 
 ### Response
 
@@ -342,6 +342,8 @@ Triggers auto-launch a workflow in response to an event. The `fileUpload` trigge
 
 Trigger endpoints are authorized on the parent workflow: API-level access is checked first, followed by object-level Casbin policy enforcement on the owning workflow.
 
+A trigger-launched execution runs as the reserved system identity rather than as the user whose action fired the trigger, and its execution record reflects this (`triggerType` `File-Upload`, `triggeredByUserId` set to the system identity). This is intentional: the user who uploaded a file may not hold permission to run the workflow, but the trigger must still process the upload reliably, so the execution is decoupled from the acting user's permissions. Executions started directly through the [execute endpoint](#execute-a-workflow) run as the calling user.
+
 ### List triggers
 
 Retrieves the triggers configured on a workflow.
@@ -361,19 +363,27 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers
 
 ```json
 {
-    "triggers": [
-        {
-            "triggerType": "fileUpload",
-            "inputFileFilters": {
-                "allow": ["*.fbx", "*.obj"],
-                "exclude": []
-            },
-            "defaultTemplateIds": {
-                "GLOBAL:3d-conversion-pipeline": "high-quality"
-            },
-            "enabled": true
-        }
-    ]
+    "message": {
+        "Items": [
+            {
+                "workflowDatabaseId": "GLOBAL",
+                "workflowId": "convert-and-preview",
+                "triggerType": "fileUpload",
+                "triggerConfig": {
+                    "inputFileFilters": {
+                        "allow": ["*.fbx", "*.obj"],
+                        "exclude": []
+                    },
+                    "defaultTemplateIds": {
+                        "GLOBAL:3d-conversion-pipeline": "high-quality"
+                    }
+                },
+                "enabled": true,
+                "dateCreated": "2026-03-15T10:30:00Z",
+                "dateModified": "2026-03-15T10:30:00Z"
+            }
+        ]
+    }
 }
 ```
 
@@ -405,15 +415,23 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 ```json
 {
-    "triggerType": "fileUpload",
-    "inputFileFilters": {
-        "allow": ["*.fbx", "*.obj"],
-        "exclude": []
-    },
-    "defaultTemplateIds": {
-        "GLOBAL:3d-conversion-pipeline": "high-quality"
-    },
-    "enabled": true
+    "message": {
+        "workflowDatabaseId": "GLOBAL",
+        "workflowId": "convert-and-preview",
+        "triggerType": "fileUpload",
+        "triggerConfig": {
+            "inputFileFilters": {
+                "allow": ["*.fbx", "*.obj"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:3d-conversion-pipeline": "high-quality"
+            }
+        },
+        "enabled": true,
+        "dateCreated": "2026-03-15T10:30:00Z",
+        "dateModified": "2026-03-15T10:30:00Z"
+    }
 }
 ```
 
@@ -469,14 +487,29 @@ PUT /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 Returns the stored trigger, in the same shape as [Get a trigger](#get-a-trigger).
 
+:::note[Trigger default templates must be headless-runnable]
+A trigger fires headless executions, which cannot supply template tags interactively. When a template named in `defaultTemplateIds` has a required tag with no default value, the request is rejected with `400` and a `triggerTemplateErrors` list under `message`, identifying each offending template, its pipeline, and the tag keys at fault. Give each such tag a default value or make it optional, or choose a different default template. `defaultTemplateIds` is optional — a trigger need not name a default template for a pipeline.
+
+```json
+{
+    "message": {
+        "triggerTemplateErrors": [
+            "template 'high-quality' (pipeline '3d-conversion-pipeline') is chosen as a trigger default but has required tag(s) with no default value: scale. A triggered (headless) execution cannot supply these, so give each a default value or make it optional."
+        ]
+    }
+}
+```
+
+:::
+
 #### Error responses
 
-| Status | Description                    |
-| ------ | ------------------------------ |
-| `400`  | Validation error               |
-| `403`  | Not authorized                 |
-| `404`  | Database or workflow not found |
-| `500`  | Internal server error          |
+| Status | Description                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error, or a chosen default template has a required tag with no default value (`triggerTemplateErrors`). |
+| `403`  | Not authorized                                                                                                     |
+| `404`  | Database or workflow not found                                                                                     |
+| `500`  | Internal server error                                                                                              |
 
 ### Delete a trigger
 
@@ -713,10 +746,14 @@ The applied lower bound is echoed back as `filterStartDate`.
             {
                 "workflowDatabaseId": "GLOBAL",
                 "workflowId": "convert-and-preview",
-                "executionId": "a1b2c3d4-e5f6-7890",
+                "workflowExecutionId": "a1b2c3d4-e5f6-7890",
                 "executionStatus": "SUCCEEDED",
-                "startDate": "03/15/2026, 10:30:00",
-                "stopDate": "03/15/2026, 10:32:15",
+                "startDate": "2026-03-15T10:30:00Z",
+                "stopDate": "2026-03-15T10:32:15Z",
+                "executionStartDate": "2026-03-15T10:30:00Z",
+                "executionStopDate": "2026-03-15T10:32:15Z",
+                "triggerType": "Manual",
+                "executionGroupId": "",
                 "inputAssetFileKey": "models/building.fbx"
             }
         ],
@@ -742,22 +779,26 @@ All executions are returned, both completed and running. Completed executions us
 
 Lists executions across all assets, not scoped to one asset. Results are permission-filtered: an execution is visible when the caller has `GET` on its workflow **and** `GET` on any of its input assets or its output asset.
 
+The list shows recent executions by default — those started within the last 90 days. Supply `filterStartDate` (and optionally `filterEndDate`) to query an explicit date range. The applied window is echoed back as `filterStartDate` (and `filterEndDate` when supplied).
+
 ```
 GET /workflows/executions
 ```
 
 ### Query parameters
 
-| Parameter                     | Type    | Required | Description                                       |
-| ----------------------------- | ------- | -------- | ------------------------------------------------- |
-| `maxItems` / `pageSize`       | integer | No       | Page size (capped; excess pages via `NextToken`). |
-| `startingToken` / `NextToken` | string  | No       | Pagination continuation token.                    |
-| `workflowId`                  | string  | No       | Filter by workflow id.                            |
-| `workflowDatabaseId`          | string  | No       | Filter by workflow database id.                   |
-| `status`                      | string  | No       | Filter by execution status.                       |
-| `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`). |
-| `groupId`                     | string  | No       | Filter by execution group id.                     |
-| `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.   |
+| Parameter                     | Type    | Required | Description                                                                                                                      |
+| ----------------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `maxItems` / `pageSize`       | integer | No       | Page size (capped; excess pages via `NextToken`).                                                                                |
+| `startingToken` / `NextToken` | string  | No       | Pagination continuation token.                                                                                                   |
+| `filterStartDate`             | string  | No       | ISO-8601 lower bound on execution start date; only executions started on or after this date are listed. Defaults to 90 days ago. |
+| `filterEndDate`               | string  | No       | ISO-8601 upper bound on execution start date; only executions started on or before this date are listed.                         |
+| `workflowId`                  | string  | No       | Filter by workflow id.                                                                                                           |
+| `workflowDatabaseId`          | string  | No       | Filter by workflow database id.                                                                                                  |
+| `status`                      | string  | No       | Filter by execution status.                                                                                                      |
+| `triggerType`                 | string  | No       | Filter by trigger type (`Manual`, `File-Upload`).                                                                                |
+| `groupId`                     | string  | No       | Filter by execution group id.                                                                                                    |
+| `triggeredByUserId`           | string  | No       | Filter by the user who triggered the execution.                                                                                  |
 
 ### Response
 
@@ -777,6 +818,7 @@ GET /workflows/executions
                 "executionGroupId": ""
             }
         ],
+        "filterStartDate": "2025-12-15T10:30:00Z",
         "NextToken": "…"
     }
 }
@@ -815,11 +857,33 @@ The route is keyed on the execution identifier because an execution may span inp
 
 ### Response
 
+Aborting a single execution returns:
+
 ```json
 {
     "message": "Execution aborted"
 }
 ```
+
+A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed.
+
+When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome:
+
+```json
+{
+    "message": {
+        "groupId": "nightly-batch-2026-07",
+        "results": [
+            { "executionId": "a1b2c3d4-e5f6-7890", "status": "aborted" },
+            { "executionId": "b2c3d4e5-f6a7-8901", "status": "skipped-terminal" }
+        ],
+        "skippedInaccessibleCount": 1,
+        "moreRemaining": true
+    }
+}
+```
+
+`skippedInaccessibleCount` (members the caller is not authorized on, counted but not identified) and `moreRemaining` (more active authorized members remain beyond this request's cap — re-invoke to continue) are present only when non-zero/applicable.
 
 :::note[Authorization]
 Aborting an execution requires `GET` permission on the execution's workflow and `POST` permission on every input-file asset tied to the execution. Because the execution does not modify the workflow definition, only read access to the workflow is required; because it affects the processed assets, write (`POST`) access to those assets is required.
@@ -934,6 +998,7 @@ The route is keyed on the execution identifier because an execution may span inp
         "outputLocationType": "asset",
         "outputDatabaseId": "my-database",
         "outputAssetId": "a1b2c3",
+        "outputFileBaseExecutionPathExtension": "/",
         "pipelines": [
             {
                 "pipelineId": "3d-conversion-pipeline",
@@ -948,7 +1013,11 @@ The route is keyed on the execution identifier because an execution may span inp
                 "executionStartDate": "2026-06-16T00:00:05Z",
                 "executionStopDate": "2026-06-16T00:04:50Z",
                 "renderedConfig": "{\"outputFormat\": \"gltf\"}",
-                "renderedConfigTruncated": false
+                "renderedConfigTruncated": false,
+                "templateId": "high-quality",
+                "templateTags": [{ "key": "scale", "value": "1.0" }],
+                "customTemplateOverrideUsed": false,
+                "configFormat": "json"
             }
         ],
         "inputFiles": [
@@ -994,13 +1063,16 @@ The route is keyed on the execution identifier because an execution may span inp
                     "resultsContentTruncated": false
                 }
             ]
-        }
+        },
+        "truncatedCollections": []
     }
 }
 ```
 
-:::note[Running executions]
-The details endpoint works for both running and completed executions. While an execution is still running, not all fields are populated yet — pipelines that have not started have empty status and timing, and outputs appear as each pipeline completes.
+:::note[Running executions and per-pipeline status]
+The details endpoint works for both running and completed executions. The top-level `executionStatus` reflects the live state: `RUNNING` while the workflow is in progress, then a terminal status (`SUCCEEDED`, `FAILED`, `ABORTED`, `TIMED_OUT`) when it finishes; a non-terminal record is reconciled against AWS Step Functions on read so a stopped run never remains `RUNNING`.
+
+Each entry in `pipelines[]` carries its own `executionStatus` that advances through the workflow: a pipeline is `NEW` (queued) until it starts, `RUNNING` while it executes, and `SUCCEEDED`/`FAILED` when it finishes. This lets a client show which pipeline of the workflow is currently running. Outputs appear as each pipeline completes.
 :::
 
 :::note[Traceability, not internals]
@@ -1027,6 +1099,8 @@ For executions whose output target is an asset, each output file carries the tar
 ## Get execution logs
 
 Returns logs for an execution in one of two modes. Logs are always scoped to the requested execution; supplying a `pipelineExecutionId` narrows the result to that single pipeline execution.
+
+Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` — are replaced with `<redacted>` before the logs are stored or returned.
 
 ```
 GET /workflows/executions/{executionId}/logs

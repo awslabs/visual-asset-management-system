@@ -46,6 +46,28 @@ class TestWorkflowServiceV2:
         resp = lambda_handler(_event("GET", "/workflows"), MagicMock())
         assert resp["statusCode"] == 403
 
+    @patch(f"{MOD}._execution_count", return_value=0)
+    @patch(f"{MOD}.dynamodb")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_global_list_queries_by_date_gsi(self, mock_enforcer, mock_claims, mock_dynamodb, mock_count):
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        paginator = MagicMock()
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "Items": [{"databaseId": "db1", "workflowId": "wflow1", "enabled": True, "archived": False}]
+        }
+        mock_dynamodb.meta.client.get_paginator.return_value = paginator
+        event = _event("GET", "/workflows", query={"maxItems": "100", "pageSize": "100", "startingToken": None})
+        resp = lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        assert json.loads(resp["body"])["message"]["Items"][0]["workflowId"] == "wflow1"
+        # Global list queries the by-date GSI newest-first, not a table scan.
+        mock_dynamodb.meta.client.get_paginator.assert_called_with("query")
+        paginate_kwargs = paginator.paginate.call_args.kwargs
+        assert paginate_kwargs["IndexName"] == "WorkflowsByDateGSI"
+        assert paginate_kwargs["ScanIndexForward"] is False
+
     @patch(f"{MOD}.workflowAsl")
     @patch(f"{MOD}._get_pipeline_record")
     @patch(f"{MOD}._workflow_table")
@@ -275,3 +297,20 @@ class TestExecutionCountEnrichment:
         from backend.backend.handlers.workflows import workflowService as ws
         with patch.object(ws.dynamodb, "Table", side_effect=Exception("boom")):
             assert ws._execution_count("db1", "wf-a") is None
+
+    def test_execution_count_bounds_to_recent_window(self):
+        # The COUNT query is bounded to the recent window: its KeyConditionExpression combines the
+        # workflow composite PK with an executionStartDate >= cutoff range (so the count reflects only
+        # recent executions and the query stays bounded).
+        from backend.backend.handlers.workflows import workflowService as ws
+        table = MagicMock()
+        table.query.return_value = {"Count": 3}
+        with patch.object(ws.dynamodb, "Table", return_value=table):
+            assert ws._execution_count("db1", "wf-a") == 3
+        kwargs = table.query.call_args.kwargs
+        assert kwargs["IndexName"] == ws.WORKFLOW_EXECUTIONS_BY_WORKFLOW_GSI
+        assert kwargs["Select"] == "COUNT"
+        # The key condition is an AND of the PK equality and the executionStartDate lower bound.
+        expr = kwargs["KeyConditionExpression"]
+        rendered = expr.get_expression() if hasattr(expr, "get_expression") else {}
+        assert rendered.get("operator") == "AND"

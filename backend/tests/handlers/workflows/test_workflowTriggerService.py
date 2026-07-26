@@ -68,17 +68,20 @@ class TestWorkflowTriggerService:
         resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
         assert resp["statusCode"] == 403
 
+    @patch(f"{MOD}._load_template_tag_schema_fields")
     @patch(f"{MOD}._triggers_table")
     @patch(f"{MOD}._enforce_parent_workflow")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
-    def test_set_trigger(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+    def test_set_trigger(self, mock_enforcer, mock_claims, mock_parent, mock_table, mock_load_schema):
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, WF_ITEM)
         table = MagicMock()
         table.get_item.return_value = {}  # no existing trigger
         mock_table.return_value = table
+        # The chosen default template has no tag schema (nothing to validate as headless-unsafe).
+        mock_load_schema.return_value = None
         body = {"inputFileFilters": {"allow": ["*.glb"], "exclude": []},
                 "defaultTemplateIds": {"db1:pipe1": "tmpl1"}}
         resp = lambda_handler(_event("PUT", BASE + "/fileUpload", TPARAMS, body), MagicMock())
@@ -87,6 +90,54 @@ class TestWorkflowTriggerService:
         assert saved["triggerType"] == "fileUpload"
         assert saved["triggerConfig"]["defaultTemplateIds"] == {"db1:pipe1": "tmpl1"}
         assert saved["triggerConfig"]["inputFileFilters"]["allow"] == ["*.glb"]
+
+    @patch(f"{MOD}._load_template_tag_schema_fields")
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_set_trigger_rejects_default_template_with_required_no_default(
+        self, mock_enforcer, mock_claims, mock_parent, mock_table, mock_load_schema):
+        # A trigger runs headless; a chosen default template with a required tag lacking a default
+        # can never render, so the save is rejected (400) rather than silently failing every run.
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.get_item.return_value = {}
+        mock_table.return_value = table
+        mock_load_schema.return_value = [
+            {"tagKey": "quality", "type": "string", "required": True},  # required, no default
+        ]
+        body = {"inputFileFilters": {"allow": ["*.glb"], "exclude": []},
+                "defaultTemplateIds": {"db1:pipe1": "tmpl1"}}
+        resp = lambda_handler(_event("PUT", BASE + "/fileUpload", TPARAMS, body), MagicMock())
+        assert resp["statusCode"] == 400
+        errors = json.loads(resp["body"])["message"]["triggerTemplateErrors"]
+        assert any("quality" in e for e in errors)
+        table.put_item.assert_not_called()
+
+    @patch(f"{MOD}._load_template_tag_schema_fields")
+    @patch(f"{MOD}._triggers_table")
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_set_trigger_allows_required_tag_with_default(
+        self, mock_enforcer, mock_claims, mock_parent, mock_table, mock_load_schema):
+        # A required tag WITH a default is fine headlessly — the default fills it.
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, WF_ITEM)
+        table = MagicMock()
+        table.get_item.return_value = {}
+        mock_table.return_value = table
+        mock_load_schema.return_value = [
+            {"tagKey": "quality", "type": "string", "required": True, "default": "high"},
+        ]
+        body = {"inputFileFilters": {"allow": ["*.glb"], "exclude": []},
+                "defaultTemplateIds": {"db1:pipe1": "tmpl1"}}
+        resp = lambda_handler(_event("PUT", BASE + "/fileUpload", TPARAMS, body), MagicMock())
+        assert resp["statusCode"] == 200
 
     @patch(f"{MOD}._triggers_table")
     @patch(f"{MOD}._enforce_parent_workflow")

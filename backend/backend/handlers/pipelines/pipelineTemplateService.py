@@ -54,6 +54,7 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import templateTagSchema as tts
 from common.workflows.defaultBucket import resolve_default_bucket, DefaultBucketNotFoundError
+from common.workflows.triggerTemplateValidation import validate_template_not_breaking_triggers
 
 logger = safeLogger(service_name="PipelineTemplateService")
 
@@ -65,6 +66,8 @@ try:
     templates_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATES_STORAGE_TABLE)
     tag_schema_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE)
     buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    triggers_table_name = get_table_name(ResourceKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
@@ -82,6 +85,14 @@ def _templates_table():
 
 def _tag_schema_table():
     return dynamodb.Table(tag_schema_table_name)
+
+
+def _triggers_table():
+    return dynamodb.Table(triggers_table_name)
+
+
+def _workflow_table():
+    return dynamodb.Table(workflow_table_name)
 
 
 def _default_bucket_name():
@@ -335,6 +346,14 @@ def create_template(database_id, pipeline_id, request, username):
         schema_errors = tts.validate_tag_schema(request.tagSchema)
         if schema_errors:
             return validation_error(body={"message": {"tagSchemaErrors": schema_errors}})
+        # If this template is (already) a trigger default, a required-without-default tag would break
+        # the headless trigger. On create the id is usually new, but a client may supply an id that a
+        # trigger already references, so check here too.
+        trigger_errors = validate_template_not_breaking_triggers(
+            _triggers_table(), _workflow_table(), database_id, pipeline_id, template_id,
+            request.tagSchema)
+        if trigger_errors:
+            return validation_error(body={"message": {"triggerTemplateErrors": trigger_errors}})
 
     storage = _store_template_bodies(
         database_id, pipeline_id, template_id, request.configBody, request.webFormJson
@@ -376,6 +395,13 @@ def update_template(database_id, pipeline_id, template_id, request, username):
         schema_errors = tts.validate_tag_schema(request.tagSchema)
         if schema_errors:
             return validation_error(body={"message": {"tagSchemaErrors": schema_errors}})
+        # A template already chosen as a trigger default must stay renderable headlessly: reject an
+        # update that introduces a required tag with no default value while triggers reference it.
+        trigger_errors = validate_template_not_breaking_triggers(
+            _triggers_table(), _workflow_table(), database_id, pipeline_id, template_id,
+            request.tagSchema)
+        if trigger_errors:
+            return validation_error(body={"message": {"triggerTemplateErrors": trigger_errors}})
 
     # Validate a new configBody against its EFFECTIVE format (the request's when supplied, else the
     # stored row's). The request model cannot see the stored format, so a partial update that changes

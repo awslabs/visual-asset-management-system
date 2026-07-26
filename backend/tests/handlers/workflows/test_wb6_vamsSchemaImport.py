@@ -245,6 +245,49 @@ class TestImportCrHandler:
         # CFN response was SUCCESS despite the archive error.
         assert m_send.call_args.args[2] == "SUCCESS"
 
+    def test_archive_deletes_both_workflow_and_pipeline(self):
+        # Turning off a built-in pipeline in CDK archives BOTH its workflow and its pipeline: the
+        # archive path issues a DELETE cross-call to the workflow service and the pipeline service.
+        calls = []
+
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            calls.append((ev["requestContext"]["http"]["method"],
+                          ev["requestContext"]["http"]["path"]))
+            return _resp(200, {"message": "archived"})
+
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            result = imp.archive_bundle(self._inline_props())
+        assert result["warnings"] == []
+        deletes = [c for c in calls if c[0] == "DELETE"]
+        assert any("/workflows/conv" in path for _, path in deletes), deletes
+        assert any("/pipelines/conv" in path for _, path in deletes), deletes
+
+    def test_reenable_reregister_reenables_both(self):
+        # Re-enabling a previously-disabled built-in (re-register): the pipeline + workflow already
+        # exist (archived), so the import updates them via PUT with enabled=True, which the services
+        # treat as unarchive/re-enable — restoring both.
+        put_bodies = []
+
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            method = ev["requestContext"]["http"]["method"]
+            if method == "GET":
+                return _resp(200, {"message": "exists"})  # already present (archived) -> update
+            if method == "PUT":
+                put_bodies.append((ev["requestContext"]["http"]["path"],
+                                   json.loads(ev.get("body") or "{}")))
+            return _resp(200, {"message": "ok"})
+
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            imp.register_bundle(self._inline_props())
+        pipeline_puts = [b for p, b in put_bodies if "/pipelines/conv" in p]
+        workflow_puts = [b for p, b in put_bodies if "/workflows/conv" in p]
+        assert pipeline_puts and pipeline_puts[0].get("enabled") is True
+        assert workflow_puts and workflow_puts[0].get("enabled") is True
+
     def test_bundle_from_s3_keys(self):
         props = {"bundleS3Keys": {"pipeline": "vamsSchema/conv/pipeline.json",
                                   "workflow": "vamsSchema/conv/workflow.json",

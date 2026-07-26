@@ -8,7 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { useWorkflows, useWorkflowMutations, useDatabases } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import CategoryGroupedList from "../components/CategoryGroupedList";
-import FilterBar, { type FilterValue } from "../components/FilterBar";
+import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
@@ -33,10 +33,16 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     // How the list is grouped/sorted: by category (default) or by database.
     const [groupBy, setGroupBy] = useState<"category" | "database">("category");
 
-    const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useWorkflows(
-        databaseId,
-        includeArchived
-    );
+    const {
+        data,
+        isLoading,
+        error,
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+        refetch,
+        isFetching,
+    } = useWorkflows(databaseId, includeArchived);
     const workflows = React.useMemo(
         () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
         [data]
@@ -200,7 +206,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     const canCreateWorkflow = can("POST", "/database/{databaseId}/workflows");
 
     return (
-        <div className="orchestration-root p-6 space-y-4 bg-surface min-h-full">
+        <div className="orchestration-root px-6 pb-6 pt-4 space-y-4 bg-surface min-h-full">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-text-primary">Workflows</h1>
                 {canCreateWorkflow && (
@@ -225,22 +231,34 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 <FilterBar
                     value={filters}
                     onChange={setFilters}
-                    facets={[
-                        {
-                            key: "enabledArchived",
-                            label: "Status",
-                            options: [
-                                { label: "Enabled", value: "enabled" },
-                                { label: "Disabled", value: "disabled" },
-                                { label: "Archived", value: "archived" },
-                            ],
-                        },
-                        ...(databaseOptions.length > 0
-                            ? [{ key: "databaseId", label: "Database", options: databaseOptions }]
-                            : []),
-                    ]}
+                    onRefresh={() => refetch()}
+                    refreshing={isFetching}
                 />
                 <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <FilterFacets
+                        value={filters}
+                        onChange={setFilters}
+                        facets={[
+                            {
+                                key: "enabledArchived",
+                                label: "Status",
+                                options: [
+                                    { label: "Enabled", value: "enabled" },
+                                    { label: "Disabled", value: "disabled" },
+                                    { label: "Archived", value: "archived" },
+                                ],
+                            },
+                            ...(databaseOptions.length > 0
+                                ? [
+                                      {
+                                          key: "databaseId",
+                                          label: "Database",
+                                          options: databaseOptions,
+                                      },
+                                  ]
+                                : []),
+                        ]}
+                    />
                     <label className="flex items-center gap-2 text-sm text-text-primary whitespace-nowrap">
                         Group by
                         <select

@@ -61,6 +61,9 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     const [excludeFilters, setExcludeFilters] = useState<string[]>([]);
     const [defaultTemplateIds, setDefaultTemplateIds] = useState<Record<string, string>>({});
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    // Save error shown inline on the edit form (e.g. a 400 triggerTemplateErrors rejection when a
+    // chosen default template has a required tag with no default value).
+    const [saveError, setSaveError] = useState<string | null>(null);
 
     const setTriggerMutation = useMutation({
         mutationFn: (body: WorkflowTrigger) => {
@@ -73,7 +76,11 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["triggers", databaseId, workflowId] });
+            setSaveError(null);
             setEditing(false);
+        },
+        onError: (err: any) => {
+            setSaveError(err?.message || "Failed to set trigger");
         },
     });
 
@@ -105,6 +112,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     }, [triggers]);
 
     const handleSave = () => {
+        setSaveError(null);
         const body: WorkflowTrigger = {
             triggerType: "fileUpload",
             enabled,
@@ -236,6 +244,11 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 Edit File Upload Trigger
             </h2>
             <div className="space-y-4">
+                {saveError && (
+                    <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded whitespace-pre-line">
+                        {saveError}
+                    </div>
+                )}
                 <div>
                     <label className="flex items-center gap-2">
                         <input

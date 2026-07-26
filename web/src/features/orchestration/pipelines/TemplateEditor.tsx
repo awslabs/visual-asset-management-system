@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { useTemplates, useTemplateMutations, usePipeline } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import Breadcrumb from "../components/Breadcrumb";
+import RefreshButton from "../components/RefreshButton";
 import { btnPrimary } from "../components/controlStyles";
 
 interface TemplateEditorProps {
@@ -27,7 +28,13 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
     pipelineName,
 }) => {
     const navigate = useNavigate();
-    const { data: templates = [], isLoading, error } = useTemplates(databaseId, pipelineId);
+    const {
+        data: templates = [],
+        isLoading,
+        error,
+        refetch,
+        isFetching,
+    } = useTemplates(databaseId, pipelineId);
     const { archiveTemplate } = useTemplateMutations();
     const { can } = useAllowedRoutes();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
@@ -55,8 +62,8 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
     );
 
     return (
-        <div className="orchestration-root p-6 space-y-6 bg-surface min-h-full">
-            <div className="space-y-1">
+        <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+            <div className="space-y-2">
                 <Breadcrumb
                     items={[
                         { label: "Pipelines", to: `/databases/${databaseId}/pipelines` },
@@ -69,11 +76,17 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                 />
                 <div className="flex justify-between items-center">
                     <h1 className="text-2xl font-semibold text-text-primary">Templates</h1>
-                    {canCreate && (
-                        <button onClick={() => navigate(`${base}/create`)} className={btnPrimary}>
-                            Create Template
-                        </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                        <RefreshButton onClick={() => refetch()} busy={isFetching} />
+                        {canCreate && (
+                            <button
+                                onClick={() => navigate(`${base}/create`)}
+                                className={btnPrimary}
+                            >
+                                Create Template
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
 

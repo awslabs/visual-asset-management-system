@@ -1011,6 +1011,14 @@ export function storageResourcesBuilder(
         sortKey: { name: "pipelineId", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.ALL,
     });
+    // Global (cross-database) pipeline list: constant partition + dateModified, so the "all
+    // pipelines" list is a single query instead of a table scan.
+    pipelineStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "PipelinesByDateGSI",
+        partitionKey: { name: "allListPartition", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "dateModified", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
 
     // One row per (pipeline, template). Composite PK matches the pipeline table so a
     // database-scoped pipeline's templates are unambiguous; SK is the template id.
@@ -1069,6 +1077,14 @@ export function storageResourcesBuilder(
         indexName: "WorkflowsByCategoryGSI",
         partitionKey: { name: "databaseId:category", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "workflowId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // Global (cross-database) workflow list: constant partition + dateModified, so the "all
+    // workflows" list is a single query instead of a table scan.
+    workflowStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "WorkflowsByDateGSI",
+        partitionKey: { name: "allListPartition", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "dateModified", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
@@ -1192,6 +1208,16 @@ export function storageResourcesBuilder(
     workflowExecutionsStorageTableV2.addGlobalSecondaryIndex({
         indexName: "WorkflowExecutionsByGroupGSI",
         partitionKey: { name: "executionGroupId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    // Global newest-first listing GSI. Every main row carries a constant partition attribute
+    // (allListPartition = "execution") with executionStartDate as the sort key, so the global
+    // executions list is a single QUERY (ScanIndexForward=false) bounded by a filterStartDate
+    // key-condition
+    workflowExecutionsStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "WorkflowExecutionsByDateGSI",
+        partitionKey: { name: "allListPartition", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
         projectionType: dynamodb.ProjectionType.ALL,
     });

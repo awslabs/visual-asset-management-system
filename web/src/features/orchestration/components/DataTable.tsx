@@ -90,7 +90,7 @@ function DataTable<T>({
                                 {headerGroup.headers.map((header) => (
                                     <th
                                         key={header.id}
-                                        className="px-4 py-2.5 text-left text-xs font-bold uppercase tracking-wide text-text-secondary cursor-pointer select-none"
+                                        className="px-4 py-2.5 text-left text-sm font-bold uppercase tracking-wide text-text-secondary cursor-pointer select-none"
                                         onClick={header.column.getToggleSortingHandler()}
                                     >
                                         <div className="flex items-center gap-1.5">

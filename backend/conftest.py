@@ -116,6 +116,13 @@ common_sync_tracking_early = import_module_from_path_early(
 )
 sys.modules['common.syncTracking'] = common_sync_tracking_early
 
+# logRedaction is pure regex logic; load early since executionService imports it at module level.
+common_log_redaction_early = import_module_from_path_early(
+    'common.logRedaction',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'logRedaction.py')
+)
+sys.modules['common.logRedaction'] = common_log_redaction_early
+
 # Set up mock imports
 import pytest
 from unittest.mock import MagicMock
@@ -190,6 +197,14 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')
     )
     sys.modules['common.apiRoutes'] = api_routes_module
+
+    # logRedaction is pure regex logic with no AWS dependencies, so load the
+    # real module (single source of truth) rather than a duplicate mock copy.
+    log_redaction_module = import_module_from_path(
+        'common.logRedaction',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'logRedaction.py')
+    )
+    sys.modules['common.logRedaction'] = log_redaction_module
 
     # resourceNames is a real module with boto3 and logger dependencies, load it
     resource_names_module = import_module_from_path(

@@ -13,6 +13,8 @@ import ExecutionRowActions from "./ExecutionRowActions";
 import ExecutionQuickView from "./ExecutionQuickView";
 import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
 import { control, btnSecondary } from "../components/controlStyles";
+import RefreshButton from "../components/RefreshButton";
+import SearchInput from "../components/SearchInput";
 import { useExecutions, useExecutionActions, type ExecutionScope } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import type { Execution } from "../types";
@@ -30,24 +32,35 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     } | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [deleteTypedValue, setDeleteTypedValue] = useState("");
+    const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
-    const [groupFilter, setGroupFilter] = useState("");
+    // Time-window filter (executions started within the window). A preset ("90"/"120"/"180" days)
+    // resolves to a filterStartDate N days before now; "custom" reveals an explicit from/to date
+    // range. Default is the last 90 days (matching the backend default).
+    const [dateWindow, setDateWindow] = useState<"90" | "120" | "180" | "custom">("90");
+    const [startDateFilter, setStartDateFilter] = useState("");
+    const [endDateFilter, setEndDateFilter] = useState("");
 
     // Server-side filters (the global-list handler AND-s these; empty values are omitted).
+    // The backend already defaults to 90 days, so the "90" preset sends no explicit start date.
     const filters = useMemo(() => {
         const f: Record<string, string> = {};
         if (statusFilter) f.status = statusFilter;
         if (triggerFilter) f.triggerType = triggerFilter;
-        if (groupFilter.trim()) f.groupId = groupFilter.trim();
+        if (dateWindow === "custom") {
+            if (startDateFilter) f.filterStartDate = `${startDateFilter}T00:00:00Z`;
+            if (endDateFilter) f.filterEndDate = `${endDateFilter}T23:59:59Z`;
+        } else if (dateWindow !== "90") {
+            // 120 / 180 day presets: N days before now (the 90-day default needs no override).
+            const cutoff = new Date(Date.now() - Number(dateWindow) * 24 * 60 * 60 * 1000);
+            f.filterStartDate = cutoff.toISOString().replace(/\.\d{3}Z$/, "Z");
+        }
         return f;
-    }, [statusFilter, triggerFilter, groupFilter]);
+    }, [statusFilter, triggerFilter, dateWindow, startDateFilter, endDateFilter]);
 
-    const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useExecutions(
-        scope,
-        filters,
-        {}
-    );
+    const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage, refetch, isFetching } =
+        useExecutions(scope, filters, {});
     const { abortExecution, rerunExecution, permanentDeleteExecution } = useExecutionActions();
     const { can } = useAllowedRoutes();
 
@@ -75,6 +88,18 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             return bDate - aDate;
         });
     }, [executions]);
+
+    // Client-side text search over the loaded rows (id / workflow / database). Server-side filters
+    // (status, trigger, date window) are applied via the query; this narrows what's already loaded.
+    const visibleExecutions = useMemo(() => {
+        const q = searchText.trim().toLowerCase();
+        if (!q) return sortedExecutions;
+        return sortedExecutions.filter((e) =>
+            [e.workflowExecutionId, e.workflowId, e.workflowDatabaseId].some((v) =>
+                (v || "").toLowerCase().includes(q)
+            )
+        );
+    }, [sortedExecutions, searchText]);
 
     const handleAbort = async (executionId: string, groupId?: string) => {
         try {
@@ -141,7 +166,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 accessorKey: "workflowExecutionId",
                 header: "Execution ID",
                 cell: ({ row }) => (
-                    <span className="font-mono text-xs">{row.original.workflowExecutionId}</span>
+                    <span className="font-mono text-sm">{row.original.workflowExecutionId}</span>
                 ),
             },
             {
@@ -163,7 +188,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <div className="text-sm">
                         <div>{row.original.triggerType || "—"}</div>
                         {row.original.triggeredByUserId && (
-                            <div className="text-xs text-text-secondary">
+                            <div className="text-sm text-text-secondary">
                                 {row.original.triggeredByUserId}
                             </div>
                         )}
@@ -192,15 +217,6 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             row.original.executionStartDate,
                             row.original.executionStopDate
                         )}
-                    </span>
-                ),
-            },
-            {
-                accessorKey: "executionGroupId",
-                header: "Group",
-                cell: ({ row }) => (
-                    <span className="text-xs font-mono text-text-secondary">
-                        {row.original.executionGroupId || "—"}
                     </span>
                 ),
             },
@@ -255,7 +271,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     );
 
     return (
-        <div className="orchestration-root p-6 space-y-4 bg-surface">
+        <div className="orchestration-root px-6 pb-6 pt-4 space-y-4 bg-surface">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-semibold text-text-primary">Executions</h1>
                 {/* Execute sits in the header row (matching Pipelines/Workflows) and is available
@@ -263,64 +279,111 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 <ExecuteWorkflowButton scope={scope} />
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap justify-end">
-                <select
-                    aria-label="Filter by status"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className={control}
-                >
-                    <option value="">All statuses</option>
-                    <option value="RUNNING">Running</option>
-                    <option value="SUCCEEDED">Succeeded</option>
-                    <option value="FAILED">Failed</option>
-                    <option value="ABORTED">Aborted</option>
-                    <option value="TIMED_OUT">Timed out</option>
-                </select>
-                <select
-                    aria-label="Filter by trigger"
-                    value={triggerFilter}
-                    onChange={(e) => setTriggerFilter(e.target.value)}
-                    className={control}
-                >
-                    <option value="">All triggers</option>
-                    <option value="Manual">Manual</option>
-                    <option value="fileUpload">File upload</option>
-                </select>
-                <input
-                    type="text"
-                    aria-label="Filter by group ID"
-                    placeholder="Group ID"
-                    value={groupFilter}
-                    onChange={(e) => setGroupFilter(e.target.value)}
-                    className={control}
-                />
-                {(statusFilter || triggerFilter || groupFilter) && (
-                    <button
-                        onClick={() => {
-                            setStatusFilter("");
-                            setTriggerFilter("");
-                            setGroupFilter("");
-                        }}
-                        className="px-2 py-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+            {/* One aligned filter row (matching Pipelines/Workflows): search + refresh on the left,
+                all filter dropdowns + clear on the right. */}
+            <div className="flex items-center gap-2 flex-wrap justify-between">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <SearchInput
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                    />
+                    <RefreshButton onClick={() => refetch()} busy={isFetching} />
+                </div>
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <select
+                        aria-label="Filter by status"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className={control}
                     >
-                        Clear
-                    </button>
-                )}
+                        <option value="">All statuses</option>
+                        <option value="RUNNING">Running</option>
+                        <option value="SUCCEEDED">Succeeded</option>
+                        <option value="FAILED">Failed</option>
+                        <option value="ABORTED">Aborted</option>
+                        <option value="TIMED_OUT">Timed out</option>
+                    </select>
+                    <select
+                        aria-label="Filter by trigger"
+                        value={triggerFilter}
+                        onChange={(e) => setTriggerFilter(e.target.value)}
+                        className={control}
+                    >
+                        <option value="">All triggers</option>
+                        <option value="Manual">Manual</option>
+                        <option value="fileUpload">File upload</option>
+                    </select>
+                    {/* Time window: preset day-counts (default 90) or a custom from/to range. */}
+                    <select
+                        aria-label="Time window"
+                        value={dateWindow}
+                        onChange={(e) => setDateWindow(e.target.value as typeof dateWindow)}
+                        className={control}
+                    >
+                        <option value="90">Last 90 days</option>
+                        <option value="120">Last 120 days</option>
+                        <option value="180">Last 180 days</option>
+                        <option value="custom">Custom range…</option>
+                    </select>
+                    {dateWindow === "custom" && (
+                        <>
+                            <input
+                                type="date"
+                                aria-label="Started on or after"
+                                title="Started on or after"
+                                value={startDateFilter}
+                                max={endDateFilter || undefined}
+                                onChange={(e) => setStartDateFilter(e.target.value)}
+                                className={control}
+                            />
+                            <span className="text-sm text-text-secondary">to</span>
+                            <input
+                                type="date"
+                                aria-label="Started on or before"
+                                title="Started on or before"
+                                value={endDateFilter}
+                                min={startDateFilter || undefined}
+                                onChange={(e) => setEndDateFilter(e.target.value)}
+                                className={control}
+                            />
+                        </>
+                    )}
+                    {(statusFilter ||
+                        triggerFilter ||
+                        dateWindow !== "90" ||
+                        startDateFilter ||
+                        endDateFilter) && (
+                        <button
+                            onClick={() => {
+                                setStatusFilter("");
+                                setTriggerFilter("");
+                                setDateWindow("90");
+                                setStartDateFilter("");
+                                setEndDateFilter("");
+                            }}
+                            className="px-2 py-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                            Clear
+                        </button>
+                    )}
+                </div>
             </div>
 
             {isLoading && <div className="text-text-secondary">Loading executions...</div>}
 
-            {!isLoading && sortedExecutions.length === 0 && (
+            {!isLoading && visibleExecutions.length === 0 && (
                 <div className="text-text-secondary">No executions found.</div>
             )}
 
-            {!isLoading && sortedExecutions.length > 0 && (
+            {!isLoading && visibleExecutions.length > 0 && (
                 <>
                     <DataTable
                         columns={columns}
-                        rows={sortedExecutions}
+                        rows={visibleExecutions}
                         paginate={false}
+                        // The board owns the search box (in the filter row); the table's own search
+                        // is disabled so it doesn't render a second, redundant search bar.
+                        filtering={false}
                         onRowClick={(row) => setQuickViewExecutionId(row.workflowExecutionId)}
                     />
                     {hasNextPage && (

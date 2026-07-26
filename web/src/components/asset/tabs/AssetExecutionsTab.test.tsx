@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AssetExecutionsTab from "./AssetExecutionsTab";
@@ -107,10 +107,10 @@ describe("AssetExecutionsTab", () => {
         });
 
         // Check that the Execute button is present
-        expect(screen.getByText("Execute Workflow")).toBeInTheDocument();
+        expect(screen.getByText("Execute workflow")).toBeInTheDocument();
     });
 
-    it("shows workflow selector and execute button", async () => {
+    it("opens the workflow picker dialog from the execute button", async () => {
         render(
             <QueryClientProvider client={queryClient}>
                 <MemoryRouter>
@@ -119,12 +119,18 @@ describe("AssetExecutionsTab", () => {
             </QueryClientProvider>
         );
 
-        await waitFor(() => {
-            expect(screen.getByText("Execute Workflow")).toBeInTheDocument();
-        });
+        const executeButton = await screen.findByText("Execute workflow");
 
-        // Workflow selector should be present
-        expect(screen.getByText("Select a workflow to execute")).toBeInTheDocument();
+        // The workflow picker lives inside a dialog opened by the execute button.
+        fireEvent.click(executeButton);
+
+        await waitFor(() => {
+            expect(screen.getByText("Execute a workflow")).toBeInTheDocument();
+        });
+        // The workflow picker (a SearchableSelect labeled "Workflow") is present,
+        // collapsed to its placeholder label.
+        expect(screen.getByLabelText("Workflow")).toBeInTheDocument();
+        expect(screen.getByText("Search workflows…")).toBeInTheDocument();
     });
 
     it("does not render ExecutionsBoard when tab is not active", () => {

@@ -8,7 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { usePipelines, useArchivePipeline, useDatabases } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import CategoryGroupedList from "../components/CategoryGroupedList";
-import FilterBar, { type FilterValue } from "../components/FilterBar";
+import FilterBar, { FilterFacets, type FilterValue } from "../components/FilterBar";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
@@ -34,10 +34,16 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const [dbPickerOpen, setDbPickerOpen] = useState(false);
     const [archiveConfirmPipeline, setArchiveConfirmPipeline] = useState<Pipeline | null>(null);
 
-    const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = usePipelines(
-        databaseId,
-        includeArchived
-    );
+    const {
+        data,
+        isLoading,
+        error,
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+        refetch,
+        isFetching,
+    } = usePipelines(databaseId, includeArchived);
     const pipelines = React.useMemo(
         () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
         [data]
@@ -184,10 +190,20 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                         )}
                     </div>
                     <div className="text-sm text-text-secondary mt-1">{pipeline.pipelineId}</div>
+                    {/* Metadata line standardized with the workflow card: Database / Category /
+                        Templates count laid out inline. */}
                     <div className="text-sm text-text-secondary mt-1">
-                        {pipeline.databaseId === "GLOBAL"
-                            ? "GLOBAL"
-                            : `Database: ${pipeline.databaseId}`}
+                        <span className="mr-3">
+                            {pipeline.databaseId === "GLOBAL"
+                                ? "Database: GLOBAL"
+                                : `Database: ${pipeline.databaseId}`}
+                        </span>
+                        {pipeline.category && (
+                            <span className="mr-3">Category: {pipeline.category}</span>
+                        )}
+                        {typeof pipeline.templateCount === "number" && (
+                            <span className="mr-3">Templates: {pipeline.templateCount}</span>
+                        )}
                     </div>
                 </div>
                 <ContextMenu
@@ -209,7 +225,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const canCreatePipeline = can("POST", "/database/{databaseId}/pipelines");
 
     return (
-        <div className="orchestration-root p-6 space-y-4 bg-surface min-h-full">
+        <div className="orchestration-root px-6 pb-6 pt-4 space-y-4 bg-surface min-h-full">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-text-primary">Pipelines</h1>
                 {canCreatePipeline && (
@@ -234,37 +250,49 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                 <FilterBar
                     value={filters}
                     onChange={setFilters}
-                    facets={[
-                        {
-                            key: "executionType",
-                            label: "Execution Type",
-                            options: [
-                                { label: "Lambda", value: "Lambda" },
-                                { label: "SQS", value: "SQS" },
-                                { label: "EventBridge", value: "EventBridge" },
-                                ...(showDeadlineCloud ||
-                                pipelines.some(
-                                    (p) => p.executionConfig.executionType === "DeadlineCloud"
-                                )
-                                    ? [{ label: "DeadlineCloud", value: "DeadlineCloud" }]
-                                    : []),
-                            ],
-                        },
-                        {
-                            key: "enabledArchived",
-                            label: "Status",
-                            options: [
-                                { label: "Enabled", value: "enabled" },
-                                { label: "Disabled", value: "disabled" },
-                                { label: "Archived", value: "archived" },
-                            ],
-                        },
-                        ...(databaseOptions.length > 0
-                            ? [{ key: "databaseId", label: "Database", options: databaseOptions }]
-                            : []),
-                    ]}
+                    onRefresh={() => refetch()}
+                    refreshing={isFetching}
                 />
                 <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <FilterFacets
+                        value={filters}
+                        onChange={setFilters}
+                        facets={[
+                            {
+                                key: "executionType",
+                                label: "Execution Type",
+                                options: [
+                                    { label: "Lambda", value: "Lambda" },
+                                    { label: "SQS", value: "SQS" },
+                                    { label: "EventBridge", value: "EventBridge" },
+                                    ...(showDeadlineCloud ||
+                                    pipelines.some(
+                                        (p) => p.executionConfig.executionType === "DeadlineCloud"
+                                    )
+                                        ? [{ label: "DeadlineCloud", value: "DeadlineCloud" }]
+                                        : []),
+                                ],
+                            },
+                            {
+                                key: "enabledArchived",
+                                label: "Status",
+                                options: [
+                                    { label: "Enabled", value: "enabled" },
+                                    { label: "Disabled", value: "disabled" },
+                                    { label: "Archived", value: "archived" },
+                                ],
+                            },
+                            ...(databaseOptions.length > 0
+                                ? [
+                                      {
+                                          key: "databaseId",
+                                          label: "Database",
+                                          options: databaseOptions,
+                                      },
+                                  ]
+                                : []),
+                        ]}
+                    />
                     <label className="flex items-center gap-2 text-sm text-text-primary whitespace-nowrap">
                         Group by
                         <select

@@ -75,8 +75,22 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
 
     const executeWorkflow = useExecuteWorkflow();
 
-    // Input stage data
-    const [inputFiles, setInputFiles] = useState<ExecuteInputFile[]>([]);
+    // Input stage data. When launched from an asset (presetAsset), seed the first input row with
+    // that database+asset so the user only has to pick the file(s) — but the asset is NOT locked to
+    // the whole asset: the file remains selectable (and, for a whole-asset-disallowed pipeline, must
+    // be a specific file). relativeFileKey starts empty so the file picker requires an explicit
+    // choice rather than silently defaulting to the whole asset.
+    const [inputFiles, setInputFiles] = useState<ExecuteInputFile[]>(
+        presetAsset
+            ? [
+                  {
+                      databaseId: presetAsset.databaseId,
+                      assetId: presetAsset.assetId,
+                      relativeFileKey: "",
+                  },
+              ]
+            : []
+    );
     const [outputAssetId, setOutputAssetId] = useState<string | undefined>(undefined);
     const [outputDatabaseId, setOutputDatabaseId] = useState<string | undefined>(undefined);
     const [outputPathPrefix, setOutputPathPrefix] = useState<string | undefined>(undefined);

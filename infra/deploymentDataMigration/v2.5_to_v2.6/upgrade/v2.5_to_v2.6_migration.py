@@ -605,6 +605,9 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             'workflowDatabaseId': s(workflow_database_id),
             'workflow_arn': s(workflow_arn),
             'workflow_execution_arn': s(execution_arn),
+            # Constant PK for the by-date global-list GSI (WorkflowExecutionsByDateGSI), so migrated
+            # executions appear in the global newest-first list alongside new ones.
+            'allListPartition': s('execution'),
             'executionStartDate': s(start_date),
             'executionStopDate': s(stop_date),
             'executionStatus': s(status),
@@ -637,6 +640,11 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
         if not pipelines:
             pipelines = [{'name': 'DELETED', 'databaseId': workflow_database_id,
                           'pipelineExecutionType': 'Lambda', 'waitForCallback': 'Disabled'}]
+        # Historical executions are complete, so their pipeline rows carry a terminal status: mirror
+        # a SUCCEEDED parent to SUCCEEDED, otherwise the parent's terminal status (empty when the
+        # source row had none). This keeps migrated pipeline rows consistent with the v2.6 status
+        # model (fresh rows default NEW; a stored terminal status is authoritative).
+        migrated_pipeline_status = 'SUCCEEDED' if status in ('SUCCEEDED', 'COMPLETE') else status
         prev_pexec_id = ""
         for p_idx, pipeline in enumerate(pipelines):
             pexec_id = derive_guid(execution_id, p_idx)
@@ -650,9 +658,9 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
                 'pipelineDatabaseId': s(pipeline_db),
                 'pipelineDatabaseId:pipelineId': s(f"{pipeline_db}:{pipeline_name}"),
                 'endStatePipeline': s('true' if is_end else 'false'),
-                'executionStartDate': s(''),
-                'executionStopDate': s(''),
-                'executionStatus': s(''),
+                'executionStartDate': s(start_date),
+                'executionStopDate': s(stop_date),
+                'executionStatus': s(migrated_pipeline_status),
                 'pipelineExecutionType': s(pipeline.get('pipelineExecutionType', 'Lambda')),
                 'waitForCallback': s(pipeline.get('waitForCallback', 'Disabled')),
                 'pipelineResourceArn': s(''),
@@ -1115,6 +1123,9 @@ def _v2_pipeline_item(row: Dict, now: str) -> Dict:
         'databaseId': s(database_id),
         'pipelineId': s(pipeline_id),
         'databaseId:category': s(f"{database_id}:{category}"),
+        # Constant PK for the by-date global-list GSI (PipelinesByDateGSI), so migrated
+        # pipelines appear in the global list alongside new ones.
+        'allListPartition': s('pipeline'),
         'pipelineName': s(name),
         'category': s(category),
         'description': s(description),
@@ -1197,6 +1208,9 @@ def _v2_workflow_item(row: Dict, now: str) -> Dict:
         'databaseId': s(database_id),
         'workflowId': s(workflow_id),
         'databaseId:category': s(f"{database_id}:"),
+        # Constant PK for the by-date global-list GSI (WorkflowsByDateGSI), so migrated
+        # workflows appear in the global list alongside new ones.
+        'allListPartition': s('workflow'),
         'workflowName': s(workflow_id),
         'category': s(''),
         'description': s(description),
@@ -1294,6 +1308,129 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
     counts['errors'] += we
 
     return counts, {'v1_pipelines': len(v1_pipelines), 'v1_workflows': len(v1_workflows)}
+
+
+# The by-date global-list GSIs (PipelinesByDateGSI / WorkflowsByDateGSI / WorkflowExecutionsByDateGSI)
+# are keyed on a constant partition attribute. Rows written before the attribute existed are absent
+# from those GSIs, so the global (cross-database) "all" lists omit them. This backfill stamps the
+# constant value on any row missing it. (attr_name, constant_value) per table.
+_ALL_LIST_PARTITION_ATTR = "allListPartition"
+_GLOBAL_LIST_BACKFILL = [
+    ("pipeline_storage_table_name_v2", "pipeline"),
+    ("workflow_storage_table_name_v2", "workflow"),
+    ("workflow_executions_storage_table_name_v2", "execution"),
+]
+
+
+def backfill_global_list_partition(dynamodb_client, cfg, dry_run: bool, limit: int):
+    """Set allListPartition on any V2 pipeline/workflow/execution row missing it, so the by-date
+    global-list GSIs return pre-existing rows. Idempotent: only rows without the attribute are
+    updated (ConditionExpression attribute_not_exists), so re-runs are no-ops."""
+    counts = {"updated": 0, "already": 0, "errors": 0}
+    for cfg_key, const_value in _GLOBAL_LIST_BACKFILL:
+        table_name = cfg.get(cfg_key)
+        if not table_name:
+            continue
+        rows = scan_all_items(dynamodb_client, table_name, limit)
+        # Each table's primary key attributes, derived from the row itself (no schema lookup):
+        # pipeline (databaseId, pipelineId); workflow (databaseId, workflowId);
+        # execution (workflowExecutionId, workflowDatabaseId:workflowId).
+        for row in rows:
+            if _ALL_LIST_PARTITION_ATTR in row:
+                counts["already"] += 1
+                continue
+            key = {}
+            for pk_attr in ("workflowExecutionId", "databaseId"):
+                if pk_attr in row:
+                    key[pk_attr] = row[pk_attr]
+                    break
+            for sk_attr in ("workflowDatabaseId:workflowId", "pipelineId", "workflowId"):
+                if sk_attr in row:
+                    key[sk_attr] = row[sk_attr]
+                    break
+            if len(key) != 2:
+                counts["errors"] += 1
+                continue
+            if dry_run:
+                counts["updated"] += 1
+                continue
+            try:
+                dynamodb_client.update_item(
+                    TableName=table_name,
+                    Key=key,
+                    UpdateExpression="SET #a = :v",
+                    ConditionExpression="attribute_not_exists(#a)",
+                    ExpressionAttributeNames={"#a": _ALL_LIST_PARTITION_ATTR},
+                    ExpressionAttributeValues={":v": s(const_value)},
+                )
+                counts["updated"] += 1
+            except ClientError as e:
+                if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    counts["already"] += 1
+                else:
+                    logger.error(f"Error backfilling {table_name} key={key}: {e}")
+                    counts["errors"] += 1
+    return counts
+
+
+def run_global_list_backfill_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Backfill allListPartition on existing V2 pipeline/workflow/execution rows. Returns 0 on success."""
+    session_kwargs = {}
+    if profile:
+        session_kwargs['profile_name'] = profile
+    if region:
+        session_kwargs['region_name'] = region
+    dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
+
+    try:
+        lookup = SsmResourceLookup(base_param_prefix, profile=profile, region=region) if base_param_prefix else None
+
+        def resolve(cfg_key, param_key):
+            override = config.get(cfg_key)
+            if override and not str(override).startswith('<') and not str(override).startswith('YOUR-'):
+                return override
+            if not lookup:
+                raise ValueError(
+                    f"Config '{cfg_key}' is unset and no resource_names_ssm_param_prefix is configured "
+                    "to resolve it from SSM.")
+            return lookup.resolve(param_key)
+
+        cfg = {
+            'pipeline_storage_table_name_v2': resolve(
+                'pipeline_storage_table_name_v2', ResourceParamKeys.PIPELINE_STORAGE_TABLE_V2),
+            'workflow_storage_table_name_v2': resolve(
+                'workflow_storage_table_name_v2', ResourceParamKeys.WORKFLOW_STORAGE_TABLE_V2),
+            'workflow_executions_storage_table_name_v2': resolve(
+                'workflow_executions_storage_table_name_v2', ResourceParamKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2),
+        }
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the globalListBackfill step: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.5 -> v2.6 GLOBAL-LIST PARTITION BACKFILL (allListPartition)")
+    logger.info(f"Dry Run: {dry_run}")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts = backfill_global_list_partition(dynamodb_client, cfg, dry_run, limit)
+    except Exception as e:
+        logger.error(f"globalListBackfill step failed: {e}")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("GLOBAL-LIST PARTITION BACKFILL SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Rows updated (attribute set):    {counts['updated']}")
+    logger.info(f"  Rows already had the attribute:  {counts['already']}")
+    logger.info(f"  Errors:                          {counts['errors']}")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 else 1
 
 
 def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
@@ -1396,7 +1533,7 @@ Notes:
                         help='Path to the migration JSON configuration file')
     parser.add_argument('--steps',
                         choices=['reindex', 'assetHistory', 'workflowExecutions', 'auxPreviewRelocation',
-                                 'pipelineWorkflowDefinitions', 'all'],
+                                 'pipelineWorkflowDefinitions', 'globalListBackfill', 'all'],
                         default='all',
                         help="Which release migration step(s) to run (default: all)")
     parser.add_argument('--operation', choices=['assets', 'files', 'both'],
@@ -1428,6 +1565,7 @@ Notes:
     run_workflow_executions = args.steps in ('workflowExecutions', 'all')
     run_aux_preview_relocation = args.steps in ('auxPreviewRelocation', 'all')
     run_pipeline_workflow_definitions = args.steps in ('pipelineWorkflowDefinitions', 'all')
+    run_global_list_backfill = args.steps in ('globalListBackfill', 'all')
 
     operation = args.operation or config.get('operation', 'both')
     dry_run = args.dry_run or bool(config.get('dry_run', False))
@@ -1560,6 +1698,13 @@ Notes:
         logger.info("")
         logger.info("##### STEP: Pipeline + workflow definition migration (V1 -> V2) #####")
         rc = run_pipeline_workflow_definitions_step(config, args, base_param_prefix, profile, region, dry_run)
+        if rc != 0:
+            exit_code = rc
+
+    if run_global_list_backfill:
+        logger.info("")
+        logger.info("##### STEP: Global-list partition backfill (allListPartition) #####")
+        rc = run_global_list_backfill_step(config, args, base_param_prefix, profile, region, dry_run)
         if rc != 0:
             exit_code = rc
 

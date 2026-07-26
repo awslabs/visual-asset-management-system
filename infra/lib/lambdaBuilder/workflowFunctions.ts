@@ -113,17 +113,27 @@ export function buildExecutionServiceFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
-            // Read scope covers both the whole-execution and per-pipeline-step log sources the
-            // logs API reads: (1) VAMS-named groups — the shared workflow SFN log group contains
-            // the config name; (2) the vended-logs namespace — each pipeline state machine emits
-            // to its own '/aws/vendedlogs/VAMSstateMachine-*' group, which a pipeline registers as
-            // a sub-process log and full/per-step log retrieval reads. Both suffixed with ':*' so
-            // stream-level reads within each group are also permitted.
+            // Read scope covers the whole-execution and per-pipeline-step log sources the logs API
+            // reads. IAM resource matching is CASE-SENSITIVE, so each real prefix is listed exactly:
+            //   (1) the shared workflow SFN log group — granted by its actual ARN (name is
+            //       '/aws/vendedlogs/vamsPipelineWorkflows<hash>', lowercase 'vams');
+            //   (2) config-name-based groups (the audit/log groups that embed the config name);
+            //   (3) pipeline state-machine groups — BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
+            //       '/aws/vendedlogs/VAMSstateMachine-*' are used across pipelines (case varies);
+            //   (4) pipeline container groups '/aws/vendedlogs/Pipelines/*'.
+            // Scoped to these prefixes (not the whole /aws/vendedlogs/* namespace) so it cannot read
+            // unrelated apps' vended log groups. Each is suffixed with ':*' for stream-level reads.
             resources: [
+                workflowsLogGroup.logGroupArn,
+                workflowsLogGroup.logGroupArn + ":*",
                 IAMArn("*" + config.name + "*").loggroup,
                 IAMArn("*" + config.name + "*").loggroup + ":*",
-                IAMArn("/aws/vendedlogs/*").loggroup,
-                IAMArn("/aws/vendedlogs/*").loggroup + ":*",
+                IAMArn("/aws/vendedlogs/VAMSStateMachine-*").loggroup,
+                IAMArn("/aws/vendedlogs/VAMSStateMachine-*").loggroup + ":*",
+                IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup,
+                IAMArn("/aws/vendedlogs/VAMSstateMachine-*").loggroup + ":*",
+                IAMArn("/aws/vendedlogs/Pipelines/*").loggroup,
+                IAMArn("/aws/vendedlogs/Pipelines/*").loggroup + ":*",
             ],
         })
     );
@@ -276,8 +286,15 @@ export function buildProcessWorkflowExecutionOutputFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
-            // Scoped to VAMS-named log groups (state machine + lambda logs contain 'vams').
-            resources: [IAMArn("*" + config.name + "*").loggroup],
+            // Reads the shared workflow SFN log group to capture a run's logs on completion. Granted
+            // by that group's actual ARN (its name embeds lowercase 'vams'); the config-name pattern
+            // is kept as a superset for any other VAMS-named group this handler may read.
+            resources: [
+                workflowsLogGroup.logGroupArn,
+                workflowsLogGroup.logGroupArn + ":*",
+                IAMArn("*" + config.name + "*").loggroup,
+                IAMArn("*" + config.name + "*").loggroup + ":*",
+            ],
         })
     );
 
@@ -286,7 +303,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
 
@@ -336,7 +353,7 @@ export function buildInterimPipelineTrackingFunction(
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
 
@@ -379,13 +396,23 @@ export function buildHandleExecutionErrorFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams"],
-            resources: [IAMArn("*" + config.name + "*").loggroup],
+            // Pulls the failed run's logs from the shared workflow SFN log group; granted by that
+            // group's actual ARN, plus the config-name pattern as a superset for other VAMS groups.
+            resources: [
+                workflowsLogGroup.logGroupArn,
+                workflowsLogGroup.logGroupArn + ":*",
+                IAMArn("*" + config.name + "*").loggroup,
+                IAMArn("*" + config.name + "*").loggroup + ":*",
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
+    // Scoped IAM5 suppression for this function's wildcard log-group read resource
+    // (IAMArn("*"+config.name+"*").loggroup), so it does not depend on a stack-wide blanket.
+    suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
 
@@ -964,6 +991,15 @@ export function buildWorkflowTriggerServiceFunction(
     });
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowTriggersStorageTable.grantReadWriteData(fun);
+    // Setting a fileUpload trigger validates any default template it names: a headless (auto-)
+    // triggered run cannot supply tag values, so a chosen default template must not have a required
+    // tag without a default. That check reads the template's tag schema (TagSchemaByTemplateGSI),
+    // and rehydrates an S3-offloaded schema from the default asset bucket.
+    storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    // A large tag schema is offloaded to the default asset bucket; the headless-template check
+    // rehydrates it, so grant read on the asset buckets (best-effort — skipped if unreadable).
+    grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

@@ -44,14 +44,21 @@ from models.workflows import (
     TRIGGER_TYPES,
 )
 from common.workflows import workflowRecords as wr
+from common.workflows import pipelineRecords as pr
+from common.workflows import templateBodyStorage as tbs
+from common.workflows.defaultBucket import resolve_default_bucket
+from common.workflows.triggerTemplateValidation import validate_trigger_default_templates
 
 logger = safeLogger(service_name="WorkflowTriggerService")
 
 dynamodb = boto3.resource("dynamodb")
+s3_client = boto3.client("s3")
 
 try:
     workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     triggers_table_name = get_table_name(ResourceKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE)
+    tag_schema_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE)
+    buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
@@ -65,6 +72,39 @@ def _workflow_table():
 
 def _triggers_table():
     return dynamodb.Table(triggers_table_name)
+
+
+def _tag_schema_table():
+    return dynamodb.Table(tag_schema_table_name)
+
+
+def _load_template_tag_schema_fields(pipeline_database_id, pipeline_id, template_id):
+    """Load a template's tag-schema fields (rehydrating from S3 when offloaded), or None. Used to
+    check a trigger's chosen default templates for required-without-default tags.
+
+    Best-effort: returns None on any read/parse failure so the headless-template validation can never
+    turn a trigger save (including the trusted deploy-time built-in registration) into a 500 — a
+    load failure simply skips the check for that template."""
+    try:
+        owner = pr.template_owner_key(pipeline_database_id, pipeline_id, template_id)
+        rows = _tag_schema_table().query(
+            IndexName="TagSchemaByTemplateGSI",
+            KeyConditionExpression=Key("pipelineDatabaseId:pipelineId:templateId").eq(owner),
+        ).get("Items", [])
+        if not rows:
+            return None
+        row = rows[0]
+        if row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and row.get("fieldsS3Key"):
+            bucket = resolve_default_bucket(dynamodb.Table(buckets_table_name))["bucketName"]
+            text = tbs.read_body_from_s3(s3_client, bucket, row["fieldsS3Key"])
+            return json.loads(text) if text else []
+        fields = row.get("fields") or ""
+        return json.loads(fields) if fields else []
+    except Exception as e:
+        logger.warning(
+            f"Could not load tag schema for {pipeline_database_id}:{pipeline_id}:{template_id} "
+            f"(skipping headless-template check): {e}")
+        return None
 
 
 def _enforce_parent_workflow(database_id, workflow_id, action, claims_and_roles):
@@ -113,6 +153,15 @@ def get_trigger(database_id, workflow_id, trigger_type):
 
 
 def set_trigger(database_id, workflow_id, trigger_type, request):
+    # A trigger runs headless, so any default template it names must be renderable with no
+    # user-supplied tags: reject the save if a chosen default template has a required tag with no
+    # default value. (A trigger never REQUIRES a template — defaultTemplateIds is optional; this only
+    # validates the templates it DID choose.)
+    template_errors = validate_trigger_default_templates(
+        request.defaultTemplateIds or {}, _load_template_tag_schema_fields)
+    if template_errors:
+        return validation_error(body={"message": {"triggerTemplateErrors": template_errors}})
+
     config = wr.build_file_upload_trigger_config(
         input_file_filters=request.inputFileFilters or {"allow": [], "exclude": []},
         default_template_ids=request.defaultTemplateIds or {},

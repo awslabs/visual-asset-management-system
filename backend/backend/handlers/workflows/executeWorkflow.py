@@ -69,6 +69,10 @@ logger = safeLogger(service="ExecuteWorkflow")
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
 
+# Per-request memo of asset-bucket details keyed by bucketId (reset at each invocation). Bucket rows
+# are immutable for a launch, so this collapses the repeated per-input/per-pass buckets-table reads.
+_bucket_details_cache = {}
+
 GLOBAL_DATABASE = "GLOBAL"
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
@@ -189,7 +193,13 @@ def _default_run_bucket():
 
 
 def _asset_bucket_details(bucket_id):
-    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix} from the buckets table."""
+    """Resolve an asset's own bucket {bucketName, baseAssetsPrefix} from the buckets table.
+
+    Memoized per request (bucket rows are immutable for the launch): a single execute resolves the
+    same bucketId once per verify/manifest/persist pass and once per input file, so without the cache
+    a many-file single-asset launch re-queries the identical row thousands of times."""
+    if bucket_id in _bucket_details_cache:
+        return _bucket_details_cache[bucket_id]
     response = _buckets_table().query(
         KeyConditionExpression=Key("bucketId").eq(bucket_id), Limit=1)
     bucket = (response.get("Items") or [{}])[0]
@@ -201,7 +211,9 @@ def _asset_bucket_details(bucket_id):
         base_prefix += "/"
     if base_prefix.startswith("/"):
         base_prefix = base_prefix[1:]
-    return {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix}
+    details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix}
+    _bucket_details_cache[bucket_id] = details
+    return details
 
 
 #######################
@@ -983,12 +995,13 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
     output_prefixes = er.pipeline_output_prefixes(first_pipeline_name, first_job_name, execution_id) \
         if pipeline_records else {"files": "", "previews": "", "metadata": "", "results": ""}
 
-    # 1) Main V2 row (+ optional group id).
+    # 1) Main V2 row (+ optional group id). The SFN execution is already started, so record RUNNING
+    # (not NEW) — every read path shows the true status with no read-time SFN poll.
     main_table = dynamodb.Table(workflow_execution_database_v2)
     main_row = er.build_workflow_execution_record(
         execution_id=execution_id, workflow_database_id=workflow_database_id, workflow_id=workflow_id,
         workflow_arn=workflow_arn, workflow_execution_arn=workflow_execution_arn,
-        execution_start_date=start_date, execution_status="NEW",
+        execution_start_date=start_date, execution_status="RUNNING",
         triggered_by_user_id=executing_user, trigger_type=trigger_type_stored,
         execution_log_group_arn=workflow_execution_log_group_arn,
         execution_group_id=execution_group_id or "")
@@ -1045,7 +1058,7 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
             orchestration_event_source_prefix, execution_id, pexec_id) \
             if orchestration_event_source_prefix else ""
 
-        pexec_table.put_item(Item=er.build_pipeline_execution_record(
+        pexec_record = er.build_pipeline_execution_record(
             pipeline_execution_id=pexec_id, workflow_execution_id=execution_id,
             pipeline_database_id=record.get("databaseId", ""), pipeline_id=pipeline_id,
             end_state_pipeline=is_end_state, s3_asset_bucket=run_bucket,
@@ -1055,7 +1068,11 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
             pipeline_execution_type=_pipeline_exec_type(record),
             wait_for_callback=_pipeline_wait_for_callback(record),
             pipeline_resource_arn=_pipeline_resource_arn(record), from_pipeline_execution_id=prev_id,
-            orchestration_bus_event_prefix=event_prefix))
+            orchestration_bus_event_prefix=event_prefix)
+        # First pipeline starts immediately; the rest stay NEW until the interim lambda advances them.
+        if idx == 0:
+            pexec_record["executionStatus"] = "RUNNING"
+        pexec_table.put_item(Item=pexec_record)
 
         # Config snapshot: what the run was built from (traceable + re-runnable).
         pin_cfg_table.put_item(Item=er.build_input_configuration_record(
@@ -1274,6 +1291,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     normalize_event(event)
     claims_and_roles = request_to_claims(event)
+    # Fresh per-request bucket cache (a warm Lambda container reuses module globals across invokes).
+    _bucket_details_cache.clear()
 
     try:
         method = event["requestContext"]["http"]["method"]

@@ -70,3 +70,33 @@ def test_process_external_upload_omits_source_bucket_when_unset():
 
     body = json.loads(captured["payload"]["body"])
     assert "sourceBucket" not in body  # legacy single-bucket path unaffected
+
+
+@pytest.mark.unit
+def test_process_external_upload_authorizes_as_cross_call():
+    """The write-back invokes fileIngestion as a system cross-call so a trigger-launched
+    execution (whose stored request context carries no authorizer claims) still authorizes."""
+    captured = {}
+
+    class _Payload:
+        def read(self):
+            return json.dumps({"statusCode": 200, "body": json.dumps({"ok": True})}).encode()
+
+    def _invoke(FunctionName, InvocationType, Payload):
+        captured["payload"] = json.loads(Payload.decode("utf-8"))
+        return {"Payload": _Payload()}
+
+    with patch.object(po, "client") as m_client:
+        m_client.invoke.side_effect = _invoke
+        # No change_user_id -> SYSTEM_USER
+        po.process_external_upload(
+            "upl-1", "asset1", "db1", "assetFile", ["a/model.glb"], "a/", {"http": {}})
+    assert captured["payload"]["lambdaCrossCall"]["userName"] == "SYSTEM_USER"
+
+    with patch.object(po, "client") as m_client:
+        m_client.invoke.side_effect = _invoke
+        # Explicit executing user is preserved for provenance/authorization.
+        po.process_external_upload(
+            "upl-1", "asset1", "db1", "assetFile", ["a/model.glb"], "a/", {"http": {}},
+            change_user_id="alice")
+    assert captured["payload"]["lambdaCrossCall"]["userName"] == "alice"

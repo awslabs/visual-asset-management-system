@@ -33,7 +33,7 @@ from common.s3PathPatterns import (
 
 logger = safeLogger(service_name="WorkflowAslBuilder")
 
-# ASL schema version stamped in the definition Comment (mirrors createWorkflow.ASL_SCHEMA_VERSION).
+# ASL schema version stamped in the definition Comment field.
 ASL_SCHEMA_VERSION = 1
 
 

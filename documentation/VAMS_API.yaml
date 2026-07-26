@@ -4429,10 +4429,16 @@ paths:
                             schema:
                                 type: object
                                 properties:
-                                  workflows:
-                                    type: array
-                                    items:
-                                        $ref: "#/components/schemas/workflow"
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/workflowV2"
+                                            NextToken:
+                                                type: string
+                                                nullable: true
                 "403":
                     description: Not authorized.
                     content:
@@ -4738,6 +4744,7 @@ paths:
                         - fileUpload
         put:
             summary: "Set or replace a workflow trigger."
+            description: "Configures a trigger that auto-launches the workflow on a matching event (e.g. a fileUpload trigger firing on a matching file upload). A trigger-launched execution runs as the reserved system user (SYSTEM_USER), not as the user whose action fired the trigger: the acting user may lack permission to run the workflow, so the execution is intentionally decoupled from their permissions to ensure the trigger functions reliably on the data. Executions started directly through the execute endpoint run as the calling user."
             requestBody:
                 required: true
                 content:
@@ -4752,11 +4759,11 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/workflowTrigger'
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list). A triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional."
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/error'
+                                $ref: '#/components/schemas/triggerTemplateError'
                 "403":
                     description: Not authorized.
                     content:
@@ -5917,10 +5924,16 @@ paths:
                             schema:
                                 type: object
                                 properties:
-                                    pipelines:
-                                        type: array
-                                        items:
-                                            $ref: "#/components/schemas/pipeline"
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/pipelineV2"
+                                            NextToken:
+                                                type: string
+                                                nullable: true
                 "404":
                     description: Database not found.
                     content:
@@ -6007,10 +6020,16 @@ paths:
                             schema:
                                 type: object
                                 properties:
-                                    templates:
-                                        type: array
-                                        items:
-                                            $ref: "#/components/schemas/pipelineTemplate"
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/pipelineTemplateDescriptor"
+                                            NextToken:
+                                                type: string
+                                                nullable: true
                 "403":
                     description: Not authorized.
                     content:
@@ -6061,11 +6080,11 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/error'
+                                $ref: '#/components/schemas/triggerTemplateError'
                 "403":
                     description: Not authorized.
                     content:
@@ -6154,11 +6173,11 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/pipelineTemplate'
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/error'
+                                $ref: '#/components/schemas/triggerTemplateError'
                 "403":
                     description: Not authorized.
                     content:
@@ -7260,9 +7279,18 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/workflow"
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/workflowV2"
+                                            NextToken:
+                                                type: string
+                                                nullable: true
                 "500":
                     description: Error processing request.
                     content:
@@ -7276,11 +7304,23 @@ paths:
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
-            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on any of its input assets or its output asset. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on any of its input assets or its output asset. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied)."
             parameters:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
+              - in: query
+                name: filterStartDate
+                required: false
+                description: "ISO-8601 lower bound on execution start date; only executions started on or after this date are listed. Defaults to 90 days ago."
+                schema:
+                    type: string
+              - in: query
+                name: filterEndDate
+                required: false
+                description: "ISO-8601 upper bound on execution start date; only executions started on or before this date are listed."
+                schema:
+                    type: string
               - in: query
                 name: workflowId
                 required: false
@@ -8756,6 +8796,21 @@ components:
                     type: string
             required:
                 - message
+        triggerTemplateError:
+            type: object
+            description: "A 400 error body for a headless-runnability rejection. Returned when a trigger's chosen default template, or a template referenced by a trigger as a default, has a required tag with no default value. The message object carries a triggerTemplateErrors list of human-readable strings, each naming the offending template, its pipeline (or the workflow(s) using it), and the tag keys at fault."
+            properties:
+                message:
+                    type: object
+                    properties:
+                        triggerTemplateErrors:
+                            type: array
+                            items:
+                                type: string
+                    required:
+                        - triggerTemplateErrors
+            required:
+                - message
         eventName:
             $ref: "#/components/schemas/object_name_pattern_regex"
         filename_pattern:
@@ -9044,119 +9099,6 @@ components:
         object_name_pattern_regex:
             type: string
             pattern: ^[a-zA-Z0-9\-._ ]{1,256}$
-        PipelineExecutionType:
-            type: string
-            description: "The execution type for the pipeline"
-            enum:
-                - Lambda
-                - SQS
-                - EventBridge
-            default: Lambda
-        PipelineType:
-            type: string
-            description: "The pipeline type classification"
-            enum:
-                - standardFile
-                - previewFile
-        WaitForCallback:
-            type: string
-            description: "Whether Step Functions waits for a task token callback"
-            enum:
-                - Enabled
-                - Disabled
-            default: Disabled
-
-        UserProvidedResource:
-            type: object
-            description: "Describes a user-provided resource (Lambda function, SQS queue, or EventBridge bus) used by a pipeline"
-            properties:
-                resourceId:
-                    type: string
-                    description: "The resource identifier (Lambda name, SQS queue URL, or EventBridge bus ARN)"
-                resourceType:
-                    type: string
-                    description: "The type of the resource"
-                    default: Lambda
-                    enum:
-                        - Lambda
-                        - SQS
-                        - EventBridge
-                isProvided:
-                    type: boolean
-                    description: "Whether the resource is user-provided (true) or managed by VAMS (false)"
-                eventSource:
-                    type: string
-                    description: "EventBridge event source (only for EventBridge resources)"
-                eventDetailType:
-                    type: string
-                    description: "EventBridge event detail-type (only for EventBridge resources)"
-
-        pipeline:
-            type: object
-            properties:
-                databaseId:
-                    #example: vr-models-training
-                    $ref: "#/components/schemas/id_regex"
-                pipelineId:
-                    #example: convert-to-gltf
-                    $ref: "#/components/schemas/id_regex"
-                description:
-                    type: string
-                    #example: Converts models to GLTF.
-                assetType:
-                    #example: model
-                    $ref: "#/components/schemas/file_type_regex"
-                outputType:
-                    #example: gltf
-                    $ref: "#/components/schemas/file_type_regex"
-                pipelineType:
-                    $ref: "#/components/schemas/PipelineType"
-                pipelineExecutionType:
-                    $ref: "#/components/schemas/PipelineExecutionType"
-                waitForCallback:
-                    $ref: "#/components/schemas/WaitForCallback"
-                taskTimeout:
-                    type: string
-                    description: "Timeout in seconds for callback (max 604800 = 1 week). Defaults to '86400' when waitForCallback is Enabled and omitted."
-                taskHeartbeatTimeout:
-                    type: string
-                    description: "Heartbeat timeout in seconds. Must be smaller than taskTimeout."
-                lambdaName:
-                    type: string
-                    description: "Lambda function name (Lambda execution type). If omitted, VAMS auto-creates a sample Lambda."
-                sqsQueueUrl:
-                    type: string
-                    description: "SQS queue URL (required when pipelineExecutionType is SQS)"
-                eventBridgeBusArn:
-                    type: string
-                    description: "EventBridge bus ARN (optional when pipelineExecutionType is EventBridge; defaults to account default bus)"
-                eventBridgeSource:
-                    type: string
-                    description: "EventBridge event source (optional; defaults to 'vams.pipeline')"
-                eventBridgeDetailType:
-                    type: string
-                    description: "EventBridge event detail-type (optional; defaults to the pipelineId)"
-                inputParameters:
-                    type: string
-                    description: "JSON string of additional parameters passed to the pipeline"
-                updateAssociatedWorkflows:
-                    type: boolean
-                    description: "When true, updates all workflows that reference this pipeline"
-                    default: false
-                enabled:
-                    type: boolean
-                    description: "Whether the pipeline is enabled"
-                    default: true
-                userProvidedResource:
-                    $ref: "#/components/schemas/UserProvidedResource"
-            required:
-                - pipelineId
-                - databaseId
-                - pipelineType
-                - pipelineExecutionType
-                - description
-                - assetType
-                - outputType
 
         # Pipeline execution and system configuration
         pipelineExecutionConfig:
@@ -9310,11 +9252,36 @@ components:
                     type: boolean
                     description: "Whether the pipeline is archived (soft-deleted). Archived pipelines are hidden by default."
                     default: false
+                dateCreated:
+                    type: string
+                    description: "ISO-8601 creation timestamp."
+                dateModified:
+                    type: string
+                    description: "ISO-8601 last-modified timestamp."
+                createdBy:
+                    type: string
+                    description: "User that created the pipeline."
+                modifiedBy:
+                    type: string
+                    description: "User that last modified the pipeline."
+                schemaVersion:
+                    type: integer
+                    description: "Storage schema version of the pipeline record."
+                    default: 1
+                templateCount:
+                    type: integer
+                    description: "Count of saved templates for this pipeline. Present on both the list and details responses."
+                    nullable: true
                 templates:
                     type: array
-                    description: "Lightweight descriptors of the templates that belong to this pipeline."
+                    description: "Lightweight descriptors of the templates that belong to this pipeline. Present on the details response."
                     items:
                         $ref: "#/components/schemas/pipelineTemplateDescriptor"
+                warnings:
+                    type: array
+                    description: "Non-fatal trigger-consistency warnings surfaced on create and update. For example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one."
+                    items:
+                        type: string
             required:
                 - databaseId
                 - pipelineId
@@ -9366,10 +9333,12 @@ components:
                     $ref: "#/components/schemas/id_regex"
                 templateName:
                     $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    type: string
                 configFormat:
                     $ref: "#/components/schemas/pipelineTemplateConfigFormat"
+                allowCustomEdit:
+                    type: boolean
+                    description: "Whether the template config may be edited inline at execution time."
+                    default: false
         pipelineTemplateConfigFormat:
             type: string
             description: "Format of the template config body."
@@ -9642,6 +9611,19 @@ components:
                     type: boolean
                     description: "Whether the workflow is archived (soft-deleted). Archived workflows are hidden by default."
                     default: false
+                workflow_arn:
+                    type: string
+                    description: "ARN of the workflow's Step Functions state machine."
+                dateCreated:
+                    type: string
+                    description: "ISO-8601 creation timestamp."
+                dateModified:
+                    type: string
+                    description: "ISO-8601 last-modified timestamp."
+                executionCount:
+                    type: integer
+                    nullable: true
+                    description: "Total number of executions recorded for the workflow. Present on list responses; null when not computed."
                 triggers:
                     type: array
                     description: "The workflow's configured triggers."
@@ -9710,21 +9692,35 @@ components:
             type: object
             description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded."
             properties:
+                workflowDatabaseId:
+                    $ref: "#/components/schemas/id_regex"
+                workflowId:
+                    $ref: "#/components/schemas/id_regex"
                 triggerType:
                     type: string
                     enum:
                         - fileUpload
-                inputFileFilters:
-                    $ref: "#/components/schemas/pipelineInputFileFilters"
-                defaultTemplateIds:
+                triggerConfig:
                     type: object
-                    description: "Maps each included pipeline to the template used when the trigger auto-launches, keyed by the composite '<pipelineDatabaseId>:<pipelineId>'."
-                    additionalProperties:
-                        $ref: "#/components/schemas/id_regex"
+                    description: "Trigger configuration. For the fileUpload trigger this carries the input-file filters and the per-pipeline default template ids."
+                    properties:
+                        inputFileFilters:
+                            $ref: "#/components/schemas/pipelineInputFileFilters"
+                        defaultTemplateIds:
+                            type: object
+                            description: "Maps each included pipeline to the template used when the trigger auto-launches, keyed by the composite '<pipelineDatabaseId>:<pipelineId>'."
+                            additionalProperties:
+                                $ref: "#/components/schemas/id_regex"
                 enabled:
                     type: boolean
                     description: "Whether the trigger is enabled."
                     default: true
+                dateCreated:
+                    type: string
+                    description: "ISO-8601 creation timestamp."
+                dateModified:
+                    type: string
+                    description: "ISO-8601 last-modified timestamp."
         setWorkflowTriggerRequest:
             type: object
             description: "Request body for setting or replacing a workflow trigger."
@@ -11191,86 +11187,6 @@ components:
                     description: "Whether to include archived versions in the results"
                     default: false
         
-        WorkflowPipelineFunction:
-            type: object
-            description: "A pipeline function within a workflow's specifiedPipelines list"
-            properties:
-                name:
-                    #example: convert-to-gltf
-                    $ref: '#/components/schemas/id_regex'
-                databaseId:
-                    #example: GLOBAL
-                    $ref: '#/components/schemas/id_regex'
-                pipelineType:
-                    $ref: '#/components/schemas/PipelineType'
-                outputType:
-                    #example: .gltf
-                    $ref: '#/components/schemas/file_type_regex'
-                pipelineExecutionType:
-                    $ref: '#/components/schemas/PipelineExecutionType'
-                waitForCallback:
-                    $ref: '#/components/schemas/WaitForCallback'
-                taskTimeout:
-                    type: string
-                    description: "Timeout in seconds (used when waitForCallback is Enabled)"
-                taskHeartbeatTimeout:
-                    type: string
-                    description: "Heartbeat timeout in seconds"
-                userProvidedResource:
-                    type: string
-                    description: "JSON string describing the pipeline resource configuration"
-                inputParameters:
-                    type: string
-                    description: "JSON string of additional parameters passed to the pipeline"
-            required:
-                - name
-                - databaseId
-                - pipelineType
-                - outputType
-        specifiedPipelines:
-            type: object
-            description: "Container for the list of pipeline functions in a workflow"
-            properties:
-                functions:
-                    type: array
-                    items:
-                        $ref: '#/components/schemas/WorkflowPipelineFunction'
-            required:
-                - functions
-        workflow:
-            type: object
-            properties:
-                workflowId:
-                    #example: to-gltf-and-reduce
-                    $ref: '#/components/schemas/id_regex'
-                databaseId:
-                    #example: vr-models-training
-                    $ref: '#/components/schemas/id_regex'
-                description:
-                    #example: Converts models to GLTF format then reduces polygons.
-                    $ref: '#/components/schemas/string256Param'
-                specifiedPipelines:
-                    $ref: '#/components/schemas/specifiedPipelines'
-                autoTriggerOnFileExtensionsUpload:
-                    type: string
-                    description: "Comma-delimited file extensions to auto-trigger on upload (e.g., 'jpg,png,pdf'), or 'all' for all extensions"
-                workflow_arn:
-                    type: string
-                    description: "ARN of the underlying Step Functions state machine"
-                dateCreated:
-                    type: string
-                    description: "Creation timestamp"
-                dateModified:
-                    type: string
-                    description: "Last modification timestamp"
-                executionCount:
-                    type: integer
-                    description: "Total number of executions for this workflow. Returned on list responses (computed per page); omitted/null when not computed."
-            required:
-                - workflowId
-                - databaseId
-                - description
-                - specifiedPipelines
         bucket:
             type: object
             properties:

@@ -24,6 +24,7 @@ checks (executionValidation.validate_workflow_save).
 
 import json
 import os
+from datetime import datetime, timezone, timedelta
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -69,8 +70,13 @@ except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
 
-# GSI (PK "workflowDatabaseId:workflowId") used to COUNT a workflow's executions without a scan.
+# GSI (PK "workflowDatabaseId:workflowId", SK executionStartDate) used to COUNT a workflow's
+# executions without a scan; the SK lets the count be bounded to recent executions.
 WORKFLOW_EXECUTIONS_BY_WORKFLOW_GSI = "WorkflowExecutionsByWorkflowGSI"
+
+# Execution counts (and the default executions listing) reflect only RECENT executions — those
+# started within this many days. Keeps the count meaningful over time and bounds the COUNT query.
+EXECUTION_COUNT_LOOKBACK_DAYS = 90
 
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
@@ -90,16 +96,22 @@ def _pipeline_table():
 
 
 def _execution_count(database_id, workflow_id):
-    """Total executions for one workflow via a COUNT query on the by-workflow GSI (no item read,
-    no scan). Pages through Count (DynamoDB caps a COUNT query at 1MB of scanned index per page).
-    Best-effort: returns None on any error so a count failure never breaks the workflow listing."""
+    """Count of RECENT executions for one workflow (started within EXECUTION_COUNT_LOOKBACK_DAYS) via
+    a COUNT query on the by-workflow GSI (no item read, no scan). The GSI sort key is
+    executionStartDate, so the recency window is a key-condition range — the count stays meaningful
+    as history grows and the query stays bounded. Pages through Count (DynamoDB caps a COUNT query at
+    1MB of scanned index per page). Best-effort: returns None on any error so a count failure never
+    breaks the workflow listing."""
     composite = f"{database_id}:{workflow_id}"
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=EXECUTION_COUNT_LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         table = dynamodb.Table(workflow_execution_table_name)
         total = 0
         kwargs = {
             "IndexName": WORKFLOW_EXECUTIONS_BY_WORKFLOW_GSI,
-            "KeyConditionExpression": Key("workflowDatabaseId:workflowId").eq(composite),
+            "KeyConditionExpression": (Key("workflowDatabaseId:workflowId").eq(composite)
+                                       & Key("executionStartDate").gte(cutoff)),
             "Select": "COUNT",
         }
         while True:
@@ -262,9 +274,14 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles):
 
 
 def get_all_workflows(query_params, include_archived, claims_and_roles):
-    paginator = dynamodb.meta.client.get_paginator("scan")
+    # Query the by-date GSI (constant partition, newest-first) instead of scanning the whole table.
+    paginator = dynamodb.meta.client.get_paginator("query")
     page_iterator = paginator.paginate(
-        TableName=workflow_table_name, PaginationConfig=_pagination_config(query_params)
+        TableName=workflow_table_name,
+        IndexName="WorkflowsByDateGSI",
+        KeyConditionExpression=Key("allListPartition").eq(wr.ALL_WORKFLOWS_LIST_PARTITION),
+        ScanIndexForward=False,
+        PaginationConfig=_pagination_config(query_params),
     ).build_full_result()
     return _filtered_page(page_iterator, include_archived, claims_and_roles)
 

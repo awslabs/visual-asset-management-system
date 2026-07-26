@@ -20,9 +20,11 @@ const Drawer: React.FC<DrawerProps> = ({ open, onOpenChange, title, children, si
     return (
         <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
             <RadixDialog.Portal>
-                <RadixDialog.Overlay className="fixed inset-0 bg-black/50 dark:bg-black/70 z-40" />
+                {/* z-index sits ABOVE the app's fixed TopNavigation header (z-index 2000 in
+                    header.scss); at a lower z the drawer rendered UNDER the header bar. */}
+                <RadixDialog.Overlay className="fixed inset-0 bg-black/50 dark:bg-black/70 z-[3000]" />
                 <RadixDialog.Content
-                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full max-w-md overflow-auto z-50 p-6`}
+                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full max-w-md overflow-auto z-[3001] p-6`}
                 >
                     <RadixDialog.Title className="text-xl font-semibold text-text-primary mb-4">
                         {title}

@@ -256,6 +256,44 @@ class TestPipelineServiceV2:
         data = json.loads(resp["body"])["message"]
         assert data["pipelineId"] == "pipe1"
         assert data["templates"][0]["templateId"] == "t1"
+        # templateCount reflects the number of templates fetched for the details view.
+        assert data["templateCount"] == 1
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}.dynamodb")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_list_pipelines_includes_template_count(
+        self, mock_enforcer, mock_claims, mock_dynamodb, mock_templates_table
+    ):
+        from backend.backend.handlers.pipelines.pipelineService import lambda_handler
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+
+        # Paginator returns one pipeline row.
+        paginator = MagicMock()
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "Items": [{"databaseId": "db1", "pipelineId": "pipe1", "enabled": True, "archived": False}]
+        }
+        mock_dynamodb.meta.client.get_paginator.return_value = paginator
+
+        # Templates COUNT query returns 3.
+        templates_table = MagicMock()
+        templates_table.query.return_value = {"Count": 3}
+        mock_templates_table.return_value = templates_table
+
+        event = _event("GET", "/pipelines")
+        event["queryStringParameters"] = {"maxItems": "100", "pageSize": "100", "startingToken": None}
+        resp = lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        items = json.loads(resp["body"])["message"]["Items"]
+        assert items[0]["pipelineId"] == "pipe1"
+        assert items[0]["templateCount"] == 3
+        # Global list queries the by-date GSI newest-first, not a table scan.
+        mock_dynamodb.meta.client.get_paginator.assert_called_with("query")
+        paginate_kwargs = paginator.paginate.call_args.kwargs
+        assert paginate_kwargs["IndexName"] == "PipelinesByDateGSI"
+        assert paginate_kwargs["ScanIndexForward"] is False
 
     @patch(f"{MOD}._pipeline_table")
     @patch(f"{MOD}.request_to_claims")

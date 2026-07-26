@@ -326,8 +326,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const goBack = () => setWizardStep(WIZARD_STEPS[Math.max(stepIndex - 1, 0)].id);
 
     return (
-        <div className="orchestration-root p-6 space-y-6 bg-surface min-h-full">
-            <div className="space-y-1">
+        <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+            <div className="space-y-2">
                 <Breadcrumb
                     items={[
                         { label: "Workflows", to: `/databases/${databaseId}/workflows` },

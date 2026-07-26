@@ -32,11 +32,57 @@ from backend.backend.handlers.workflows import executionService as le
 MOD = "backend.backend.handlers.workflows.executionService"
 
 
+@pytest.fixture(autouse=True)
+def _clear_asset_cache():
+    # The per-request asset memo is a module global; clear it between tests so a cached row from one
+    # test cannot leak into another (mirrors the per-invocation clear in the real handlers).
+    le._asset_details_cache.clear()
+    yield
+    le._asset_details_cache.clear()
+
+
 def _allow_all():
     e = MagicMock()
     e.enforce.return_value = True
     e.enforceAPI.return_value = True
     return e
+
+
+@pytest.mark.unit
+class TestGlobalListRecencyWindow:
+    """The global executions list queries the by-date GSI newest-first, defaulting to a recent window
+    (90 days) and accepting an explicit filterStartDate/filterEndDate range as the SK key condition."""
+
+    def _run(self, query_params):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        with patch(f"{MOD}.dynamodb") as mock_dynamodb, \
+             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()):
+            mock_dynamodb.Table.return_value = table
+            resp = le.get_global_executions({}, query_params)
+        return resp, table.query.call_args.kwargs
+
+    def test_default_recency_window_queried_newest_first(self):
+        resp, kwargs = self._run({"pageSize": "50"})
+        # Queries the by-date GSI, newest-first, with a KeyConditionExpression (the date window).
+        assert kwargs["IndexName"] == "WorkflowExecutionsByDateGSI"
+        assert kwargs["ScanIndexForward"] is False
+        assert "KeyConditionExpression" in kwargs
+        body = json.loads(resp["body"])["message"]
+        assert body["filterStartDate"].endswith("Z") and len(body["filterStartDate"]) >= 20
+        assert "filterEndDate" not in body  # none supplied
+
+    def test_explicit_range_echoed(self):
+        resp, kwargs = self._run({
+            "pageSize": "50",
+            "filterStartDate": "2026-01-01T00:00:00Z",
+            "filterEndDate": "2026-02-01T00:00:00Z",
+        })
+        assert kwargs["IndexName"] == "WorkflowExecutionsByDateGSI"
+        body = json.loads(resp["body"])["message"]
+        assert body["filterStartDate"] == "2026-01-01T00:00:00Z"
+        assert body["filterEndDate"] == "2026-02-01T00:00:00Z"
 
 
 @pytest.mark.unit
@@ -70,6 +116,31 @@ class TestGlobalListFilters:
         le.claims_and_roles = {"tokens": []}
         assert le._execution_visible_to_caller("E1", {"workflowId": "wf",
                                                       "workflowDatabaseId": "db"}) is False
+
+    def test_results_only_with_no_inputs_visible_on_workflow_get(self):
+        # A results-only run with NO inputs is visible on workflow GET alone (no asset to gate on).
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+             patch(f"{MOD}.get_execution_input_assets", return_value=[]), \
+             patch(f"{MOD}.get_workflow_execution_configuration_row",
+                   return_value={"outputLocationType": "none"}):
+            assert le._execution_visible_to_caller(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}) is True
+
+    def test_results_only_with_unauthorized_inputs_not_visible(self):
+        # L3: a results-only run that HAS input files the caller cannot GET must NOT be listed —
+        # otherwise details/logs (which require GET on every input asset) would 403 on click-through.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        enforcer = MagicMock()
+        # workflow GET passes; asset GET denied.
+        enforcer.enforce.side_effect = lambda obj, action, *a, **k: obj.get("object__type") != "asset"
+        with patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}.get_execution_input_assets", return_value=[("db", "a1")]), \
+             patch(f"{MOD}.get_asset_details", return_value={"assetId": "a1", "databaseId": "db"}), \
+             patch(f"{MOD}.get_workflow_execution_configuration_row",
+                   return_value={"outputLocationType": "none"}):
+            assert le._execution_visible_to_caller(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}) is False
 
 
 @pytest.mark.unit
@@ -233,6 +304,53 @@ class TestAbortGroup:
         with patch(f"{MOD}._executions_in_group", return_value=[]):
             resp = le.abort_group({}, "nope")
         assert resp["statusCode"] == 404
+
+
+@pytest.mark.unit
+class TestReconcileMainStatus:
+    """_reconcile_main_status lazily reconciles a non-terminal main row against SFN. RUNNING is
+    written at launch so the common path skips the poll; this only fires when the row is non-terminal
+    AND stale (past the min sync interval), and catches an out-of-band terminal transition."""
+
+    def test_terminal_row_skips_poll(self):
+        main = {"workflowExecutionId": "E1", "executionStatus": "SUCCEEDED",
+                "executionStopDate": "2026-01-01T00:00:00Z"}
+        with patch.object(le, "sfn") as m_sfn:
+            le._reconcile_main_status("E1", main)
+        m_sfn.describe_execution.assert_not_called()
+
+    def test_recent_sync_skips_poll(self):
+        # A row polled within the min interval is not re-polled (RUNNING, fresh lastSfnSyncCheckDate).
+        main = {"workflowExecutionId": "E1", "executionStatus": "RUNNING", "executionStopDate": "",
+                "workflow_execution_arn": "arn:x", "lastSfnSyncCheckDate": le.er.iso_now()}
+        with patch.object(le, "sfn") as m_sfn:
+            le._reconcile_main_status("E1", main)
+        m_sfn.describe_execution.assert_not_called()
+
+    def test_stale_running_reconciles_to_terminal(self):
+        main = {"workflowExecutionId": "E1", "workflowDatabaseId:workflowId": "db:wf",
+                "executionStatus": "RUNNING", "executionStopDate": "",
+                "workflow_execution_arn": "arn:x", "lastSfnSyncCheckDate": ""}
+        import datetime
+        with patch.object(le, "sfn") as m_sfn, \
+             patch.object(le.dynamodb, "Table", return_value=MagicMock()):
+            m_sfn.describe_execution.return_value = {
+                "status": "ABORTED",
+                "stopDate": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)}
+            le._reconcile_main_status("E1", main)
+        assert main["executionStatus"] == "ABORTED"
+        assert main["executionStopDate"].startswith("2026-01-01")
+
+    def test_stale_running_still_running_keeps_running(self):
+        main = {"workflowExecutionId": "E1", "workflowDatabaseId:workflowId": "db:wf",
+                "executionStatus": "RUNNING", "executionStopDate": "",
+                "workflow_execution_arn": "arn:x", "lastSfnSyncCheckDate": ""}
+        with patch.object(le, "sfn") as m_sfn, \
+             patch.object(le.dynamodb, "Table", return_value=MagicMock()):
+            m_sfn.describe_execution.return_value = {"status": "RUNNING"}  # no stopDate
+            le._reconcile_main_status("E1", main)
+        assert main["executionStatus"] == "RUNNING"
+        assert main["executionStopDate"] == ""
 
 
 @pytest.mark.unit
@@ -405,7 +523,7 @@ class TestGetExecutionLogsLiveFallback:
                    return_value="arn:aws:logs:us-west-2:1:log-group:/aws/vendedlogs/sub") as resolve, \
              patch(f"{MOD}._fetch_registered_log_events",
                    return_value=(True, [{"timestamp": 3, "message": "sub log line",
-                                         "logGroupArn": "arn:...:/aws/vendedlogs/sub"}])):
+                                         "logGroupArn": "arn:...:/aws/vendedlogs/sub"}])) as fetch:
             resp = le.get_execution_logs(
                 {}, "E1", self._q(mode="full", pipelineExecutionId="pe-1"))
         body = json.loads(resp["body"])["message"]
@@ -413,6 +531,35 @@ class TestGetExecutionLogsLiveFallback:
         assert "TaskSucceeded" in msgs  # sub-SFN history
         assert "sub log line" in msgs   # resolved sub-SFN log group
         resolve.assert_called_once_with("arn:aws:states:us-west-2:1:stateMachine:sub")
+        # L1: the shared sub-SFN log group is read SCOPED to this execution + pipeline, never whole.
+        _, kw = fetch.call_args
+        assert kw.get("scope_terms") == ["E1", "pe-1"]
+
+    def test_full_mode_sub_sfn_log_group_not_double_read(self):
+        # L2: when a sub-execution's resolved log group is the SAME group already read from
+        # registeredLogs, it is not read a second time (no duplicate events).
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:...:log-group:/g:*"}
+        shared = "arn:aws:logs:us-west-2:1:log-group:/aws/vendedlogs/sub"
+        prow = {"pipelineExecutionId": "pe-1",
+                "registeredLogs": [{"logGroupArn": shared}],
+                "registeredSubExecutions": [{
+                    "resourceType": "stepFunctionsExecution",
+                    "stateMachineArn": "arn:aws:states:us-west-2:1:stateMachine:sub",
+                    "executionArn": "arn:aws:states:us-west-2:1:execution:sub:x"}]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main), \
+             patch(f"{MOD}.authorize_execution_access", return_value=(True, "")), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]), \
+             patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}), \
+             patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}), \
+             patch(f"{MOD}._resolve_sfn_log_group_arn", return_value=shared), \
+             patch(f"{MOD}._fetch_registered_log_events",
+                   return_value=(True, [])) as fetch:
+            le.get_execution_logs({}, "E1", self._q(mode="full", pipelineExecutionId="pe-1"))
+        # The shared group is read exactly once (from registeredLogs), not again after resolution.
+        assert fetch.call_count == 1
 
 
 @pytest.mark.unit

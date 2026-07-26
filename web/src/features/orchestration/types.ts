@@ -58,6 +58,10 @@ export interface Pipeline {
     archived?: boolean;
     executionConfig: PipelineExecutionConfig;
     systemConfig?: PipelineSystemConfig;
+    /** Count of saved templates for this pipeline (present on list + details responses). */
+    templateCount?: number;
+    /** Present on the single-pipeline details response. */
+    templates?: Array<Record<string, any>>;
 }
 
 export interface TagSchemaField {

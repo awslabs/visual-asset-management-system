@@ -18,7 +18,7 @@ import click
 
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
-from ..utils.json_output import output_status, output_result, output_error
+from ..utils.json_output import output_status, output_result, output_error, output_warning
 from ..utils.exceptions import (
     PipelineNotFoundError, PipelineAlreadyExistsError, InvalidPipelineDataError,
     PipelineTemplateNotFoundError, PipelineTemplateAlreadyExistsError, InvalidPipelineTemplateDataError,
@@ -78,6 +78,17 @@ def _message(result: Dict[str, Any]) -> Any:
     return result.get('message', result) if isinstance(result, dict) else result
 
 
+def _emit_warnings(result: Dict[str, Any], json_output: bool) -> None:
+    """Print any top-level `warnings` array from a successful save as a visible warning.
+    Suppressed in JSON mode (the raw JSON already carries the warnings)."""
+    if not isinstance(result, dict):
+        return
+    warnings = result.get('warnings')
+    if warnings:
+        for warning in warnings:
+            output_warning(f"⚠️  {warning}", json_output)
+
+
 # ---------------------------------------------------------------------------
 # Formatters
 # ---------------------------------------------------------------------------
@@ -92,6 +103,9 @@ def format_pipeline(pipeline: Dict[str, Any]) -> str:
         f"Enabled: {pipeline.get('enabled', 'N/A')}",
         f"Archived: {pipeline.get('archived', False)}",
     ]
+    template_count = pipeline.get('templateCount')
+    if template_count is not None:
+        lines.append(f"Template Count: {template_count}")
     description = pipeline.get('description')
     if description:
         lines.append(f"Description: {description}")
@@ -259,6 +273,7 @@ def create_pipeline(ctx: click.Context, database_id: str, pipeline_name: str,
         result = api_client.create_pipeline(database_id, body)
         output_result(_message(result), json_output, success_message="✓ Pipeline created successfully!",
                       cli_formatter=lambda _r: format_pipeline(_message(result)))
+        _emit_warnings(result, json_output)
         return result
     except PipelineAlreadyExistsError as e:
         output_error(e, json_output, error_type="Pipeline Already Exists")
@@ -322,6 +337,7 @@ def update_pipeline(ctx: click.Context, database_id: str, pipeline_id: str,
         result = api_client.update_pipeline(database_id, pipeline_id, body)
         output_result(_message(result), json_output, success_message="✓ Pipeline updated successfully!",
                       cli_formatter=lambda _r: format_pipeline(_message(result)))
+        _emit_warnings(result, json_output)
         return result
     except PipelineNotFoundError as e:
         output_error(e, json_output, error_type="Pipeline Not Found")

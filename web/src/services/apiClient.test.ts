@@ -135,4 +135,24 @@ describe("apiClient backstop", () => {
         expect(fetchMock).toHaveBeenCalledTimes(2); // initial + one retry, then surfaced
         expect(mockLogout).not.toHaveBeenCalled();
     });
+
+    it("flattens a structured 400 message (triggerTemplateErrors) into readable lines", async () => {
+        const body = {
+            message: {
+                triggerTemplateErrors: [
+                    "template 'X' (pipeline 'Y') is chosen as a trigger default but has required tag(s) with no default value: q.",
+                ],
+            },
+        };
+        (global.fetch as any) = jest.fn().mockResolvedValue(jsonResponse(400, body));
+        mockEnsure.mockResolvedValue(true);
+        await expect(apiClient.post("thing", { body: {} })).rejects.toMatchObject({
+            status: 400,
+            message: expect.stringContaining("required tag"),
+        });
+        // The raw structured body is preserved on the error for callers that want it.
+        await apiClient
+            .post("thing", { body: {} })
+            .catch((e: ApiError) => expect(e.message).not.toContain("[object Object]"));
+    });
 });

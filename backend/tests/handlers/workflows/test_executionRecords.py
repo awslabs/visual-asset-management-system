@@ -136,7 +136,8 @@ class TestTruncateAndBuilders:
         assert rec["S3AssetPipelineBucketOutputFilesPrefix"] == "f/"
         assert rec["credentialVendingState"] == "notVended"
         assert rec["vendedRoleArn"] == "" and rec["s3ReadOnlyScopes"] == [] and rec["s3ReadWriteScopes"] == []
-        assert rec["executionStartDate"] == "" and rec["executionStatus"] == ""
+        # A fresh pipeline row is NEW (queued) until the SFN pre-step/interim lambda flips it RUNNING.
+        assert rec["executionStartDate"] == "" and rec["executionStatus"] == "NEW"
         # from_pipeline_execution_id is the PipelineExecChainGSI sort key; when there is no chain
         # parent it must be OMITTED (DynamoDB rejects an empty string for an indexed key attribute).
         assert "from_pipeline_execution_id" not in rec

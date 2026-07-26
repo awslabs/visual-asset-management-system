@@ -4,8 +4,31 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
-import { toTuple, pageAll } from "./client";
+import { toTuple, pageAll, unwrapMessage } from "./client";
 import type { Pipeline, Template, TagSchemaField } from "../types";
+
+/**
+ * A pipeline save result: the unwrapped pipeline plus any non-blocking warnings the backend
+ * returned alongside `message` (e.g. a require-template pipeline in an auto-trigger with no
+ * default template chosen). The save still succeeded — warnings are surfaced, not thrown.
+ */
+export interface PipelineSaveResult {
+    pipeline: any;
+    warnings: string[];
+}
+
+async function savePipeline(
+    fn: () => Promise<any>
+): Promise<[boolean, PipelineSaveResult | string]> {
+    try {
+        const resp = await fn();
+        const warnings = Array.isArray(resp?.warnings) ? resp.warnings : [];
+        return [true, { pipeline: unwrapMessage(resp), warnings }];
+    } catch (e: any) {
+        console.log(e);
+        return [false, e?.message || "Request failed"];
+    }
+}
 
 /**
  * One server page of pipelines. Returns the raw page object { Items, NextToken? } so the
@@ -52,16 +75,20 @@ export async function getPipeline(
     return toTuple(() => apiClient.get(`database/${databaseId}/pipelines/${pipelineId}`));
 }
 
-export async function createPipeline(body: Pipeline): Promise<[boolean, any]> {
-    return toTuple(() => apiClient.post(`database/${body.databaseId}/pipelines`, { body }));
+export async function createPipeline(
+    body: Pipeline
+): Promise<[boolean, PipelineSaveResult | string]> {
+    return savePipeline(() => apiClient.post(`database/${body.databaseId}/pipelines`, { body }));
 }
 
 export async function updatePipeline(
     databaseId: string,
     pipelineId: string,
     body: Partial<Pipeline>
-): Promise<[boolean, any]> {
-    return toTuple(() => apiClient.put(`database/${databaseId}/pipelines/${pipelineId}`, { body }));
+): Promise<[boolean, PipelineSaveResult | string]> {
+    return savePipeline(() =>
+        apiClient.put(`database/${databaseId}/pipelines/${pipelineId}`, { body })
+    );
 }
 
 export async function archivePipeline(

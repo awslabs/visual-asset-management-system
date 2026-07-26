@@ -45,7 +45,7 @@ const WorkflowTriggersPage: React.FC = () => {
     }
 
     return (
-        <div className="orchestration-root p-6 bg-surface min-h-full">
+        <div className="orchestration-root px-6 pb-6 pt-4 bg-surface min-h-full">
             <TriggersEditor
                 databaseId={databaseId}
                 workflowId={workflowId}

@@ -247,6 +247,40 @@ def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id
     )
 
 
+def set_main_status_running(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
+                            workflow_id):
+    """Flip the main row NEW -> RUNNING, conditioned on NEW so it never clobbers a terminal status a
+    fast end-state lambda already wrote. Best-effort (the ConditionalCheckFailed is expected)."""
+    table = dynamo.Table(main_table_name)
+    try:
+        table.update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId":
+                     er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression="SET executionStatus = :st",
+            ConditionExpression="executionStatus = :new",
+            ExpressionAttributeValues={":st": "RUNNING", ":new": "NEW"},
+        )
+    except Exception:  # nosec B110 - ConditionalCheckFailed (already terminal) is expected
+        pass
+
+
+def set_pipeline_status_running(dynamo, pipeline_executions_table, pipeline_execution_id,
+                                workflow_execution_id):
+    """Flip a pipeline row NEW -> RUNNING (conditioned on NEW; best-effort)."""
+    table = dynamo.Table(pipeline_executions_table)
+    try:
+        table.update_item(
+            Key={"pipelineExecutionId": pipeline_execution_id,
+                 "workflowExecutionId": workflow_execution_id},
+            UpdateExpression="SET executionStatus = :st",
+            ConditionExpression="executionStatus = :new",
+            ExpressionAttributeValues={":st": "RUNNING", ":new": "NEW"},
+        )
+    except Exception:  # nosec B110 - ConditionalCheckFailed (already terminal) is expected
+        pass
+
+
 def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
                       workflow_id, status, stop_date, execution_log="", execution_error=None):
     """Set terminal status + stop date (+ optional log/error) on the V2 main execution row."""

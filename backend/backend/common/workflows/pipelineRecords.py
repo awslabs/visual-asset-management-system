@@ -25,6 +25,9 @@ PIPELINE_SCHEMA_VERSION = 1
 TEMPLATE_SCHEMA_VERSION = 1
 TAG_SCHEMA_VERSION = 1
 
+# Constant PK for the global (cross-database) pipeline-list GSI (query, not table scan).
+ALL_PIPELINES_LIST_PARTITION = "pipeline"
+
 # Execution types a pipeline can be created with (aligns with the CDK executionConfig block).
 PIPELINE_EXECUTION_TYPES = ("Lambda", "SQS", "EventBridge", "DeadlineCloud")
 
@@ -129,6 +132,7 @@ def build_pipeline_record(
         "databaseId": database_id,  # PK
         "pipelineId": pipeline_id,  # SK
         "databaseId:category": f"{database_id}:{category or ''}",  # GSI PK
+        "allListPartition": ALL_PIPELINES_LIST_PARTITION,  # by-date GSI PK (global list)
         "pipelineName": pipeline_name or "",
         "category": category or "",
         "description": description or "",

@@ -17,6 +17,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
+from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
@@ -44,6 +45,19 @@ logger = safeLogger(service="ExecutionService")
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
+
+# Per-request memo of asset rows keyed by (databaseId, assetId), reset at each invocation. The global
+# execution list authorizes every row against its input/output assets; many executions reference the
+# same few assets, so caching collapses the repeated get_asset_details reads within one list request.
+_asset_details_cache = {}
+
+
+def _get_asset_details_cached(database_id, asset_id):
+    """get_asset_details with per-request memoization (asset rows are stable within one request)."""
+    key = (database_id, asset_id)
+    if key not in _asset_details_cache:
+        _asset_details_cache[key] = get_asset_details(database_id, asset_id)
+    return _asset_details_cache[key]
 
 
 def _clean_validation_message(v):
@@ -172,6 +186,8 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
             limit=limit_events,
         )
         text = "\n".join(e.get('message', '') for e in resp.get('events', []))
+        # Redact any inline credentials before the log text is stored or returned.
+        text = redact_log_text(text)
         # Keep the stored log within DynamoDB item limits.
         text, _ = er.truncate_text(text, limit=er.MAX_LOG_FIELD_BYTES)
         return text
@@ -308,8 +324,8 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'inputAssetFileKey': input_item.get('inputAssetFileKey', ''),
             'databaseId': input_item.get('databaseId', ''),
             'assetId': input_item.get('assetId', ''),
-            'executionError': execution_error,
-            'executionLog': execution_log,
+            'executionError': redact_log_text(execution_error),
+            'executionLog': redact_log_text(execution_log),
         })
     return result_items
 
@@ -429,7 +445,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             try:
                 err = describe_response.get('error', '') if describe_response else ''
                 cause = describe_response.get('cause', '') if describe_response else ''
-                error_text = ": ".join(p for p in (err, cause) if p)
+                error_text = redact_log_text(": ".join(p for p in (err, cause) if p))
             except Exception as e:
                 logger.info(f"Could not read SFN error fields (non-critical): {e}")
             log_text = _fetch_execution_logs(
@@ -635,7 +651,7 @@ def authorize_execution_access(execution_id, main_item, asset_action):
     # asset_action on every distinct input-file asset tied to the execution.
     input_assets = get_execution_input_assets(execution_id)
     for database_id, asset_id in input_assets:
-        asset = get_asset_details(database_id, asset_id)
+        asset = _get_asset_details_cached(database_id, asset_id)
         if not asset:
             # An input asset that no longer exists cannot be authorized against; deny.
             return False, f"input asset missing ({database_id}/{asset_id})"
@@ -727,6 +743,12 @@ LOG_MODE_FULL = "full"
 
 # Upper bound on CloudWatch events returned by a single full-search logs call.
 MAX_LOG_EVENTS_PER_CALL = 1000
+
+# Upper bound on registered sub-process logs / sub-executions read per logs request. A pipeline may
+# register an unbounded number of these; each read is a CloudWatch/SFN API call, so a single logs GET
+# must not fan out without limit. Excess entries are skipped and flagged in the response warnings.
+MAX_REGISTERED_LOGS_INSPECTED = 20
+MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED = 20
 
 # Upper bound on rows collected per sub-collection (output files/metadata/results, input files/metadata)
 # in the execution-details view, so an output-heavy execution's assembled response cannot exceed the
@@ -1092,7 +1114,7 @@ def assemble_execution_details(execution_id, main_item):
         "executionStopDate": main_item.get('executionStopDate', ''),
         "triggerType": main_item.get('triggerType', ''),
         "triggeredByUserId": main_item.get('triggeredByUserId', ''),
-        "executionError": main_item.get('executionError', ''),
+        "executionError": redact_log_text(main_item.get('executionError', '')),
         # Output target of the run: where outputs were written. locationType 'none' = results-only
         # (no asset outputs); 'asset' carries the destination asset/database ids.
         "outputLocationType": (config_row or {}).get('outputLocationType', '') or 'asset',
@@ -1130,8 +1152,44 @@ def get_execution_details(event, execution_id):
         logger.info(f"Details access not authorized for execution {execution_id}: {reason}")
         return authorization_error()
 
+    # Safety net: reconcile a non-terminal row against SFN (RUNNING is written at launch, so the
+    # common path skips the poll) so an out-of-band abort never shows RUNNING forever.
+    _reconcile_main_status(execution_id, main_item)
+
     details = assemble_execution_details(execution_id, main_item)
     return success(body={'message': details})
+
+
+def _reconcile_main_status(execution_id, main_item):
+    """Lazily reconcile a non-terminal main row's status against Step Functions (in place). No-op
+    when already terminal or polled within SFN_SYNC_MIN_INTERVAL_SECONDS. Best-effort."""
+    if main_item.get("executionStopDate") or main_item.get("executionStatus", "") in TERMINAL_STATUSES:
+        return
+    last_sync = main_item.get("lastSfnSyncCheckDate", "")
+    if er.iso_seconds_since(last_sync) < SFN_SYNC_MIN_INTERVAL_SECONDS:
+        return
+    arn = main_item.get("workflow_execution_arn", "")
+    if not arn:
+        return
+    try:
+        described = sfn.describe_execution(executionArn=arn)
+    except Exception as e:
+        logger.info(f"Details status reconcile poll failed (non-critical): {e}")
+        return
+    main_item["lastSfnSyncCheckDate"] = er.iso_now()
+    status = described.get("status", main_item.get("executionStatus", ""))
+    sfn_stop = described.get("stopDate")
+    if sfn_stop:
+        stop_date = sfn_stop.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(sfn_stop, "strftime") else str(sfn_stop)
+        main_item["executionStopDate"] = stop_date
+        main_item["executionStatus"] = status
+    else:
+        # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
+        main_item["executionStatus"] = status or main_item.get("executionStatus", "")
+    try:
+        dynamodb.Table(workflow_execution_database_v2).put_item(Item=main_item)
+    except Exception as e:
+        logger.info(f"Could not persist reconciled main row (non-critical): {e}")
 
 
 def _full_log_search(log_group_arn, filter_terms, query_params):
@@ -1190,14 +1248,17 @@ def _full_log_search(log_group_arn, filter_terms, query_params):
     return {"events": events, "nextToken": resp.get('nextToken')}
 
 
-def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix=""):
+def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
+                                 scope_terms=None):
     """Best-effort fetch of events from a registered sub-process log location. Returns
     (ok, events) on success or (False, reason) on a real failure (e.g. AccessDenied), never
     raising; the caller surfaces a failure as a warning.
 
     Scoping precedence within the log group: an exact logStreamName (one stream) takes priority;
     otherwise a logStreamPrefix narrows to streams under that prefix (e.g. an AWS Batch/ECS task
-    family); with neither, the whole group is read."""
+    family); with neither, the whole group is read. `scope_terms` (e.g. an execution id) are AND-ed
+    into the filter pattern as required literal terms so a group SHARED across executions (a nested
+    state machine's own log group) returns only this execution's events, not every execution's."""
     parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return False, "unparseable log group ARN"
@@ -1213,6 +1274,9 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
         kwargs['logStreamNames'] = [log_stream_name]
     elif log_stream_prefix:
         kwargs['logStreamNamePrefix'] = log_stream_prefix
+    filter_pattern = " ".join(f'"{t}"' for t in (scope_terms or []) if t)
+    if filter_pattern:
+        kwargs['filterPattern'] = filter_pattern
     if query_params.get('startTime'):
         kwargs['startTime'] = int(query_params['startTime'])
     if query_params.get('endTime'):
@@ -1394,8 +1458,8 @@ def get_execution_logs(event, execution_id, query_params):
             return success(body={'message': {
                 "mode": LOG_MODE_TRUNCATED,
                 "pipelineExecutionId": pipeline_execution_id,
-                "resultLog": result_log,
-                "errorLog": error_log,
+                "resultLog": redact_log_text(result_log),
+                "errorLog": redact_log_text(error_log),
                 "logsSource": logs_source,
             }})
         # Whole-execution truncated logs. The stored executionLog is captured before CloudWatch
@@ -1420,8 +1484,8 @@ def get_execution_logs(event, execution_id, query_params):
                     logs_source = "sfnHistory"
         return success(body={'message': {
             "mode": LOG_MODE_TRUNCATED,
-            "executionLog": execution_log,
-            "executionError": main_item.get('executionError', ''),
+            "executionLog": redact_log_text(execution_log),
+            "executionError": redact_log_text(main_item.get('executionError', '')),
             "logsSource": logs_source,
         }})
 
@@ -1437,44 +1501,65 @@ def get_execution_logs(event, execution_id, query_params):
     sub_process_events = []
     warnings = []
     if pipeline_row is not None:
-        # Explicitly-registered log locations (logGroupArn reported by the pipeline).
-        for log in pipeline_row.get('registeredLogs', []) or []:
+        # Log-group ARNs already read this request, so a group reported in registeredLogs is not
+        # re-read when it is also resolved from a sub-execution's state machine (avoids duplicates).
+        read_log_group_arns = set()
+        # Explicitly-registered log locations (logGroupArn reported by the pipeline). Capped so an
+        # unbounded registration list cannot turn one logs GET into an unbounded CloudWatch burst.
+        registered_logs = pipeline_row.get('registeredLogs', []) or []
+        for log in registered_logs[:MAX_REGISTERED_LOGS_INSPECTED]:
             log_arn = (log or {}).get('logGroupArn', '')
             stream = (log or {}).get('logStreamName', '')
             stream_prefix = (log or {}).get('logStreamPrefix', '')
             if not log_arn:
                 continue
+            read_log_group_arns.add(log_arn)
             ok, events_or_err = _fetch_registered_log_events(
                 log_arn, stream, query_params, log_stream_prefix=stream_prefix)
             if ok:
                 sub_process_events.extend(events_or_err)
             else:
                 warnings.append(f"Sub-process log retrieval failed for {log_arn}: {events_or_err}")
+        if len(registered_logs) > MAX_REGISTERED_LOGS_INSPECTED:
+            warnings.append(
+                f"Only the first {MAX_REGISTERED_LOGS_INSPECTED} of {len(registered_logs)} "
+                f"registered logs were read.")
 
         # A registered Step Functions sub-execution: surface ITS execution history (the sub-SFN's
         # own state timeline) and, when the sub state machine has a CloudWatch logging destination
-        # that was not explicitly registered, its resolved log group too. This lets a pipeline that
-        # runs its own nested state machine expose that machine's logs without reporting a log ARN.
-        for sub in pipeline_row.get('registeredSubExecutions', []) or []:
-            if (sub or {}).get('resourceType') != RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
-                continue
+        # that was not already read above, its resolved log group too — scoped to THIS execution so
+        # a group shared across executions does not leak other runs' events. Capped as above.
+        registered_subs = [
+            s for s in (pipeline_row.get('registeredSubExecutions', []) or [])
+            if (s or {}).get('resourceType') == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION]
+        for sub in registered_subs[:MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED]:
             sub_exec_arn = sub.get('executionArn', '')
             if sub_exec_arn:
                 sub_hist = _sfn_execution_history_events(sub_exec_arn, query_params)
                 sub_process_events.extend(sub_hist["events"])
             resolved_arn = _resolve_sfn_log_group_arn(sub.get('stateMachineArn', ''))
-            if resolved_arn:
-                ok, events_or_err = _fetch_registered_log_events(resolved_arn, "", query_params)
+            if resolved_arn and resolved_arn not in read_log_group_arns:
+                read_log_group_arns.add(resolved_arn)
+                # The nested state machine's log group is shared across all of its executions; scope
+                # the read to this execution (and pipeline) so only this run's events are returned.
+                ok, events_or_err = _fetch_registered_log_events(
+                    resolved_arn, "", query_params, scope_terms=scope_terms)
                 if ok:
                     sub_process_events.extend(events_or_err)
                 else:
                     warnings.append(
                         f"Sub-SFN log retrieval failed for {resolved_arn}: {events_or_err}")
+        if len(registered_subs) > MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED:
+            warnings.append(
+                f"Only the first {MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED} of "
+                f"{len(registered_subs)} registered sub-executions were read.")
 
+    # Every log string surfaced to the caller passes through the credential redactor first: a
+    # CloudWatch/history message can carry an inline token, AWS key, or JWT (see common.logRedaction).
     message = {
         "mode": LOG_MODE_FULL,
         "pipelineExecutionId": pipeline_execution_id,
-        "events": search["events"],
+        "events": redact_log_events(search["events"]),
         "nextToken": search["nextToken"],
     }
     # For the WHOLE execution (no single pipeline in scope), include the Step Functions execution
@@ -1484,9 +1569,9 @@ def get_execution_logs(event, execution_id, query_params):
         history = _sfn_execution_history_events(
             main_item.get('workflow_execution_arn', ''), query_params)
         if history["events"]:
-            message["sfnHistoryEvents"] = history["events"]
+            message["sfnHistoryEvents"] = redact_log_events(history["events"])
     if sub_process_events:
-        message["subProcessEvents"] = sub_process_events
+        message["subProcessEvents"] = redact_log_events(sub_process_events)
     if warnings:
         message["warnings"] = warnings
     return success(body={'message': message})
@@ -1639,13 +1724,17 @@ def handle_get_request(event):
 # Global (asset-less) execution list
 # ---------------------------------------------------------------------------
 
-def _execution_visible_to_caller(execution_id, main_item):
+def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None):
     """True when the caller may see an execution under the global access rule: workflow GET AND
     (GET on ANY input-file asset OR GET on the output asset). A caller with data access to what the
-    run reads from or writes to may see it; access to neither hides it. Empty tokens -> not visible."""
+    run reads from or writes to may see it; access to neither hides it. Empty tokens -> not visible.
+
+    `casbin_enforcer` may be passed in so a batch caller (the global list) builds one enforcer for the
+    whole page instead of one per row."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
-    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if casbin_enforcer is None:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
 
     workflow_obj = {
         "object__type": "workflow",
@@ -1656,8 +1745,9 @@ def _execution_visible_to_caller(execution_id, main_item):
         return False
 
     # Any input-file asset the caller can GET.
-    for database_id, asset_id in get_execution_input_assets(execution_id):
-        asset = get_asset_details(database_id, asset_id)
+    input_assets = get_execution_input_assets(execution_id)
+    for database_id, asset_id in input_assets:
+        asset = _get_asset_details_cached(database_id, asset_id)
         if not asset:
             continue
         asset.update({"object__type": "asset"})
@@ -1669,16 +1759,19 @@ def _execution_visible_to_caller(execution_id, main_item):
     output_database_id = config_row.get("outputDatabaseId", "")
     output_asset_id = config_row.get("outputAssetId", "")
     if output_database_id and output_asset_id:
-        output_asset = get_asset_details(output_database_id, output_asset_id)
+        output_asset = _get_asset_details_cached(output_database_id, output_asset_id)
         if output_asset:
             output_asset.update({"object__type": "asset"})
             if casbin_enforcer.enforce(output_asset, "GET"):
                 return True
 
-    # Results-only execution (outputLocationType 'none'): no input or output asset to gate on, so the
-    # workflow GET (already passed above) is the sole access control — such a run is visible to any
-    # caller who can see its workflow.
-    if (config_row.get("outputLocationType") or "asset") == "none" and not output_asset_id:
+    # Results-only execution with NO input assets: there is no input or output asset to gate on, so
+    # workflow GET (already passed) is the sole access control. This is gated on having no inputs so
+    # it agrees with authorize_execution_access (used by details/logs), which requires GET on every
+    # input asset — a results-only run that DOES have inputs is authorized on those inputs above, and
+    # must not be listed to a caller who would then be denied its details.
+    if ((config_row.get("outputLocationType") or "asset") == "none"
+            and not output_asset_id and not input_assets):
         return True
     return False
 
@@ -1718,11 +1811,9 @@ def _global_list_row(main_item):
 
 def get_global_executions(event, query_params):
     """List executions across all assets (asset-less), permission-filtered by the caller's access to
-    each execution's input and/or output assets. Scans the V2 main table page by page, applies the
-    optional query filters, then the per-execution visibility check, and returns a NextToken page.
-
-    Bounded by the pagination page size; a NextToken continues from the last-scanned key so the
-    caller can page without the handler accumulating an unbounded in-memory set (Rule 15)."""
+    each execution's input and/or output assets. Queries the by-date GSI newest-first (bounded by the
+    date-range key condition), applies the optional equality filters + per-execution visibility check,
+    and returns a NextToken page (Rule 15)."""
     filters = {
         "workflowId": (query_params.get("workflowId") or "").strip(),
         "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
@@ -1731,8 +1822,11 @@ def get_global_executions(event, query_params):
         "groupId": (query_params.get("groupId") or "").strip(),
         "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
     }
+    # Recency window (default 90 days) / custom range, applied as the GSI sort-key condition.
+    filter_start_date = _resolve_filter_start_date(query_params)
+    filter_end_date = (query_params.get("filterEndDate") or "").strip()
     # pageSize/maxItems were normalized to valid ints by validate_pagination_info in the handler;
-    # cap the scan Limit so a single request cannot drive the per-candidate authorization fan-out
+    # cap the page so a single request cannot drive the per-candidate authorization fan-out
     # (input-asset + output-asset reads + Casbin enforce per row) over an unbounded page.
     try:
         page_size = int(query_params.get("pageSize") or query_params.get("maxItems") or 50)
@@ -1741,11 +1835,23 @@ def get_global_executions(event, query_params):
     page_size = min(max(1, page_size), MAX_GLOBAL_LIST_PAGE_SIZE)
     main_table = dynamodb.Table(workflow_execution_database_v2)
 
-    scan_kwargs = {"Limit": page_size}
-    # Push the equality filters server-side as a DynamoDB FilterExpression so scanned-but-unmatched
-    # rows are dropped before they reach Python (and before the per-row visibility fan-out) — a sparse
-    # filter (e.g. status=FAILED) no longer authorizes every scanned row. The Python filter below stays
-    # as a safety net. (DynamoDB applies Limit before the filter, so a page may return fewer matches.)
+    # By-date GSI key condition: constant partition + executionStartDate range (newest-first below).
+    key_cond = Key("allListPartition").eq(er.ALL_EXECUTIONS_LIST_PARTITION)
+    if filter_start_date and filter_end_date:
+        key_cond = key_cond & Key("executionStartDate").between(filter_start_date, filter_end_date)
+    elif filter_start_date:
+        key_cond = key_cond & Key("executionStartDate").gte(filter_start_date)
+    elif filter_end_date:
+        key_cond = key_cond & Key("executionStartDate").lte(filter_end_date)
+
+    query_kwargs = {
+        "IndexName": "WorkflowExecutionsByDateGSI",
+        "KeyConditionExpression": key_cond,
+        "ScanIndexForward": False,  # newest first
+        "Limit": page_size,
+    }
+    # Equality filters (status/trigger/workflow/group/user) as a FilterExpression so unmatched rows
+    # drop before the per-row visibility fan-out. The Python filter below stays as a safety net.
     _filter_attr = {
         "workflowId": "workflowId", "workflowDatabaseId": "workflowDatabaseId",
         "status": "executionStatus", "triggerType": "triggerType",
@@ -1757,19 +1863,23 @@ def get_global_executions(event, query_params):
             cond = Attr(attr_name).eq(filters[fkey])
             filter_expr = cond if filter_expr is None else (filter_expr & cond)
     if filter_expr is not None:
-        scan_kwargs["FilterExpression"] = filter_expr
+        query_kwargs["FilterExpression"] = filter_expr
     starting_token = query_params.get("startingToken") or query_params.get("NextToken")
     if starting_token:
         try:
-            scan_kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(starting_token).decode("utf-8"))
+            query_kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(starting_token).decode("utf-8"))
         except Exception as e:
             logger.exception(f"Invalid startingToken: {e}")
 
-    # Dedup by executionExecutionId across the main table's (PK, SK) rows (there is one main row per
-    # execution, but a scan is on the base table so guard anyway).
+    # Dedup by workflowExecutionId (one main row per execution; guard defensively).
     items = []
     seen = set()
-    resp = main_table.scan(**scan_kwargs)
+    # One CasbinEnforcer + a fresh per-request asset cache for the whole page: the visibility check
+    # re-reads the same few assets and re-evaluates the same policy across many rows, so build the
+    # enforcer once and memoize asset lookups rather than repeating both per row.
+    _asset_details_cache.clear()
+    page_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
+    resp = main_table.query(**query_kwargs)
     for main_item in resp.get("Items", []):
         execution_id = main_item.get("workflowExecutionId", "")
         if not execution_id or execution_id in seen:
@@ -1777,11 +1887,15 @@ def get_global_executions(event, query_params):
         seen.add(execution_id)
         if not _global_list_matches_filters(main_item, filters):
             continue
-        if not _execution_visible_to_caller(execution_id, main_item):
+        if not _execution_visible_to_caller(execution_id, main_item, page_enforcer):
             continue
         items.append(_global_list_row(main_item))
 
-    result = {"Items": items}
+    # Echo the applied recency window so the caller can show the active range (matches the per-asset
+    # list's filterStartDate echo). filterEndDate is included only when the caller set one.
+    result = {"Items": items, "filterStartDate": filter_start_date}
+    if filter_end_date:
+        result["filterEndDate"] = filter_end_date
     if "LastEvaluatedKey" in resp:
         result["NextToken"] = base64.b64encode(
             json.dumps(resp["LastEvaluatedKey"]).encode("utf-8")).decode("utf-8")

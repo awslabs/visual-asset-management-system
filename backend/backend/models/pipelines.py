@@ -391,6 +391,8 @@ class PipelineResponseModel(BaseModel, extra='ignore'):
     createdBy: Optional[str] = ""
     modifiedBy: Optional[str] = ""
     schemaVersion: Optional[int] = 1
+    # Count of saved templates for this pipeline. Present on both the list and details responses.
+    templateCount: Optional[int] = None
     # Present on the single-pipeline details response.
     templates: Optional[List[Dict[str, Any]]] = None
 

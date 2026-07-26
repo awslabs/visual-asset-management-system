@@ -240,27 +240,27 @@ Stores metadata attached to asset relationships.
 
 **DynamoDB Streams:** NEW_IMAGE
 
-### Pipeline Storage Table
+### Pipeline Storage Table (legacy)
 
-Stores pipeline definitions scoped to a database.
+Stores pipeline definitions scoped to a database. Retained as the migration source for the V2 pipeline table.
 
 | Attribute    | Type   | Key           |
 | ------------ | ------ | ------------- |
 | `databaseId` | String | Partition Key |
 | `pipelineId` | String | Sort Key      |
 
-### Workflow Storage Table
+### Workflow Storage Table (legacy)
 
-Stores workflow definitions scoped to a database.
+Stores workflow definitions scoped to a database. Retained as the migration source for the V2 workflow table.
 
 | Attribute    | Type   | Key           |
 | ------------ | ------ | ------------- |
 | `databaseId` | String | Partition Key |
 | `workflowId` | String | Sort Key      |
 
-### Workflow Executions Storage Table
+### Workflow Executions Storage Table (legacy)
 
-Stores individual workflow execution records.
+Stores individual workflow execution records. Retained as the migration source for the V2 execution tables.
 
 | Attribute            | Type   | Key           |
 | -------------------- | ------ | ------------- |
@@ -279,6 +279,65 @@ Stores individual workflow execution records.
 | ---------------- | ------------------------------- | ------------- | ---------- |
 | `WorkflowGSI`    | `workflowDatabaseId:workflowId` | `executionId` | Keys Only  |
 | `ExecutionIdGSI` | `workflowId`                    | `executionId` | Keys Only  |
+
+### Pipeline Storage Table (V2)
+
+Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)` composite key keeps a pipeline unique even when its id is overridden to a known value.
+
+| Attribute    | Type   | Key           |
+| ------------ | ------ | ------------- |
+| `databaseId` | String | Partition Key |
+| `pipelineId` | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                 | Partition Key         | Sort Key       | Projection | Purpose                                          |
+| ------------------------ | --------------------- | -------------- | ---------- | ------------------------------------------------ |
+| `PipelinesByDatabaseGSI` | `databaseId`          | `dateModified` | ALL        | List a database's pipelines newest-first         |
+| `PipelinesByCategoryGSI` | `databaseId:category` | `pipelineId`   | ALL        | List a database's pipelines within a category    |
+| `PipelinesByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) pipeline list as a query |
+
+The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
+
+### Workflow Storage Table (V2)
+
+Stores workflow definitions scoped to a database.
+
+| Attribute    | Type   | Key           |
+| ------------ | ------ | ------------- |
+| `databaseId` | String | Partition Key |
+| `workflowId` | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                 | Partition Key         | Sort Key       | Projection | Purpose                                          |
+| ------------------------ | --------------------- | -------------- | ---------- | ------------------------------------------------ |
+| `WorkflowsByDatabaseGSI` | `databaseId`          | `dateModified` | ALL        | List a database's workflows newest-first         |
+| `WorkflowsByCategoryGSI` | `databaseId:category` | `workflowId`   | ALL        | List a database's workflows within a category    |
+| `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
+
+The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+### Workflow Executions Storage Table (V2)
+
+Stores the main workflow execution record. Executions are workflow-keyed; asset and database linkage lives in the workflow/pipeline input tables.
+
+| Attribute                       | Type   | Key           |
+| ------------------------------- | ------ | ------------- |
+| `workflowExecutionId`           | String | Partition Key |
+| `workflowDatabaseId:workflowId` | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                          | Partition Key                   | Sort Key             | Projection | Purpose                                                 |
+| --------------------------------- | ------------------------------- | -------------------- | ---------- | ------------------------------------------------------- |
+| `WorkflowExecutionsByWorkflowGSI` | `workflowDatabaseId:workflowId` | `executionStartDate` | ALL        | List a workflow's executions newest-first               |
+| `WorkflowExecutionsByGroupGSI`    | `executionGroupId`              | `executionStartDate` | ALL        | Enumerate a group's executions (sparse; abort-by-group) |
+| `WorkflowExecutionsByDateGSI`     | `allListPartition`              | `executionStartDate` | ALL        | Global executions list as a newest-first query          |
+
+The `allListPartition` attribute holds the constant value `execution` on every row, so the global executions list resolves as a single newest-first query bounded by an `executionStartDate` key condition (default 90-day recency window) rather than an unordered scan that could drop recent executions off the first page. `WorkflowExecutionsByGroupGSI` is sparse — only grouped executions carry `executionGroupId`.
+
+The per-pipeline and per-input execution detail records live in supporting tables (`PipelineExecutionsStorageTable`, `PipelineExecutionInput*`/`Output*StorageTable`, `PipelineExecutionLogsStorageTable`, `WorkflowExecutionInputsStorageTable`, `WorkflowExecutionConfigurationStorageTable`), all keyed by `pipelineExecutionId` or `workflowExecutionId`. See [AWS Resources Inventory](aws-resources.md#workflow-execution-tables-v2-data-model) for the full table and index list.
 
 ### Authorization Tables
 

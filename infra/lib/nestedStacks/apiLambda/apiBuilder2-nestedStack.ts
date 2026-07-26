@@ -576,13 +576,22 @@ export class ApiBuilder2NestedStack extends NestedStack {
             );
         }
 
-        //Nag Supressions
+        // Nag suppressions. Scoped with appliesTo so this does NOT blanket-waive every IAM5 wildcard
+        // in the stack: it only covers the constraint/auth-table read wildcards and the CDK-generated
+        // BucketNotifications/LogRetention custom-resource roles. Per-function log/S3 wildcards are
+        // suppressed at their own builder (suppressCdkNagErrorsByGrantReadWrite(fun)).
         NagSuppressions.addResourceSuppressions(
             this,
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Not providing IAM wildcard permissions to constraint tables.",
+                    reason:
+                        "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
+                        "action/resource wildcards scoped to VAMS resources.",
+                    appliesTo: [
+                        { regex: "/Action::(dynamodb|logs|s3):.*/g" },
+                        { regex: "/^Resource::.*/g" },
+                    ],
                 },
             ],
             true

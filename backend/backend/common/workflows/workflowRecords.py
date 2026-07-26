@@ -17,6 +17,9 @@ from common.workflows.executionRecords import iso_now, workflow_composite_key
 
 WORKFLOW_SCHEMA_VERSION = 1
 
+# Constant PK for the global (cross-database) workflow-list GSI (query, not table scan).
+ALL_WORKFLOWS_LIST_PARTITION = "workflow"
+
 # Trigger types (only fileUpload implemented now; typed for extensibility).
 TRIGGER_TYPES = ("fileUpload",)
 
@@ -88,6 +91,7 @@ def build_workflow_record(
         "databaseId": database_id,  # PK
         "workflowId": workflow_id,  # SK
         "databaseId:category": f"{database_id}:{category or ''}",  # GSI PK
+        "allListPartition": ALL_WORKFLOWS_LIST_PARTITION,  # by-date GSI PK (global list)
         "workflowName": workflow_name or "",
         "category": category or "",
         "description": description or "",

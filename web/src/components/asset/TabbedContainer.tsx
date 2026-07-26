@@ -83,10 +83,10 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                             },
                             {
                                 id: "workflows",
-                                label: "Workflows",
+                                label: "Executions",
                                 content: (
                                     <Suspense
-                                        fallback={<LoadingSpinner text="Loading Workflows..." />}
+                                        fallback={<LoadingSpinner text="Loading Executions..." />}
                                     >
                                         <AssetExecutionsTab
                                             databaseId={databaseId}

@@ -6,6 +6,7 @@ Test APIClient URL composition for stage-inclusive and fronted base URLs.
 """
 
 import pytest
+import requests
 from unittest.mock import MagicMock, patch
 from vamscli.utils.api_client import APIClient
 
@@ -155,3 +156,31 @@ class TestListWorkflowExecutionsHttpMethod:
 
             assert mock_req.call_args[0][0] == "GET"
             assert mock_req.call_args.kwargs.get("json") is None
+
+
+class TestPweErrorMessageFlattening:
+    """A structured {'message': {...}} error body (e.g. triggerTemplateErrors) must be flattened
+    into readable lines rather than shown as raw JSON."""
+
+    @staticmethod
+    def _http_error(body: dict) -> requests.exceptions.HTTPError:
+        resp = MagicMock()
+        resp.content = b"non-empty"
+        resp.json.return_value = body
+        return requests.exceptions.HTTPError(response=resp)
+
+    def test_trigger_template_errors_list_flattened(self):
+        err = self._http_error({"message": {"triggerTemplateErrors": [
+            "template 'X' (pipeline 'Y') is chosen as a trigger default but has required tag(s) "
+            "with no default value: q."]}})
+        msg = APIClient._pwe_error_message(err)
+        assert "required tag" in msg
+        assert "triggerTemplateErrors" not in msg  # key stripped, only the line shown
+
+    def test_plain_string_message_passthrough(self):
+        err = self._http_error({"message": "simple error"})
+        assert APIClient._pwe_error_message(err) == "simple error"
+
+    def test_top_level_list_message_flattened(self):
+        err = self._http_error({"message": ["line one", "line two"]})
+        assert APIClient._pwe_error_message(err) == "line one\nline two"

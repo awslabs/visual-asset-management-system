@@ -18,7 +18,7 @@ interface ExecutionQuickViewProps {
 /** Bordered group used throughout the quick-view panel so data reads as cards, not a text block. */
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
     <div className="rounded-lg border border-border-default bg-surface-container p-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary mb-2">
+        <div className="text-sm font-semibold uppercase tracking-wide text-text-secondary mb-2">
             {title}
         </div>
         {children}
@@ -34,7 +34,7 @@ const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value
 );
 
 const MoreNote: React.FC<{ count?: number }> = ({ count }) => (
-    <div className="text-xs text-text-secondary mt-1">
+    <div className="text-sm text-text-secondary mt-1">
         {count ? `+ ${count} more` : "+ more"} — see full details
     </div>
 );
@@ -108,7 +108,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                             <div className="font-semibold text-red-800 dark:text-red-300 mb-1">
                                 Error
                             </div>
-                            <pre className="text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap break-words max-w-full overflow-x-auto font-mono">
+                            <pre className="text-sm text-red-700 dark:text-red-400 whitespace-pre-wrap break-words max-w-full overflow-x-auto font-mono">
                                 {details.executionError}
                             </pre>
                         </div>
@@ -121,7 +121,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                 {details.pipelines.map((pipeline: any, idx: number) => (
                                     <span
                                         key={idx}
-                                        className="px-2 py-1 text-xs rounded bg-surface-secondary text-text-primary border border-border-default"
+                                        className="px-2 py-1 text-sm rounded bg-surface-secondary text-text-primary border border-border-default"
                                     >
                                         {pipeline.name ||
                                             pipeline.pipelineId ||
@@ -143,7 +143,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                     .map((f: any, idx: number) => (
                                         <li
                                             key={idx}
-                                            className="font-mono text-xs break-all text-text-primary"
+                                            className="font-mono text-sm break-all text-text-primary"
                                         >
                                             {f.assetId ? `${f.assetId}:` : ""}
                                             {f.inputAssetFileKey || f.relativeFilePath || "—"}
@@ -165,7 +165,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                     .map((f: any, idx: number) => (
                                         <li
                                             key={`f-${idx}`}
-                                            className="font-mono text-xs break-all text-text-primary"
+                                            className="font-mono text-sm break-all text-text-primary"
                                         >
                                             {f.relativeFilePath || "—"}
                                             {f.assetFileVersionId
@@ -178,7 +178,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                     .map((r: any, idx: number) => (
                                         <li
                                             key={`r-${idx}`}
-                                            className="font-mono text-xs break-all text-text-primary"
+                                            className="font-mono text-sm break-all text-text-primary"
                                         >
                                             {r.relativeFilePath || "result"}
                                         </li>
@@ -191,7 +191,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                     )}
 
                     {details.truncatedCollections && details.truncatedCollections.length > 0 && (
-                        <div className="text-xs text-yellow-700 dark:text-yellow-400">
+                        <div className="text-sm text-yellow-700 dark:text-yellow-400">
                             Note: some collections were truncated:{" "}
                             {details.truncatedCollections.join(", ")}
                         </div>

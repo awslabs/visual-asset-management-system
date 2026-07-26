@@ -47,6 +47,11 @@ def execution():
 @click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload)')
 @click.option('--group-id', help='Filter by executionGroupId')
 @click.option('--triggered-by', help='Filter by the user ID that triggered the execution')
+@click.option('--filter-start-date',
+              help='Only executions started on/after this ISO-8601 date-time '
+                   '(default: 90 days ago). The list shows recent executions by default.')
+@click.option('--filter-end-date',
+              help='Only executions started on/before this ISO-8601 date-time (optional upper bound).')
 @click.option('--page-size', type=int, help='Number of items per page (max 100)')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
@@ -56,15 +61,19 @@ def execution():
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_database_id: Optional[str],
                     status: Optional[str], trigger_type: Optional[str], group_id: Optional[str],
-                    triggered_by: Optional[str], page_size: Optional[int], max_items: Optional[int],
+                    triggered_by: Optional[str], filter_start_date: Optional[str],
+                    filter_end_date: Optional[str], page_size: Optional[int], max_items: Optional[int],
                     starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List workflow executions globally (permission-filtered), with optional filters.
 
     Only executions whose workflow you can read AND whose input/output asset you can read are shown.
+    By default only recent executions (started within the last 90 days) are listed; use
+    --filter-start-date / --filter-end-date to query an explicit date range.
 
     Examples:
         vamscli execution list
         vamscli execution list -w my-workflow --status RUNNING
+        vamscli execution list --filter-start-date 2026-01-01T00:00:00Z --filter-end-date 2026-02-01T00:00:00Z
         vamscli execution list --group-id grp-123 --auto-paginate
     """
     # Setup/auth already validated by decorator
@@ -91,6 +100,10 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             params['groupId'] = group_id
         if triggered_by:
             params['triggeredByUserId'] = triggered_by
+        if filter_start_date:
+            params['filterStartDate'] = filter_start_date
+        if filter_end_date:
+            params['filterEndDate'] = filter_end_date
         if page_size:
             params['pageSize'] = page_size
         return params

@@ -316,12 +316,12 @@ class TestUpdateConfigBodyJsonValidation:
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
         # Stored template is json-format; the update omits configFormat.
-        mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "t1",
+        mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1",
                                      "configFormat": "json", "bodyStorage": "inline"}
         mock_bucket.return_value = "b"
         mock_table.return_value = MagicMock()
-        path = BASE_PATH + "/t1"
-        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "t1"}
+        path = BASE_PATH + "/tmpl1"
+        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
         resp = lambda_handler(_event("PUT", path, params, {"configBody": "not json"}), MagicMock())
         assert resp["statusCode"] == 400
         assert "JSON" in json.loads(resp["body"])["message"]
@@ -337,11 +337,11 @@ class TestUpdateConfigBodyJsonValidation:
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
         mock_parent.return_value = (True, PIPELINE_ITEM)
-        mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "t1",
+        mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1",
                                      "configFormat": "json", "bodyStorage": "inline"}
         mock_bucket.return_value = "b"
         mock_table.return_value = MagicMock()
-        path = BASE_PATH + "/t1"
-        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "t1"}
+        path = BASE_PATH + "/tmpl1"
+        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
         resp = lambda_handler(_event("PUT", path, params, {"configBody": '{"a": 1}'}), MagicMock())
         assert resp["statusCode"] == 200

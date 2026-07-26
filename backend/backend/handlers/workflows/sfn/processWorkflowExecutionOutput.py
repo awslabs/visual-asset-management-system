@@ -260,13 +260,17 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         if source_bucket:
             body["sourceBucket"] = source_bucket
         
-        # Create the Lambda payload to simulate an API Gateway request
+        # Create the Lambda payload to simulate an API Gateway request. The write-back is a
+        # system action attributed to the executing user (SYSTEM_USER for auto-triggers), so
+        # identity travels as a lambdaCrossCall rather than relying on the stored execution
+        # request context, which carries no authorizer claims for trigger-launched executions.
         lambda_payload = {
             "requestContext": request_context,
             "pathParameters": {
                 "uploadId": upload_id
             },
             "body": json.dumps(body),
+            "lambdaCrossCall": {"userName": change_user_id or "SYSTEM_USER"},
         }
         # Synthetic internal route -- must match API_UPLOAD_COMPLETE_EXTERNAL in
         # common/apiRoutes.py, which the uploadFile dispatcher matches against.

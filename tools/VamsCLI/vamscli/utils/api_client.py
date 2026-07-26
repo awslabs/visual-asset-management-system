@@ -3513,12 +3513,23 @@ class APIClient:
         except ValueError:
             return str(e)
         msg = data.get('message', str(e))
-        # Some handlers nest structured errors under message (e.g. saveErrors); stringify for display.
-        if isinstance(msg, (dict, list)):
+        # Some handlers nest structured errors under message (e.g. triggerTemplateErrors,
+        # saveErrors). Flatten string lists into readable lines instead of raw JSON.
+        if isinstance(msg, dict):
+            lines = []
+            for key, val in msg.items():
+                if isinstance(val, list):
+                    lines.extend(str(item) for item in val)
+                else:
+                    lines.append(f"{key}: {val}")
+            if lines:
+                return "\n".join(lines)
             try:
                 return json.dumps(msg)
             except (TypeError, ValueError):
                 return str(msg)
+        if isinstance(msg, list):
+            return "\n".join(str(item) for item in msg)
         return msg
 
     # ---- Pipeline CRUD ------------------------------------------------

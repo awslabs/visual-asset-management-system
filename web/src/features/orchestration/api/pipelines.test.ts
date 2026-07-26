@@ -86,23 +86,35 @@ describe("pipelines service", () => {
     });
 
     describe("createPipeline", () => {
-        it("posts to database/{db}/pipelines", async () => {
+        it("posts to database/{db}/pipelines and returns { pipeline, warnings }", async () => {
             (apiClient.post as jest.Mock).mockResolvedValue({ message: { pipelineId: "p1" } });
             const r = await createPipeline({ databaseId: "db1" } as any);
             expect(apiClient.post).toHaveBeenCalledWith("database/db1/pipelines", {
                 body: { databaseId: "db1" },
             });
-            expect(r[0]).toBe(true);
+            expect(r).toEqual([true, { pipeline: { pipelineId: "p1" }, warnings: [] }]);
+        });
+
+        it("threads the top-level warnings array through the save result", async () => {
+            const warning =
+                "pipeline 'P' requires a template and is part of auto-triggered workflow 'db1:wf1' (trigger 'fileUpload'), but that trigger has not chosen a default template for it.";
+            (apiClient.post as jest.Mock).mockResolvedValue({
+                message: { pipelineId: "p1" },
+                warnings: [warning],
+            });
+            const r = await createPipeline({ databaseId: "db1" } as any);
+            expect(r).toEqual([true, { pipeline: { pipelineId: "p1" }, warnings: [warning] }]);
         });
     });
 
     describe("updatePipeline", () => {
-        it("puts to database/{db}/pipelines/{id}", async () => {
+        it("puts to database/{db}/pipelines/{id} and returns { pipeline, warnings }", async () => {
             (apiClient.put as jest.Mock).mockResolvedValue({ message: "updated" });
-            await updatePipeline("db1", "p1", { pipelineName: "new" });
+            const r = await updatePipeline("db1", "p1", { pipelineName: "new" });
             expect(apiClient.put).toHaveBeenCalledWith("database/db1/pipelines/p1", {
                 body: { pipelineName: "new" },
             });
+            expect(r).toEqual([true, { pipeline: "updated", warnings: [] }]);
         });
     });
 

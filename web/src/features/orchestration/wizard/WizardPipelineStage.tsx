@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm, { formDataToTags } from "../components/DynamicTagForm";
+import SystemTagHelp from "../components/SystemTagHelp";
 import { useTemplates } from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
 import type { Workflow, Pipeline, SpecifiedPipelineRef, Template } from "../types";
@@ -237,6 +238,11 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                         }}
                         height="300px"
                     />
+                    {customize && (
+                        <div className="mt-2">
+                            <SystemTagHelp />
+                        </div>
+                    )}
                 </div>
             )}
 

@@ -21,11 +21,12 @@ interface BreadcrumbProps {
  * current page (rendered as plain text); earlier items link back (e.g. to the Workflows/Pipelines
  * list).
  */
-// Mirrors the Cloudscape BreadcrumbGroup look used on the legacy pages: ~12px text, muted color,
-// "/" separators with tight spacing, link-blue anchors, current page in default text color. No
-// Cloudscape dependency — plain elements styled to match so the page doesn't look out of place.
+// Mirrors the Cloudscape BreadcrumbGroup look used on the Cloudscape pages: 14px body text
+// (font-size-body-m), muted color, "/" separators, link-blue anchors, current page in default text
+// color. No Cloudscape dependency — plain elements styled to match so the page doesn't look out of
+// place. Font size (text-sm = 14px) and the leading match the Cloudscape breadcrumb.
 const Breadcrumb: React.FC<BreadcrumbProps> = ({ items }) => (
-    <nav aria-label="Breadcrumb" className="text-xs leading-none text-text-secondary">
+    <nav aria-label="Breadcrumb" className="text-sm leading-normal text-text-secondary">
         {/* list-none: Tailwind preflight is disabled in this module, so an <ol> would otherwise
             render default "1." markers. */}
         <ol className="flex flex-wrap items-center list-none p-0 m-0">

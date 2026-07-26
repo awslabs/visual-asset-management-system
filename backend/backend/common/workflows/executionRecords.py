@@ -27,6 +27,9 @@ MANIFEST_SCHEMA_VERSION = 1
 METADATA_SCHEMA_VERSION = 1
 METADATA_SCHEMA_VERSION_GROUPED = 2
 
+# Constant PK for the by-date global-list GSI (newest-first query, not a table scan).
+ALL_EXECUTIONS_LIST_PARTITION = "execution"
+
 
 def new_guid() -> str:
     """Generate a VAMS execution/pipeline-execution GUID (32 hex chars)."""
@@ -378,6 +381,7 @@ def build_workflow_execution_record(
         "workflowDatabaseId": workflow_database_id,
         "workflow_arn": workflow_arn,
         "workflow_execution_arn": workflow_execution_arn,
+        "allListPartition": ALL_EXECUTIONS_LIST_PARTITION,  # by-date GSI PK (global newest-first list)
         "executionStartDate": execution_start_date,  # GSI SK, always set at launch
         "executionStopDate": "",
         "executionStatus": execution_status,
@@ -432,7 +436,8 @@ def build_pipeline_execution_record(
         "S3AssetAuxPipelineBucketPrefixPreview": aux_preview_prefix,
         "executionStartDate": "",
         "executionStopDate": "",
-        "executionStatus": "",
+        # NEW (queued) until the pipeline's task state starts; flipped to RUNNING then terminal.
+        "executionStatus": "NEW",
         "pipelineExecutionType": pipeline_execution_type,
         "waitForCallback": wait_for_callback,
         "pipelineResourceArn": pipeline_resource_arn or "",

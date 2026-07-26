@@ -40,6 +40,12 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
 }) => {
     const inputFileArity = workflow.systemConfig?.inputFileArity || "one";
     const allowOutputOverride = workflow.systemConfig?.outputTarget?.allowOverride || false;
+    // Whether a whole-asset input ('/') is allowed. The assetScope uses either the shorthand
+    // `wholeAsset` or the canonical `wholeAssetAllowed` key (both accepted by the backend); a folder
+    // input also implies picking below the asset root. When neither is set, a whole-asset input is
+    // NOT allowed, so the file picker requires a specific file.
+    const scope = workflow.systemConfig?.assetScope || {};
+    const allowWholeAsset = !!(scope.wholeAssetAllowed || scope.wholeAsset);
 
     // Databases for the input/output selectors. On a database-scoped launch the database is fixed;
     // on the global page the user picks from the databases they can see.
@@ -111,7 +117,16 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     }
 
     const handleAddInputFile = () => {
-        onInputFilesChange([...inputFiles, { databaseId, assetId: "", relativeFileKey: "/" }]);
+        // Seed a new row with the preset asset when launched from one (so the common case is one
+        // click to add another file from the same asset), else an empty row for cross-asset search.
+        onInputFilesChange([
+            ...inputFiles,
+            {
+                databaseId: presetAsset?.databaseId || databaseId,
+                assetId: presetAsset?.assetId || "",
+                relativeFileKey: allowWholeAsset ? "/" : "",
+            },
+        ]);
     };
 
     const handleRemoveInputFile = (index: number) => {
@@ -134,25 +149,28 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                     <label className="block text-sm font-medium text-text-primary mb-2">
                         Input File
                     </label>
-                    {presetAsset ? (
-                        <div className="p-3 bg-surface-secondary rounded text-sm text-text-primary">
-                            Preset Asset: {presetAsset.databaseId} / {presetAsset.assetId}
-                        </div>
-                    ) : (
-                        <div className="p-3 border border-border-default rounded">
-                            <InputFileSelector
-                                databaseOptions={databaseOptions}
-                                value={
-                                    inputFiles[0] || {
-                                        databaseId,
-                                        assetId: "",
-                                        relativeFileKey: "/",
-                                    }
-                                }
-                                onChange={(file) => onInputFilesChange([file])}
-                            />
-                        </div>
+                    {presetAsset && (
+                        <p className="text-xs text-text-secondary mb-2">
+                            Launched from {presetAsset.databaseId} / {presetAsset.assetId}. The
+                            asset is pre-filled — choose the file to run
+                            {allowWholeAsset ? " (or the whole asset)" : ""}. You can also pick a
+                            different database/asset.
+                        </p>
                     )}
+                    <div className="p-3 border border-border-default rounded">
+                        <InputFileSelector
+                            databaseOptions={databaseOptions}
+                            allowWholeAsset={allowWholeAsset}
+                            value={
+                                inputFiles[0] || {
+                                    databaseId: presetAsset?.databaseId || databaseId,
+                                    assetId: presetAsset?.assetId || "",
+                                    relativeFileKey: allowWholeAsset ? "/" : "",
+                                }
+                            }
+                            onChange={(file) => onInputFilesChange([file])}
+                        />
+                    </div>
                 </div>
             )}
 
@@ -161,10 +179,23 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                     <label className="block text-sm font-medium text-text-primary mb-2">
                         Input Files
                     </label>
+                    {presetAsset && (
+                        <p className="text-xs text-text-secondary mb-2">
+                            Launched from {presetAsset.databaseId} / {presetAsset.assetId}. Add one
+                            or more files; each row can search a different database/asset, so you
+                            can combine files from multiple assets.
+                        </p>
+                    )}
+                    {inputFiles.length === 0 && (
+                        <p className="text-sm text-text-secondary mb-2">
+                            No input files added yet.
+                        </p>
+                    )}
                     {inputFiles.map((file, index) => (
                         <div key={index} className="mb-2 p-3 border border-border-default rounded">
                             <InputFileSelector
                                 databaseOptions={databaseOptions}
+                                allowWholeAsset={allowWholeAsset}
                                 value={file}
                                 onChange={(updated) => {
                                     const next = [...inputFiles];

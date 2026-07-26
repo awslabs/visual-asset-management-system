@@ -157,6 +157,11 @@ export function buildPipelineServiceV2Function(
     });
     storageResources.dynamo.pipelineStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
+    // Saving a require-template pipeline emits a non-blocking warning when the pipeline is part of an
+    // auto-triggered workflow whose trigger picked no default template for it; that check reads the
+    // workflow + trigger tables.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
     // Read the sample pipeline package for auto-provisioned Lambda pipelines.
     storageResources.s3.artefactsBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -227,6 +232,11 @@ export function buildPipelineTemplateServiceFunction(
     storageResources.dynamo.pipelineTemplatesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    // Saving a template that is chosen as a trigger default is rejected when it has a required tag
+    // with no default (a headless trigger run could never supply it); that check reads the workflow
+    // + trigger tables to find referencing triggers.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

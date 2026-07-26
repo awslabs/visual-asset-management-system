@@ -106,6 +106,8 @@ Triggers auto-launch a workflow in response to an event. A `fileUpload` trigger 
 Input-file filters accept extension patterns such as `*.jpg` (or the `.jpg` shorthand), exact paths, file names, and wildcards. Matching is case-insensitive. A non-empty `allow` list restricts eligibility to matching files; `exclude` removes matches and takes precedence.
 :::
 
+A trigger-launched execution runs as the reserved system identity, not as the user whose action fired the trigger. This is intentional: a user may be permitted to upload a file without being permitted to run the workflow, yet the trigger must still process that upload reliably. Running the execution as the system identity decouples the trigger from the acting user's permissions so it functions consistently regardless of who performed the triggering action. Executions launched directly through the execute endpoint run as the calling user; trigger-launched executions are attributed to the system identity in their execution record and provenance.
+
 ### GLOBAL workflows
 
 Like pipelines, workflows can be scoped to a database or declared as `GLOBAL`. GLOBAL workflows are available for execution using assets in any database and are typically used for common processing sequences that apply across the entire organization.
@@ -156,6 +158,8 @@ An output index keyed by `databaseId:assetId` records which execution wrote to e
 
 :::note[Traceability and logs]
 The execution details endpoint returns full input/output traceability -- the underlying pipelines with their rendered configuration, the input files and metadata, the output target, and a listing of all output files, metadata, and results. The logs endpoint returns the stored execution log, falling back to a live Amazon CloudWatch Logs search, and can be narrowed to a single pipeline execution.
+
+Log data is redacted before it is stored or returned: credential-bearing values -- authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` -- are replaced with `<redacted>` so they are never surfaced to a caller viewing execution or pipeline logs.
 :::
 
 ## Pipeline outputs

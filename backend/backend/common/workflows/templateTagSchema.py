@@ -207,10 +207,10 @@ def validate_tags(tag_schema, provided_tags):
 
     Rules:
       - A provided key that is a reserved system tag name is rejected (the engine owns those; the
-        caller may not supply them — comment 5d).
+        caller may not supply them).
       - Every required tag must be present (or have a default); missing required is an error.
       - Each provided value must match its declared type (coerced where unambiguous).
-      - EXTRA provided tags (no matching schema entry) are IGNORED, not an error (Q1). The only
+      - EXTRA provided tags (no matching schema entry) are IGNORED, not an error. The only
         render-time tag error is an unmatched {{tag}} in the body, enforced by the renderer.
     """
     errors = []
@@ -250,5 +250,25 @@ def validate_tags(tag_schema, provided_tags):
         elif required:
             errors.append(f"tag '{key}' is required")
 
-    # EXTRA provided tags (not in schema, not reserved) are ignored — no error (Q1).
+    # EXTRA provided tags (not in schema, not reserved) are ignored — no error.
     return errors, filled
+
+
+def required_tags_without_default(tag_schema):
+    """Return the tagKeys in a schema that are required=True AND have no usable default value.
+
+    A headless run (an auto-triggered workflow) has no person to supply tag values, so a template
+    with such a tag can never render for a trigger — every triggered execution would fail at
+    validate_tags with 'tag X is required'. Callers use this to reject saving a trigger (or a
+    trigger-referenced template) that would be dead-on-arrival. A default of None (or an absent
+    default) counts as 'no default'; any other value (including False/0/"") is a usable default."""
+    missing = []
+    for field in tag_schema or []:
+        if not isinstance(field, dict):
+            continue
+        key = field.get("tagKey")
+        if not key:
+            continue
+        if bool(field.get("required")) and field.get("default") is None:
+            missing.append(key)
+    return missing

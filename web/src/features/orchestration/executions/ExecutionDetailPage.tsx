@@ -40,6 +40,58 @@ const Card: React.FC<{ title?: string; children: React.ReactNode; className?: st
     </section>
 );
 
+/** Header progress summary: "Pipeline N of M · <status>" + a segmented bar colored per pipeline. */
+const TERMINAL_OK = new Set(["SUCCEEDED", "COMPLETE"]);
+const TERMINAL_BAD = new Set(["FAILED", "ABORTED", "TIMED_OUT"]);
+
+const PipelineProgress: React.FC<{ pipelines: any[] }> = ({ pipelines }) => {
+    if (!pipelines || pipelines.length === 0) return null;
+    const total = pipelines.length;
+    const done = pipelines.filter((p) => TERMINAL_OK.has(p.executionStatus)).length;
+    // The "current" pipeline: first RUNNING, else first non-terminal (NEW), else the last one.
+    const runningIdx = pipelines.findIndex((p) => p.executionStatus === "RUNNING");
+    const queuedIdx = pipelines.findIndex(
+        (p) => !TERMINAL_OK.has(p.executionStatus) && !TERMINAL_BAD.has(p.executionStatus)
+    );
+    const currentIdx = runningIdx >= 0 ? runningIdx : queuedIdx >= 0 ? queuedIdx : total - 1;
+    const current = pipelines[currentIdx] || {};
+    const allDone = done === total;
+
+    const segColor = (status: string) =>
+        TERMINAL_OK.has(status)
+            ? "bg-green-500"
+            : TERMINAL_BAD.has(status)
+            ? "bg-red-500"
+            : status === "RUNNING"
+            ? "bg-blue-500 animate-pulse"
+            : "bg-gray-300 dark:bg-gray-600"; // NEW / queued
+
+    return (
+        <div className="flex items-center gap-2">
+            <span className="text-sm text-text-secondary">
+                {allDone
+                    ? `${total} pipeline${total > 1 ? "s" : ""} complete`
+                    : `Pipeline ${currentIdx + 1} of ${total}${
+                          current.executionStatus ? ` · ${current.executionStatus}` : ""
+                      }`}
+            </span>
+            <span className="flex items-center gap-0.5" aria-hidden="true">
+                {pipelines.map((p, i) => (
+                    <span
+                        key={i}
+                        title={`${p.name || p.pipelineId || `Pipeline ${i + 1}`}: ${
+                            p.executionStatus || "NEW"
+                        }`}
+                        className={`inline-block h-1.5 w-5 rounded-full ${segColor(
+                            p.executionStatus
+                        )}`}
+                    />
+                ))}
+            </span>
+        </div>
+    );
+};
+
 /** Label/value pair used inside the detail cards. */
 const Field: React.FC<{ label: string; children: React.ReactNode; mono?: boolean }> = ({
     label,
@@ -126,7 +178,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 return (
                     <a
                         href={buildFileManagerLink(f.databaseId, f.assetId, isFile ? key : "")}
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                        className="text-sm text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
                     >
                         {isFile ? "Open in file manager" : "Open asset"}
                     </a>
@@ -182,7 +234,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             f.assetId,
                             baseFilePathForPreview(f.relativeFilePath)
                         )}
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                        className="text-sm text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
                     >
                         Open in file manager
                     </a>
@@ -227,9 +279,10 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
 
             {/* Header card */}
             <Card>
-                <div className="flex items-center gap-3 mb-4">
+                <div className="flex items-center gap-3 mb-4 flex-wrap">
                     <h1 className="text-2xl font-bold">Execution Detail</h1>
                     <StatusBadge status={execution.executionStatus as ExecutionStatus} />
+                    <PipelineProgress pipelines={execution.pipelines || []} />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
                     <Field label="Execution ID" mono>
@@ -383,7 +436,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                             />
                                         )}
                                         {pipeline.endStatePipeline && (
-                                            <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded">
+                                            <span className="px-2 py-1 text-sm bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded">
                                                 End state
                                             </span>
                                         )}
@@ -425,15 +478,33 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                                     </span>
                                                 </div>
                                             )}
-                                            {pipeline.templateTags &&
-                                                Object.keys(pipeline.templateTags).length > 0 && (
+                                            {Array.isArray(pipeline.templateTags) &&
+                                                pipeline.templateTags.length > 0 && (
                                                     <div className="text-sm mb-1">
                                                         <span className="text-blue-700 dark:text-blue-400">
                                                             Tags:
-                                                        </span>{" "}
-                                                        <span className="font-mono">
-                                                            {JSON.stringify(pipeline.templateTags)}
                                                         </span>
+                                                        <ul className="mt-1 ml-4 list-disc space-y-0.5">
+                                                            {pipeline.templateTags.map(
+                                                                (t: any, ti: number) => (
+                                                                    <li
+                                                                        key={ti}
+                                                                        className="font-mono text-sm"
+                                                                    >
+                                                                        {t?.key}
+                                                                        {" = "}
+                                                                        {typeof t?.value ===
+                                                                        "object"
+                                                                            ? JSON.stringify(
+                                                                                  t.value
+                                                                              )
+                                                                            : String(
+                                                                                  t?.value ?? ""
+                                                                              )}
+                                                                    </li>
+                                                                )
+                                                            )}
+                                                        </ul>
                                                     </div>
                                                 )}
                                             {pipeline.customTemplateOverrideUsed !== undefined && (
@@ -456,13 +527,13 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                                 Executed Configuration
                                             </h4>
                                             {pipeline.renderedConfigTruncated && (
-                                                <p className="text-xs text-text-secondary mb-1">
+                                                <p className="text-sm text-text-secondary mb-1">
                                                     Configuration was truncated for display.
                                                 </p>
                                             )}
                                             {!expandedEditors[idx] ? (
                                                 <div>
-                                                    <pre className="text-xs overflow-auto p-3 bg-surface-secondary border border-border-default rounded max-h-[300px]">
+                                                    <pre className="text-sm overflow-auto p-3 bg-surface-secondary border border-border-default rounded max-h-[300px]">
                                                         {pipeline.renderedConfig}
                                                     </pre>
                                                     <button
@@ -472,7 +543,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                                                 [idx]: true,
                                                             }))
                                                         }
-                                                        className="mt-2 px-3 py-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                                        className="mt-2 px-3 py-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
                                                     >
                                                         View in editor
                                                     </button>
@@ -537,7 +608,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                                     (Content truncated)
                                                 </div>
                                             )}
-                                            <pre className="text-xs overflow-auto whitespace-pre-wrap break-words">
+                                            <pre className="text-sm overflow-auto whitespace-pre-wrap break-words">
                                                 {result.resultsContent ||
                                                     JSON.stringify(result, null, 2)}
                                             </pre>
@@ -584,13 +655,13 @@ const MetadataValueCell: React.FC<{ value: any }> = ({ value }) => {
     const isLong = text.length > LONG;
     return (
         <div className="max-w-md">
-            <span className="font-mono text-xs break-all whitespace-pre-wrap">
+            <span className="font-mono text-sm break-all whitespace-pre-wrap">
                 {isLong && !expanded ? `${text.slice(0, LONG)}…` : text}
             </span>
             {isLong && (
                 <button
                     onClick={() => setExpanded((e) => !e)}
-                    className="ml-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    className="ml-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
                 >
                     {expanded ? "Show less" : "Show more"}
                 </button>

@@ -24,12 +24,11 @@ const statusConfig: Record<
         label: "Running",
         bgColor: "bg-blue-100 dark:bg-blue-900/30",
         textColor: "text-blue-800 dark:text-blue-300",
-        icon: "●",
     },
     NEW: {
-        label: "New",
-        bgColor: "bg-gray-100 dark:bg-gray-800/50",
-        textColor: "text-gray-700 dark:text-gray-400",
+        label: "Queued",
+        bgColor: "bg-blue-50 dark:bg-blue-900/20",
+        textColor: "text-blue-700 dark:text-blue-300",
     },
     FAILED: {
         label: "Failed",
@@ -59,13 +58,27 @@ const statusConfig: Record<
 
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
     const config = statusConfig[status];
+    // Non-terminal states get a moving indicator: RUNNING a spinner, NEW (queued) a pulsing dot.
     const isRunning = status === "RUNNING";
+    const isQueued = status === "NEW";
 
     return (
         <span
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.textColor}`}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium ${config.bgColor} ${config.textColor}`}
         >
-            {config.icon && <span className={isRunning ? "animate-pulse" : ""}>{config.icon}</span>}
+            {isRunning ? (
+                <span
+                    aria-hidden="true"
+                    className="inline-block h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin"
+                />
+            ) : isQueued ? (
+                <span
+                    aria-hidden="true"
+                    className="inline-block h-2 w-2 rounded-full bg-current animate-pulse"
+                />
+            ) : (
+                config.icon && <span aria-hidden="true">{config.icon}</span>
+            )}
             <span>{config.label}</span>
         </span>
     );

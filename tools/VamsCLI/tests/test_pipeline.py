@@ -99,6 +99,33 @@ class TestPipelineCreate:
             result = cli_runner.invoke(cli, ['pipeline', 'create', '-d', 'my-db', '-n', 'X'])
             assert result.exit_code != 0
 
+    def test_create_success_with_warnings(self, cli_runner, generic_command_mocks):
+        warning = ("pipeline 'New Pipe' requires a template and is part of auto-triggered "
+                   "workflow 'db1:wf1' (trigger 'fileUpload'), but that trigger has not chosen "
+                   "a default template for it.")
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline.return_value = {
+                'message': {'pipelineId': 'gen', 'pipelineName': 'New Pipe',
+                            'executionConfig': {'executionType': 'Lambda'}},
+                'warnings': [warning]}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'create', '-d', 'my-db', '-n', 'New Pipe',
+                '--execution-config', '{"executionType": "Lambda"}'])
+            assert result.exit_code == 0
+            assert 'requires a template' in result.output
+
+    def test_create_warnings_suppressed_in_json(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline.return_value = {
+                'message': {'pipelineId': 'gen'},
+                'warnings': ['some warning']}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'create', '-d', 'my-db', '-n', 'New Pipe', '--json-output'])
+            assert result.exit_code == 0
+            # JSON mode emits only the unwrapped message envelope; the warning banner is suppressed.
+            data = json.loads(result.output)
+            assert data['pipelineId'] == 'gen'
+
 
 class TestPipelineUpdate:
     def test_update_success(self, cli_runner, generic_command_mocks):
@@ -180,6 +207,19 @@ class TestPipelineTemplate:
             result = cli_runner.invoke(cli, [
                 'pipeline', 'template', 'create', '-d', 'my-db', '-p', 'p1', '-n', 'X', '-t', 'dup'])
             assert result.exit_code != 0
+
+    def test_template_create_trigger_template_error(self, cli_runner, generic_command_mocks):
+        # A 400 with structured triggerTemplateErrors is flattened by the API client into an
+        # InvalidPipelineTemplateDataError; the command must surface the message to the user.
+        msg = ("this template is a trigger default for workflow(s) [db1:wf1] and has required "
+               "tag(s) with no default value: q. Give each a default value or make it optional.")
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline_template.side_effect = InvalidPipelineTemplateDataError(msg)
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'create', '-d', 'my-db', '-p', 'p1', '-n', 'X',
+                '--config-body', '{"foo": "bar"}'])
+            assert result.exit_code != 0
+            assert 'required tag' in result.output
 
     def test_template_update_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('pipeline') as mocks:

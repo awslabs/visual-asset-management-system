@@ -130,11 +130,15 @@ vamscli pipeline template delete -d my-db -p my-pipeline -t to-obj
 | `--config-format`                     | `json` / `yaml` / `openjd` / `xml` / `raw`                            |
 | `--config-body[-file]`                | The configuration body (inline or from a file)                        |
 | `--web-form-json` / `--web-form-file` | Optional web-form definition                                          |
-| `--allow-custom-edit`                 | Allow per-execution custom override of the config                     |
-| `--default` / `--no-default`          | Set (or clear) this template as the pipeline's default                |
+| `--allow-custom-edit`                 | Allow per-execution custom override of the config (see note)          |
+| `--default`                           | Set this template as the pipeline's default (see note)                |
 | `--input-instructions`                | Instructions shown to the user                                        |
 | `--overrides[-file]`                  | Per-template overrides (arity, metadata inputs, asset scope, filters) |
 | `--tag-schema[-file]`                 | Inline tag schema (list of field definitions)                         |
+
+:::note[Create vs update flags]
+`create` takes the bare enabling flags `--allow-custom-edit` and `--default`. `update` takes the paired toggle forms `--allow-custom-edit/--no-custom-edit` and `--default/--no-default`, so an update can also clear either setting.
+:::
 
 ---
 

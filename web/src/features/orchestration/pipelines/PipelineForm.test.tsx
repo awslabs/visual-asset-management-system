@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PipelineForm from "./PipelineForm";
@@ -252,5 +252,65 @@ describe("PipelineForm", () => {
         expect(screen.queryByText(/Read-only:/)).not.toBeInTheDocument();
 
         expect(screen.getByText(/Update/)).toBeInTheDocument();
+    });
+
+    it("shows a non-blocking warning banner and holds navigation when a save returns warnings", async () => {
+        const user = userEvent.setup();
+        const warning =
+            "pipeline 'New Pipe' requires a template and is part of auto-triggered workflow 'db1:wf1' (trigger 'fileUpload'), but that trigger has not chosen a default template for it.";
+        const mutateAsync = jest
+            .fn()
+            .mockResolvedValue({ pipeline: { pipelineId: "p1" }, warnings: [warning] });
+        const onDone = jest.fn();
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={onDone} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        // The optional timeout fields reject an empty string, so give them valid values. Both share
+        // the "1-604800" placeholder (Task Timeout, Task Heartbeat Timeout).
+        const timeouts = screen.getAllByPlaceholderText(/1-604800/);
+        await user.type(timeouts[0], "3600");
+        await user.type(timeouts[1], "60");
+        // The submit button lives in the Dialog footer (associated via form=), which jsdom does not
+        // fully honour — submit the form element directly.
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        // Warning banner shows; the form has NOT navigated away yet (save succeeded).
+        await waitFor(() => {
+            expect(screen.getByText(/Pipeline saved with warnings/)).toBeInTheDocument();
+        });
+        expect(screen.getByText(/requires a template/)).toBeInTheDocument();
+        expect(onDone).not.toHaveBeenCalled();
+
+        // Acknowledging closes the form.
+        await user.click(screen.getByRole("button", { name: /Acknowledge/ }));
+        expect(onDone).toHaveBeenCalled();
+    });
+
+    it("closes immediately (no warning banner) when a save returns no warnings", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = jest
+            .fn()
+            .mockResolvedValue({ pipeline: { pipelineId: "p1" }, warnings: [] });
+        const onDone = jest.fn();
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={onDone} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        const timeouts = screen.getAllByPlaceholderText(/1-604800/);
+        await user.type(timeouts[0], "3600");
+        await user.type(timeouts[1], "60");
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => expect(onDone).toHaveBeenCalled());
+        expect(screen.queryByText(/saved with warnings/)).not.toBeInTheDocument();
     });
 });

@@ -38,6 +38,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     const createMutation = useCreatePipeline();
     const updateMutation = useUpdatePipeline();
     const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+    // Non-blocking warnings returned alongside a successful save (e.g. a require-template pipeline
+    // in an auto-trigger with no default template). The save succeeded; the user acknowledges them
+    // before the form closes.
+    const [saveWarnings, setSaveWarnings] = useState<string[]>([]);
 
     const config = appCache.getItem("config");
     const featuresEnabled = config?.featuresEnabled || [];
@@ -124,17 +128,23 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         };
 
         try {
-            if (mode === "create") {
-                await createMutation.mutateAsync(body);
+            const result =
+                mode === "create"
+                    ? await createMutation.mutateAsync(body)
+                    : await updateMutation.mutateAsync({
+                          databaseId,
+                          pipelineId: initial?.pipelineId || "",
+                          body,
+                      });
+            // The save succeeded. If the backend returned non-blocking warnings, show them and let
+            // the user acknowledge before closing; otherwise close immediately.
+            const warnings = (result as any)?.warnings;
+            if (Array.isArray(warnings) && warnings.length > 0) {
+                setSaveWarnings(warnings);
             } else {
-                await updateMutation.mutateAsync({
-                    databaseId,
-                    pipelineId: initial?.pipelineId || "",
-                    body,
-                });
+                setIsOpen(false);
+                onDone();
             }
-            setIsOpen(false);
-            onDone();
         } catch (err: any) {
             console.log("Form submission error:", err);
             setValidationErrors({ _form: err.message || "Submission failed" });
@@ -233,8 +243,30 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                 </div>
             )}
             {validationErrors._form && (
-                <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded">
+                <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded whitespace-pre-line">
                     {validationErrors._form}
+                </div>
+            )}
+
+            {saveWarnings.length > 0 && (
+                <div className="p-3 bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 rounded space-y-2">
+                    <strong>Pipeline saved with warnings:</strong>
+                    <ul className="list-disc list-inside space-y-1">
+                        {saveWarnings.map((warning, idx) => (
+                            <li key={idx}>{warning}</li>
+                        ))}
+                    </ul>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setSaveWarnings([]);
+                            setIsOpen(false);
+                            onDone();
+                        }}
+                        className={btnPrimary}
+                    >
+                        Acknowledge
+                    </button>
                 </div>
             )}
 
@@ -773,8 +805,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     // Page variant: full-page with breadcrumb + heading + footer buttons at the bottom.
     if (isPage) {
         return (
-            <div className="orchestration-root p-6 space-y-6 bg-surface min-h-full">
-                <div className="space-y-1">
+            <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+                <div className="space-y-2">
                     <Breadcrumb
                         items={[
                             { label: "Pipelines", to: `/databases/${databaseId}/pipelines` },
