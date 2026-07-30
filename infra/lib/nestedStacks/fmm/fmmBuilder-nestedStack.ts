@@ -14,7 +14,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
-import { RouteRegistry, attachFunctionToApi, apiGatewayLambdaConfiguration } from "../apiLambda/apiRouteRegistry";
+import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";

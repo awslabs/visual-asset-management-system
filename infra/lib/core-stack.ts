@@ -308,6 +308,26 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
             }
 
+            let fmmBuilderNestedStack: FMMBuilderNestedStack | undefined;
+            if (props.config.app.federatedModelManagement.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.FMM);
+
+                fmmBuilderNestedStack = new FMMBuilderNestedStack(
+                    this,
+                    "FMMBuilder",
+                    {
+                        config: props.config,
+                        storageResources: storageResourcesNestedStack.storageResources,
+                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                        vpc: this.vpc,
+                        subnets: this.subnetsIsolated,
+                        registry: apiRouteRegistry,
+                    }
+                );
+                fmmBuilderNestedStack.addDependency(storageResourcesNestedStack);
+                fmmBuilderNestedStack.addDependency(resourceNamesNestedStack);
+            }
+
             // Build the API stack last (after all registrars have contributed routes).
             const apiNestedStack = new ApiNestedStack(this, "RestApi", {
                 ...props,
@@ -327,6 +347,9 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addDependency(apiBuilder2NestedStack);
             apiNestedStack.addDependency(searchBuilderNestedStack);
             apiNestedStack.addDependency(addonBuilderNestedStack);
+            if (fmmBuilderNestedStack) {
+                apiNestedStack.addDependency(fmmBuilderNestedStack);
+            }
 
             //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
             if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {
@@ -383,25 +406,6 @@ export class CoreVAMSStack extends cdk.Stack {
                             "ALB DNS Endpoint to use for primary domain host DNS routing to static web site",
                     });
                 }
-            }
-
-            if (props.config.app.federatedModelManagement.enabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.FMM);
-
-                const fmmBuilderNestedStack = new FMMBuilderNestedStack(
-                    this,
-                    "FMMBuilder",
-                    {
-                        config: props.config,
-                        storageResources: storageResourcesNestedStack.storageResources,
-                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                        vpc: this.vpc,
-                        subnets: this.subnetsIsolated,
-                        registry: apiRouteRegistry,
-                    }
-                );
-                fmmBuilderNestedStack.addDependency(storageResourcesNestedStack);
-                fmmBuilderNestedStack.addDependency(resourceNamesNestedStack);
             }
 
             //Write final output configurations (pulling forward from nested stacks)
