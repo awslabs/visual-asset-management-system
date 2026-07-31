@@ -1086,7 +1086,7 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //If using RapidPipeline or ModelOps, make sure Imported VPC has at least one private subnet included
+    //If using a pipeline that runs in (or reaches an endpoint in) private subnets, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -1096,7 +1096,12 @@ export function getConfig(app: cdk.App): Config {
         if (
             config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             config.app.pipelines.useRapidPipeline.useEks.enabled ||
-            config.app.pipelines.useModelOps.enabled
+            config.app.pipelines.useModelOps.enabled ||
+            config.app.pipelines.useSplatToolbox.enabled ||
+            config.app.pipelines.useIsaacLabTraining.enabled ||
+            config.app.pipelines.useNvidiaCosmos.enabled ||
+            config.app.pipelines.useNvidiaCosmos3?.enabled ||
+            config.app.pipelines.useNvidiaGr00t.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -1104,7 +1109,7 @@ export function getConfig(app: cdk.App): Config {
                 config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
             ) {
                 throw new Error(
-                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                    "Configuration Error: Must define at least one private subnet ID when using a pipeline that requires private subnets."
                 );
             }
         }

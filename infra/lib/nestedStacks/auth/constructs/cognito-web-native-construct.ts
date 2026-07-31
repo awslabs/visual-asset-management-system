@@ -188,7 +188,9 @@ export class CognitoWebNativeConstructStack extends Construct {
             cognitoIdentityProviders: [
                 {
                     clientId: userPoolWebClient.userPoolClientId,
-                    providerName: `${Service("COGNITO_IDP").Endpoint}/${userPool.userPoolId}`,
+                    providerName: `${Service("COGNITO_IDP", false).Endpoint}/${
+                        userPool.userPoolId
+                    }`,
                 },
             ],
             allowClassicFlow: true,

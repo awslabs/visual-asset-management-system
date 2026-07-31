@@ -39,7 +39,7 @@ export function buildConfigService(
     //Only fill in if we have locaiton services enabled since this is not in all aws partitions
     if (config.app.useLocationService.enabled) {
         urlFormat = `https://maps.${
-            Service.Service("GEO").Endpoint
+            Service.Service("GEO", false).Endpoint
         }/v2/styles/Standard/descriptor?key=<apiKey>`;
     }
 
