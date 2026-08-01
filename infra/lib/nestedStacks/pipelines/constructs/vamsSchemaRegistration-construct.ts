@@ -21,8 +21,9 @@ export interface VamsSchemaRegistrationProps {
     /** Artefacts bucket the vamsSchema files are uploaded to (same bucket the import lambda reads). */
     artefactsBucket: s3.IBucket;
     /**
-     * Absolute path to the pipeline's `vamsSchema/` directory. Must contain at least `pipeline.json`;
-     * `workflow.json` and `templates/*.json` are optional (minimal-required ingestion).
+     * Absolute path to the pipeline's `vamsSchema/` directory. Must contain `pipeline.json` and
+     * `workflow.json` (a pipeline is only launchable through its workflow); `templates/*.json` are
+     * optional.
      */
     vamsSchemaDir: string;
     /**
@@ -59,9 +60,10 @@ export class VamsSchemaRegistration extends Construct {
         super(scope, id);
 
         const dir = props.vamsSchemaDir;
-        const pipelinePath = path.join(dir, "pipeline.json");
-        if (!fs.existsSync(pipelinePath)) {
-            throw new Error(`VamsSchemaRegistration: required pipeline.json not found in ${dir}`);
+        for (const required of ["pipeline.json", "workflow.json"]) {
+            if (!fs.existsSync(path.join(dir, required))) {
+                throw new Error(`VamsSchemaRegistration: required ${required} not found in ${dir}`);
+            }
         }
 
         // Deterministic per-registration prefix so redeploys overwrite the same keys and distinct
@@ -83,14 +85,11 @@ export class VamsSchemaRegistration extends Construct {
             prune: false,
         });
 
-        // Compute the S3 keys present, mirroring the on-disk layout (minimal-required: only
-        // pipeline.json is guaranteed; workflow.json + templates/*.json are optional).
+        // Compute the S3 keys present, mirroring the on-disk layout (templates/*.json are optional).
         const bundleS3Keys: { pipeline: string; workflow?: string; templates?: string[] } = {
             pipeline: `${prefix}/pipeline.json`,
+            workflow: `${prefix}/workflow.json`,
         };
-        if (fs.existsSync(path.join(dir, "workflow.json"))) {
-            bundleS3Keys.workflow = `${prefix}/workflow.json`;
-        }
         const templatesDir = path.join(dir, "templates");
         if (fs.existsSync(templatesDir) && fs.statSync(templatesDir).isDirectory()) {
             const templateFiles = fs
@@ -158,18 +157,21 @@ export class VamsSchemaRegistration extends Construct {
         triggerEnabled?: boolean
     ): string {
         const hash = crypto.createHash("sha256");
-        const addFile = (p: string) => {
+        // The file's path relative to the bundle dir, so an identical bundle hashes the same from any
+        // checkout location or OS (an absolute path would make CI and a developer machine disagree).
+        const addFile = (relativePath: string) => {
+            const p = path.join(dir, relativePath);
             if (fs.existsSync(p)) {
-                hash.update(p);
+                hash.update(relativePath.split(path.sep).join("/"));
                 hash.update(fs.readFileSync(p));
             }
         };
-        addFile(path.join(dir, "pipeline.json"));
-        addFile(path.join(dir, "workflow.json"));
+        addFile("pipeline.json");
+        addFile("workflow.json");
         const templatesDir = path.join(dir, "templates");
         if (fs.existsSync(templatesDir) && fs.statSync(templatesDir).isDirectory()) {
             for (const f of fs.readdirSync(templatesDir).sort()) {
-                addFile(path.join(templatesDir, f));
+                addFile(path.join("templates", f));
             }
         }
         hash.update(JSON.stringify(resourceOverrides || {}));

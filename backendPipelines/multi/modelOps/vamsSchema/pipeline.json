@@ -22,7 +22,18 @@
         "requireTemplate": true,
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
-            "allow": ["*.glb", "*.gltf", "*.obj", "*.fbx", "*.stl", "*.ply", "*.usd", "*.usdz"],
+            "allow": [
+                "*.glb",
+                "*.gltf",
+                "*.obj",
+                "*.fbx",
+                "*.stl",
+                "*.ply",
+                "*.usd",
+                "*.usdz",
+                "*.dae",
+                "*.abc"
+            ],
             "exclude": []
         }
     }

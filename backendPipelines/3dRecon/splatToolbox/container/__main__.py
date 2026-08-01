@@ -6,7 +6,23 @@ import os
 import sys
 import subprocess
 import boto3
-from utils import manifest_io
+from vams_utils import manifest_io
+
+def resolve_output_env(bucket_name: str, object_dir: str, job_name: str) -> tuple:
+    """The (S3_OUTPUT, UUID) pair for an output-files prefix, as `main.py` expects them.
+
+    `main.py` writes every output to "{S3_OUTPUT}/{UUID}/..." and rejects an empty UUID, so the pair
+    is split to recompose to exactly the given prefix: UUID takes its last segment and S3_OUTPUT
+    everything above. Outputs then land at the prefix root, leaving the workflow's output path prefix
+    as the only thing that nests them — an execution's output folder is the workflow's choice, not
+    the container's. `main.py` interpolates the pair at ~15 sites and is upstream-synced and
+    gitignored, so this is the only durable place to fix the layout. UUID is read nowhere else here:
+    the DynamoDB metrics writes it keys are all gated on DDB_TABLE_NAME, which VAMS does not set.
+    """
+    trimmed = str(object_dir or "").strip("/")
+    parent, _, leaf = trimmed.rpartition("/")
+    return f"s3://{bucket_name}/{parent}", (leaf or job_name)
+
 
 def set_config_parameters(params: dict, metadata: dict):
     """
@@ -120,14 +136,15 @@ def main():
         sys.exit(1)
     
     # Set environment variables that main.py expects
-    os.environ['UUID'] = pipeline_def.get('jobName', 'pipeline-job')
     os.environ['S3_INPUT'] = f"s3://{input_file['bucketName']}/{input_file['objectKey']}"
     os.environ['FILENAME'] = input_file['objectKey'].split('/')[-1]
-    
-    # Set S3_OUTPUT to point to the assets output location (not aux assets)
-    # This ensures final asset files (.ply, .spz, .sog, .mp4) are written to the correct location
-    os.environ['S3_OUTPUT'] = f"s3://{output_files['bucketName']}/{output_files['objectDir']}"
-    
+
+    # S3_OUTPUT + UUID recompose to the output-files prefix (see resolve_output_env), so outputs land
+    # at its root and only the workflow's output path prefix nests them.
+    os.environ['S3_OUTPUT'], os.environ['UUID'] = resolve_output_env(
+        output_files['bucketName'], output_files['objectDir'],
+        pipeline_def.get('jobName', 'pipeline-job'))
+
     # Force the correct paths for Batch environment
     os.environ['AWS_BATCH_JOB_ID'] = 'vams-batch-job'
     os.environ['DATASET_PATH'] = '/tmp/input/train'

@@ -55,6 +55,15 @@ export function findUnmatchedTags(
 }
 
 /**
+ * A provided tag value counts as absent when it is undefined, null, an empty string, or an empty
+ * list — matching the backend's `_is_absent`, which treats an empty collection like a blank string.
+ */
+function isAbsentTagValue(value: any): boolean {
+    if (value === undefined || value === null || value === "") return true;
+    return Array.isArray(value) && value.length === 0;
+}
+
+/**
  * Return tagKeys of schema fields with required===true that have no provided value
  * (missing or empty/undefined/null) and no default.
  */
@@ -72,8 +81,7 @@ export function missingRequiredTags(
         if (field.required !== true) continue;
         if (field.default !== undefined) continue;
 
-        const value = tagMap.get(field.tagKey);
-        if (value === undefined || value === null || value === "") {
+        if (isAbsentTagValue(tagMap.get(field.tagKey))) {
             missing.push(field.tagKey);
         }
     }

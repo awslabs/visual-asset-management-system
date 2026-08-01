@@ -125,6 +125,64 @@ class TestVamsSchemaImport:
         assert ids == {"pipelineDatabaseId": "GLOBAL", "pipelineId": "conv",
                        "workflowDatabaseId": "GLOBAL", "workflowId": "conv"}
 
+    def test_template_is_default_forwarded(self):
+        """A schema template flagged isDefault must reach the create/update bodies: execute
+        auto-selects the pipeline's default template, which is what lets a requireTemplate
+        pipeline run without the caller naming one."""
+        b = self._bundle()
+        b["templates"] = [{"templateId": "t1", "templateName": "T1", "isDefault": True}]
+        reqs = vsi.build_import_requests(b)
+        tpl = next(r for r in reqs if r["kind"] == "template")
+        assert tpl["createBody"]["isDefault"] is True
+        assert tpl["updateBody"]["isDefault"] is True
+
+    def test_template_is_default_absent_is_false(self):
+        b = self._bundle()
+        b["templates"] = [{"templateId": "t1", "templateName": "T1"}]
+        reqs = vsi.build_import_requests(b)
+        tpl = next(r for r in reqs if r["kind"] == "template")
+        assert tpl["createBody"]["isDefault"] is False
+
+    def test_sole_template_of_require_template_pipeline_becomes_default(self):
+        """A requireTemplate pipeline shipping exactly one template must have it promoted to the
+        default. Without a default, execute rejects the run unless the caller names the template,
+        even though the single template is the only possible choice."""
+        b = self._bundle()
+        b["pipeline"]["systemConfig"] = {"requireTemplate": True}
+        b["templates"] = [{"templateId": "t1", "templateName": "T1"}]
+        reqs = vsi.build_import_requests(b)
+        tpl = next(r for r in reqs if r["kind"] == "template")
+        assert tpl["createBody"]["isDefault"] is True
+        assert tpl["updateBody"]["isDefault"] is True
+
+    def test_sole_template_not_promoted_when_template_not_required(self):
+        b = self._bundle()
+        b["pipeline"]["systemConfig"] = {"requireTemplate": False}
+        b["templates"] = [{"templateId": "t1", "templateName": "T1"}]
+        reqs = vsi.build_import_requests(b)
+        tpl = next(r for r in reqs if r["kind"] == "template")
+        assert tpl["createBody"]["isDefault"] is False
+
+    def test_multiple_templates_are_not_auto_defaulted(self):
+        """With more than one template the choice is ambiguous, so the bundle must declare it."""
+        b = self._bundle()
+        b["pipeline"]["systemConfig"] = {"requireTemplate": True}
+        b["templates"] = [
+            {"templateId": "t1", "templateName": "T1"},
+            {"templateId": "t2", "templateName": "T2"},
+        ]
+        reqs = vsi.build_import_requests(b)
+        tpls = [r for r in reqs if r["kind"] == "template"]
+        assert [t["createBody"]["isDefault"] for t in tpls] == [False, False]
+
+    def test_explicit_default_wins_over_promotion(self):
+        b = self._bundle()
+        b["pipeline"]["systemConfig"] = {"requireTemplate": True}
+        b["templates"] = [{"templateId": "t1", "templateName": "T1", "isDefault": True}]
+        reqs = vsi.build_import_requests(b)
+        tpl = next(r for r in reqs if r["kind"] == "template")
+        assert tpl["createBody"]["isDefault"] is True
+
     def test_template_requires_id(self):
         b = self._bundle()
         b["templates"] = [{"templateName": "No Id"}]
@@ -164,6 +222,124 @@ def _resp(status_code, body=None):
             return json.dumps({"statusCode": status_code,
                                "body": json.dumps(body or {})}).encode()
     return {"Payload": _P()}
+
+
+@pytest.mark.unit
+class TestSystemConfigDefaultsFill:
+    """A bundle's PARTIAL systemConfig is stored completed with the builder defaults.
+
+    Both records store systemConfig wholesale (create/update replace, never merge), so a partial block
+    would persist as-is — and every later systemConfig field addition would silently change the stored
+    meaning of every bundle written before it. Filling at registration makes omissions explicitly the
+    documented defaults, so a new field is inert for existing bundles.
+    """
+
+    def test_a_partial_workflow_block_is_completed_with_every_default(self):
+        from backend.backend.common.workflows.workflowRecords import build_workflow_system_config
+        defaults = build_workflow_system_config()
+        body = vsi._workflow_create_body(
+            {"workflowName": "W", "systemConfig": {"inputFileArity": "multi"}},
+            "GLOBAL", "w1", "GLOBAL", "p1")
+        stored = body["systemConfig"]
+        assert set(stored.keys()) == set(defaults.keys())
+        # The declaration wins; everything else is the default.
+        assert stored["inputFileArity"] == "multi"
+        for key, default_value in defaults.items():
+            if key != "inputFileArity":
+                assert stored[key] == default_value, key
+
+    def test_a_partial_pipeline_block_is_completed_with_every_default(self):
+        from backend.backend.common.workflows.pipelineRecords import build_pipeline_system_config
+        defaults = build_pipeline_system_config()
+        body = vsi._pipeline_create_body(
+            {"pipelineName": "P", "systemConfig": {"requireTemplate": True}},
+            "GLOBAL", "p1", {"executionType": "Lambda", "lambda": {}})
+        stored = body["systemConfig"]
+        assert set(stored.keys()) == set(defaults.keys())
+        assert stored["requireTemplate"] is True
+        assert stored["inputFileArity"] == defaults["inputFileArity"]
+
+    def test_an_absent_block_becomes_the_full_defaults(self):
+        from backend.backend.common.workflows.workflowRecords import build_workflow_system_config
+        body = vsi._workflow_create_body(
+            {"workflowName": "W"}, "GLOBAL", "w1", "GLOBAL", "p1")
+        assert body["systemConfig"] == build_workflow_system_config()
+
+    def test_a_partial_nested_map_keeps_its_sibling_defaults(self):
+        """A declared assetScope that names one rule must not drop the other three."""
+        body = vsi._workflow_create_body(
+            {"workflowName": "W", "systemConfig": {"assetScope": {"folderAllowed": True}}},
+            "GLOBAL", "w1", "GLOBAL", "p1")
+        scope = body["systemConfig"]["assetScope"]
+        assert scope["folderAllowed"] is True
+        assert scope["singleAssetOnly"] is True
+        assert scope["crossAssetAllowed"] is False
+        assert scope["wholeAssetAllowed"] is False
+
+    def test_the_wholeAsset_shorthand_is_not_contradicted_by_the_canonical_default(self):
+        """The two spellings mean the same thing. Filling the canonical default alongside a shorthand
+        declaration would let the default win at read time and silently disable whole-asset support."""
+        body = vsi._pipeline_create_body(
+            {"pipelineName": "P", "systemConfig": {"assetScope": {"wholeAsset": True}}},
+            "GLOBAL", "p1", {"executionType": "Lambda", "lambda": {}})
+        scope = body["systemConfig"]["assetScope"]
+        assert scope["wholeAsset"] is True
+        assert "wholeAssetAllowed" not in scope
+        # The unrelated siblings are still filled.
+        assert scope["singleAssetOnly"] is True
+
+    def test_update_sends_the_full_defaults_when_the_bundle_declares_none(self):
+        """Registration is self-healing: a bundle with no systemConfig still writes the complete
+        defaults. Sending the raw {} once blanked stored blocks; merely OMITTING the field instead left
+        rows already blanked that way stuck empty, because nothing rewrote them (observed live on
+        conversion-3d-basic and metadata-extraction-cad-mesh)."""
+        from backend.backend.common.workflows.workflowRecords import build_workflow_system_config
+        body = vsi._workflow_update_body({"workflowName": "W"}, "GLOBAL", "p1")
+        assert body["systemConfig"] == build_workflow_system_config()
+
+    def test_update_sends_a_declared_block_filled(self):
+        from backend.backend.common.workflows.workflowRecords import build_workflow_system_config
+        body = vsi._workflow_update_body(
+            {"workflowName": "W", "systemConfig": {"concurrencyRestriction": "perAsset"}},
+            "GLOBAL", "p1")
+        stored = body["systemConfig"]
+        assert stored["concurrencyRestriction"] == "perAsset"
+        assert set(stored.keys()) == set(build_workflow_system_config().keys())
+
+    def test_the_declaration_is_not_mutated(self):
+        declared = {"inputFileArity": "none", "outputTarget": {"allowOverride": True}}
+        snapshot = json.loads(json.dumps(declared))
+        vsi._workflow_create_body(
+            {"workflowName": "W", "systemConfig": declared}, "GLOBAL", "w1", "GLOBAL", "p1")
+        assert declared == snapshot
+
+    def test_a_registered_bundle_with_no_inputs_and_no_output_override_is_REJECTED(self):
+        """Registration runs the same model validation as the API, so a bundle that cannot execute is
+        kicked back at deploy rather than landing as an unusable row. arity 'none' means no input asset
+        to lock output to, so the destination must be selectable at execute time."""
+        from aws_lambda_powertools.utilities.parser import ValidationError
+        from backend.backend.models.workflows import CreateWorkflowRequestModel
+        body = vsi._workflow_create_body(
+            {"workflowName": "W", "systemConfig": {"inputFileArity": "none"}},
+            "GLOBAL", "wf-none", "GLOBAL", "pipe-none")
+        with pytest.raises(ValidationError) as raised:
+            CreateWorkflowRequestModel(**body)
+        assert "allow output override" in str(raised.value)
+
+        # With the output asset selectable at execute time it validates.
+        ok = vsi._workflow_create_body(
+            {"workflowName": "W", "systemConfig": {
+                "inputFileArity": "none",
+                "outputTarget": {"locationType": "asset", "allowOverride": True}}},
+            "GLOBAL", "wf-none", "GLOBAL", "pipe-none")
+        CreateWorkflowRequestModel(**ok)
+
+        # So does results-only, which writes no asset at all.
+        results_only = vsi._workflow_create_body(
+            {"workflowName": "W", "systemConfig": {
+                "inputFileArity": "none", "outputTarget": {"locationType": "none"}}},
+            "GLOBAL", "wf-none", "GLOBAL", "pipe-none")
+        CreateWorkflowRequestModel(**results_only)
 
 
 @pytest.mark.unit
@@ -233,17 +409,134 @@ class TestImportCrHandler:
         assert result["warnings"] == []
 
     def test_delete_never_fails_teardown(self):
-        # A Delete whose archive raises still returns SUCCESS to CloudFormation.
+        # A Delete whose archive fails still returns normally (the provider framework then signals
+        # SUCCESS); the failure is surfaced as a warning attribute.
         event = {"RequestType": "Delete", "ResourceProperties": self._inline_props(),
                  "StackId": "s", "RequestId": "r", "LogicalResourceId": "l",
                  "ResponseURL": "https://cfn", "PhysicalResourceId": "conv"}
         ctx = MagicMock(); ctx.log_stream_name = "log"
-        with patch.object(imp, "lambda_client") as m, patch(f"{IMOD}.send_cfn_response") as m_send:
+        with patch.object(imp, "lambda_client") as m:
             m.invoke.side_effect = RuntimeError("boom")
             resp = imp.lambda_handler(event, ctx)
-        assert resp["statusCode"] == 200
-        # CFN response was SUCCESS despite the archive error.
-        assert m_send.call_args.args[2] == "SUCCESS"
+        assert "PhysicalResourceId" not in resp
+        assert "pipeline archive" in resp["Data"]["warnings"]
+        assert "workflow archive" in resp["Data"]["warnings"]
+
+    def test_create_returns_provider_shape(self):
+        # As a Provider onEventHandler, a successful Create returns {PhysicalResourceId, Data} and
+        # writes no CloudFormation response itself.
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            if ev["requestContext"]["http"]["method"] == "GET":
+                return _resp(404)
+            return _resp(200, {"message": "ok"})
+
+        event = {"RequestType": "Create", "ResourceProperties": self._inline_props(),
+                 "StackId": "s", "RequestId": "r", "LogicalResourceId": "l",
+                 "ResponseURL": "https://cfn"}
+        ctx = MagicMock(); ctx.log_stream_name = "log"
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            resp = imp.lambda_handler(event, ctx)
+        assert resp["PhysicalResourceId"] == "conv"
+        assert resp["Data"]["pipelineId"] == "conv"
+        assert not hasattr(imp, "send_cfn_response")
+
+    def _renamed_props(self):
+        props = {"inlineBundle": {
+            "pipeline": {"pipelineId": "conv-v2", "pipelineName": "Converter",
+                         "executionConfig": {"executionType": "Lambda", "lambda": {}}},
+            "workflow": {"workflowId": "conv-v2", "workflowName": "Convert WF"},
+        }, "resourceOverrides": {"lambdaName": "vams-conv-fn"}}
+        return props
+
+    def test_update_archives_the_superseded_ids(self):
+        # An id change (idOverrides/schema pipelineId rename) does not change the physical id, so
+        # CloudFormation sends no Delete for the retired registration. The Update archives it itself
+        # from OldResourceProperties — otherwise two built-ins stay active for one deployed lambda.
+        calls = []
+
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            method = ev["requestContext"]["http"]["method"]
+            calls.append((method, ev["requestContext"]["http"]["path"]))
+            if method == "GET":
+                return _resp(404)
+            return _resp(200, {"message": "ok"})
+
+        event = {"RequestType": "Update", "ResourceProperties": self._renamed_props(),
+                 "OldResourceProperties": self._inline_props(),
+                 "StackId": "s", "RequestId": "r", "LogicalResourceId": "l",
+                 "ResponseURL": "https://cfn", "PhysicalResourceId": "conv"}
+        ctx = MagicMock(); ctx.log_stream_name = "log"
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            resp = imp.lambda_handler(event, ctx)
+        assert resp["Data"]["pipelineId"] == "conv-v2"
+        deletes = [path for method, path in calls if method == "DELETE"]
+        assert any(path.endswith("/pipelines/conv") for path in deletes), deletes
+        assert any(path.endswith("/workflows/conv") for path in deletes), deletes
+        # The newly registered ids are never archived by the same invocation.
+        assert not any("conv-v2" in path for path in deletes), deletes
+
+    def test_update_without_id_change_archives_nothing(self):
+        # A plain re-register (same ids) must not archive the rows it just wrote.
+        calls = []
+
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            method = ev["requestContext"]["http"]["method"]
+            calls.append((method, ev["requestContext"]["http"]["path"]))
+            if method == "GET":
+                return _resp(200, {"message": "exists"})
+            return _resp(200, {"message": "ok"})
+
+        event = {"RequestType": "Update", "ResourceProperties": self._inline_props(),
+                 "OldResourceProperties": self._inline_props(),
+                 "StackId": "s", "RequestId": "r", "LogicalResourceId": "l",
+                 "ResponseURL": "https://cfn", "PhysicalResourceId": "conv"}
+        ctx = MagicMock(); ctx.log_stream_name = "log"
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            resp = imp.lambda_handler(event, ctx)
+        assert "warnings" not in resp["Data"]
+        assert not [c for c in calls if c[0] == "DELETE"], calls
+
+    def test_create_failure_raises_for_the_provider(self):
+        # A registration failure must raise so the provider framework signals FAILED — returning a
+        # 500 payload would let the framework write SUCCESS and pass a broken deployment.
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            if ev["requestContext"]["http"]["method"] == "GET":
+                return _resp(404)
+            return _resp(400, {"message": "bad config"})
+
+        event = {"RequestType": "Create", "ResourceProperties": self._inline_props(),
+                 "StackId": "s", "RequestId": "r", "LogicalResourceId": "l",
+                 "ResponseURL": "https://cfn"}
+        ctx = MagicMock(); ctx.log_stream_name = "log"
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            with pytest.raises(imp.ImportError_):
+                imp.lambda_handler(event, ctx)
+
+    def test_exists_probe_includes_archived(self):
+        # The exists probe must see soft-archived rows: an archived built-in still occupies its id, so
+        # the register must take the update (unarchive) branch, not a create the service rejects.
+        probes = []
+
+        def _invoke(FunctionName, InvocationType, Payload):
+            ev = json.loads(Payload.decode("utf-8"))
+            if ev["requestContext"]["http"]["method"] == "GET":
+                probes.append(ev.get("queryStringParameters"))
+                return _resp(200, {"message": "exists"})
+            return _resp(200, {"message": "ok"})
+
+        with patch.object(imp, "lambda_client") as m:
+            m.invoke.side_effect = _invoke
+            imp.register_bundle(self._inline_props())
+        assert probes
+        assert all(p.get("includeArchived") == "true" for p in probes), probes
 
     def test_archive_deletes_both_workflow_and_pipeline(self):
         # Turning off a built-in pipeline in CDK archives BOTH its workflow and its pipeline: the
@@ -287,6 +580,9 @@ class TestImportCrHandler:
         workflow_puts = [b for p, b in put_bodies if "/workflows/conv" in p]
         assert pipeline_puts and pipeline_puts[0].get("enabled") is True
         assert workflow_puts and workflow_puts[0].get("enabled") is True
+        # The update also clears archived so a soft-archived built-in is restored.
+        assert pipeline_puts[0].get("archived") is False
+        assert workflow_puts[0].get("archived") is False
 
     def test_bundle_from_s3_keys(self):
         props = {"bundleS3Keys": {"pipeline": "vamsSchema/conv/pipeline.json",

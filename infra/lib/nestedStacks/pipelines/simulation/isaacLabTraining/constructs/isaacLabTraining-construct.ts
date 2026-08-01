@@ -149,6 +149,12 @@ export class IsaacLabTrainingConstruct extends Construct {
                 minvCpus: props.config.app.pipelines.useIsaacLabTraining.keepWarmInstance ? 8 : 0,
                 allocationStrategy: batch.AllocationStrategy.BEST_FIT_PROGRESSIVE,
                 launchTemplate: launchTemplate,
+                // NVIDIA-accelerated AMI for the GPU instance families above
+                images: [
+                    {
+                        imageType: batch.EcsMachineImageType.ECS_AL2023_NVIDIA,
+                    },
+                ],
             }
         );
 

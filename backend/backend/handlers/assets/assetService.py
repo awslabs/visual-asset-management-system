@@ -21,7 +21,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
-from handlers.assets.assetFiles import delete_s3_prefix_all_versions
+from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info
 from common.s3 import is_object_version_archived, list_all_object_versions
@@ -289,10 +289,11 @@ def mark_file_as_archived(key, bucket):
         Key=key
     )
 
-def delete_assetAuxiliary_files(assetLocation):
+def delete_assetAuxiliary_files(databaseId, assetLocation):
     """Delete auxiliary files for an asset
-    
+
     Args:
+        databaseId: The database ID owning the asset
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
     # Convert to AssetLocationModel if it's a dictionary
@@ -308,12 +309,11 @@ def delete_assetAuxiliary_files(assetLocation):
         logger.warning("Invalid asset location type")
         return
 
-    key = location_model.Key
-    if not key:
+    if not location_model.Key:
         return
 
-    # Add the folder delimiter to the end of the key
-    key = key + '/'
+    # Auxiliary objects live under the database-scoped per-file layout
+    key = aux_bucket_asset_file_base(databaseId, location_model.Key)
 
     logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder: {s3_assetAuxiliary_bucket}:{key}")
 
@@ -1417,6 +1417,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
         
+        original_db_id = databaseId.replace("#deleted", "")
+
         # 1. Delete all S3 objects (assets files and preview)
         if "assetLocation" in asset and "Key" in asset["assetLocation"]:
             prefix = asset["assetLocation"]["Key"]
@@ -1429,7 +1431,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
-                delete_assetAuxiliary_files(asset["assetLocation"])
+                delete_assetAuxiliary_files(original_db_id, asset["assetLocation"])
 
         if "previewLocation" in asset and "Key" in asset["previewLocation"]:
             prefix = asset["previewLocation"]["Key"]
@@ -1443,7 +1445,6 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         
         # 2. Delete from asset table (both active and archived locations)
         # First try the original database ID
-        original_db_id = databaseId.replace("#deleted", "")
         asset_table.delete_item(Key={'databaseId': original_db_id, 'assetId': assetId})
         deleted_items["dynamodb_tables"].append(f"{asset_database} (databaseId={original_db_id})")
         

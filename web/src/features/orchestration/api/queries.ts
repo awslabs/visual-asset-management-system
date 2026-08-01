@@ -19,6 +19,8 @@ import * as databaseService from "./databases";
 import * as assetService from "./assets";
 import type {
     Pipeline,
+    PipelineCreateRequest,
+    WorkflowCreateRequest,
     Template,
     Workflow,
     WorkflowTrigger,
@@ -36,6 +38,8 @@ export const qk = {
         ["pipeline", databaseId, pipelineId] as const,
     templates: (databaseId: string, pipelineId: string) =>
         ["templates", databaseId, pipelineId] as const,
+    template: (databaseId: string, pipelineId: string, templateId: string) =>
+        ["template", databaseId, pipelineId, templateId] as const,
     workflows: (databaseId?: string, filters?: any) =>
         ["workflows", databaseId ?? null, filters ?? null] as const,
     workflow: (databaseId: string, workflowId: string) =>
@@ -169,7 +173,8 @@ export function usePipeline(databaseId: string, pipelineId: string) {
 export function useCreatePipeline() {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: (body: Pipeline) => callService(() => pipelineService.createPipeline(body)),
+        mutationFn: (body: PipelineCreateRequest) =>
+            callService(() => pipelineService.createPipeline(body)),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["pipelines"] });
         },
@@ -221,8 +226,32 @@ export function useTemplates(databaseId: string, pipelineId: string) {
     });
 }
 
+/**
+ * Single template, including the tagSchema and the fully rehydrated configBody/webFormJson.
+ * The templates list omits the tag schema and blanks S3-offloaded bodies, so any caller that
+ * writes a template back must load it through here.
+ */
+export function useTemplate(databaseId: string, pipelineId: string, templateId: string) {
+    return useQuery({
+        queryKey: qk.template(databaseId, pipelineId, templateId),
+        queryFn: () =>
+            callService<Template>(() =>
+                pipelineService.getTemplate(databaseId, pipelineId, templateId)
+            ),
+        enabled: !!databaseId && !!pipelineId && !!templateId,
+    });
+}
+
 export function useTemplateMutations() {
     const queryClient = useQueryClient();
+
+    // The pipeline detail and list responses embed templates/templateCount, so a template write
+    // invalidates them alongside the template caches.
+    const invalidateTemplateScopes = (databaseId: string, pipelineId: string) => {
+        queryClient.invalidateQueries({ queryKey: qk.templates(databaseId, pipelineId) });
+        queryClient.invalidateQueries({ queryKey: qk.pipeline(databaseId, pipelineId) });
+        queryClient.invalidateQueries({ queryKey: ["pipelines"] });
+    };
 
     const createTemplate = useMutation({
         mutationFn: ({
@@ -235,9 +264,7 @@ export function useTemplateMutations() {
             body: Template;
         }) => callService(() => pipelineService.createTemplate(databaseId, pipelineId, body)),
         onSuccess: (_, vars) => {
-            queryClient.invalidateQueries({
-                queryKey: qk.templates(vars.databaseId, vars.pipelineId),
-            });
+            invalidateTemplateScopes(vars.databaseId, vars.pipelineId);
         },
     });
 
@@ -257,13 +284,14 @@ export function useTemplateMutations() {
                 pipelineService.updateTemplate(databaseId, pipelineId, templateId, body)
             ),
         onSuccess: (_, vars) => {
+            invalidateTemplateScopes(vars.databaseId, vars.pipelineId);
             queryClient.invalidateQueries({
-                queryKey: qk.templates(vars.databaseId, vars.pipelineId),
+                queryKey: qk.template(vars.databaseId, vars.pipelineId, vars.templateId),
             });
         },
     });
 
-    const archiveTemplate = useMutation({
+    const deleteTemplate = useMutation({
         mutationFn: ({
             databaseId,
             pipelineId,
@@ -272,16 +300,16 @@ export function useTemplateMutations() {
             databaseId: string;
             pipelineId: string;
             templateId: string;
-        }) =>
-            callService(() => pipelineService.archiveTemplate(databaseId, pipelineId, templateId)),
+        }) => callService(() => pipelineService.deleteTemplate(databaseId, pipelineId, templateId)),
         onSuccess: (_, vars) => {
+            invalidateTemplateScopes(vars.databaseId, vars.pipelineId);
             queryClient.invalidateQueries({
-                queryKey: qk.templates(vars.databaseId, vars.pipelineId),
+                queryKey: qk.template(vars.databaseId, vars.pipelineId, vars.templateId),
             });
         },
     });
 
-    return { createTemplate, updateTemplate, archiveTemplate };
+    return { createTemplate, updateTemplate, deleteTemplate };
 }
 
 // ============================================================================
@@ -334,7 +362,8 @@ export function useWorkflowMutations() {
     const queryClient = useQueryClient();
 
     const createWorkflow = useMutation({
-        mutationFn: (body: Workflow) => callService(() => workflowService.createWorkflow(body)),
+        mutationFn: (body: WorkflowCreateRequest) =>
+            callService(() => workflowService.createWorkflow(body)),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["workflows"] });
         },
@@ -404,10 +433,12 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
                 return data as ExecutionListResponse;
             } else if (scope.kind === "workflow") {
+                // The global-list endpoint filters a workflow by its composite key: workflowId plus
+                // workflowDatabaseId (workflow ids are unique only within a database).
                 const workflowParams = {
                     ...params,
                     workflowId: scope.workflowId,
-                    databaseId: scope.databaseId,
+                    workflowDatabaseId: scope.databaseId,
                 };
                 const [ok, data] = await executionService.listExecutionsGlobal(workflowParams);
                 if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");

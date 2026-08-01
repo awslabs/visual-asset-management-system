@@ -8,12 +8,17 @@ Downloads and parses config file from S3 if provided.
 """
 
 import json
+import re
+from datetime import datetime, timezone
 import boto3
 from urllib.parse import urlparse
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="OpenPipelineIsaacLabTraining")
 s3_client = boto3.client("s3")
+
+# Sort floor for a checkpoint whose S3 object carries no LastModified.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 DEFAULT_TASK = "Isaac-Cartpole-v0"
 DEFAULT_NUM_ENVS_TRAIN = 4096
@@ -89,6 +94,27 @@ def load_config_from_s3(s3_uri: str) -> dict:
         return {}
 
 
+def _as_utc(last_modified) -> datetime:
+    """A comparable timezone-aware timestamp for an S3 object's LastModified. A missing value or a
+    naive datetime is normalized so run folders always compare against each other."""
+    if not isinstance(last_modified, datetime):
+        return _EPOCH
+    if last_modified.tzinfo is None:
+        return last_modified.replace(tzinfo=timezone.utc)
+    return last_modified
+
+
+def checkpoint_iteration(key: str) -> int:
+    """The training iteration encoded in a checkpoint file name (``model_1500.pt`` -> 1500).
+
+    Reads the last run of digits in the file name; a name carrying no digits yields -1 so it sorts
+    below every numbered checkpoint.
+    """
+    file_name = key.rsplit("/", 1)[-1]
+    digits = re.findall(r"\d+", file_name)
+    return int(digits[-1]) if digits else -1
+
+
 def discover_policy_file(bucket: str, asset_location_key: str) -> str:
     """Discover .pt policy file anywhere under the asset root in S3.
 
@@ -96,6 +122,10 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
     root), not under the input file's parent directory. The asset root is the
     only reliable starting point — input files may live at arbitrary depths
     beneath it, and deriving the root from the input file path is unsafe.
+
+    Each training run writes its checkpoints under its own execution folder, so selection is
+    per-run: the run folder holding the most recently written checkpoint wins, and within it the
+    highest training iteration (numeric, not lexicographic).
 
     Args:
         bucket: The asset S3 bucket name (bucketAsset).
@@ -112,17 +142,24 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
 
         logger.info(f"Searching for .pt files under asset root s3://{bucket}/{prefix}")
 
-        pt_files = []
+        # Per run folder (the checkpoint's parent prefix): its checkpoints and its newest write time.
+        runs = {}
         paginator = s3_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
-                if obj["Key"].endswith(".pt"):
-                    pt_files.append(obj["Key"])
+                key = obj["Key"]
+                if not key.endswith(".pt"):
+                    continue
+                run_prefix = key.rsplit("/", 1)[0]
+                run = runs.setdefault(run_prefix, {"keys": [], "lastModified": _EPOCH})
+                run["keys"].append(key)
+                last_modified = _as_utc(obj.get("LastModified"))
+                if last_modified > run["lastModified"]:
+                    run["lastModified"] = last_modified
 
-        if pt_files:
-            # Sort descending to get latest model (e.g., model_1500.pt > model_1000.pt)
-            pt_files.sort(reverse=True)
-            policy_key = pt_files[0]
+        if runs:
+            newest_run_prefix = max(runs, key=lambda p: (runs[p]["lastModified"], p))
+            policy_key = max(runs[newest_run_prefix]["keys"], key=checkpoint_iteration)
             policy_uri = f"s3://{bucket}/{policy_key}"
             logger.info(f"Discovered policy file: {policy_uri}")
             return policy_uri

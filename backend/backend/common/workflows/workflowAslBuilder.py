@@ -36,6 +36,25 @@ logger = safeLogger(service_name="WorkflowAslBuilder")
 # ASL schema version stamped in the definition Comment field.
 ASL_SCHEMA_VERSION = 1
 
+# Characters that cannot appear in a pipeline name spliced into a States.Format() intrinsic
+# argument: the single quote closes the intrinsic's string literal, the braces are its
+# placeholder syntax, and the backslash is its escape character. A name carrying any of them
+# produces an intrinsic Step Functions rejects when the definition is created.
+_ASL_INTRINSIC_UNSAFE_CHARS = "'{}\\"
+
+
+def _validate_asl_pipeline_name(name):
+    """Reject a pipeline name that cannot be embedded in the generated ASL's States.Format
+    intrinsics (its output-path templates). Raises ValueError, which the workflow save path
+    surfaces as a validation error rather than a Step Functions definition failure."""
+    if not name:
+        raise ValueError("Each workflow pipeline requires a job name or pipeline id")
+    if any(c in name for c in _ASL_INTRINSIC_UNSAFE_CHARS) or any(ord(c) < 0x20 for c in name):
+        logger.warning(f"Pipeline job name unusable in ASL output paths: {name}")
+        raise ValueError(
+            "Pipeline job names cannot contain quotes, braces, backslashes, or control "
+            "characters. Use letters, numbers, dashes, and underscores.")
+
 
 def generate_workflow_asl(pipelines, databaseId, workflowId,
                           process_workflow_output_function,
@@ -61,6 +80,11 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         Tuple of (workflow_definition dict, job_names list)
     """
     logger.info("Generating workflow ASL definition")
+
+    # Each pipeline name becomes a path segment inside the ASL's States.Format intrinsics, so it is
+    # checked before any template is built.
+    for pipeline in pipelines:
+        _validate_asl_pipeline_name(pipeline.get('name'))
 
     # Generate unique names for each pipeline job
     # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
@@ -203,9 +227,12 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                         f"$$.Execution.Name)"),
                     "nextPipelineAuxTempPrefix.$": next_aux_temp_prefix_uri,
                     # Next pipeline identity for template-tag rendering of its input configuration
-                    # (name + database id + job name are known at ASL-build time; the workflow ids
-                    # and executing-user context come from the SFN input).
-                    "nextPipelineId": next_pipeline['name'],
+                    # (pipeline id + database id + job name are known at ASL-build time; the
+                    # workflow ids and executing-user context come from the SFN input). The
+                    # pipeline id — not the jobName-derived path name — is threaded so the
+                    # {{pipelineId}}/{{pipelineName}} tags render the same value the execute
+                    # handler supplies for the first pipeline.
+                    "nextPipelineId": next_pipeline.get('pipelineId') or next_pipeline['name'],
                     "nextPipelineDatabaseId": next_pipeline.get('databaseId', ''),
                     "nextPipelineJobName": job_names[i + 1],
                     "workflowId.$": "$.workflowId",
@@ -282,8 +309,17 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
 
     # Create retry and catch configs for process output (Catch routes through the
     # error-handler state, capturing the error at $.errorInfo).
+    # Retry only transient AWS/Lambda faults. This handler ingests produced files into the output
+    # asset before it records them, so a blanket States.ALL retry of an application error would
+    # re-run ingestion and duplicate files/versions; such errors go straight to the Catch instead.
     po_retry_config = create_retry_config(
-        error_equals=["States.ALL"],
+        error_equals=[
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "States.Timeout",
+        ],
         interval_seconds=5,
         backoff_rate=2.0,
         max_attempts=3

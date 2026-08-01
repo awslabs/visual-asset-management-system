@@ -36,6 +36,21 @@ import {
     grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
+import { NagSuppressions } from "cdk-nag";
+
+// Workflow state machines and auto-provisioned pipeline Lambdas are named at runtime by the
+// backend with a fixed lowercase 'vams-' prefix that does not embed config.name, so both the
+// config-name pattern and this prefix are granted.
+const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
+
+// Use-case pipeline sub-state-machines are named by CDK from their construct ids
+// (e.g. 'CosmosReasonPipelineCosmosReasonreason2BStateMachineB865922C-YV2FQMz87VHM',
+// 'PcPotreeViewerProcessingStateMachine92DD7A15-90NUO0WAz4Ct'), so they carry neither the config
+// name nor the 'vams-' prefix. Aborting a workflow execution has to stop the registered sub-execution
+// as well, or the parent is marked ABORTED while the pipeline state machine — and the AWS Batch job
+// it is waiting on — keeps running. IAM offers no name pattern that covers these, so the abort and
+// log-read scope for sub-executions is account/region-wide on Step Functions executions.
+const PIPELINE_SUB_STATE_MACHINE_PATTERN = "*";
 
 export function buildExecutionServiceFunction(
     scope: Construct,
@@ -106,6 +121,11 @@ export function buildExecutionServiceFunction(
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,
                 IAMArn("*" + config.name + "*").statemachineExecution,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
+                // Registered pipeline sub-executions (CDK-generated names — see the constant above).
+                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachine,
+                IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachineExecution,
             ],
         })
     );
@@ -227,6 +247,8 @@ export function buildExecuteWorkflowV2Function(
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,
                 IAMArn("*" + config.name + "*").statemachineExecution,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachineExecution,
             ],
         })
     );
@@ -523,6 +545,11 @@ export function buildWorkflowTriggerDispatchFunction(
     storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    // Read the candidate workflow's systemConfig.allowWorkflowTriggerChaining, which decides whether
+    // a file written by ANOTHER workflow may fire this workflow's trigger. Read from the workflow
+    // record rather than mirrored onto the trigger row, so it cannot go stale; only consulted for a
+    // workflow-written file, so an ordinary upload performs no extra reads.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     executeWorkflowV2Function.grantInvoke(fun);
     // Reads uploaded-object metadata to resolve the asset (head_object across asset buckets).
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -589,6 +616,25 @@ export function buildDeadlineCloudJobCallbackFunction(
     // failure states (a job that fails at CREATE/UPLOAD never reaches a task-run status, so
     // its task token would otherwise only resolve by timing out). The lambda additionally
     // ignores jobs without the reserved VamsTaskToken job parameter.
+    // The handler re-raises GetJob/SendTask* failures so EventBridge retries delivery. Without a
+    // dead-letter queue a persistently failing terminal event is discarded after those retries and
+    // the workflow's task token is left to time out with no operator-visible signal.
+    const kmsEncryptionKey = storageResources.encryption.kmsKey;
+    const deadlineCallbackDlq = new sqs.Queue(scope, "DeadlineCloudJobCallbackDLQ", {
+        encryption: kmsEncryptionKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsEncryptionKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(deadlineCallbackDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue is itself the dead-letter target for the Deadline Cloud job-status EventBridge rules, " +
+                "so it does not take a further dead-letter queue. Its messages are the undeliverable terminal " +
+                "job events an operator redrives after fixing the underlying Deadline Cloud access failure.",
+        },
+    ]);
+
     const deadlineJobStatusRule = new events.Rule(scope, "DeadlineCloudJobStatusRule", {
         eventPattern: {
             source: ["aws.deadline"],
@@ -598,7 +644,12 @@ export function buildDeadlineCloudJobCallbackFunction(
             },
         },
     });
-    deadlineJobStatusRule.addTarget(new eventsTargets.LambdaFunction(fun));
+    deadlineJobStatusRule.addTarget(
+        new eventsTargets.LambdaFunction(fun, {
+            deadLetterQueue: deadlineCallbackDlq,
+            retryAttempts: 3,
+        })
+    );
 
     const deadlineJobLifecycleRule = new events.Rule(scope, "DeadlineCloudJobLifecycleRule", {
         eventPattern: {
@@ -609,7 +660,12 @@ export function buildDeadlineCloudJobCallbackFunction(
             },
         },
     });
-    deadlineJobLifecycleRule.addTarget(new eventsTargets.LambdaFunction(fun));
+    deadlineJobLifecycleRule.addTarget(
+        new eventsTargets.LambdaFunction(fun, {
+            deadLetterQueue: deadlineCallbackDlq,
+            retryAttempts: 3,
+        })
+    );
 
     const deadlineArnBase = `arn:${Partition()}:deadline:${config.env.region}:${
         config.env.account
@@ -639,8 +695,29 @@ export function buildDeadlineCloudJobCallbackFunction(
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
-    // Covers the IAM5 wildcards above: SendTask* task tokens are opaque (account-scoped
-    // states resource) and GetJob targets operator-owned farms/queues unknown at deploy.
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Deadline Cloud job submission targets operator-owned farms/queues whose IDs are stored in " +
+                    "pipeline records rather than known at deploy time, so deadline:GetJob is scoped to this " +
+                    "account/region's farms, queues and jobs by wildcard. Step Functions task tokens are opaque " +
+                    "values that carry no resource ARN, so states:SendTaskSuccess/SendTaskFailure cannot be " +
+                    "scoped below the account/region — the same scope the pipeline callback lambdas use.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:deadline:.*$/g",
+                    },
+                    {
+                        regex: "/^Resource::arn:.*:states:.*$/g",
+                    },
+                ],
+            },
+        ],
+        true
+    );
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
@@ -656,7 +733,10 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["states:CreateStateMachine"],
-                resources: [IAMArn("*" + config.name + "*").statemachine],
+                resources: [
+                    IAMArn("*" + config.name + "*").statemachine,
+                    IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
+                ],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -730,12 +810,10 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["lambda:InvokeFunction"],
-                resources: [IAMArn("*" + config.name + "*").lambda],
-            }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["iam:PassRole"],
-                resources: [IAMArn("*" + config.name + "*").role],
+                resources: [
+                    IAMArn("*" + config.name + "*").lambda,
+                    IAMArn(BACKEND_GENERATED_NAME_PATTERN).lambda,
+                ],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -941,7 +1019,10 @@ export function buildWorkflowServiceV2Function(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*" + config.name + "*").statemachine],
+            resources: [
+                IAMArn("*" + config.name + "*").statemachine,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).statemachine,
+            ],
         })
     );
     fun.addToRolePolicy(

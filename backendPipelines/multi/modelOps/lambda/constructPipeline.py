@@ -54,10 +54,14 @@ def construct_modelops_definition(event) -> dict:
     config = manifestHelper.fetch_input_configuration(s3, event.get('inputConfigurationS3Location', ''))
 
     if config:
-        config["state"]["name"] = input_s3_asset_file_filename
-        config["state"]["bucket"] = input_s3_asset_file_bucket
-        config["state"]["prefix"] = input_s3_asset_file_key.split("/")[0]
-        config["state"]["extension"] = input_s3_asset_extension.replace(".", "")
+        # The state block carries the asset identity injected below. A template config body need
+        # not declare it (the shipped per-format templates do not), so create it when absent
+        # rather than raising KeyError on a valid configuration.
+        state = config.setdefault("state", {})
+        state["name"] = input_s3_asset_file_filename
+        state["bucket"] = input_s3_asset_file_bucket
+        state["prefix"] = input_s3_asset_file_key.split("/")[0]
+        state["extension"] = input_s3_asset_extension.replace(".", "")
 
         command_string = json.dumps(config)
         # The config JSON is derived from the asset filename/key and caller parameters.

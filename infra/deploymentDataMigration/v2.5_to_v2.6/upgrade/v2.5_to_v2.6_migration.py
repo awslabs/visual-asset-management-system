@@ -37,8 +37,9 @@ The v2.6 release introduces:
      a bare assetId), looks up that asset's databaseId, inserts it in front of
      the key, and copies+deletes each preview object to the new key. Reserved
      working prefixes (``pipeline``/``pipelines``/``temp-upload``/``temp-uploads``)
-     are ignored, and the step is idempotent (already-migrated objects, whose
-     leading segment is a known databaseId, are skipped).
+     are ignored, and the step is idempotent (an already-migrated object carries
+     its databaseId in front of the location base, so it matches no base and is
+     skipped).
 
 Because the v3 indexes are empty after the v2.6 CDK deploy, this migration
 delegates to the existing reindexer Lambda (``crReindexer``) to re-populate
@@ -84,10 +85,10 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import boto3
-from botocore.exceptions import ClientError, ReadTimeoutError
+from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 
 # Shared migration tooling (infra/deploymentDataMigration/tools)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
@@ -484,10 +485,15 @@ def to_iso(us_date: str) -> str:
         return us_date
 
 
-def scan_all_items(dynamodb_client, table_name: str, limit: int = None) -> List[Dict]:
+def scan_all_items(dynamodb_client, table_name: str, limit: int = None,
+                   projection: str = None) -> List[Dict]:
+    """All items in a table, paged to exhaustion. ``projection`` is an optional comma-separated
+    attribute list, which keeps a scan of a large table off the full item payload."""
     logger.info(f"Scanning {table_name} for all records...")
     records = []
     scan_kwargs = {'TableName': table_name}
+    if projection:
+        scan_kwargs['ProjectionExpression'] = projection
     try:
         response = dynamodb_client.scan(**scan_kwargs)
         records.extend(response.get('Items', []))
@@ -504,13 +510,38 @@ def scan_all_items(dynamodb_client, table_name: str, limit: int = None) -> List[
         raise
 
 
+def iter_all_items(dynamodb_client, table_name: str, limit: int = None,
+                   projection: str = None) -> Iterator[Dict]:
+    """Yield a table's items page by page, so a large table is never held in memory at once.
+    Same paging + ``limit`` + ``projection`` semantics as ``scan_all_items``."""
+    logger.info(f"Scanning {table_name} for all records...")
+    scan_kwargs = {'TableName': table_name}
+    if projection:
+        scan_kwargs['ProjectionExpression'] = projection
+    yielded = 0
+    try:
+        while True:
+            response = dynamodb_client.scan(**scan_kwargs)
+            for item in response.get('Items', []):
+                yield item
+                yielded += 1
+                if limit and yielded >= limit:
+                    return
+            if 'LastEvaluatedKey' not in response:
+                return
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except ClientError as e:
+        logger.error(f"Error scanning table {table_name}: {e}")
+        raise
+
+
 def build_workflow_pipeline_cache(dynamodb_client, workflow_table_name: str) -> Dict[str, List[Dict]]:
     """Map workflowId -> list of pipeline dicts (name, databaseId, pipelineExecutionType, ...)
     from the workflow table's specifiedPipelines.functions. Keyed by workflowId only
     (workflowIds are unique across databases in VAMS)."""
     logger.info(f"Building workflow -> pipelines cache from {workflow_table_name}...")
     cache: Dict[str, List[Dict]] = {}
-    for item in scan_all_items(dynamodb_client, workflow_table_name):
+    for item in iter_all_items(dynamodb_client, workflow_table_name):
         workflow_id = item.get('workflowId', {}).get('S', '')
         if not workflow_id:
             continue
@@ -528,6 +559,32 @@ def build_workflow_pipeline_cache(dynamodb_client, workflow_table_name: str) -> 
         cache[workflow_id] = pipelines
     logger.info(f"Cached pipelines for {len(cache)} workflows")
     return cache
+
+
+def _item_identity(item: Dict) -> str:
+    """A human-readable identity for a wire-format row, for per-item error logging. Reports the
+    first recognized identifying attributes so a failed write names the record to re-migrate."""
+    parts = []
+    for attr in ('workflowExecutionId', 'pipelineExecutionId', 'databaseId', 'pipelineId',
+                 'workflowId', 'templateId'):
+        value = (item.get(attr) or {}).get('S')
+        if value:
+            parts.append(f"{attr}={value}")
+    return ', '.join(parts) if parts else '<unidentified row>'
+
+
+def _write_chunk_item_by_item(dynamodb_client, table_name: str, chunk: List[Dict]) -> Tuple[int, int]:
+    """Fall back to one PutItem per row after a chunk-level batch_write_item failure, so a single
+    invalid record does not discard the other rows in its chunk. Each failure names its row."""
+    written, errors = 0, 0
+    for item in chunk:
+        try:
+            dynamodb_client.put_item(TableName=table_name, Item=item)
+            written += 1
+        except ClientError as e:
+            errors += 1
+            logger.error(f"Failed writing row to {table_name} ({_item_identity(item)}): {e}")
+    return written, errors
 
 
 def flush_batch_write(dynamodb_client, table_name: str, batch: List[Dict], dry_run: bool = False) -> Tuple[int, int]:
@@ -553,15 +610,28 @@ def flush_batch_write(dynamodb_client, table_name: str, batch: List[Dict], dry_r
             if unprocessed:
                 errors += len(unprocessed)
                 written -= len(unprocessed)
+                for request in unprocessed:
+                    logger.error(f"Unprocessed row after retries in {table_name} "
+                                 f"({_item_identity(request.get('PutRequest', {}).get('Item', {}))})")
         except ClientError as e:
-            logger.error(f"Error in batch_write_item to {table_name}: {e}")
-            errors += len(chunk)
+            # A validation failure on one row fails the whole request, so retry the chunk one row
+            # at a time to keep the valid rows and identify the offending ones.
+            logger.error(f"Error in batch_write_item to {table_name}: {e}. "
+                         f"Retrying the {len(chunk)}-row chunk one row at a time.")
+            chunk_written, chunk_errors = _write_chunk_item_by_item(dynamodb_client, table_name, chunk)
+            written += chunk_written
+            errors += chunk_errors
     return written, errors
 
 
 def s(val):
     """Wrap a python string as a DynamoDB wire-format String attribute."""
     return {'S': val if val is not None else ''}
+
+
+# Mirrors executionService.TERMINAL_STATUSES: the statuses the backend treats as finished.
+_V2_TERMINAL_EXECUTION_STATUSES = ('SUCCEEDED', 'FAILED', 'ABORTED', 'TIMED_OUT')
+TIMED_OUT_STATUS = 'TIMED_OUT'
 
 
 def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int):
@@ -571,15 +641,26 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
     pexec = cfg['pipeline_executions_storage_table_name']
     pin_files = cfg['pipeline_execution_input_files_storage_table_name']
     workflow_table = cfg['workflow_storage_table_name']
+    # Configuration snapshot tables. The detail view reads the workflow row for the execution's
+    # output target, and re-run reads the per-pipeline rows for template parameters.
+    wf_config = cfg.get('workflow_execution_configuration_storage_table_name')
+    pexec_config = cfg.get('pipeline_execution_input_configuration_storage_table_name')
 
     pipeline_cache = build_workflow_pipeline_cache(dynamodb_client, workflow_table)
-    legacy_rows = scan_all_items(dynamodb_client, legacy_table, limit)
+    # Streamed rather than materialized: a deployment can hold hundreds of thousands of legacy
+    # executions, and rows are written in batches as they are read.
+    legacy_rows = iter_all_items(dynamodb_client, legacy_table, limit)
 
-    counts = {"main": 0, "inputs": 0, "pexec": 0, "pin_files": 0, "errors": 0}
+    counts = {"main": 0, "inputs": 0, "pexec": 0, "pin_files": 0, "no_start_date": 0,
+              "unresolved_status": 0, "wf_config": 0, "pexec_config": 0, "errors": 0}
+    migration_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     main_batch, inputs_batch, pexec_batch, pin_files_batch = [], [], [], []
+    wf_config_batch, pexec_config_batch = [], []
 
+    scanned = 0
     for idx, row in enumerate(legacy_rows, 1):
+        scanned = idx
         execution_id = row.get('executionId', {}).get('S', '')
         if not execution_id:
             counts["errors"] += 1
@@ -594,11 +675,32 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
         input_file_key = normalize_file_key(row.get('inputAssetFileKey', {}).get('S', ''))
         start_date = to_iso(row.get('startDate', {}).get('S', ''))
         stop_date = to_iso(row.get('stopDate', {}).get('S', ''))
+        # V1 'COMPLETE' is not in the v2.6 terminal-status set.
         status = row.get('executionStatus', {}).get('S', '')
+        if status == 'COMPLETE':
+            status = 'SUCCEEDED'
+
+        # Non-terminal V1 rows are recorded TIMED_OUT: their SFN history has expired and would
+        # otherwise be re-polled forever.
+        if status not in _V2_TERMINAL_EXECUTION_STATUSES:
+            counts["unresolved_status"] += 1
+            status = TIMED_OUT_STATUS
+        # The stop date is what the backend gates re-polling on, so a terminal row missing one falls
+        # back to its start date (or the migration timestamp when it has neither).
+        if not stop_date:
+            stop_date = start_date or migration_now
+
+        # executionStartDate is the sort key of the by-workflow, by-group and by-date execution GSIs
+        # and of the by-asset inputs GSI; DynamoDB rejects an empty string for an indexed key
+        # attribute. A legacy row keeps startDate == "" until a listing refreshed it after the run
+        # stopped, so the attribute is set only when a date is available (sparse — a dateless
+        # execution stays out of the date-ordered indexes but its rows still write and read by id).
+        if not start_date:
+            counts["no_start_date"] += 1
 
         # 1) V2 main row. PK attribute is 'workflowExecutionId' (matches the WorkflowExecutionsStorageTableV2
         # hash key + build_workflow_execution_record); SK is 'workflowDatabaseId:workflowId'.
-        main_batch.append({
+        main_row = {
             'workflowExecutionId': s(execution_id),
             'workflowDatabaseId:workflowId': s(f"{workflow_database_id}:{workflow_id}"),
             'workflowId': s(workflow_id),
@@ -608,50 +710,60 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             # Constant PK for the by-date global-list GSI (WorkflowExecutionsByDateGSI), so migrated
             # executions appear in the global newest-first list alongside new ones.
             'allListPartition': s('execution'),
-            'executionStartDate': s(start_date),
             'executionStopDate': s(stop_date),
             'executionStatus': s(status),
-            'triggeredByUserId': s('system'),
+            # A V1 row recorded no triggering user, so the migration attributes it to the reserved
+            # system identity every other system-authored row in this file uses.
+            'triggeredByUserId': s('SYSTEM_USER'),
             'triggerType': s('Manual'),
             'executionLogGroupArn': s(''),
-            # New v2.6 sync/error/log fields. Historical rows already carry their final
-            # stop date (when present), so listExecutions will not re-poll them; leave
-            # the sync-check time, error message, and log fields empty.
+            # New v2.6 sync/error/log fields. Every migrated row carries a stop date and a terminal
+            # status, so listExecutions will not re-poll them; leave the sync-check time, error
+            # message, and log fields empty.
             'lastSfnSyncCheckDate': s(''),
             'executionError': s(''),
             'executionLog': s(''),
-        })
+        }
+        if start_date:
+            main_row['executionStartDate'] = s(start_date)
+        main_batch.append(main_row)
 
         # 2) WorkflowExecutionInputs row
-        inputs_batch.append({
+        inputs_row = {
             'workflowExecutionId': s(execution_id),
             'databaseId:assetId:inputAssetFileKey': s(f"{database_id}:{asset_id}:{input_file_key}"),
             'databaseId:assetId': s(f"{database_id}:{asset_id}"),
             'assetId': s(asset_id),
             'databaseId': s(database_id),
             'inputAssetFileKey': s(input_file_key),
-            'executionStartDate': s(start_date),
             'workflowId': s(workflow_id),
             'workflowDatabaseId': s(workflow_database_id),
-        })
+        }
+        if start_date:
+            inputs_row['executionStartDate'] = s(start_date)
+        inputs_batch.append(inputs_row)
 
         # 3) PipelineExecutions stubs (one per pipeline; DELETED fallback)
         pipelines = pipeline_cache.get(workflow_id)
         if not pipelines:
             pipelines = [{'name': 'DELETED', 'databaseId': workflow_database_id,
                           'pipelineExecutionType': 'Lambda', 'waitForCallback': 'Disabled'}]
-        # Historical executions are complete, so their pipeline rows carry a terminal status: mirror
-        # a SUCCEEDED parent to SUCCEEDED, otherwise the parent's terminal status (empty when the
-        # source row had none). This keeps migrated pipeline rows consistent with the v2.6 status
-        # model (fresh rows default NEW; a stored terminal status is authoritative).
-        migrated_pipeline_status = 'SUCCEEDED' if status in ('SUCCEEDED', 'COMPLETE') else status
+        # Historical executions are complete, so their pipeline rows mirror the parent's terminal
+        # status (empty when the source row had none). This keeps migrated pipeline rows consistent
+        # with the v2.6 status model (fresh rows default NEW; a stored terminal status is authoritative).
+        migrated_pipeline_status = status
         prev_pexec_id = ""
         for p_idx, pipeline in enumerate(pipelines):
             pexec_id = derive_guid(execution_id, p_idx)
             is_end = (p_idx == len(pipelines) - 1)
             pipeline_name = pipeline.get('name') or 'DELETED'
             pipeline_db = pipeline.get('databaseId', workflow_database_id)
-            pexec_batch.append({
+            # A built-in whose id was consolidated in v2.6 no longer exists under its V1 id, so the
+            # execution row records the effective V2 id — the same rewrite the definitions step
+            # applies to a workflow's pipeline references, keeping the two records consistent.
+            pipeline_db, pipeline_name, default_template_id = _remap_pipeline_reference(
+                pipeline_db, pipeline_name)
+            pexec_row = {
                 'pipelineExecutionId': s(pexec_id),
                 'workflowExecutionId': s(execution_id),
                 'pipelineId': s(pipeline_name),
@@ -665,10 +777,16 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
                 'waitForCallback': s(pipeline.get('waitForCallback', 'Disabled')),
                 'pipelineResourceArn': s(''),
                 'credentialVendingState': s('notVended'),
-                'from_pipeline_execution_id': s(prev_pexec_id),
                 'pipeline_execution_sub_arn': s(''),
                 'pipeline_execution_sub_execution_arn': s(''),
-            })
+            }
+            # from_pipeline_execution_id is the PipelineExecChainGSI sort key, which DynamoDB rejects
+            # as an empty string. Set it only when this pipeline chains from a prior one, matching
+            # build_pipeline_execution_record's sparse-GSI contract (the first pipeline of an
+            # execution is simply absent from the chain index).
+            if prev_pexec_id:
+                pexec_row['from_pipeline_execution_id'] = s(prev_pexec_id)
+            pexec_batch.append(pexec_row)
             # File inputs attached to the FIRST pipeline only
             if p_idx == 0:
                 pin_files_batch.append({
@@ -680,46 +798,84 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
                     'inputAssetFileKey': s(input_file_key),
                     'workflowExecutionId': s(execution_id),
                 })
+            # 4) Per-pipeline configuration snapshot. A V1 execution recorded no template, so the
+            # snapshot is empty except for the effective template a consolidated built-in now needs,
+            # which a re-run resolves through instead of failing template resolution.
+            if pexec_config:
+                pexec_config_batch.append({
+                    'pipelineExecutionId': s(pexec_id),
+                    'recordType': s('configuration'),
+                    'inputConfiguration': s(''),
+                    'inputConfigurationTruncated': bool_(False),
+                    'inputConfigurationFileS3Key': s(''),
+                    'inputPortMappings': m({}),
+                    'templateId': s(default_template_id),
+                    'templateSchemaVersion': s(''),
+                    'tagSchemaVersion': s(''),
+                    'templateTags': {'L': []},
+                    'customTemplateOverrideUsed': bool_(False),
+                    'customTemplateOverride': s(''),
+                    'customTemplateOverrideTruncated': bool_(False),
+                    'configFormat': s(''),
+                    'migratedRecord': bool_(True),
+                })
             prev_pexec_id = pexec_id
+
+        # 5) Workflow-level configuration snapshot. A V1 execution always wrote back to its single
+        # input asset at the asset root, so the output target is that asset.
+        if wf_config:
+            wf_config_batch.append({
+                'workflowExecutionId': s(execution_id),
+                'recordType': s('configuration'),
+                'workflowConfiguration': s(''),
+                'workflowConfigurationTruncated': bool_(False),
+                'inputMetadata': s(''),
+                'inputMetadataTruncated': bool_(False),
+                'specifiedPipelinesSnapshot': {'L': []},
+                'outputLocationType': s('asset'),
+                'outputAssetId': s(asset_id),
+                'outputDatabaseId': s(database_id),
+                'outputFileBaseExecutionPathExtension': s('/'),
+                'inputMetadataAssetId': s(''),
+                'inputMetadataDatabaseId': s(''),
+                'inputMetadataFileS3Key': s(''),
+                'migratedRecord': bool_(True),
+            })
 
         # Flush batches at 25
         for table, batch, key in (
             (main_v2, main_batch, "main"), (wf_inputs, inputs_batch, "inputs"),
             (pexec, pexec_batch, "pexec"), (pin_files, pin_files_batch, "pin_files"),
+            (wf_config, wf_config_batch, "wf_config"),
+            (pexec_config, pexec_config_batch, "pexec_config"),
         ):
-            if len(batch) >= 25:
+            if table and len(batch) >= 25:
                 w, e = flush_batch_write(dynamodb_client, table, batch, dry_run)
                 counts[key] += w
                 counts["errors"] += e
                 batch.clear()
 
         if idx % 100 == 0:
-            logger.info(f"  Processed {idx}/{len(legacy_rows)} legacy executions...")
+            logger.info(f"  Processed {idx} legacy executions...")
 
     # Final flush
     for table, batch, key in (
         (main_v2, main_batch, "main"), (wf_inputs, inputs_batch, "inputs"),
         (pexec, pexec_batch, "pexec"), (pin_files, pin_files_batch, "pin_files"),
+        (wf_config, wf_config_batch, "wf_config"),
+        (pexec_config, pexec_config_batch, "pexec_config"),
     ):
+        if not table:
+            continue
         w, e = flush_batch_write(dynamodb_client, table, batch, dry_run)
         counts[key] += w
         counts["errors"] += e
 
-    return counts, len(legacy_rows)
+    return counts, scanned
 
 
 def run_workflow_executions_step(config: dict, args) -> int:
     """Run the workflow-executions storage overhaul step. Returns 0 on success."""
-    required = [
-        'workflow_executions_storage_table_name_v1', 'workflow_executions_storage_table_name_v2',
-        'workflow_execution_inputs_storage_table_name', 'pipeline_executions_storage_table_name',
-        'pipeline_execution_input_files_storage_table_name', 'workflow_storage_table_name',
-    ]
-    missing = [k for k in required if not config.get(k)]
-    if missing:
-        logger.error(f"Configuration is missing required field(s) for the workflowExecutions step: {', '.join(missing)}")
-        return 1
-
     dry_run = args.dry_run or bool(config.get('dry_run', False))
     limit = args.limit if args.limit is not None else config.get('limit')
     profile = args.profile or config.get('aws_profile')
@@ -732,6 +888,65 @@ def run_workflow_executions_step(config: dict, args) -> int:
         session_kwargs['region_name'] = region
     dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
 
+    step_cfg = dict(config)
+    base_param_prefix = config.get('resource_names_ssm_param_prefix')
+    if base_param_prefix and str(base_param_prefix).startswith('<'):
+        base_param_prefix = None
+    lookup = (SsmResourceLookup(base_param_prefix, profile=profile, region=region)
+              if base_param_prefix else None)
+
+    def resolve(cfg_key, param_key):
+        """The explicit config value, else the SSM-published name. A shipped placeholder value
+        ('<...>' / 'YOUR-...') is not a name, so it falls through to SSM."""
+        override = config.get(cfg_key)
+        if override and not str(override).startswith('<') and not str(override).startswith('YOUR-'):
+            return override
+        if not lookup:
+            raise ValueError(
+                f"Config '{cfg_key}' is unset and no resource_names_ssm_param_prefix is configured "
+                "to resolve it from SSM.")
+        return lookup.resolve(param_key)
+
+    try:
+        for cfg_key, param_key in (
+            ('workflow_executions_storage_table_name_v1',
+             ResourceParamKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE),
+            ('workflow_executions_storage_table_name_v2',
+             ResourceParamKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2),
+            ('workflow_execution_inputs_storage_table_name',
+             ResourceParamKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE),
+            ('pipeline_executions_storage_table_name',
+             ResourceParamKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE),
+            ('pipeline_execution_input_files_storage_table_name',
+             ResourceParamKeys.PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE),
+            ('workflow_storage_table_name', ResourceParamKeys.WORKFLOW_STORAGE_TABLE),
+        ):
+            step_cfg[cfg_key] = resolve(cfg_key, param_key)
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the workflowExecutions step: {e}")
+        return 1
+
+    # The two configuration-snapshot tables back the detail view's output target and re-run's
+    # per-pipeline template parameters. Unlike the six above they are optional: without either an
+    # explicit name or an SSM prefix the snapshot rows are skipped and migrated executions show an
+    # empty output target and cannot be re-run through a require-template pipeline.
+    for cfg_key, param_key in (
+        ('workflow_execution_configuration_storage_table_name',
+         ResourceParamKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE),
+        ('pipeline_execution_input_configuration_storage_table_name',
+         ResourceParamKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE),
+    ):
+        step_cfg[cfg_key] = None
+        try:
+            step_cfg[cfg_key] = resolve(cfg_key, param_key)
+        except Exception as e:
+            logger.warning(f"Could not resolve '{cfg_key}': {e}")
+        if not step_cfg[cfg_key]:
+            logger.warning(
+                f"'{cfg_key}' is unset and could not be resolved from SSM; migrated executions will "
+                "have no configuration snapshot (empty output target in the detail view, and re-run "
+                "unavailable for pipelines that require a template).")
+
     logger.info("=" * 80)
     logger.info("VAMS v2.5 -> v2.6 WORKFLOW EXECUTIONS STORAGE OVERHAUL (V1 -> V2)")
     logger.info(f"Dry Run: {dry_run}")
@@ -739,7 +954,7 @@ def run_workflow_executions_step(config: dict, args) -> int:
 
     start = datetime.now(timezone.utc)
     try:
-        counts, total = migrate_workflow_executions(dynamodb_client, config, dry_run, limit)
+        counts, total = migrate_workflow_executions(dynamodb_client, step_cfg, dry_run, limit)
     except Exception as e:
         logger.error(f"Workflow-executions step failed: {e}")
         return 1
@@ -753,6 +968,12 @@ def run_workflow_executions_step(config: dict, args) -> int:
     logger.info(f"  Workflow input rows:       {counts['inputs']}")
     logger.info(f"  Pipeline-exec stubs:       {counts['pexec']}")
     logger.info(f"  First-pipeline input rows: {counts['pin_files']}")
+    logger.info(f"  Workflow config rows:      {counts['wf_config']}")
+    logger.info(f"  Pipeline config rows:      {counts['pexec_config']}")
+    logger.info(f"  Without a start date:      {counts['no_start_date']} "
+                f"(omitted from the date-ordered execution indexes)")
+    logger.info(f"  Recorded as TIMED_OUT:     {counts['unresolved_status']} "
+                f"(no terminal status/stop date in V1)")
     logger.info(f"  Errors:                    {counts['errors']}")
     logger.info("=" * 80)
 
@@ -780,32 +1001,66 @@ def _build_asset_location_index(dynamodb_client, asset_table_name: str):
     ``location_index`` maps each asset's location-key base (``assetLocation.Key``, normalized to a
     trailing slash) -> databaseId. The asset location key may carry a custom base prefix (it is not
     necessarily the bare assetId), so old aux preview keys are matched against this location base
-    rather than assuming an assetId prefix. ``database_ids`` is the set of known database ids, used
-    to detect already-migrated objects (whose leading segment is a databaseId)."""
+    rather than assuming an assetId prefix. ``database_ids`` is the set of live database ids.
+
+    Asset-location uniqueness is enforced per source bucket, so two assets in different buckets may
+    share a location key. The shared auxiliary bucket keys previews on the location key alone, which
+    already conflates such assets under the old layout, so the index keeps the first databaseId seen
+    and logs every collision for the operator to hand-resolve."""
     logger.info(f"Building asset location-key -> databaseId index from {asset_table_name}...")
     location_index: Dict[str, str] = {}
     database_ids = set()
-    for item in scan_all_items(dynamodb_client, asset_table_name):
+    collisions = 0
+    # databaseId + assetLocation are the only attributes needed; projecting keeps the scan of a
+    # large asset table off the full item payload.
+    for item in iter_all_items(dynamodb_client, asset_table_name,
+                               projection='databaseId,assetLocation'):
         database_id = item.get('databaseId', {}).get('S', '')
         if not database_id or database_id.endswith('#deleted'):
             continue
         database_ids.add(database_id)
         location_key = item.get('assetLocation', {}).get('M', {}).get('Key', {}).get('S', '')
         location_key = (location_key or '').strip('/')
-        if location_key:
-            location_index[location_key + '/'] = database_id
+        if not location_key:
+            continue
+        base = location_key + '/'
+        existing = location_index.get(base)
+        if existing and existing != database_id:
+            collisions += 1
+            logger.warning(
+                f"Asset location key '{base}' is used by both database '{existing}' and database "
+                f"'{database_id}'. Previews under it relocate to '{existing}'; previews belonging "
+                f"to '{database_id}' must be copied by hand.")
+            continue
+        location_index[base] = database_id
     logger.info(f"Indexed {len(location_index)} asset locations across {len(database_ids)} databases")
+    if collisions:
+        logger.warning(f"{collisions} asset location key(s) are shared across databases; see the "
+                       "warnings above for the keys needing a hand copy.")
     return location_index, database_ids
 
 
-def _new_aux_preview_key(old_key: str, location_index: Dict[str, str], database_ids) -> Optional[str]:
+def _longest_location_base(old_key: str, location_index: Dict[str, str]) -> Optional[str]:
+    """The longest asset location-key base in ``location_index`` that ``old_key`` starts with, or
+    None. Bases always end with '/', so only the key's own '/'-delimited prefixes are candidates —
+    a bounded number of dict lookups per object rather than a pass over every indexed asset."""
+    segments = old_key.split('/')
+    # Longest first: drop the trailing filename segment, then walk back toward the root.
+    for cut in range(len(segments) - 1, 0, -1):
+        base = '/'.join(segments[:cut]) + '/'
+        if base in location_index:
+            return base
+    return None
+
+
+def _new_aux_preview_key(old_key: str, location_index: Dict[str, str]) -> Optional[str]:
     """Compute the new aux preview key for an old key, or None to skip it.
 
     Old preview objects are keyed ``{assetLocationKey}{relativeFileKey}/preview/...`` (the asset
     location key may include a custom base prefix). The new layout inserts the asset's databaseId at
     the front: ``{databaseId}/{assetLocationKey}{relativeFileKey}/preview/...``. Returns None when
     the key is a reserved (non-preview) prefix, has no ``preview`` segment, does not start with a
-    known asset location key, or is already migrated (its leading segment is a known databaseId)."""
+    known asset location key, or is already migrated."""
     segments = old_key.split('/')
     if not segments:
         return None
@@ -815,18 +1070,20 @@ def _new_aux_preview_key(old_key: str, location_index: Dict[str, str], database_
     # Only relocate objects that live under a 'preview' segment (viewer/preview data).
     if _AUX_PREVIEW_SEGMENT not in segments:
         return None
-    # Already migrated: leading segment is a known databaseId.
-    if segments[0] in database_ids:
-        return None
     # Match against the longest asset location-key base the object starts with, then prefix that
     # asset's databaseId. Longest match wins so nested location keys resolve to the right asset.
-    best_base = None
-    for base in location_index:
-        if old_key.startswith(base) and (best_base is None or len(base) > len(best_base)):
-            best_base = base
+    # An already-relocated key carries its databaseId in front of the base, so it no longer starts
+    # with any base and drops out here — the base match, not the leading segment, decides, so a
+    # location key whose own first segment happens to equal a databaseId still relocates.
+    best_base = _longest_location_base(old_key, location_index)
     if best_base is None:
         return None
-    return f"{location_index[best_base]}/{old_key}"
+    database_id = location_index[best_base]
+    # Defensive: a base that itself starts with its own databaseId segment would match an
+    # already-relocated key a second time. Skip when the key already carries the prefix.
+    if old_key.startswith(f"{database_id}/{best_base}"):
+        return None
+    return f"{database_id}/{old_key}"
 
 
 def relocate_aux_previews(
@@ -865,9 +1122,10 @@ def relocate_aux_previews(
     s3_client = session.client('s3')
     dynamodb_client = session.client('dynamodb')
 
-    location_index, database_ids = _build_asset_location_index(dynamodb_client, asset_table_name)
+    location_index, _database_ids = _build_asset_location_index(dynamodb_client, asset_table_name)
 
     stats = {'objects_scanned': 0, 'objects_relocated': 0, 'objects_skipped': 0, 'errors': 0}
+    failed_keys: List[str] = []
 
     paginator = s3_client.get_paginator('list_objects_v2')
     for page in paginator.paginate(Bucket=aux_bucket_name):
@@ -879,7 +1137,7 @@ def relocate_aux_previews(
                 break
             stats['objects_scanned'] += 1
 
-            new_key = _new_aux_preview_key(old_key, location_index, database_ids)
+            new_key = _new_aux_preview_key(old_key, location_index)
             if not new_key or new_key == old_key:
                 stats['objects_skipped'] += 1
                 continue
@@ -890,15 +1148,18 @@ def relocate_aux_previews(
                 continue
 
             try:
-                s3_client.copy_object(
-                    Bucket=aux_bucket_name,
+                # Managed transfer rather than copy_object: it switches to a multipart copy above
+                # the 5 GB single-part limit, which an aux artifact can exceed.
+                s3_client.copy(
                     CopySource={'Bucket': aux_bucket_name, 'Key': old_key},
+                    Bucket=aux_bucket_name,
                     Key=new_key,
                 )
                 s3_client.delete_object(Bucket=aux_bucket_name, Key=old_key)
                 stats['objects_relocated'] += 1
-            except ClientError as e:
+            except (ClientError, BotoCoreError) as e:
                 stats['errors'] += 1
+                failed_keys.append(old_key)
                 logger.error(f"Failed relocating {old_key} -> {new_key}: {e}")
 
             if stats['objects_scanned'] % 500 == 0:
@@ -915,6 +1176,10 @@ def relocate_aux_previews(
     logger.info(f"{action}: {stats['objects_relocated']}")
     logger.info(f"Objects skipped:   {stats['objects_skipped']}")
     logger.info(f"Errors:            {stats['errors']}")
+    if failed_keys:
+        logger.error("Objects left at their old key (re-run the step after resolving the cause):")
+        for key in failed_keys:
+            logger.error(f"  {key}")
     logger.info("=" * 80)
     return stats
 
@@ -973,13 +1238,16 @@ def run_aux_preview_relocation_step(config: dict, args, base_param_prefix, profi
 # into the V2 tables (PipelineStorageTableV2 / WorkflowStorageTableV2, plus per-pipeline templates).
 #
 # Scope + safety:
-#   - ONLY user-database (non-GLOBAL) definitions are migrated. GLOBAL built-ins are (re)created by
-#     the CDK vamsSchema importer at deploy time with new consolidated ids + templates; migrating the
-#     old GLOBAL rows would clobber those freshly-registered built-ins, so GLOBAL is skipped entirely.
-#     This is the "don't-clobber-built-ins" rule.
+#   - GLOBAL built-ins are (re)created by the CDK vamsSchema importer at deploy time with new
+#     consolidated ids + templates; migrating the old GLOBAL rows would clobber those
+#     freshly-registered built-ins, so a GLOBAL definition whose id is in _BUILTIN_DEFINITION_IDS is
+#     skipped. This is the "don't-clobber-built-ins" rule. A GLOBAL definition the user created (V1
+#     accepted the GLOBAL keyword on create) is not a built-in and is migrated like a user-database
+#     definition; every skipped GLOBAL id is logged so the classification is auditable.
 #   - Soft-deleted rows (databaseId ending in '#deleted') are skipped.
 #   - Idempotent: V2 rows are keyed by the same (databaseId, pipelineId/workflowId), so a re-run
-#     overwrites rather than duplicates. Migrated rows are flagged migratedRecord=true.
+#     overwrites rather than duplicates. Migrated rows are flagged migratedRecord=true. The overwrite
+#     is unconditional, so a re-run also discards post-migration edits to a migrated definition.
 #   - The V1 tables are never modified (read-only source).
 #
 # V1 -> V2 field mapping (pipeline):
@@ -1009,12 +1277,58 @@ CONSOLIDATED_PIPELINE_ID_MAP = {
     "vntana-model-ops-to-gltf": ("vntana-model-ops", "model-ops-to-gltf"),
     "3dRecon-splat-toolbox-objects": ("3dRecon-splat-toolbox", "splat-objects"),
     "3dRecon-splat-toolbox-environments-360": ("3dRecon-splat-toolbox", "splat-environments-360"),
+    # These built-ins keep their ids but require a template whose shipped definition carries no
+    # isDefault flag, so the reference names that template the same way a consolidated id's
+    # per-format template is named. Without it, template resolution fails on every execute.
+    "rapid-pipeline-eks-to-glb": ("rapid-pipeline-eks-to-glb", "rapid-pipeline-eks-to-glb"),
+    "isaaclab-evaluation": ("isaaclab-evaluation", "isaaclab-evaluation-cartpole"),
+    "conversion-coordinate-transform": ("conversion-coordinate-transform",
+                                        "coordinate-transform-wgs84-to-osgb36-laz"),
 }
 
 GLOBAL_DATABASE = "GLOBAL"
+
+# Shipped built-in pipeline/workflow ids: the v2.6 ids the CDK vamsSchema importer registers plus
+# the pre-consolidation v2.5 ids they replace. A built-in workflow carries its pipeline's id, so the
+# one set covers both. A GLOBAL definition whose id is in this set is a built-in and is skipped (the
+# importer owns it); any other GLOBAL definition was created by a user (V1 accepted the GLOBAL
+# keyword on create) and is migrated like a user-database definition.
+_BUILTIN_DEFINITION_IDS = set(CONSOLIDATED_PIPELINE_ID_MAP) | {
+    # v2.6 consolidated + newly shipped built-ins.
+    "3dRecon-splat-toolbox",
+    "conversion-3d-basic",
+    "conversion-coordinate-transform",
+    "genai-metadata-3d-labeling-obj-glb-fbx-ply-stl-usd",
+    "isaaclab-evaluation",
+    "isaaclab-training",
+    "metadata-extraction-cad-mesh",
+    "nvidia-cosmos-predict2-text2world-2b",
+    "nvidia-cosmos-predict2-text2world-14b",
+    "nvidia-cosmos-predict2-video2world-2b",
+    "nvidia-cosmos-predict2-video2world-14b",
+    "nvidia-cosmos-reason2-2b",
+    "nvidia-cosmos-reason2-8b",
+    "nvidia-cosmos-transfer2-edge-2b",
+    "nvidia-cosmos3-nano",
+    "nvidia-cosmos3-super",
+    "nvidia-cosmos3-super-image2video",
+    "nvidia-cosmos3-super-text2image",
+    "nvidia-gr00t-finetune-n1-5-3b",
+    "preview-3d-thumbnail",
+    "preview-pc-potree-viewer-las-laz-e57-ply",
+    "rapid-pipeline",
+    "rapid-pipeline-eks-to-glb",
+    "vntana-model-ops",
+    # v2.5 built-in workflow ids with no matching pipeline id.
+    "rapid-pipeline-obj-to-gltf",
+}
+
 _PIPELINE_SCHEMA_VERSION = 1
 _TEMPLATE_SCHEMA_VERSION = 1
 _WORKFLOW_SCHEMA_VERSION = 1
+
+# templateId of the single template carrying a migrated pipeline's V1 inputParameters.
+_MIGRATED_TEMPLATE_ID = 'migrated-default'
 
 
 def n(val) -> Dict:
@@ -1037,16 +1351,23 @@ def string_list(values: List[str]) -> Dict:
     return {'L': [s(v) for v in values]}
 
 
-def _remap_pipeline_reference(pipeline_database_id: str, pipeline_id: str) -> Tuple[str, str, str]:
+def _remap_pipeline_reference(pipeline_database_id: str, pipeline_id: str,
+                              migrated_template_pipelines=None) -> Tuple[str, str, str]:
     """Rewrite a workflow's reference to a (possibly consolidated) built-in pipeline. Only GLOBAL
     references are remapped; a user-owned pipeline passes through unchanged. Returns the effective
     (pipelineDatabaseId, pipelineId, defaultTemplateId) — for a consolidated built-in the third element
     is the per-format template that reproduces the pre-consolidation behavior (e.g. the old
     conversion-3d-basic-to-obj id maps to pipeline conversion-3d-basic + template convert-to-obj), which
-    the migrated workflow ref carries so the pipeline (which now requires a template) still executes."""
+    the migrated workflow ref carries so the pipeline (which now requires a template) still executes.
+
+    For a user-owned pipeline whose V1 inputParameters were migrated into the 'migrated-default'
+    template (its composite key is in migrated_template_pipelines), the ref carries that template id
+    so a run applies the pipeline's V1 parameters without the caller naming a template per run."""
     if pipeline_database_id == GLOBAL_DATABASE and pipeline_id in CONSOLIDATED_PIPELINE_ID_MAP:
         new_id, template_id = CONSOLIDATED_PIPELINE_ID_MAP[pipeline_id]
         return GLOBAL_DATABASE, new_id, template_id
+    if (pipeline_database_id, pipeline_id) in (migrated_template_pipelines or ()):
+        return pipeline_database_id, pipeline_id, _MIGRATED_TEMPLATE_ID
     return pipeline_database_id, pipeline_id, ""
 
 
@@ -1105,10 +1426,26 @@ def _v1_system_config(row: Dict) -> Dict:
             'fileAttributes': bool_(True),
         }),
         'requireTemplate': bool_(False),
-        'allowCustomTemplateOverride': bool_(True),
+        # A V1 pipeline had no inline-config-override capability, and the V2 builders default the
+        # flag off, so a migrated pipeline gains none; an operator opts in per pipeline.
+        'allowCustomTemplateOverride': bool_(False),
         'auxPreviewPipelineSuffix': s(''),
         'inputFileFilters': m({'allow': string_list(allow), 'exclude': string_list([])}),
     })
+
+
+def _v1_date_created(row: Dict, now: str) -> str:
+    """The V1 row's dateCreated as ISO-8601 UTC. V1 stored it as a JSON-quoted
+    '%B %d %Y - %H:%M:%S' string; an absent or unparseable value falls back to ``now``."""
+    raw = row.get('dateCreated', {}).get('S', '') or ''
+    if not raw:
+        return now
+    try:
+        raw = json.loads(raw) if raw.startswith('"') else raw
+        return (datetime.strptime(raw, '%B %d %Y - %H:%M:%S')
+                .replace(tzinfo=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+    except (ValueError, TypeError):
+        return now
 
 
 def _v2_pipeline_item(row: Dict, now: str) -> Dict:
@@ -1119,6 +1456,7 @@ def _v2_pipeline_item(row: Dict, now: str) -> Dict:
     description = row.get('description', {}).get('S', '') or ''
     category = row.get('pipelineType', {}).get('S', '') or ''  # standardFile/previewFile -> category
     enabled = row.get('enabled', {}).get('BOOL', True)
+    date_created = _v1_date_created(row, now)
     return {
         'databaseId': s(database_id),
         'pipelineId': s(pipeline_id),
@@ -1133,8 +1471,11 @@ def _v2_pipeline_item(row: Dict, now: str) -> Dict:
         'systemConfig': _v1_system_config(row),
         'enabled': bool_(enabled),
         'archived': bool_(False),
-        'dateCreated': s(now),
-        'dateModified': s(now),
+        # dateModified is the by-date GSI sort key, so carrying the V1 creation date keeps migrated
+        # pipelines in their original order in the newest-first global list rather than collapsing
+        # every one of them onto the migration timestamp.
+        'dateCreated': s(date_created),
+        'dateModified': s(date_created),
         'createdBy': s('SYSTEM_USER'),
         'modifiedBy': s('SYSTEM_USER'),
         'schemaVersion': n(_PIPELINE_SCHEMA_VERSION),
@@ -1151,10 +1492,10 @@ def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
     input_parameters = row.get('inputParameters', {}).get('S', '') or ''
     if not input_parameters.strip():
         return None
-    template_id = 'migrated-default'
+    date_created = _v1_date_created(row, now)
     return {
         'pipelineDatabaseId:pipelineId': s(f"{database_id}:{pipeline_id}"),
-        'templateId': s(template_id),
+        'templateId': s(_MIGRATED_TEMPLATE_ID),
         'pipelineDatabaseId': s(database_id),
         'pipelineId': s(pipeline_id),
         'templateName': s('Migrated default parameters'),
@@ -1170,8 +1511,11 @@ def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
         'webFormS3Key': s(''),
         'webFormHash': s(''),
         'overrides': m({}),
-        'dateCreated': s(now),
-        'dateModified': s(now),
+        # The pipeline's only template, so it is its default: the UI pre-selects it and a
+        # require-template run falls back to it.
+        'isDefault': bool_(True),
+        'dateCreated': s(date_created),
+        'dateModified': s(date_created),
         'createdBy': s('SYSTEM_USER'),
         'modifiedBy': s('SYSTEM_USER'),
         'schemaVersion': n(_TEMPLATE_SCHEMA_VERSION),
@@ -1179,13 +1523,35 @@ def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
     }
 
 
-def _v2_workflow_item(row: Dict, now: str) -> Dict:
+def _existing_v2_deployment(dynamodb_client, table_name: str, database_id: str,
+                            workflow_id: str) -> Tuple[str, Dict]:
+    """The (workflow_arn, jobNames) already stored on the V2 workflow row, or ("", {'L': []}) when
+    there is none. A re-run reads these so a V2 state machine deployed after the first migration (by
+    re-saving the workflow) is preserved rather than cleared, which would orphan it and lose the
+    output-path job names."""
+    try:
+        item = dynamodb_client.get_item(
+            TableName=table_name,
+            Key={'databaseId': s(database_id), 'workflowId': s(workflow_id)},
+        ).get('Item') or {}
+    except ClientError as e:
+        logger.warning(f"Could not read the existing V2 workflow row {database_id}:{workflow_id}: {e}")
+        return "", {'L': []}
+    arn = item.get('workflow_arn', {}).get('S', '') or ''
+    job_names = item.get('jobNames') if arn else None
+    return arn, job_names or {'L': []}
+
+
+def _v2_workflow_item(row: Dict, now: str, migrated_template_pipelines=None,
+                      existing_arn: str = "", existing_job_names: Optional[Dict] = None) -> Dict:
     """Build a WorkflowStorageTableV2 wire-format row from a V1 workflow row, rewriting the
     specifiedPipelines.functions list into the V2 specifiedPipelines ref list (with consolidated
-    built-in id remap)."""
+    built-in id remap). migrated_template_pipelines is the set of (databaseId, pipelineId) whose V1
+    inputParameters became the 'migrated-default' template."""
     database_id = row.get('databaseId', {}).get('S', '')
     workflow_id = row.get('workflowId', {}).get('S', '')
     description = row.get('description', {}).get('S', '') or ''
+    date_created = _v1_date_created(row, now)
 
     functions = row.get('specifiedPipelines', {}).get('M', {}).get('functions', {}).get('L', [])
     refs = []
@@ -1193,14 +1559,16 @@ def _v2_workflow_item(row: Dict, now: str) -> Dict:
         fm = fn.get('M', {})
         p_id = fm.get('name', {}).get('S', '') or fm.get('pipelineId', {}).get('S', '')
         p_db = fm.get('databaseId', {}).get('S', '') or database_id
-        eff_db, eff_id, default_template_id = _remap_pipeline_reference(p_db, p_id)
+        eff_db, eff_id, default_template_id = _remap_pipeline_reference(
+            p_db, p_id, migrated_template_pipelines)
         refs.append(m({
             'pipelineDatabaseId': s(eff_db),
             'pipelineId': s(eff_id),
             'pipelineDatabaseId:pipelineId': s(f"{eff_db}:{eff_id}"),
             'jobName': s(fm.get('name', {}).get('S', '') or ''),
-            # A consolidated built-in requires a template; carry the per-format template so the
-            # migrated workflow still executes without a human selecting one per run.
+            # A consolidated built-in requires a template, and a migrated user pipeline keeps its V1
+            # parameters in a template; carry that template so the migrated workflow executes with
+            # the same configuration without a human selecting one per run.
             'defaultTemplateId': s(default_template_id),
         }))
 
@@ -1214,9 +1582,15 @@ def _v2_workflow_item(row: Dict, now: str) -> Dict:
         'workflowName': s(workflow_id),
         'category': s(''),
         'description': s(description),
-        'workflow_arn': s(row.get('workflow_arn', {}).get('S', '') or ''),
+        # The V1 state machine's ASL references the removed V1 tracking lambdas and the V1 input
+        # shape ($.bucketAsset / $.assetId), so it cannot run a V2 execution payload. The V1 ARN is
+        # not carried over: executeWorkflow gates on a non-empty workflow_arn and returns "Workflow
+        # has no deployed state machine." until the workflow is saved again, and that save deploys a
+        # V2 state machine (workflowService PUT -> deploy_state_machine). A V2 ARN already on the
+        # row (deployed by such a save before a re-run) is preserved.
+        'workflow_arn': s(existing_arn),
         'aslSchemaVersion': s(''),
-        'jobNames': {'L': []},
+        'jobNames': existing_job_names or {'L': []},
         'specifiedPipelines': {'L': refs},
         'systemConfig': m({
             'inputFileArity': s('one'),
@@ -1233,13 +1607,18 @@ def _v2_workflow_item(row: Dict, now: str) -> Dict:
             }),
             'inputFileFilters': m({'allow': string_list([]), 'exclude': string_list([])}),
             'concurrencyRestriction': s('none'),
-            'outputTarget': m({'locationType': s('asset'), 'allowOverride': bool_(True)}),
+            # A V1 execution always wrote back to its single input asset, and the V2 builders default
+            # allowOverride off, so a migrated workflow keeps the input asset as its locked output
+            # target; an operator opts in per workflow.
+            'outputTarget': m({'locationType': s('asset'), 'allowOverride': bool_(False)}),
         }),
         'subDashboardUrl': s(''),
         'enabled': bool_(row.get('enabled', {}).get('BOOL', True)),
         'archived': bool_(False),
-        'dateCreated': s(now),
-        'dateModified': s(now),
+        # dateModified is the by-date GSI sort key, so carrying the V1 creation date keeps migrated
+        # workflows in their original order in the newest-first global list.
+        'dateCreated': s(date_created),
+        'dateModified': s(date_created),
         'createdBy': s('SYSTEM_USER'),
         'modifiedBy': s('SYSTEM_USER'),
         'schemaVersion': n(_WORKFLOW_SCHEMA_VERSION),
@@ -1258,10 +1637,20 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     counts = {'pipelines': 0, 'templates': 0, 'workflows': 0, 'skipped_global': 0,
-              'skipped_deleted': 0, 'errors': 0}
+              'skipped_deleted': 0, 'errors': 0,
+              'duplicate_pipeline_ids': 0, 'duplicate_workflow_ids': 0}
+
+    # v2.6 requires pipeline and workflow ids to be unique across all databases. Pre-existing
+    # duplicates are migrated as-is (their composite PK keeps them distinct) and reported here so an
+    # operator can rename them; new creates are rejected by the API.
+    pipeline_id_owners: dict = {}
+    workflow_id_owners: dict = {}
 
     # --- Pipelines ---
     pipeline_batch, template_batch = [], []
+    # (databaseId, pipelineId) of every pipeline whose V1 inputParameters became a migrated template.
+    # The workflow pass reads this to point each ref's defaultTemplateId at that template.
+    migrated_template_pipelines = set()
     v1_pipelines = scan_all_items(dynamodb_client, v1_pipeline_table, limit)
     for row in v1_pipelines:
         database_id = row.get('databaseId', {}).get('S', '')
@@ -1271,14 +1660,26 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
         if database_id.endswith('#deleted'):
             counts['skipped_deleted'] += 1
             continue
-        if database_id == GLOBAL_DATABASE:
-            counts['skipped_global'] += 1  # built-in: re-created by the CDK importer, never clobbered
+        if database_id == GLOBAL_DATABASE and pipeline_id in _BUILTIN_DEFINITION_IDS:
+            # Built-in: re-created by the CDK importer, never clobbered.
+            counts['skipped_global'] += 1
+            logger.info(f"  Skipping GLOBAL built-in pipeline '{pipeline_id}' "
+                        "(re-created by the CDK vamsSchema importer)")
             continue
+        prior = pipeline_id_owners.get(pipeline_id)
+        if prior:
+            counts['duplicate_pipeline_ids'] += 1
+            logger.warning(f"  pipelineId '{pipeline_id}' exists in both '{prior}' and "
+                           f"'{database_id}'; v2.6 requires ids unique across databases. Migrated "
+                           "as-is; rename one before creating new pipelines with this id.")
+        else:
+            pipeline_id_owners[pipeline_id] = database_id
         pipeline_batch.append(_v2_pipeline_item(row, now))
         counts['pipelines'] += 1
         tpl = _v2_migrated_template_item(row, now)
         if tpl:
             template_batch.append(tpl)
+            migrated_template_pipelines.add((database_id, pipeline_id))
             counts['templates'] += 1
 
     w, e = flush_batch_write(dynamodb_client, v2_pipeline_table, pipeline_batch, dry_run)
@@ -1298,10 +1699,23 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
         if database_id.endswith('#deleted'):
             counts['skipped_deleted'] += 1
             continue
-        if database_id == GLOBAL_DATABASE:
+        if database_id == GLOBAL_DATABASE and workflow_id in _BUILTIN_DEFINITION_IDS:
             counts['skipped_global'] += 1
+            logger.info(f"  Skipping GLOBAL built-in workflow '{workflow_id}' "
+                        "(re-created by the CDK vamsSchema importer)")
             continue
-        workflow_batch.append(_v2_workflow_item(row, now))
+        prior = workflow_id_owners.get(workflow_id)
+        if prior:
+            counts['duplicate_workflow_ids'] += 1
+            logger.warning(f"  workflowId '{workflow_id}' exists in both '{prior}' and "
+                           f"'{database_id}'; v2.6 requires ids unique across databases. Migrated "
+                           "as-is; rename one before creating new workflows with this id.")
+        else:
+            workflow_id_owners[workflow_id] = database_id
+        existing_arn, existing_job_names = _existing_v2_deployment(
+            dynamodb_client, v2_workflow_table, database_id, workflow_id)
+        workflow_batch.append(_v2_workflow_item(
+            row, now, migrated_template_pipelines, existing_arn, existing_job_names))
         counts['workflows'] += 1
 
     _, we = flush_batch_write(dynamodb_client, v2_workflow_table, workflow_batch, dry_run)

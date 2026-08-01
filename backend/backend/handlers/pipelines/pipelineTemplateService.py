@@ -20,6 +20,7 @@ Authorization is scoped to the owning pipeline: Tier-1 gates the route; Tier-2 e
 pipeline object (templates have no independent permission fields).
 """
 
+import base64
 import json
 
 import boto3
@@ -28,6 +29,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.validators import validate
 from common.resourceNames import get_table_name, ResourceKeys
+from common.apiRoutes import API_PIPELINE_TEMPLATE_TAG_SCHEMA
 from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -74,6 +76,31 @@ except Exception as e:
 
 OBJECT_TYPE = "pipeline"
 
+# Pipelines in this database are shared across every database in the deployment.
+GLOBAL_DATABASE = "GLOBAL"
+
+# HTTP methods that reconfigure a template / tag schema (and therefore the owning pipeline's
+# configuration).
+WRITE_METHODS = ("POST", "PUT", "DELETE")
+
+# Templates per page of the list response, and the ceiling a caller can request. A list descriptor
+# carries its inline body, which may reach the inline threshold (320KB), so the ceiling keeps a
+# worst-case page well under the 6 MB Lambda synchronous-response limit.
+TEMPLATES_PAGE_SIZE = 10
+
+
+def _page_size(query_params):
+    """Requested page size clamped to [1, TEMPLATES_PAGE_SIZE]; the default applies for an absent or
+    unparseable value."""
+    raw = (query_params or {}).get("pageSize") or (query_params or {}).get("maxItems")
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        return TEMPLATES_PAGE_SIZE
+    if size < 1:
+        return TEMPLATES_PAGE_SIZE
+    return min(size, TEMPLATES_PAGE_SIZE)
+
 
 def _pipeline_table():
     return dynamodb.Table(pipeline_table_name)
@@ -99,18 +126,37 @@ def _default_bucket_name():
     return resolve_default_bucket(dynamodb.Table(buckets_table_name))["bucketName"]
 
 
+def _casbin_object(item):
+    """The Tier-2 Casbin object for a pipeline row: the record + object__type + the flat ABAC
+    constraint fields (name from pipelineName; pipelineExecutionType from executionConfig)."""
+    obj = dict(item)
+    obj["object__type"] = OBJECT_TYPE
+    pr.apply_pipeline_constraint_fields(obj, item)
+    return obj
+
+
+def _enforce_pipeline(item, action, claims_and_roles):
+    """Tier-2 object check on a pipeline row. Denies when there are no tokens to enforce."""
+    if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
+        return CasbinEnforcer(claims_and_roles).enforce(_casbin_object(item), action)
+    return False
+
+
+def _enforce_missing_pipeline(database_id, pipeline_id, action, claims_and_roles):
+    """Tier-2 check for a pipeline row that does not exist, run against a provisional record carrying
+    only the path-scoped ids. An unauthorized caller therefore cannot use the 404 as an existence
+    oracle for pipelines it may not see."""
+    return _enforce_pipeline(
+        {"databaseId": database_id, "pipelineId": pipeline_id}, action, claims_and_roles)
+
+
 def _enforce_parent_pipeline(database_id, pipeline_id, action, claims_and_roles):
     """Tier-2: authorize against the owning pipeline object. Returns (allowed, pipeline_item)."""
     response = _pipeline_table().get_item(Key={"databaseId": database_id, "pipelineId": pipeline_id})
     item = response.get("Item")
     if not item:
         return None, None
-    if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-        obj = dict(item)
-        obj["object__type"] = OBJECT_TYPE
-        obj.setdefault("name", item.get("pipelineName", ""))
-        return CasbinEnforcer(claims_and_roles).enforce(obj, action), item
-    return False, item
+    return _enforce_pipeline(item, action, claims_and_roles), item
 
 
 #######################
@@ -155,6 +201,15 @@ def _delete_tag_schema_rows(rows):
         })
 
 
+def _delete_tag_schema_object(key):
+    """Best-effort delete of an offloaded tag-schema object; a failed delete is logged, not fatal
+    (the object is orphaned, not incorrect)."""
+    try:
+        s3_client.delete_object(Bucket=_default_bucket_name(), Key=key)
+    except Exception as e:  # noqa: BLE001 - cleanup is best-effort
+        logger.warning(f"Failed deleting offloaded tag-schema object {key}: {e}")
+
+
 def _store_tag_schema(database_id, pipeline_id, template_id, fields, username):
     """Validate + persist a template's tag schema. Idempotent: reuses the existing owner row's
     tagSchemaId (and removes any stray duplicates) so a re-set OVERWRITES a single row — matching the
@@ -171,6 +226,7 @@ def _store_tag_schema(database_id, pipeline_id, template_id, fields, username):
         _delete_tag_schema_rows(existing[1:])
 
     fields_json = json.dumps(fields or [])
+    prior_s3_key = ""
     # Reuse the body-size cap/threshold for the (independently-stored) schema.
     if tbs.should_offload(fields_json, ""):
         key = tbs.tag_schema_s3_key(database_id, pipeline_id, template_id)
@@ -181,11 +237,17 @@ def _store_tag_schema(database_id, pipeline_id, template_id, fields, username):
             fields_hash=tbs.content_hash(fields_json), created_by=username, modified_by=username,
         )
     else:
+        if existing and existing[0].get("bodyStorage") == tbs.BODY_STORAGE_S3:
+            prior_s3_key = existing[0].get("fieldsS3Key") or ""
         record = pr.build_tag_schema_record(
             database_id, pipeline_id, template_id, fields, tag_schema_id=tag_schema_id,
             created_by=username, modified_by=username,
         )
     _tag_schema_table().put_item(Item=record)
+    # A shrink-to-inline transition leaves the prior offloaded object unreferenced; delete it only
+    # after the row is rewritten so a failed write leaves a row whose S3 key still resolves.
+    if prior_s3_key:
+        _delete_tag_schema_object(prior_s3_key)
     return []
 
 
@@ -193,18 +255,18 @@ def _store_tag_schema(database_id, pipeline_id, template_id, fields, username):
 # Template body storage
 #######################
 
-def _store_template_bodies(database_id, pipeline_id, template_id, config_body, web_form_json,
-                           prior_row=None):
+def _store_template_bodies(database_id, pipeline_id, template_id, config_body, web_form_json):
     """Decide inline-vs-S3 for a template's bodies (offload to the default bucket when large) and
     return the storage fields to merge onto the template record. Raises TemplateBodyTooLargeError
-    when the combined body exceeds the absolute cap. When a prior S3-offloaded row transitions to
-    inline (body shrank below the threshold), its offloaded objects are cleaned up."""
+    when the combined body exceeds the absolute cap.
+
+    When a prior S3-offloaded row transitions to inline (body shrank below the threshold) the
+    now-unreferenced offloaded objects are left in place: the caller cleans them up via
+    _delete_offloaded_objects AFTER the row is rewritten, so a failed write leaves a stored row
+    whose S3 keys still resolve."""
     tbs.assert_within_cap(config_body, web_form_json)
     plan = tbs.plan_body_storage(config_body, web_form_json)
     if not plan["offload"]:
-        # Transitioning from S3 back to inline: remove the now-unreferenced offloaded objects.
-        if prior_row and prior_row.get("bodyStorage") == tbs.BODY_STORAGE_S3:
-            _delete_offloaded_objects(prior_row)
         return {
             "bodyStorage": tbs.BODY_STORAGE_INLINE,
             "configBody": config_body or "",
@@ -223,6 +285,15 @@ def _store_template_bodies(database_id, pipeline_id, template_id, config_body, w
         "configBodyS3Key": cb_key, "configBodyHash": plan["configBodyHash"],
         "webFormS3Key": wf_key, "webFormHash": plan["webFormHash"],
     }
+
+
+def _request_body(event):
+    """Parsed JSON request body as a mapping. A valid-JSON-but-non-object body (list/string/null)
+    is a client error, not an internal one."""
+    body = json.loads(event.get("body") or "{}")
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    return body
 
 
 def _rehydrate_template(row):
@@ -317,21 +388,32 @@ def _clear_other_defaults(database_id, pipeline_id, keep_template_id):
 # Data operations
 #######################
 
-def list_templates(database_id, pipeline_id):
+def list_templates(database_id, pipeline_id, query_params=None):
+    """One page of a pipeline's template descriptors plus a NextToken when more remain. An inline
+    body can be up to the inline threshold (320KB), so the page is bounded to keep the response
+    under the 6MB Lambda limit; callers drain the pages via startingToken."""
+    params = query_params or {}
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
-    items = []
-    query_kwargs = {"KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite)}
-    table = _templates_table()
-    while True:
-        response = table.query(**query_kwargs)
-        for row in response.get("Items", []):
-            # Lightweight list descriptors — no per-row S3 rehydration of offloaded bodies. Callers
-            # fetch the full configBody/webFormJson via the single-template GET.
-            items.append(_template_to_response_light(row))
-        if "LastEvaluatedKey" not in response:
-            break
-        query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-    return GetTemplatesResponseModel(Items=items)
+    query_kwargs = {
+        "KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite),
+        "Limit": _page_size(params),
+    }
+    starting_token = params.get("startingToken") or params.get("NextToken")
+    if starting_token:
+        try:
+            query_kwargs["ExclusiveStartKey"] = json.loads(
+                base64.b64decode(starting_token).decode("utf-8"))
+        except Exception as e:
+            logger.exception(f"Invalid startingToken: {e}")
+    response = _templates_table().query(**query_kwargs)
+    # Lightweight list descriptors — no per-row S3 rehydration of offloaded bodies. Callers fetch
+    # the full configBody/webFormJson via the single-template GET.
+    items = [_template_to_response_light(row) for row in response.get("Items", [])]
+    result = GetTemplatesResponseModel(Items=items)
+    if "LastEvaluatedKey" in response:
+        result.NextToken = base64.b64encode(
+            json.dumps(response["LastEvaluatedKey"]).encode("utf-8")).decode("utf-8")
+    return result
 
 
 def create_template(database_id, pipeline_id, request, username):
@@ -403,13 +485,18 @@ def update_template(database_id, pipeline_id, template_id, request, username):
         if trigger_errors:
             return validation_error(body={"message": {"triggerTemplateErrors": trigger_errors}})
 
-    # Validate a new configBody against its EFFECTIVE format (the request's when supplied, else the
-    # stored row's). The request model cannot see the stored format, so a partial update that changes
-    # only configBody must be JSON-checked here against the template's persisted configFormat.
-    if request.configBody is not None:
-        effective_format = request.configFormat if request.configFormat is not None else row.get("configFormat", "json")
+    # Validate the EFFECTIVE body against the EFFECTIVE format (each the request's when supplied,
+    # else the stored row's). The request model sees neither stored value, so a partial update that
+    # changes only one of the two must be checked here: a body-only change against the persisted
+    # format, and a format-only change against the persisted body.
+    effective_format = request.configFormat if request.configFormat is not None else row.get("configFormat", "json")
+    format_changed = (request.configFormat is not None
+                      and request.configFormat != row.get("configFormat", "json"))
+    if request.configBody is not None or format_changed:
+        effective_body = (request.configBody if request.configBody is not None
+                          else _rehydrate_template(row)["configBody"])
         try:
-            _validate_template_bodies(effective_format, request.configBody, None)
+            _validate_template_bodies(effective_format, effective_body, None)
         except ValueError as ve:
             return validation_error(body={"message": str(ve)})
 
@@ -429,9 +516,11 @@ def update_template(database_id, pipeline_id, template_id, request, username):
         row["isDefault"] = bool(request.isDefault)
 
     # Re-run body storage when either body is being changed (rehydrate the unchanged one first).
+    orphaned_storage = None
     if request.configBody is not None or request.webFormJson is not None:
-        # Snapshot the prior storage state so a shrink-to-inline transition can clean up S3 objects
-        # (the field mutations above do not touch bodyStorage/*S3Key, but snapshot to be explicit).
+        # Snapshot the prior storage state so a shrink-to-inline transition knows which S3 objects
+        # to clean up (the field mutations above do not touch bodyStorage/*S3Key, but snapshot to be
+        # explicit).
         prior_storage = {
             "bodyStorage": row.get("bodyStorage"),
             "configBodyS3Key": row.get("configBodyS3Key"),
@@ -441,12 +530,20 @@ def update_template(database_id, pipeline_id, template_id, request, username):
         config_body = request.configBody if request.configBody is not None else current["configBody"]
         web_form = request.webFormJson if request.webFormJson is not None else current["webFormJson"]
         storage = _store_template_bodies(
-            database_id, pipeline_id, template_id, config_body, web_form, prior_row=prior_storage)
+            database_id, pipeline_id, template_id, config_body, web_form)
+        # A shrink-to-inline transition leaves the prior offloaded objects unreferenced. They are
+        # deleted only after the row is rewritten below, so a failed write leaves a stored row whose
+        # S3 keys still resolve instead of an unreadable template.
+        if (storage["bodyStorage"] == tbs.BODY_STORAGE_INLINE
+                and prior_storage["bodyStorage"] == tbs.BODY_STORAGE_S3):
+            orphaned_storage = prior_storage
         row.update(storage)
 
     row["dateModified"] = pr.iso_now()
     row["modifiedBy"] = username
     _templates_table().put_item(Item=row)
+    if orphaned_storage:
+        _delete_offloaded_objects(orphaned_storage)
     # Enforce single-default-per-pipeline when this update sets the template as the default.
     if request.isDefault:
         _clear_other_defaults(database_id, pipeline_id, template_id)
@@ -489,10 +586,7 @@ def delete_template(database_id, pipeline_id, template_id):
     tag_rows = _existing_tag_schema_rows(database_id, pipeline_id, template_id)
     for tag_row in tag_rows:
         if tag_row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and tag_row.get("fieldsS3Key"):
-            try:
-                s3_client.delete_object(Bucket=_default_bucket_name(), Key=tag_row["fieldsS3Key"])
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Failed deleting offloaded tag-schema object: {e}")
+            _delete_tag_schema_object(tag_row["fieldsS3Key"])
     _delete_tag_schema_rows(tag_rows)
     return success(body={"message": "Template deleted"})
 
@@ -521,6 +615,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     logger.info(event)
     try:
         path_parameters = event.get("pathParameters", {}) or {}
+        query_parameters = event.get("queryStringParameters", {}) or {}
         method = event["requestContext"]["http"]["method"]
         path = event["requestContext"]["http"]["path"]
 
@@ -546,11 +641,24 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             database_id, pipeline_id, method, claims_and_roles
         )
         if pipeline_item is None:
+            # Authorize against a provisional record first so the 404 is not an existence oracle.
+            if not _enforce_missing_pipeline(database_id, pipeline_id, method, claims_and_roles):
+                return authorization_error()
             return validation_error(status_code=404, body={"message": "Pipeline not found"}, event=event)
         if not allowed_obj:
             return authorization_error()
 
-        is_tag_schema = path.endswith("/tagSchema")
+        # A GLOBAL pipeline's templates and tag schemas drive its behavior in every database, so
+        # reconfiguring them additionally requires pipeline management (PUT) permission on the GLOBAL
+        # scope. The pipeline object action POST is shared by "run this pipeline" and "create", so
+        # run-only roles carry POST on GLOBAL pipelines.
+        if (database_id == GLOBAL_DATABASE and method in WRITE_METHODS
+                and not _enforce_pipeline(pipeline_item, "PUT", claims_and_roles)):
+            logger.info(f"{method} on GLOBAL pipeline {pipeline_id} templates denied: no GLOBAL "
+                        f"pipeline management")
+            return authorization_error()
+
+        is_tag_schema = API_PIPELINE_TEMPLATE_TAG_SCHEMA.matches(path)
 
         if is_tag_schema:
             # The tag schema is a sub-resource of a template; the template must exist.
@@ -562,7 +670,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     pipelineDatabaseId=database_id, pipelineId=pipeline_id,
                     templateId=template_id, fields=fields).dict()})
             if method == "PUT":
-                request = SetTagSchemaRequestModel(**json.loads(event.get("body") or "{}"))
+                request = SetTagSchemaRequestModel(**_request_body(event))
                 # Round-trip through JSON so enum types serialize to their string values (a plain
                 # .dict() would leave TemplateTagType enum objects that are not JSON-serializable).
                 fields = [json.loads(f.json()) for f in request.fields]
@@ -572,7 +680,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return success(body={"message": TagSchemaResponseModel(
                     pipelineDatabaseId=database_id, pipelineId=pipeline_id,
                     templateId=template_id, fields=fields).dict()})
-            return authorization_error(body={"message": "Method not allowed"})
+            return validation_error(body={"message": "Method not allowed"}, event=event)
 
         if method == "GET":
             if template_id:
@@ -581,16 +689,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return validation_error(status_code=404, body={"message": "Template not found"}, event=event)
                 fields = _load_tag_schema_fields(database_id, pipeline_id, template_id)
                 return success(body={"message": _template_to_response(row, tag_schema_fields=fields).dict()})
-            return success(body={"message": list_templates(database_id, pipeline_id).dict()})
+            return success(body={
+                "message": list_templates(database_id, pipeline_id, query_parameters).dict()})
 
         if method == "POST":
-            request = CreateTemplateRequestModel(**json.loads(event.get("body") or "{}"))
+            request = CreateTemplateRequestModel(**_request_body(event))
             return create_template(database_id, pipeline_id, request, username)
 
         if method == "PUT":
             if not template_id:
                 return validation_error(body={"message": "templateId required"}, event=event)
-            request = UpdateTemplateRequestModel(**json.loads(event.get("body") or "{}"))
+            request = UpdateTemplateRequestModel(**_request_body(event))
             return update_template(database_id, pipeline_id, template_id, request, username)
 
         if method == "DELETE":
@@ -598,7 +707,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={"message": "templateId required"}, event=event)
             return delete_template(database_id, pipeline_id, template_id)
 
-        return authorization_error(body={"message": "Method not allowed"})
+        return validation_error(body={"message": "Method not allowed"}, event=event)
 
     except tbs.TemplateBodyTooLargeError as te:
         return validation_error(body={"message": str(te)}, event=event)

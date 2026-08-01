@@ -22,6 +22,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { SpecifiedPipelineRef, Pipeline, Template } from "../types";
+import { JOB_NAME_PATTERN } from "./workflowValidation";
 
 export function moveItem<T>(list: T[], from: number, to: number): T[] {
     const newList = [...list];
@@ -88,6 +89,8 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
         });
     };
 
+    const jobNameInvalid = !!pipelineRef.jobName && !JOB_NAME_PATTERN.test(pipelineRef.jobName);
+
     return (
         <div ref={setNodeRef} style={style}>
             <div className="border border-border-default rounded p-4 mb-2 bg-surface-container">
@@ -118,12 +121,17 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                                 className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                             >
                                 <option value="">Select a pipeline</option>
+                                {/* Archived pipelines are listed so an existing reference to one
+                                    still resolves to a named card, but cannot be newly chosen. */}
                                 {pipelineOptions.map((p) => (
                                     <option
                                         key={`${p.databaseId}:${p.pipelineId}`}
                                         value={`${p.databaseId}:${p.pipelineId}`}
+                                        disabled={p.archived === true}
                                     >
-                                        {p.pipelineName}
+                                        {p.archived === true
+                                            ? `${p.pipelineName} (archived)`
+                                            : p.pipelineName}
                                     </option>
                                 ))}
                             </select>
@@ -158,14 +166,24 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                             >
                                 Job Name (optional)
                             </label>
+                            {/* The job name becomes a Step Functions state name and an S3
+                                output-path segment, so it is limited to the id character set. */}
                             <input
                                 id={`jobName-${index}`}
                                 type="text"
                                 value={pipelineRef.jobName || ""}
                                 onChange={handleJobNameChange}
                                 placeholder="Enter job name"
+                                maxLength={63}
+                                pattern="[-_a-zA-Z0-9]{3,63}"
+                                title="Letters, numbers, hyphens, and underscores only (3-63)"
                                 className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                             />
+                            {jobNameInvalid && (
+                                <p className="mt-1 text-sm text-vams-error">
+                                    Letters, numbers, hyphens, and underscores only (3-63).
+                                </p>
+                            )}
                         </div>
                     </div>
                     <button

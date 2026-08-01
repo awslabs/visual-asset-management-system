@@ -257,6 +257,7 @@ const COMMERCIAL: ConfigShape = {
             },
             useSplatToolbox: {
                 enabled: false,
+                useCodeBuild: false,
                 autoRegisterWithVAMS: true,
             },
             useRapidPipeline: {

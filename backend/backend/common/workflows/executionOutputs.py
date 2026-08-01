@@ -93,11 +93,15 @@ def _head_version_id(s3_client, bucket, key):
 def attribute_pipeline_outputs(current_files, snapshot_before):
     """Given the current output-files listing and the {key: versionId} snapshot taken
     before this pipeline ran, return the subset of current_files this pipeline produced:
-    keys not present in the snapshot, OR whose latest versionId changed."""
+    keys not present in the snapshot, OR whose latest versionId changed.
+
+    A key with an empty versionId carries no evidence either way and is attributed to this
+    pipeline, erring toward over-attribution rather than dropping a produced output."""
     produced = []
     for f in current_files:
         prev_version = snapshot_before.get(f["key"])
-        if prev_version is None or prev_version != f.get("versionId", ""):
+        version = f.get("versionId", "")
+        if prev_version is None or not version or prev_version != version:
             produced.append(f)
     return produced
 
@@ -230,21 +234,46 @@ def record_pipeline_output_files(dynamo, output_files_table, pipeline_execution_
         ))
 
 
+def _is_conditional_check_failure(error):
+    """Whether a DynamoDB write error is a ConditionalCheckFailedException (the row already holds a
+    terminal status), as opposed to a real failure that must surface."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code", "")
+        if code:
+            return code == "ConditionalCheckFailedException"
+    return "ConditionalCheckFailed" in str(error)
+
+
 def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id,
                         workflow_execution_id, status, stop_date=None):
-    """Set a pipeline-execution row's status (and stop date when terminal)."""
+    """Set a pipeline-execution row's status (and stop date when terminal), conditioned on the row not
+    already being terminal so a still-in-flight writer (the interim tracking lambda) cannot regress a
+    row the abort/error path already finished. A row that is already terminal is left untouched."""
     table = dynamo.Table(pipeline_executions_table)
     expr = "SET executionStatus = :st"
     values = {":st": status}
     if stop_date:
         expr += ", executionStopDate = :s"
         values[":s"] = stop_date
-    table.update_item(
-        Key={"pipelineExecutionId": pipeline_execution_id,
-             "workflowExecutionId": workflow_execution_id},
-        UpdateExpression=expr,
-        ExpressionAttributeValues=values,
-    )
+    terminal_names = {}
+    for index, terminal in enumerate(TERMINAL_STATUSES):
+        placeholder = f":term{index}"
+        terminal_names[placeholder] = terminal
+    values.update(terminal_names)
+    condition = ("attribute_not_exists(executionStatus) OR NOT executionStatus IN ("
+                 + ", ".join(terminal_names) + ")")
+    try:
+        table.update_item(
+            Key={"pipelineExecutionId": pipeline_execution_id,
+                 "workflowExecutionId": workflow_execution_id},
+            UpdateExpression=expr,
+            ConditionExpression=condition,
+            ExpressionAttributeValues=values,
+        )
+    except Exception as e:
+        if not _is_conditional_check_failure(e):
+            raise
 
 
 def set_main_status_running(dynamo, main_table_name, workflow_execution_id, workflow_database_id,

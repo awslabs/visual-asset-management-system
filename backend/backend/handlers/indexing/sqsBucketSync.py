@@ -34,7 +34,6 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY,
     VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
     VAMS_CHANGE_SOURCE_DIRECT,
-    VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
     normalize_history_file_path,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
@@ -1384,25 +1383,6 @@ def publish_to_file_indexer_sns(event):
         logger.exception(f"Error publishing to file indexer SNS topic: {e}")
         # We don't re-raise the exception here to avoid stopping the process
 
-def _is_workflow_sourced_record(record):
-    """True when an ingested S3 record was written by a workflow execution (vams-changesource=
-    workflowExecution). Such outputs must NOT re-fire fileUpload triggers (re-trigger loop guard).
-    Best-effort: a head failure returns False (do not silently drop a genuine user upload)."""
-    s3_info = record.get("s3", {}) or {}
-    bucket = (s3_info.get("bucket") or {}).get("name")
-    key = (s3_info.get("object") or {}).get("key")
-    if not bucket or not key:
-        return False
-    try:
-        import urllib.parse
-        head = s3_client.head_object(Bucket=bucket, Key=urllib.parse.unquote_plus(key))
-        return (head.get("Metadata", {}) or {}).get(
-            VAMS_CHANGE_SOURCE_METADATA_KEY) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
-    except Exception as e:
-        logger.info(f"Could not read change-source for {key} (treating as user upload): {e}")
-        return False
-
-
 def publish_to_orchestration_bus(successful_records):
     """Publish an asset.file.uploaded event to the VAMS orchestration EventBridge bus (Phase 2
     fileUpload trigger delivery). A standing rule on the bus routes these to the SQS buffer the
@@ -1410,22 +1390,24 @@ def publish_to_orchestration_bus(successful_records):
 
     Publishes a CLEAN, flat detail — {"Records": [{"s3": {...}}], ASSET_BUCKET_*} — built from the
     already-unwrapped S3 records, so the dispatcher does not re-implement the SQS->SNS->S3 unwrapping.
-    Records written by a workflow execution (vams-changesource=workflowExecution) are excluded so a
-    workflow's own file outputs cannot re-fire fileUpload triggers (re-trigger loop guard).
+    Every S3 record is published, including workflow-written ones: the re-trigger decision belongs to
+    the dispatcher, which knows the candidate workflow (see the loop-guard note in the body).
 
     Best-effort: a publish failure is logged, not raised (auto-trigger is non-critical to the primary
     ingestion path)."""
     try:
         if not orchestration_bus_name or not orchestration_event_source_prefix:
             return
-        user_records = [
-            r for r in (successful_records or [])
-            if r.get("s3") and not _is_workflow_sourced_record(r)
-        ]
-        if not user_records:
+        # Every S3 record is published, including workflow-written ones. The re-trigger decision is
+        # made per candidate WORKFLOW by the dispatcher (which already reads the object's provenance
+        # metadata), because it depends on that workflow's allowWorkflowTriggerChaining and on whether
+        # the file came from that same workflow. Filtering here would drop the record before any
+        # workflow is known, making a per-workflow opt-in unreachable.
+        publishable_records = [r for r in (successful_records or []) if r.get("s3")]
+        if not publishable_records:
             return
         detail = {
-            "Records": user_records,
+            "Records": publishable_records,
             "ASSET_BUCKET_NAME": asset_bucket_name,
             "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
         }

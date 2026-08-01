@@ -156,6 +156,50 @@ class TestWorkflowDelete:
             assert result.exit_code == 0
 
 
+class TestWorkflowUnarchive:
+    def test_unarchive_clears_archived_and_reenables(self, cli_runner, generic_command_mocks):
+        """Archiving sets enabled=False too, so unarchive must re-enable or the workflow comes back
+        unexecutable. Only these two flags are sent — any other field would overwrite stored values."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].update_workflow.return_value = {
+                'message': {'workflowId': 'wf1', 'workflowName': 'WF One', 'archived': False}}
+            result = cli_runner.invoke(cli, ['workflow', 'unarchive', '-d', 'my-db', '-w', 'wf1'])
+            assert result.exit_code == 0
+            mocks['api_client'].update_workflow.assert_called_once_with(
+                'my-db', 'wf1', {'archived': False, 'enabled': True})
+
+    def test_unarchive_keep_disabled(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].update_workflow.return_value = {
+                'message': {'workflowId': 'wf1', 'archived': False}}
+            result = cli_runner.invoke(
+                cli, ['workflow', 'unarchive', '-d', 'my-db', '-w', 'wf1', '--keep-disabled'])
+            assert result.exit_code == 0
+            mocks['api_client'].update_workflow.assert_called_once_with(
+                'my-db', 'wf1', {'archived': False})
+
+    def test_unarchive_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].update_workflow.return_value = {
+                'message': {'workflowId': 'wf1', 'archived': False}}
+            result = cli_runner.invoke(
+                cli, ['workflow', 'unarchive', '-d', 'my-db', '-w', 'wf1', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['archived'] is False
+
+    def test_unarchive_not_found(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].update_workflow.side_effect = WorkflowNotFoundError("nope")
+            result = cli_runner.invoke(cli, ['workflow', 'unarchive', '-d', 'my-db', '-w', 'wf1'])
+            assert result.exit_code != 0
+
+    def test_unarchive_invalid_data(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].update_workflow.side_effect = InvalidWorkflowDataError("bad")
+            result = cli_runner.invoke(cli, ['workflow', 'unarchive', '-d', 'my-db', '-w', 'wf1'])
+            assert result.exit_code != 0
+
+
 class TestWorkflowTrigger:
     def test_trigger_list(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:
@@ -253,6 +297,41 @@ class TestWorkflowExecute:
             body = mocks['api_client'].execute_workflow.call_args.args[2]
             assert body['pipelineExecutionParameters'] == {'conv': {'templateId': 'to-glb'}}
 
+    def test_execute_omits_the_prefix_so_the_workflow_default_applies(self, cli_runner,
+                                                                      generic_command_mocks):
+        """No --output-path-prefix must leave the key OUT of the body, which is what lets the backend
+        substitute the workflow's own default prefix."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert 'outputFileBaseExecutionPathExtension' not in body
+
+    def test_execute_sends_a_prefix_with_its_template_tags_unresolved(self, cli_runner,
+                                                                     generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--output-path-prefix', '/{{jobName}}/'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert body['outputFileBaseExecutionPathExtension'] == '/{{jobName}}/'
+
+    def test_execute_sends_an_explicitly_empty_prefix(self, cli_runner, generic_command_mocks):
+        """An empty string is a deliberate "asset root". Dropping it as falsy would re-apply the
+        workflow default the caller passed the flag to opt out of."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--output-path-prefix', ''])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert body['outputFileBaseExecutionPathExtension'] == ''
+
     def test_execute_workflow_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:
             mocks['api_client'].execute_workflow.side_effect = WorkflowNotFoundError("nope")
@@ -298,6 +377,16 @@ class TestWorkflowListExecutions:
                 '--workflow-database-id', 'global'])
             assert result.exit_code == 0
             assert mocks['api_client'].list_workflow_executions.call_args.kwargs['workflow_database_id'] == 'global'
+
+    def test_list_executions_empty_page_surfaces_next_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [], 'NextToken': 'tok-abc'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            assert 'tok-abc' in result.output
+            assert 'more pages available' in result.output
 
     def test_list_executions_page_size_cap(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow'):

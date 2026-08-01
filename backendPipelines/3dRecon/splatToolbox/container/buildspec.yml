@@ -1,0 +1,29 @@
+version: 0.2
+
+env:
+    variables:
+        IMAGE_TAG: "latest"
+
+phases:
+    pre_build:
+        commands:
+            - echo "Logging in to ECR..."
+            - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+            - IMAGE_URI="${ECR_REPO_URI}:${IMAGE_TAG}"
+            # Pull previous image from ECR to use as Docker layer cache (speeds up rebuilds significantly)
+            - echo "Pulling previous image for layer cache..."
+            - docker pull ${IMAGE_URI} || true
+    build:
+        commands:
+            - echo "Building container image..."
+            - docker build --cache-from ${IMAGE_URI} -t ${IMAGE_URI} .
+    post_build:
+        commands:
+            - echo "Pushing image to ECR..."
+            - docker push ${IMAGE_URI}
+            - echo "${IMAGE_URI}" > image_uri.txt
+            - echo "Build completed successfully"
+
+artifacts:
+    files:
+        - image_uri.txt

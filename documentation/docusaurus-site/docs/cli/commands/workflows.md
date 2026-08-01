@@ -64,18 +64,18 @@ vamscli workflow create -d my-db -n "My Workflow" \
     --system-config-file system.json
 ```
 
-| Option                         | Description                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------- |
-| `-d, --database-id`            | Database to create the workflow in (`GLOBAL` allowed)                                       |
-| `-n, --name`                   | Human-readable workflow name                                                                |
-| `-w, --workflow-id`            | Explicit workflow ID (a GUID is generated when omitted)                                     |
-| `--pipeline`                   | Referenced pipeline `databaseId:pipelineId[:defaultTemplateId]` (repeatable)                |
-| `--specified-pipelines[-file]` | Full `specifiedPipelines` list as inline JSON or a file                                     |
-| `--category`                   | Workflow category                                                                           |
-| `--description`                | Workflow description                                                                        |
-| `--system-config[-file]`       | `systemConfig` (input-file arity, asset scope, metadata inputs, concurrency, output target) |
-| `--sub-dashboard-url`          | Optional sub-dashboard URL                                                                  |
-| `--disabled`                   | Create the workflow disabled                                                                |
+| Option                         | Description                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `-d, --database-id`            | Database to create the workflow in (`GLOBAL` allowed)                                                         |
+| `-n, --name`                   | Human-readable workflow name                                                                                  |
+| `-w, --workflow-id`            | Explicit workflow ID (a GUID is generated when omitted)                                                       |
+| `--pipeline`                   | Referenced pipeline `databaseId:pipelineId[:defaultTemplateId]` (repeatable)                                  |
+| `--specified-pipelines[-file]` | Full `specifiedPipelines` list as inline JSON or a file                                                       |
+| `--category`                   | Workflow category                                                                                             |
+| `--description`                | Workflow description                                                                                          |
+| `--system-config[-file]`       | `systemConfig` (input-file arity, asset scope, metadata inputs, concurrency, output target, trigger chaining) |
+| `--sub-dashboard-url`          | Optional sub-dashboard URL                                                                                    |
+| `--disabled`                   | Create the workflow disabled                                                                                  |
 
 :::note
 A `GLOBAL` workflow may only reference `GLOBAL` pipelines; a database workflow may reference `GLOBAL`
@@ -100,12 +100,41 @@ vamscli workflow update -d my-db -w my-workflow --disable
 
 ## workflow delete
 
-Archive (soft-delete) a workflow. Archived workflows are hidden from `list` unless
-`--include-archived` is passed and can be restored by re-creating with the same ID.
+Archive (soft-delete) a workflow. Archiving marks the workflow archived **and disables it**, so it is
+hidden from `list` (unless `--include-archived` is passed) and cannot be executed. The workflow keeps its
+ID: because workflow IDs are unique across every database, no other workflow can take that ID while the
+archived record holds it. Use `workflow unarchive` to bring it back.
 
 ```bash
 vamscli workflow delete -d my-db -w my-workflow
 ```
+
+---
+
+## workflow unarchive
+
+Unarchive an archived workflow, returning it to the default listing and making it executable again.
+
+```bash
+vamscli workflow unarchive -d my-db -w my-workflow
+vamscli workflow unarchive -d my-db -w my-workflow --keep-disabled
+```
+
+| Option              | Description                                                  |
+| ------------------- | ------------------------------------------------------------ |
+| `-d, --database-id` | Database containing the workflow                             |
+| `-w, --workflow-id` | Archived workflow ID to unarchive                            |
+| `--keep-disabled`   | Unarchive without re-enabling (leaves the workflow disabled) |
+| `--json-output`     | Output the raw JSON response                                 |
+
+List archived workflows with `workflow list -d my-db --include-archived` to find the ID to unarchive.
+
+:::note[Unarchiving re-enables the workflow]
+Because archiving also disables the workflow, unarchiving re-enables it — otherwise `workflow execute`
+would reject the restored workflow as disabled. Pass `--keep-disabled` to clear only the archived flag
+and leave the workflow disabled. Every other field is left as stored, so the workflow returns with its
+original name, category, specified pipelines, and triggers intact.
+:::
 
 ---
 
@@ -163,16 +192,25 @@ vamscli workflow execute --workflow-database-id global -w my-workflow \
     --execution-group-id batch-2026-01
 ```
 
-| Option                                       | Description                                                                                                                                     |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--workflow-database-id`                     | The workflow's database (`GLOBAL` allowed)                                                                                                      |
-| `-w, --workflow-id`                          | Workflow to execute                                                                                                                             |
-| `--input-file`                               | `databaseId:assetId:relativeFileKey[:versionId]` (repeatable)                                                                                   |
-| `--input-files[-file]`                       | Full `inputFiles` list as inline JSON or a file                                                                                                 |
-| `--pipeline-parameters[-file]`               | Per-pipeline `{templateId, templateTags, customTemplateOverride}` keyed by pipelineId                                                           |
-| `--output-asset-id` / `--output-database-id` | Override the output target (when the workflow allows it)                                                                                        |
-| `--output-path-prefix`                       | Optional base path under the output asset for output files; supports dynamic tags (e.g. `{{firstAssetFileFileNameNoExt}}`). No `..`/backslashes |
-| `--execution-group-id`                       | Group this execution under an executionGroupId                                                                                                  |
+| Option                                       | Description                                                                                                                                                                                                                                                        |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--workflow-database-id`                     | The workflow's database (`GLOBAL` allowed)                                                                                                                                                                                                                         |
+| `-w, --workflow-id`                          | Workflow to execute                                                                                                                                                                                                                                                |
+| `--input-file`                               | `databaseId:assetId:relativeFileKey[:versionId]` (repeatable)                                                                                                                                                                                                      |
+| `--input-files[-file]`                       | Full `inputFiles` list as inline JSON or a file                                                                                                                                                                                                                    |
+| `--pipeline-parameters[-file]`               | Per-pipeline `{templateId, templateTags, customTemplateOverride}` keyed by pipelineId                                                                                                                                                                              |
+| `--output-asset-id` / `--output-database-id` | Override the output target (when the workflow allows it)                                                                                                                                                                                                           |
+| `--output-path-prefix`                       | Base path under the output asset for output files, inserted just above each file's own name; supports dynamic tags (e.g. `{{firstAssetFileFileNameNoExt}}`). Omit to inherit the workflow's default prefix; pass `""` to force the asset root. No `..`/backslashes |
+| `--execution-group-id`                       | Group this execution under an executionGroupId                                                                                                                                                                                                                     |
+
+A workflow may define a default output path prefix, which is used when `--output-path-prefix` is
+omitted. Because the stored default keeps its template tags unresolved, one setting such as
+`/{{jobName}}/` gives every run its own output folder. Pass an empty prefix to write at the asset root
+instead:
+
+```bash
+vamscli workflow execute --workflow-database-id global -w my-workflow     --input-file my-db:asset1:/model.glb --output-path-prefix ""
+```
 
 The command prints the new `executionId`. Track it with the [Executions](executions.md) commands.
 

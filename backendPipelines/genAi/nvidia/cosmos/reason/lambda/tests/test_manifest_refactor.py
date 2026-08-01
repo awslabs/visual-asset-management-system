@@ -139,11 +139,16 @@ class TestVamsExecuteCosmosReasonPipeline:
         # The boundary prompt extraction produces the SAME value when metadata is read from S3
         # (envelope-wrapped) as it would from the inline legacy field.
         mod = self._load()
+        # This test compares the metadata SOURCE (S3 envelope vs inline legacy field), not precedence,
+        # so BOTH input-configuration sources must be empty — the prompt resolves config-first, and
+        # _body() otherwise supplies an inline `inputParameters` prompt that would legitimately win.
         s3 = self._s3_reader(self._manifest(), self._metadata_envelope(prompt="Caption everything."),
                              {})
+        body_no_config = self._body()
+        body_no_config.pop("inputParameters")
         invoke = MagicMock(return_value={"StatusCode": 200})
         with patch.object(mod, "s3_client", s3), patch.object(mod.lambda_client, "invoke", invoke):
-            mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+            mod.lambda_handler({"body": json.dumps(body_no_config)}, MagicMock())
         payload_from_s3 = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
 
         # Now the legacy path: no manifest, no config location read; metadata comes inline with the
@@ -151,6 +156,7 @@ class TestVamsExecuteCosmosReasonPipeline:
         legacy_body = self._body()
         legacy_body.pop("inputManifestS3Location")
         legacy_body.pop("inputConfigurationS3Location")
+        legacy_body.pop("inputParameters")
         legacy_body["inputMetadata"] = {"VAMS": {"fileMetadata": {"COSMOS_REASON_PROMPT": "Caption everything."}}}
         s3_fail = MagicMock()
         s3_fail.get_object.side_effect = Exception("no manifest/metadata in S3")

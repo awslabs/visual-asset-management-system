@@ -70,6 +70,70 @@ class TestRunningStatusHelpers:
 
 
 @pytest.mark.unit
+class TestSetPipelineStatus:
+    """set_pipeline_status guards against regressing a row that already holds a terminal status, so a
+    still-in-flight interim lambda cannot flip an ABORTED/FAILED pipeline back to SUCCEEDED."""
+
+    def test_conditions_on_non_terminal_status(self):
+        table = MagicMock()
+        dynamo = MagicMock(Table=MagicMock(return_value=table))
+        eo.set_pipeline_status(dynamo, "pexec-tbl", "P1", "E1", "SUCCEEDED", stop_date="2026-01-01T00:00:00Z")
+        kwargs = table.update_item.call_args.kwargs
+        condition = kwargs["ConditionExpression"]
+        values = kwargs["ExpressionAttributeValues"]
+        assert "attribute_not_exists(executionStatus)" in condition
+        assert "NOT executionStatus IN (" in condition
+        assert set(eo.TERMINAL_STATUSES).issubset(set(values.values()))
+        assert values[":st"] == "SUCCEEDED"
+
+    def test_swallows_conditional_failure_on_terminal_row(self):
+        table = MagicMock()
+        table.update_item.side_effect = Exception("ConditionalCheckFailedException")
+        dynamo = MagicMock(Table=MagicMock(return_value=table))
+        # An already-ABORTED row fails the condition; that is expected and must not raise.
+        eo.set_pipeline_status(dynamo, "pexec-tbl", "P1", "E1", "SUCCEEDED")
+
+    def test_real_write_failure_propagates(self):
+        table = MagicMock()
+        table.update_item.side_effect = Exception("ProvisionedThroughputExceededException")
+        dynamo = MagicMock(Table=MagicMock(return_value=table))
+        with pytest.raises(Exception, match="ProvisionedThroughput"):
+            eo.set_pipeline_status(dynamo, "pexec-tbl", "P1", "E1", "SUCCEEDED")
+
+    @pytest.mark.aws
+    def test_terminal_row_is_not_regressed_against_dynamodb(self):
+        # Against a real DynamoDB expression parser: an ABORTED row keeps its status while a RUNNING
+        # row and a row with no status yet are advanced.
+        import boto3
+        from moto import mock_aws
+        with mock_aws():
+            ddb = boto3.resource("dynamodb", region_name="us-east-1")
+            ddb.create_table(
+                TableName="pexec-cond",
+                KeySchema=[{"AttributeName": "pipelineExecutionId", "KeyType": "HASH"},
+                           {"AttributeName": "workflowExecutionId", "KeyType": "RANGE"}],
+                AttributeDefinitions=[{"AttributeName": "pipelineExecutionId", "AttributeType": "S"},
+                                      {"AttributeName": "workflowExecutionId", "AttributeType": "S"}],
+                BillingMode="PAY_PER_REQUEST")
+            table = ddb.Table("pexec-cond")
+            table.put_item(Item={"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
+                                 "executionStatus": "ABORTED"})
+            table.put_item(Item={"pipelineExecutionId": "P2", "workflowExecutionId": "E1",
+                                 "executionStatus": "RUNNING"})
+            table.put_item(Item={"pipelineExecutionId": "P3", "workflowExecutionId": "E1"})
+            for pexec_id in ("P1", "P2", "P3"):
+                eo.set_pipeline_status(ddb, "pexec-cond", pexec_id, "E1", "SUCCEEDED",
+                                       stop_date="2026-01-01T00:00:00Z")
+            statuses = {
+                pexec_id: table.get_item(
+                    Key={"pipelineExecutionId": pexec_id, "workflowExecutionId": "E1"}
+                )["Item"].get("executionStatus")
+                for pexec_id in ("P1", "P2", "P3")
+            }
+            assert statuses == {"P1": "ABORTED", "P2": "SUCCEEDED", "P3": "SUCCEEDED"}
+
+
+@pytest.mark.unit
 class TestOutputAttribution:
     def test_attribute_new_and_changed_versions(self):
         snapshot = {"k/a": "v1", "k/b": "v1"}
@@ -81,6 +145,18 @@ class TestOutputAttribution:
         produced = eo.attribute_pipeline_outputs(current, snapshot)
         rels = {f["relativePath"] for f in produced}
         assert rels == {"/b", "/c"}
+
+    def test_attribute_without_version_signal(self):
+        # A bucket without versioning reports every versionId as '' (both in the recorded baseline
+        # and the current listing), so an overwrite carries no change signal. Those keys are
+        # attributed to the pipeline rather than dropped.
+        snapshot = {"k/a": ""}
+        current = [
+            {"key": "k/a", "versionId": "", "relativePath": "/a"},   # overwritten, no signal
+            {"key": "k/b", "versionId": "", "relativePath": "/b"},   # new
+        ]
+        produced = eo.attribute_pipeline_outputs(current, snapshot)
+        assert {f["relativePath"] for f in produced} == {"/a", "/b"}
 
     def test_build_resolved_manifest_shadows_only_overwritten_paths(self):
         # Original inputs: two asset files. Output folder has a new version of pump.e57 only.

@@ -5,5 +5,6 @@
     "configFormat": "json",
     "configBody": "{\"MODEL_TYPE\":\"video2world\",\"MODEL_SIZE\":\"14B\",\"DISABLE_GUARDRAILS\":\"true\",\"OFFLOAD_TEXT_ENCODER\":\"true\",\"OFFLOAD_TOKENIZER\":\"true\",\"OFFLOAD_DIFFUSION_MODEL\":\"true\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Supply an input video; provide the guiding prompt via the COSMOS_PREDICT_PROMPT file metadata key (or PROMPT in the config)."
+    "inputInstructions": "Supply an input video; provide the guiding prompt via the COSMOS_PREDICT_PROMPT file metadata key (or PROMPT in the config).",
+    "isDefault": true
 }

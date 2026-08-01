@@ -6,7 +6,7 @@
 import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import ExecuteWizard from "./ExecuteWizard";
+import ExecuteWizard, { validateInputSelection } from "./ExecuteWizard";
 import type { Workflow, Pipeline, Template } from "../types";
 
 // Mock the API queries
@@ -14,6 +14,7 @@ jest.mock("../api/queries", () => ({
     useWorkflow: jest.fn(),
     useAllPipelines: jest.fn(),
     useTemplates: jest.fn(),
+    useTemplate: jest.fn(),
     useExecuteWorkflow: jest.fn(),
     // WizardInputStage's cascading selectors call these; default to idle/empty so the wizard
     // renders. Individual tests can override if they exercise the input selectors.
@@ -51,6 +52,8 @@ describe("ExecuteWizard", () => {
         },
     };
 
+    // Arity matches the workflow's 'none': a pipeline that requires a file inside a workflow that
+    // selects none is an invalid combination the wizard (and the backend) rejects.
     const mockPipeline: Pipeline = {
         databaseId: "db1",
         pipelineId: "pipe1",
@@ -60,7 +63,7 @@ describe("ExecuteWizard", () => {
             executionType: "Lambda",
         },
         systemConfig: {
-            inputFileArity: "one",
+            inputFileArity: "none",
         },
     };
 
@@ -112,8 +115,19 @@ describe("ExecuteWizard", () => {
             isSuccess: true,
         });
 
+        // The real templates LIST endpoint omits tagSchema and blanks S3-offloaded bodies. Mock it
+        // that way so a component that needs the tag schema cannot pass on a fat fixture; the full
+        // template comes from the single-template hook below.
+        const { tagSchema: _omitted, ...listDescriptor } = mockTemplate as any;
         useTemplates.mockReturnValue({
-            data: [mockTemplate],
+            data: [listDescriptor],
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        const { useTemplate } = require("../api/queries");
+        useTemplate.mockReturnValue({
+            data: mockTemplate,
             isLoading: false,
             isSuccess: true,
         });
@@ -148,6 +162,149 @@ describe("ExecuteWizard", () => {
 
         const reviewSteps = screen.getAllByText(/Review/i);
         expect(reviewSteps.length).toBeGreaterThan(0);
+    });
+
+    // --- Output path prefix: the workflow's stored default pre-fills the field ------------------
+    // The default is stored UNRESOLVED, so the form must round-trip the {{tag}} verbatim and let the
+    // backend resolve it per run. `undefined` (untouched) lets the backend apply the default; an
+    // explicit "" means "asset root" and must therefore be SENT, not omitted.
+
+    const prefixWorkflow = (defaultPrefix?: string) => ({
+        ...mockWorkflow,
+        systemConfig: {
+            ...mockWorkflow.systemConfig,
+            outputTarget: { locationType: "asset" as const, allowOverride: false },
+            ...(defaultPrefix === undefined
+                ? {}
+                : { defaultOutputFileBaseExecutionPathExtension: defaultPrefix }),
+        },
+    });
+
+    /** Satisfy the default fixture's required tag, so Launch is enabled and the body can be read. */
+    const withSatisfiedTags = () => {
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const { tagSchema: _omit, ...listRow } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRow], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+    };
+
+    const launch = async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: /Launch/i })).not.toBeDisabled()
+        );
+        fireEvent.click(screen.getByRole("button", { name: /Launch/i }));
+        await waitFor(() => expect(mockExecuteWorkflow.mutateAsync).toHaveBeenCalled());
+        return mockExecuteWorkflow.mutateAsync.mock.calls[0][0].body;
+    };
+
+    it("pre-fills the output path prefix from the workflow default, tags unresolved", async () => {
+        const workflow = prefixWorkflow("/{{jobName}}/");
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: workflow, isLoading: false });
+        withSatisfiedTags();
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={workflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        const field = await screen.findByLabelText(/Output path prefix/i);
+        await waitFor(() => expect(field).toHaveValue("/{{jobName}}/"));
+        expect(await launch()).toMatchObject({
+            outputFileBaseExecutionPathExtension: "/{{jobName}}/",
+        });
+    });
+
+    it("sends nothing for the prefix when the workflow has no default and the user types none", async () => {
+        const workflow = prefixWorkflow(undefined);
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: workflow, isLoading: false });
+        withSatisfiedTags();
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={workflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        expect(await screen.findByLabelText(/Output path prefix/i)).toHaveValue("");
+        const body = await launch();
+        expect(body.outputFileBaseExecutionPathExtension).toBeUndefined();
+    });
+
+    it("sends an explicitly cleared prefix so the workflow default is not re-applied", async () => {
+        // Clearing the pre-filled field is a deliberate "write at the asset root". Omitting the field
+        // would make the backend fall back to the very default the user just removed.
+        const workflow = prefixWorkflow("/{{jobName}}/");
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: workflow, isLoading: false });
+        withSatisfiedTags();
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={workflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+
+        const field = await screen.findByLabelText(/Output path prefix/i);
+        await waitFor(() => expect(field).toHaveValue("/{{jobName}}/"));
+        fireEvent.change(field, { target: { value: "" } });
+
+        const body = await launch();
+        expect(body.outputFileBaseExecutionPathExtension).toBe("");
+    });
+
+    it("does not re-seed over a user-edited prefix on a later re-render", async () => {
+        // The seed must fire once. A re-render (a refetch settling, a parent state change) must not
+        // put the workflow default back over what the user typed.
+        const workflow = prefixWorkflow("/{{jobName}}/");
+        const { useWorkflow } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: workflow, isLoading: false });
+        withSatisfiedTags();
+
+        const tree = (
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard open onClose={jest.fn()} workflow={workflow} databaseId="db1" />
+            </QueryClientProvider>
+        );
+        const { rerender } = render(tree);
+
+        const field = await screen.findByLabelText(/Output path prefix/i);
+        await waitFor(() => expect(field).toHaveValue("/{{jobName}}/"));
+        fireEvent.change(field, { target: { value: "/mine/" } });
+
+        rerender(tree);
+
+        await waitFor(() =>
+            expect(screen.getByLabelText(/Output path prefix/i)).toHaveValue("/mine/")
+        );
+        expect(await launch()).toMatchObject({
+            outputFileBaseExecutionPathExtension: "/mine/",
+        });
     });
 
     it("disables Launch when required tags are missing", async () => {
@@ -214,11 +371,19 @@ describe("ExecuteWizard", () => {
 
         const {
             useTemplates: mockUseTemplates,
+            useTemplate: mockUseTemplate,
             useExecuteWorkflow: mockUseExecuteWorkflow,
         } = require("../api/queries");
 
+        // List = light descriptor (no tagSchema); the tag schema arrives via the single-template GET.
+        const { tagSchema: _omit, ...listRow } = templateWithDefault as any;
         mockUseTemplates.mockReturnValue({
-            data: [templateWithDefault],
+            data: [listRow],
+            isLoading: false,
+            isSuccess: true,
+        });
+        mockUseTemplate.mockReturnValue({
+            data: templateWithDefault,
             isLoading: false,
             isSuccess: true,
         });
@@ -312,7 +477,12 @@ describe("ExecuteWizard", () => {
             },
         };
 
-        const { useAllPipelines, useTemplates, useExecuteWorkflow } = require("../api/queries");
+        const {
+            useAllPipelines,
+            useTemplates,
+            useTemplate,
+            useExecuteWorkflow,
+        } = require("../api/queries");
 
         useAllPipelines.mockReturnValue({
             data: [pipelineWithOverride],
@@ -320,8 +490,15 @@ describe("ExecuteWizard", () => {
             isSuccess: true,
         });
 
+        // List = light descriptor (no tagSchema); the tag schema arrives via the single-template GET.
+        const { tagSchema: _omitOverride, ...listRowOverride } = templateWithAllowOverride as any;
         useTemplates.mockReturnValue({
-            data: [templateWithAllowOverride],
+            data: [listRowOverride],
+            isLoading: false,
+            isSuccess: true,
+        });
+        useTemplate.mockReturnValue({
+            data: templateWithAllowOverride,
             isLoading: false,
             isSuccess: true,
         });
@@ -377,5 +554,417 @@ describe("ExecuteWizard", () => {
                 })
             );
         });
+    });
+
+    it("surfaces a launch failure in the dialog and keeps the wizard open", async () => {
+        const onClose = jest.fn();
+
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const { tagSchema: _omit, ...listRow } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRow], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        mockExecuteWorkflow.mutateAsync.mockRejectedValue(
+            new Error("tag 'q': expected an integer")
+        );
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
+            </QueryClientProvider>
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: /Launch/i }));
+
+        await waitFor(() => {
+            expect(screen.getByRole("alert")).toHaveTextContent("tag 'q': expected an integer");
+        });
+        expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("shows backend warnings on the success path instead of closing silently", async () => {
+        const onClose = jest.fn();
+
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const { tagSchema: _omit2, ...listRow2 } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRow2], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        mockExecuteWorkflow.mutateAsync.mockResolvedValue({
+            warnings: ["pipeline 'db1:pipe1' is disabled; it will not run"],
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
+            </QueryClientProvider>
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: /Launch/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText(/Execution launched with warnings/i)).toBeInTheDocument();
+        });
+        expect(
+            screen.getByText(/pipeline 'db1:pipe1' is disabled; it will not run/)
+        ).toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("button", { name: /^Close$/ }));
+        expect(onClose).toHaveBeenCalled();
+    });
+
+    it("blocks Launch for a multi-arity workflow with no files selected", async () => {
+        const onClose = jest.fn();
+
+        const multiWorkflow: Workflow = {
+            ...mockWorkflow,
+            systemConfig: { inputFileArity: "multi" },
+        };
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useWorkflow, useTemplates, useTemplate } = require("../api/queries");
+        useWorkflow.mockReturnValue({ data: multiWorkflow, isLoading: false });
+        const { tagSchema: _omitMulti, ...listRowMulti } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRowMulti], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={multiWorkflow}
+                    databaseId="db1"
+                />
+            </QueryClientProvider>
+        );
+
+        // The Input step already flags the unmet requirement.
+        expect(
+            screen.getByText(/requires at least one input file but none were provided/i)
+        ).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        expect(screen.getByRole("button", { name: /Launch/i })).toBeDisabled();
+    });
+
+    it("drops a presetAsset-seeded input row for an arity-'none' workflow", async () => {
+        const onClose = jest.fn();
+
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const { tagSchema: _omit3, ...listRow3 } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRow3], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                    presetAsset={{ databaseId: "db1", assetId: "asset1" }}
+                />
+            </QueryClientProvider>
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        await waitFor(() => {
+            expect(screen.getByRole("button", { name: /Launch/i })).not.toBeDisabled();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Launch/i }));
+
+        await waitFor(() => {
+            expect(mockExecuteWorkflow.mutateAsync).toHaveBeenCalledWith(
+                expect.objectContaining({ body: expect.objectContaining({ inputFiles: [] }) })
+            );
+        });
+    });
+});
+
+describe("validateInputSelection", () => {
+    const oneFile = [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/model.glb" }];
+
+    it("reports a missing selection for arity 'one' and 'multi'", () => {
+        expect(validateInputSelection({ inputFileArity: "one" }, [], [])).toContain(
+            "Workflow requires exactly one input file but none were provided."
+        );
+        expect(validateInputSelection({ inputFileArity: "multi" }, [], [])).toContain(
+            "Workflow requires at least one input file but none were provided."
+        );
+    });
+
+    it("reports an input row whose file was never chosen", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one" },
+                [],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "" }]
+            )
+        ).toContain("Every input row needs a file selection.");
+    });
+
+    it("reports a pipeline whose effective arity is 'one' against a multi-file selection", () => {
+        const errors = validateInputSelection(
+            { inputFileArity: "multi", assetScope: { crossAssetAllowed: true } },
+            [{ label: 'Pipeline "P"', systemConfig: { inputFileArity: "one" } }],
+            [
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.glb" },
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/b.glb" },
+            ]
+        );
+        expect(errors).toContain(
+            'Pipeline "P" accepts a single input file but multiple were provided.'
+        );
+    });
+
+    it("reports a pipeline whose input-file filters exclude every selected input", () => {
+        const errors = validateInputSelection(
+            { inputFileArity: "one" },
+            [
+                {
+                    label: 'Pipeline "P"',
+                    systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
+                },
+            ],
+            oneFile
+        );
+        expect(errors).toContain(
+            'Pipeline "P" requires input files but its input-file filters exclude all selected inputs.'
+        );
+    });
+
+    it("admits a whole-asset selection under an extension-only allow list", () => {
+        // A container selection cannot carry an extension, so extension patterns are dropped for it.
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one", assetScope: { wholeAssetAllowed: true } },
+                [
+                    {
+                        label: 'Pipeline "P"',
+                        systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
+                    },
+                ],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            )
+        ).toEqual([]);
+    });
+
+    it("still applies a path glob to a folder selection", () => {
+        const errors = validateInputSelection(
+            { inputFileArity: "one", assetScope: { folderAllowed: true } },
+            [
+                {
+                    label: 'Pipeline "P"',
+                    systemConfig: { inputFileFilters: { allow: ["/models/*"] } },
+                },
+            ],
+            [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/textures/" }]
+        );
+        expect(errors).toContain(
+            'Pipeline "P" requires input files but its input-file filters exclude all selected inputs.'
+        );
+    });
+
+    it("applies a template's overrides over the pipeline systemConfig", () => {
+        // Pipeline arity 'multi' would pass; the template overrides it to 'one'.
+        const errors = validateInputSelection(
+            { inputFileArity: "multi", assetScope: { crossAssetAllowed: true } },
+            [
+                {
+                    label: 'Pipeline "P"',
+                    systemConfig: { inputFileArity: "multi" },
+                    templateOverrides: { inputFileArity: "one" },
+                },
+            ],
+            [
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.glb" },
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/b.glb" },
+            ]
+        );
+        expect(errors).toContain(
+            'Pipeline "P" accepts a single input file but multiple were provided.'
+        );
+    });
+
+    it("reports a whole-asset selection when the workflow does not allow one", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one" },
+                [],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            )
+        ).toContain("Workflow does not allow whole-asset ('/') selection.");
+    });
+
+    it("accepts the assetScope wholeAsset shorthand", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one", assetScope: { wholeAsset: true } },
+                [],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            )
+        ).toEqual([]);
+    });
+
+    it("reports cross-asset inputs when the workflow does not allow them", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "multi" },
+                [],
+                [
+                    { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.glb" },
+                    { databaseId: "db1", assetId: "a2", relativeFileKey: "/b.glb" },
+                ]
+            )
+        ).toContain("Workflow does not allow cross-asset inputs, but inputs span multiple assets.");
+    });
+
+    it("passes a valid single-file selection with no constraints violated", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one" },
+                [{ label: 'Pipeline "P"', systemConfig: { inputFileArity: "one" } }],
+                oneFile
+            )
+        ).toEqual([]);
+    });
+
+    it("reports a whole-asset selection a pipeline's own assetScope forbids", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one", assetScope: { wholeAssetAllowed: true } },
+                [
+                    {
+                        label: 'Pipeline "P"',
+                        systemConfig: { assetScope: { wholeAssetAllowed: false } },
+                    },
+                ],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            )
+        ).toContain("Pipeline \"P\" does not allow whole-asset ('/') selection.");
+    });
+
+    it("lets a pipeline assetScope omitting a key defer to the workflow gate", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one", assetScope: { wholeAssetAllowed: true } },
+                [{ label: 'Pipeline "P"', systemConfig: { assetScope: { folderAllowed: true } } }],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            )
+        ).toEqual([]);
+    });
+
+    it("ignores a 'none'-arity pipeline inside a file-consuming workflow", () => {
+        expect(
+            validateInputSelection(
+                { inputFileArity: "one" },
+                [{ label: 'Pipeline "P"', systemConfig: { inputFileArity: "none" } }],
+                oneFile
+            )
+        ).toEqual([]);
     });
 });

@@ -1005,6 +1005,15 @@ export const FIELDS: FieldMeta[] = [
         help: "Generate Gaussian splat reconstructions from media. Requires VPC + GPU.",
     },
     {
+        path: "app.pipelines.useSplatToolbox.useCodeBuild",
+        label: "Gaussian splatting — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Build the Splat Toolbox container in the cloud with AWS CodeBuild instead of locally during CDK deploy.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useSplatToolbox.enabled"),
+    },
+    {
         path: "app.pipelines.useSplatToolbox.autoRegisterWithVAMS",
         label: "Gaussian splatting — auto-register",
         input: "boolean",

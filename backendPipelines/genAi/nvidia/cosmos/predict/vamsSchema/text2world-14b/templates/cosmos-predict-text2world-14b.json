@@ -3,7 +3,8 @@
     "templateName": "Text-to-World (14B)",
     "description": "Generate a high-quality video world from a text prompt with the Cosmos Predict 14B model.",
     "configFormat": "json",
-    "configBody": "{\"MODEL_TYPE\":\"text2world\",\"MODEL_SIZE\":\"14B\",\"DISABLE_GUARDRAILS\":\"true\",\"OFFLOAD_TEXT_ENCODER\":\"true\",\"OFFLOAD_TOKENIZER\":\"true\",\"OFFLOAD_DIFFUSION_MODEL\":\"true\"}",
+    "configBody": "{\"DISABLE_GUARDRAILS\":\"true\",\"GENERATE_PREVIEW_GIF\":\"false\",\"OFFLOAD_TEXT_ENCODER\":\"true\",\"OFFLOAD_TOKENIZER\":\"true\",\"OFFLOAD_DIFFUSION_MODEL\":\"true\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Provide the generation prompt via the COSMOS_PREDICT_PROMPT asset metadata key (or PROMPT in the config)."
+    "inputInstructions": "Provide the generation prompt via the COSMOS_PREDICT_PROMPT asset metadata key (or PROMPT in the config). DISABLE_GUARDRAILS toggles the model guardrails, GENERATE_PREVIEW_GIF=true also emits a preview GIF of the result, and the OFFLOAD_* flags trade inference speed for GPU memory. The model type and size are fixed by the registered pipeline.",
+    "isDefault": true
 }

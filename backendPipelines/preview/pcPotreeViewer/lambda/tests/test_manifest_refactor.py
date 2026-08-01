@@ -116,6 +116,59 @@ class TestVamsExecute:
         assert "inputParameters" not in payload
 
 
+    def test_failure_after_token_fails_the_task(self):
+        """A failure once the task token is known must fail the waitForCallback task rather than
+        leave it waiting for the full taskTimeout."""
+        mod = self._load()
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(self._manifest()).encode("utf-8"))}
+        send_failure = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.lambda_client, "invoke", MagicMock(side_effect=Exception("Throttled"))), \
+                patch.object(mod.sfn_client, "send_task_failure", send_failure):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        assert send_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_multi_file_manifest_fails_the_task(self):
+        mod = self._load()
+        manifest = self._manifest()
+        manifest["inputFiles"] = manifest["inputFiles"] * 2
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
+        send_failure = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.lambda_client, "invoke", MagicMock()), \
+                patch.object(mod.sfn_client, "send_task_failure", send_failure):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        send_failure.assert_called_once()
+
+    def test_missing_task_token_reports_no_callback(self):
+        """No token to fail: the handler still reports 500 and issues no callback."""
+        mod = self._load()
+        body = self._body()
+        body.pop("TaskToken")
+        s3 = MagicMock()
+        send_failure = MagicMock()
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.sfn_client, "send_task_failure", send_failure):
+            resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
+        assert resp["statusCode"] == 500
+        send_failure.assert_not_called()
+
+    def test_callback_failure_does_not_mask_the_error(self):
+        mod = self._load()
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(self._manifest()).encode("utf-8"))}
+        with patch.object(mod, "s3_client", s3), \
+                patch.object(mod.lambda_client, "invoke", MagicMock(side_effect=Exception("Throttled"))), \
+                patch.object(mod.sfn_client, "send_task_failure",
+                             MagicMock(side_effect=Exception("TaskTimedOut"))):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+
+
 @pytest.mark.unit
 class TestOpenPipeline:
     def _load(self):

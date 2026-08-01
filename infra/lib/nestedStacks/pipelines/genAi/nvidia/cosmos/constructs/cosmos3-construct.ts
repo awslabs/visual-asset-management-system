@@ -352,7 +352,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 instanceTypes: instanceTypes,
                 ec2Configuration: [
                     {
-                        imageType: "ECS_AL2_NVIDIA",
+                        imageType: "ECS_AL2023_NVIDIA",
                     },
                 ],
                 subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
@@ -474,7 +474,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         instanceTypes: instanceTypesSuper,
                         ec2Configuration: [
                             {
-                                imageType: "ECS_AL2_NVIDIA",
+                                imageType: "ECS_AL2023_NVIDIA",
                             },
                         ],
                         subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),

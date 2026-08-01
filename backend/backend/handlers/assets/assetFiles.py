@@ -496,9 +496,30 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         logger.exception(f"Error copying S3 object from {source_key} to {dest_key}: {e}")
         return False
 
+def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
+    """Auxiliary-bucket base prefix holding the derived data for one asset file.
+
+    Auxiliary objects live under the database-scoped per-file layout
+    ``{databaseId}/{assetFileKey}/``; workflow preview/viewer data lands in the
+    ``preview`` subfolder of that base (see
+    ``common.workflows.executionRecords.aux_preview_file_prefix``, the writer of that
+    layout). ``asset_file_key`` is the full asset-bucket key, so a custom asset base
+    prefix is preserved; passing a folder key scopes the result to every file beneath it.
+
+    Args:
+        database_id: The database ID owning the asset
+        asset_file_key: Full asset-bucket key of the file, or a folder key
+
+    Returns:
+        The auxiliary-bucket prefix, with a trailing slash
+    """
+    key = (asset_file_key or "").strip('/')
+    base = (database_id or "").strip('/')
+    return f"{base}/{key}/" if key else f"{base}/"
+
 def delete_assetAuxiliary_files(prefix):
     """Delete auxiliary files for an asset
-    
+
     Args:
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
@@ -2089,7 +2110,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
 
         # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2122,7 +2143,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         success = delete_s3_object_all_versions(bucket, full_key)
 
         # Delete aux files if they exist
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
@@ -2575,7 +2596,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
     # Copy auxiliary files if they exist
-    copy_auxiliary_files(source_key, dest_key)
+    copy_auxiliary_files(
+        aux_bucket_asset_file_base(databaseId, source_key),
+        aux_bucket_asset_file_base(effective_dest_db, dest_key)
+    )
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -2718,7 +2742,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     )
     
     # Move auxiliary files if they exist
-    move_auxiliary_files(source_key, dest_key)
+    move_auxiliary_files(
+        aux_bucket_asset_file_base(databaseId, source_key),
+        aux_bucket_asset_file_base(databaseId, dest_key)
+    )
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -2830,8 +2857,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
-    #Delete aux files for asset as they don't match anymore with the version. 
-    delete_assetAuxiliary_files(full_key)
+    #Delete aux files for asset as they don't match anymore with the version.
+    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -4292,25 +4319,26 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    
+    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+
     # Check if auxiliary files exist under the prefix
     file_count = 0
     deleted_files = []
-    
+
     try:
         # List objects in the auxiliary bucket with the prefix
         paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=full_key):
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=aux_prefix):
             if 'Contents' in page:
                 file_count += len(page['Contents'])
                 for item in page['Contents']:
                     deleted_files.append(item['Key'])
-        
+
         if file_count == 0:
             raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
-        
+
         # Delete the auxiliary files
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_prefix)
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)

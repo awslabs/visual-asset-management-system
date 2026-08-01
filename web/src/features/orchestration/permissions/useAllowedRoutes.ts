@@ -32,7 +32,9 @@ export function __resetCache() {
 
 /**
  * Segment matcher for route templates.
- * Returns true if two paths match segment-by-segment, where {param} placeholders match any segment.
+ * Returns true if two paths match segment-by-segment. A {param} in the GRANTED route matches any
+ * segment; a {param} in the queried path is a placeholder for a value and only matches a granted
+ * {param}, so a concrete segment in a grant is never satisfied by an unrelated query param.
  */
 function pathsMatch(templatePath: string, queryPath: string): boolean {
     const templateSegments = templatePath.split("/");
@@ -46,15 +48,10 @@ function pathsMatch(templatePath: string, queryPath: string): boolean {
         const templateSeg = templateSegments[i];
         const querySeg = querySegments[i];
 
-        // If either is a {param}, it matches
-        const templateIsParam = templateSeg.startsWith("{") && templateSeg.endsWith("}");
-        const queryIsParam = querySeg.startsWith("{") && querySeg.endsWith("}");
-
-        if (templateIsParam || queryIsParam) {
+        if (templateSeg.startsWith("{") && templateSeg.endsWith("}")) {
             continue;
         }
 
-        // Both are concrete segments, must match exactly
         if (templateSeg !== querySeg) {
             return false;
         }
@@ -85,10 +82,14 @@ export function useAllowedRoutes() {
                 if (success && typeof data === "object" && "routes" in data) {
                     setRoutes((data as AllowedRoutesData).routes);
                 } else {
+                    // Only a successful fetch is cached; a failure is dropped so the next mount
+                    // retries instead of pinning every action closed for the SPA session.
+                    if (cachedPromise === promise) cachedPromise = null;
                     setRoutes([]);
                 }
             })
             .catch(() => {
+                if (cachedPromise === promise) cachedPromise = null;
                 setRoutes([]);
             })
             .finally(() => {

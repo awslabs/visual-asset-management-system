@@ -217,3 +217,23 @@ class TestWorkflowTriggerService:
         resp = lambda_handler(_event("DELETE", BASE + "/fileUpload", TPARAMS), MagicMock())
         assert resp["statusCode"] == 200
         table.delete_item.assert_called_once()
+
+
+@pytest.mark.unit
+class TestTriggerConfigBuilderDispatch:
+    """triggerConfig is built by the builder registered for the trigger type, so a supported type
+    with no builder fails the save rather than storing a fileUpload-shaped config under it."""
+
+    def test_file_upload_type_has_a_builder(self):
+        from backend.backend.handlers.workflows import workflowTriggerService as wts
+        assert wts.TRIGGER_TYPE_FILE_UPLOAD in wts._TRIGGER_CONFIG_BUILDERS
+
+    def test_type_without_a_builder_is_rejected(self):
+        from backend.backend.handlers.workflows import workflowTriggerService as wts
+        request = type("R", (), {"inputFileFilters": {}, "defaultTemplateIds": {},
+                                 "enabled": True})()
+        with patch(f"{MOD}.validate_trigger_default_templates", return_value=[]), \
+             patch(f"{MOD}._triggers_table") as mock_table:
+            resp = wts.set_trigger("db1", "wflow1", "schedule", request)
+        assert resp["statusCode"] == 400
+        mock_table.return_value.put_item.assert_not_called()

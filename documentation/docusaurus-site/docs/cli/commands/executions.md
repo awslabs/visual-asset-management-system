@@ -20,6 +20,10 @@ default only recent executions — those started within the last 90 days — are
 `--filter-start-date` and `--filter-end-date` to query an explicit date range. The applied window is
 returned as `filterStartDate` (and `filterEndDate` when supplied) in the response.
 
+Each execution reports its output target — `Output Type` (`asset`, or `none` for a results-only run)
+and `Output Asset` as `databaseId:assetId`. Both lines are omitted for a results-only execution, which
+writes no files and therefore has no destination asset.
+
 ```bash
 vamscli execution list
 vamscli execution list -w my-workflow --status RUNNING

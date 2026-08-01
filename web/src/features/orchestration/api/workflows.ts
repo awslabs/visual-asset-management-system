@@ -5,7 +5,7 @@
 
 import { apiClient } from "../../../services/apiClient";
 import { toTuple, pageAll } from "./client";
-import type { Workflow, WorkflowTrigger } from "../types";
+import type { Workflow, WorkflowCreateRequest, WorkflowTrigger } from "../types";
 
 /**
  * One server page of workflows. Returns the raw page object { Items, NextToken? } so the
@@ -51,7 +51,7 @@ export async function getWorkflow(
     return toTuple(() => apiClient.get(`database/${databaseId}/workflows/${workflowId}`));
 }
 
-export async function createWorkflow(body: Workflow): Promise<[boolean, any]> {
+export async function createWorkflow(body: WorkflowCreateRequest): Promise<[boolean, any]> {
     return toTuple(() => apiClient.post(`database/${body.databaseId}/workflows`, { body }));
 }
 

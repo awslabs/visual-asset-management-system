@@ -268,3 +268,90 @@ class TestCreateWorkflowStage2ASL:
         assert "inputAssetLocationKey.$" not in body
         # The execution id the interim lambda does read remains.
         assert body["workflowExecutionId.$"] == "$.workflowExecutionId"
+
+
+@pytest.mark.unit
+class TestNextPipelineIdentityThreading:
+    """The interim lambda feeds nextPipelineId to the template renderer as {{pipelineId}} /
+    {{pipelineName}}, and the execute handler supplies the real pipelineId for pipeline 1, so the
+    ASL must thread the pipeline id — not the jobName-derived output-path name."""
+
+    def test_next_pipeline_id_is_the_pipeline_id_not_the_job_name(self):
+        pipelines = _pipelines(2)
+        # A workflow ref jobName override makes `name` differ from `pipelineId`.
+        pipelines[1]["name"] = "convert-b"
+        pipelines[1]["pipelineId"] = "meshConvert"
+        definition, _jobs = cw.generate_workflow_asl(pipelines, "db", "wf")
+        interim = [s for k, s in definition["States"].items() if k.startswith("interim-")][0]
+        body = interim["Parameters"]["Payload"]["body"]
+        assert body["nextPipelineId"] == "meshConvert"
+        # The uuid-prefixed output-path job name stays on its own field.
+        assert body["nextPipelineJobName"].endswith("-convert-b")
+
+    def test_next_pipeline_id_falls_back_to_the_name_without_a_pipeline_id(self):
+        definition, _jobs = cw.generate_workflow_asl(_pipelines(2), "db", "wf")
+        interim = [s for k, s in definition["States"].items() if k.startswith("interim-")][0]
+        assert interim["Parameters"]["Payload"]["body"]["nextPipelineId"] == "p2"
+
+
+@pytest.mark.unit
+class TestAslPipelineNameSafety:
+    """Pipeline names are spliced into single-quoted States.Format() intrinsic arguments in the
+    generated output-path templates, so a name carrying intrinsic syntax must be rejected before
+    the definition is built rather than failing Step Functions validation on create."""
+
+    @pytest.mark.parametrize("job_name", [
+        "Kurt's job", "a{}b", "a{", "b}", "back\\slash", "line\nbreak",
+    ])
+    def test_intrinsic_unsafe_job_name_rejected(self, job_name):
+        pipelines = _pipelines(1)
+        pipelines[0]["name"] = job_name
+        with pytest.raises(ValueError):
+            cw.generate_workflow_asl(pipelines, "db", "wf")
+
+    def test_empty_pipeline_name_rejected(self):
+        pipelines = _pipelines(1)
+        pipelines[0]["name"] = ""
+        with pytest.raises(ValueError):
+            cw.generate_workflow_asl(pipelines, "db", "wf")
+
+    def test_ordinary_job_name_accepted(self):
+        pipelines = _pipelines(1)
+        pipelines[0]["name"] = "convert-a_1"
+        definition, job_names = cw.generate_workflow_asl(pipelines, "db", "wf")
+        assert job_names[0].endswith("-convert-a_1")
+        assert definition["States"]
+
+
+@pytest.mark.unit
+class TestCallbackTaskRetryPolicy:
+    """A .waitForTaskToken task must not retry a callback timeout: the pipeline may still be
+    running, so re-sending the invocation starts a second concurrent run of the same step."""
+
+    def _pipeline(self, exec_type, resource):
+        return {
+            "name": "p1", "outputType": "assetFile", "pipelineExecutionType": exec_type,
+            "databaseId": "db", "waitForCallback": "Enabled", "taskTimeout": "3600",
+            "userProvidedResource": json.dumps(resource),
+        }
+
+    @pytest.mark.parametrize("exec_type,resource", [
+        ("Lambda", {"resourceId": "arn:fn", "resourceType": "Lambda"}),
+        ("SQS", {"resourceId": "https://sqs.us-east-1.amazonaws.com/1/q", "resourceType": "SQS"}),
+        ("EventBridge", {"resourceId": "default", "resourceType": "EventBridge"}),
+    ])
+    def test_timeout_errors_are_not_retried_for_callback_states(self, exec_type, resource):
+        definition, _jobs = cw.generate_workflow_asl(
+            [self._pipeline(exec_type, resource)], "db", "wf")
+        state = _pipeline_states(definition["States"])[0]
+        assert state["Retry"][0]["ErrorEquals"] == ["States.Timeout", "States.HeartbeatTimeout"]
+        assert state["Retry"][0]["MaxAttempts"] == 0
+        # Invocation failures still retry, via the trailing catch-all retrier.
+        assert state["Retry"][-1]["ErrorEquals"] == ["States.ALL"]
+        assert state["Retry"][-1]["MaxAttempts"] > 0
+
+    def test_fire_and_forget_states_keep_the_single_catch_all_retrier(self):
+        definition, _jobs = cw.generate_workflow_asl(_pipelines(1), "db", "wf")
+        state = _pipeline_states(definition["States"])[0]
+        assert len(state["Retry"]) == 1
+        assert state["Retry"][0]["ErrorEquals"] == ["States.ALL"]

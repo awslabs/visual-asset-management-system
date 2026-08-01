@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import ReactFlow, { Node, Edge, ReactFlowProvider, Position } from "reactflow";
 import "reactflow/dist/style.css";
 import { SpecifiedPipelineRef } from "../types";
@@ -47,17 +47,16 @@ const DagPreview: React.FC<DagPreviewProps> = ({ refs }) => {
         return { nodes: newNodes, edges: newEdges };
     }, [refs]);
 
-    let reactFlowInstance: any = null;
+    const reactFlowInstance = useRef<any>(null);
 
     const onInit = (instance: any) => {
-        reactFlowInstance = instance;
+        reactFlowInstance.current = instance;
         instance.fitView();
     };
 
+    // `fitView` as a prop only applies on mount, so appended nodes need an explicit refit.
     useEffect(() => {
-        if (reactFlowInstance && reactFlowInstance.fitView) {
-            reactFlowInstance.fitView();
-        }
+        reactFlowInstance.current?.fitView?.();
     }, [nodes]);
 
     return (

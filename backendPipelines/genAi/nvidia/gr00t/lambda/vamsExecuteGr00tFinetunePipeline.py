@@ -23,6 +23,30 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
+def resolve_input_asset_prefix(resolved):
+    """The S3 PREFIX this pipeline trains on.
+
+    Gr00t fine-tuning consumes the WHOLE asset, so the container needs a prefix, not an object key. A
+    whole-asset selection already resolves to a prefix and is used as-is. A single-FILE selection
+    resolves to an object key, and appending "/" to that would produce a prefix matching nothing — so
+    the asset root recorded on the manifest's first input file (``assetRootS3Key``) is used instead.
+    With no manifest entry to read, fall back to the file's parent prefix.
+    """
+    path = (resolved or {}).get("inputS3AssetFilePath") or ""
+    if not path:
+        return ""
+    if path.endswith("/"):
+        return path
+    input_files = (resolved or {}).get("inputFiles") or []
+    first = input_files[0] if input_files else {}
+    bucket = first.get("bucket") or ""
+    asset_root = first.get("assetRootS3Key") or ""
+    if bucket and asset_root:
+        return f"s3://{bucket}/{asset_root.lstrip('/')}"
+    # No manifest root: the parent "folder" of the object key is the closest usable prefix.
+    return path.rsplit("/", 1)[0] + "/"
+
+
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path,
                       inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location,
                       orchestration_event_prefix, external_task_token,
@@ -97,42 +121,13 @@ def lambda_handler(event, context):
         input_metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']) \
             or data.get('inputMetadata', '')
 
-        # Build merged config from asset metadata (2nd priority) and inputParameters (3rd priority)
-        # gr00t_config.json in the asset (1st priority) is handled by the container after download
+        # Merge order, lowest first so later sources override: asset metadata, then the
+        # execute-time input configuration. The asset's own gr00t_config.json is applied last of
+        # all by the container after download, so it stays the highest priority.
         groot_config = {}
 
-        # Extract from inputParameters (3rd priority -- lowest, applied first so metadata can override)
-        if input_parameters:
-            try:
-                params_obj = json.loads(input_parameters) if isinstance(input_parameters, str) else input_parameters
-                param_mappings = {
-                    "datasetPath": "datasetPath",
-                    "dataConfig": "dataConfig",
-                    "baseModelPath": "baseModelPath",
-                    "maxSteps": "maxSteps",
-                    "batchSize": "batchSize",
-                    "learningRate": "learningRate",
-                    "weightDecay": "weightDecay",
-                    "warmupRatio": "warmupRatio",
-                    "saveSteps": "saveSteps",
-                    "numGpus": "numGpus",
-                    "loraRank": "loraRank",
-                    "loraAlpha": "loraAlpha",
-                    "loraDropout": "loraDropout",
-                    "tuneLlm": "tuneLlm",
-                    "tuneVisual": "tuneVisual",
-                    "tuneProjector": "tuneProjector",
-                    "tuneDiffusionModel": "tuneDiffusionModel",
-                    "embodimentTag": "embodimentTag",
-                    "videoBackend": "videoBackend",
-                }
-                for param_key, config_key in param_mappings.items():
-                    if param_key in params_obj:
-                        groot_config[config_key] = params_obj[param_key]
-            except Exception as e:
-                logger.warning(f"Failed to parse input parameters: {e}")
-
-        # Extract from asset metadata (2nd priority -- overrides inputParameters)
+        # Extract from ASSET metadata -- applied FIRST so it is the fallback layer the input
+        # configuration below can override.
         if input_metadata:
             try:
                 metadata_obj = json.loads(input_metadata) if isinstance(input_metadata, str) else input_metadata
@@ -167,12 +162,46 @@ def lambda_handler(event, context):
                         logger.info(f"Extracted {metadata_key} from asset metadata: {val}")
             except Exception as e:
                 logger.warning(f"Failed to extract config from asset metadata: {e}")
+        # Extract from the input CONFIGURATION -- applied SECOND so it OVERRIDES asset metadata.
+        # This is what the operator supplied on the execute screen (a template's dynamic tags), so
+        # it must win over a standing value saved on the asset. A blank field is simply absent here,
+        # leaving the metadata value applied above in place.
+        if input_parameters:
+            try:
+                params_obj = json.loads(input_parameters) if isinstance(input_parameters, str) else input_parameters
+                param_mappings = {
+                    "datasetPath": "datasetPath",
+                    "dataConfig": "dataConfig",
+                    "baseModelPath": "baseModelPath",
+                    "maxSteps": "maxSteps",
+                    "batchSize": "batchSize",
+                    "learningRate": "learningRate",
+                    "weightDecay": "weightDecay",
+                    "warmupRatio": "warmupRatio",
+                    "saveSteps": "saveSteps",
+                    "numGpus": "numGpus",
+                    "loraRank": "loraRank",
+                    "loraAlpha": "loraAlpha",
+                    "loraDropout": "loraDropout",
+                    "tuneLlm": "tuneLlm",
+                    "tuneVisual": "tuneVisual",
+                    "tuneProjector": "tuneProjector",
+                    "tuneDiffusionModel": "tuneDiffusionModel",
+                    "embodimentTag": "embodimentTag",
+                    "videoBackend": "videoBackend",
+                }
+                for param_key, config_key in param_mappings.items():
+                    if param_key in params_obj:
+                        groot_config[config_key] = params_obj[param_key]
+            except Exception as e:
+                logger.warning(f"Failed to parse input parameters: {e}")
+
 
         executing_userName = data.get('executingUserName', '')
         executing_requestContext = data.get('executingRequestContext', '')
 
         execute_pipeline(
-            resolved['inputS3AssetFilePath'],
+            resolve_input_asset_prefix(resolved),
             resolved['outputS3AssetFilesPath'],
             resolved['outputS3AssetPreviewPath'],
             resolved['outputS3AssetMetadataPath'],

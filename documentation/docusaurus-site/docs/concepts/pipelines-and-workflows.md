@@ -10,6 +10,8 @@ Together, they enable automated, repeatable processing of visual assets at scale
 
 A pipeline represents a configurable processing step. Each pipeline binds to an AWS compute resource through its `executionConfig`, describes how it consumes input through its `systemConfig`, and can carry reusable configuration templates. Pipelines are scoped to a database (or `GLOBAL`).
 
+A `pipelineId` is unique across every database, including `GLOBAL` -- creating a pipeline with an id that another database already uses is rejected. Workflow ids follow the same rule. Ids identify a pipeline or workflow on their own in execution records, per-pipeline execution parameters, and external references, so an id is never reused in a second database. Omit the id (or send `null`) to have VAMS generate one.
+
 For the full pipeline, template, and tag-schema API, see the [Pipelines API](../api/pipelines.md) reference.
 
 ### Pipeline execution types
@@ -24,6 +26,8 @@ VAMS supports four execution types, each suited to a different processing patter
 | **DeadlineCloud** | Asynchronous submission to AWS Deadline Cloud     | Mandatory (task token callback)  | Render-farm-style batch processing                                          |
 
 The `executionConfig` object selects the binding. Its `executionType` field is one of `Lambda`, `SQS`, `EventBridge`, or `DeadlineCloud`, and the matching nested block (`lambda`, `sqs`, `eventBridge`, or `deadlineCloud`) supplies the target resource -- for example a Lambda function name or ARN, an Amazon SQS queue URL, or an Amazon EventBridge bus ARN with its source and detail-type.
+
+`DeadlineCloud` is selectable only when the deployment enables `app.pipelines.deadlineCloudExecutionTypeEnabled` (default `false`); pipeline create and update reject the type with `400` otherwise. It is unavailable in the GovCloud and EU Sovereign partitions. See the [configuration reference](../deployment/configuration-reference.md).
 
 :::info[Callback pattern]
 When `waitForCallback` is `Enabled`, AWS Step Functions sends a task token along with the pipeline payload and pauses until the pipeline calls `SendTaskSuccess` or `SendTaskFailure`. This lets a pipeline run for hours or days without timing out the workflow. `taskTimeout` (maximum 604,800 seconds, one week) and `taskHeartbeatTimeout` control how long the workflow waits. The **DeadlineCloud** type is asynchronous only, so its callback is mandatory and `waitForCallback` is always `Enabled`.
@@ -44,7 +48,7 @@ A pipeline's `systemConfig` governs how the pipeline consumes input and whether 
 
 ### Templates and tag schemas
 
-A pipeline can carry one or more **templates** -- reusable configuration bodies (JSON, YAML, OpenJD, XML, or raw text) that supply the parameters an execution passes to the pipeline. A template body may contain `{{tagName}}` placeholders that are resolved from tag values at execution time.
+A pipeline can carry one or more **templates** -- reusable configuration bodies (JSON, YAML, OpenJD, XML, or raw text) that supply the parameters an execution passes to the pipeline. A template body may contain `{{tagName}}` placeholders. These are either the template's own schema tags (filled in at execution time) or **system tags** that the engine resolves automatically per pipeline task — execution identity, input files, output/auxiliary locations, and resolved metadata. See [System template tags](../api/pipelines.md#system-template-tags) for the full catalog.
 
 Each template can define a **tag schema** describing the typed tags (`string`, `integer`, `number`, `boolean`, `string-list`, or `enum`) that fill those placeholders, including labels, defaults, and whether each is required. A pipeline may designate one template as its **default** (`isDefault`); the default is pre-selected on the execute form and is used automatically when a pipeline that requires a template is run without one specified.
 
@@ -63,7 +67,7 @@ VAMS includes several built-in pipelines that are auto-registered as `GLOBAL` du
 
 ### Pipeline permissions
 
-Pipeline access is controlled through the VAMS [permissions model](permissions-model.md). The `pipeline` object type supports constraint fields including `databaseId`, `pipelineId`, `pipelineType`, and `pipelineExecutionType`. Administrators can grant users permission to view and execute pipelines without granting them permission to create or delete pipelines.
+Pipeline access is controlled through the VAMS [permissions model](permissions-model.md). The `pipeline` object type supports constraint fields including `databaseId`, `pipelineId`, `category`, and `pipelineExecutionType`. Administrators can grant users permission to view and execute pipelines without granting them permission to create or delete pipelines.
 
 ## Workflows
 
@@ -87,14 +91,16 @@ A `GLOBAL` workflow may reference only `GLOBAL` pipelines; a database workflow m
 
 A workflow's `systemConfig` governs how the workflow consumes input, which asset selections it accepts, how concurrent runs are limited, and where output is written.
 
-| Field                    | Description                                                                                                       |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`         | Number of input files the workflow consumes: `none`, `one`, or `multi`.                                           |
-| `assetScope`             | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling selections. |
-| `metadataInputs`         | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is passed to the pipelines.       |
-| `inputFileFilters`       | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard.                            |
-| `concurrencyRestriction` | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                     |
-| `outputTarget`           | Where the workflow writes its output: `locationType` (`asset` or `none`) and `allowOverride`.                     |
+| Field                                         | Description                                                                                                                                                                           |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`                              | Number of input files the workflow consumes: `none`, `one`, or `multi`.                                                                                                               |
+| `assetScope`                                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling selections.                                                                     |
+| `metadataInputs`                              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is passed to the pipelines.                                                                           |
+| `inputFileFilters`                            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard.                                                                                                |
+| `concurrencyRestriction`                      | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                         |
+| `outputTarget`                                | Where the workflow writes its output: `locationType` (`asset` or `none`) and `allowOverride`.                                                                                         |
+| `allowWorkflowTriggerChaining`                | Whether another workflow's output may fire this workflow's triggers. Self-output never re-triggers, whatever this is set to. Defaults to `false`.                                     |
+| `defaultOutputFileBaseExecutionPathExtension` | Output path prefix used when an execution names none, stored unresolved so `{{tag}}` placeholders resolve per run (e.g. `/{{jobName}}/`). Empty means outputs land at the asset root. |
 
 The `outputTarget.locationType` is `asset` to write output files and metadata to a VAMS asset, or `none` for a results-only workflow that records only results text and logs and writes no asset output. A results-only workflow may still take input files -- for example, reading files to emit a metadata report. When `locationType` is `asset`, `allowOverride` gates whether an execution may redirect output to a chosen asset.
 

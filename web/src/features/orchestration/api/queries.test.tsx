@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { computeRefetchInterval, qk } from "./queries";
+import React from "react";
+import { renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { computeRefetchInterval, qk, useExecutions, useTemplateMutations } from "./queries";
+import * as executionService from "./executions";
+import * as pipelineService from "./pipelines";
+
+jest.mock("./executions");
+jest.mock("./pipelines");
 
 describe("computeRefetchInterval", () => {
     it("polls only while a row is non-terminal", () => {
@@ -94,5 +102,73 @@ describe("qk (query key factory)", () => {
 
     it("generates stable keys for allowedRoutes", () => {
         expect(qk.allowedRoutes()).toEqual(["allowedRoutes"]);
+    });
+});
+
+describe("useExecutions", () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (executionService.listExecutionsGlobal as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [] },
+        ]);
+    });
+
+    it("sends the workflow's database as workflowDatabaseId, the key the global list filters on", async () => {
+        const { result } = renderHook(
+            () => useExecutions({ kind: "workflow", databaseId: "db1", workflowId: "wf1" }),
+            { wrapper }
+        );
+
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        expect(executionService.listExecutionsGlobal).toHaveBeenCalledWith(
+            expect.objectContaining({ workflowId: "wf1", workflowDatabaseId: "db1" })
+        );
+        const sent = (executionService.listExecutionsGlobal as jest.Mock).mock.calls[0][0];
+        expect(sent.databaseId).toBeUndefined();
+    });
+});
+
+describe("useTemplateMutations", () => {
+    let client: QueryClient;
+    let invalidated: any[][];
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        invalidated = [];
+        jest.spyOn(client, "invalidateQueries").mockImplementation((filters?: any) => {
+            invalidated.push(filters?.queryKey);
+            return Promise.resolve();
+        });
+    });
+
+    it.each([
+        ["createTemplate", { databaseId: "db1", pipelineId: "p1", body: {} as any }],
+        ["updateTemplate", { databaseId: "db1", pipelineId: "p1", templateId: "t1", body: {} }],
+        ["deleteTemplate", { databaseId: "db1", pipelineId: "p1", templateId: "t1" }],
+    ])("%s invalidates the pipeline detail and list caches", async (name, vars) => {
+        (pipelineService as any)[name].mockResolvedValue([true, {}]);
+        const { result } = renderHook(() => useTemplateMutations(), { wrapper });
+
+        await (result.current as any)[name].mutateAsync(vars);
+
+        expect(invalidated).toEqual(
+            expect.arrayContaining([
+                qk.templates("db1", "p1"),
+                qk.pipeline("db1", "p1"),
+                ["pipelines"],
+            ])
+        );
     });
 });

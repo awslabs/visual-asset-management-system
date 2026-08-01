@@ -76,6 +76,7 @@ Enable this pipeline in `infra/config/config.json`:
         "pipelines": {
             "useSplatToolbox": {
                 "enabled": true,
+                "useCodeBuild": true,
                 "autoRegisterWithVAMS": true
             }
         }
@@ -85,10 +86,11 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                 | Default | Description                                                                    |
-| :--------------------- | :------ | :----------------------------------------------------------------------------- |
-| `enabled`              | `false` | Deploy the Gaussian Splatting pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment.        |
+| Option                 | Default | Description                                                                                               |
+| :--------------------- | :------ | :-------------------------------------------------------------------------------------------------------- |
+| `enabled`              | `false` | Deploy the Gaussian Splatting pipeline infrastructure. Enables the global VPC.                            |
+| `useCodeBuild`         | `false` | Build the container image with AWS CodeBuild instead of locally during `cdk deploy`. See Container Image. |
+| `autoRegisterWithVAMS` | `false` | Automatically register the pipeline and workflow during CDK deployment.                                   |
 
 :::note[No Auto-Trigger on Upload]
 Unlike preview pipelines, the Gaussian Splatting pipeline does not support `autoRegisterAutoTriggerOnFileUpload`. Reconstruction jobs are resource-intensive and should be triggered intentionally through the VAMS web interface or API.
@@ -136,7 +138,15 @@ The container image is automatically synced from the upstream open-source reposi
 -   **Pinned commit**: The CDK stack pins to a specific commit hash to ensure reproducible builds.
 -   **Integration**: A VAMS-specific entrypoint script (`pipeline_vams.py`) wraps the upstream pipeline with Amazon S3 I/O and AWS Step Functions callback handling.
 
-The sync process clones the upstream repository, copies the container files into the pipeline directory, and builds the Docker image during `cdk deploy`.
+The sync process clones the upstream repository at the pinned commit and copies the container files into the pipeline directory. The synth verifies that the checked-out commit matches the pinned hash and that the VAMS entry point is staged into the Dockerfile, and fails the deployment if either check does not hold rather than building from stale sources.
+
+Set `useCodeBuild` to `true` to build the image with AWS CodeBuild instead of locally. The deployment then creates an Amazon ECR repository, uploads the container directory as an Amazon S3 source asset, and runs a CodeBuild project (Docker layer caching, privileged mode, in the pipeline VPC) that pushes the image to Amazon ECR; the AWS Batch job definition consumes that image. This avoids building the large CUDA image on the machine running `cdk deploy`. The build is started by a custom resource and continues after the deployment completes, so check its status before running the pipeline:
+
+```bash
+aws codebuild list-builds-for-project --project-name <SplatToolboxCodeBuild project>
+```
+
+Left at `false`, the image is built locally during `cdk deploy`.
 
 ## Infrastructure Components
 

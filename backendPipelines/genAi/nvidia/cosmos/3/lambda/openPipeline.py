@@ -22,7 +22,7 @@ STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 # Task modes / variants that require an input file
-INPUT_FILE_MODES = ("image2video", "video2video")
+INPUT_FILE_MODES = ("image2video", "video2video", "transfer")
 
 
 def abort_external_workflow(error, task_token):

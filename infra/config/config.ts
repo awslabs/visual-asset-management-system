@@ -235,6 +235,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useSplatToolbox.enabled = false;
     }
 
+    if (config.app.pipelines.useSplatToolbox.useCodeBuild == undefined) {
+        config.app.pipelines.useSplatToolbox.useCodeBuild = false;
+    }
+
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
@@ -505,6 +509,76 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
         };
+    }
+
+    // Pipeline constructs gate the VamsSchemaRegistration custom resource on
+    // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
+    // would deploy the pipeline stack with no VAMS registration. A partially-specified block
+    // defaults to registering (as the config templates do) with its upload trigger disarmed.
+    const defaultAutoRegisterFlags = (
+        block:
+            | { autoRegisterWithVAMS?: boolean; autoRegisterAutoTriggerOnFileUpload?: boolean }
+            | undefined,
+        hasUploadTrigger = false
+    ) => {
+        if (block == undefined) return;
+        if (block.autoRegisterWithVAMS == undefined) {
+            block.autoRegisterWithVAMS = true;
+        }
+        if (hasUploadTrigger && block.autoRegisterAutoTriggerOnFileUpload == undefined) {
+            block.autoRegisterAutoTriggerOnFileUpload = false;
+        }
+    };
+
+    defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
+    defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
+    defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
+    defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
+    defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
+    defaultAutoRegisterFlags(config.app.pipelines.useModelOps);
+    defaultAutoRegisterFlags(config.app.pipelines.useIsaacLabTraining);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.text2world2B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.video2world2B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.text2world14B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.video2world14B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsReason?.reason2B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsReason?.reason8B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsTransfer?.transfer2B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.nano16B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.super64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaGr00t.modelsFinetune?.gr00tN1_5_3B);
+
+    //The upload trigger ships with the VamsSchemaRegistration custom resource, which is created only
+    //when autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded.
+    for (const [name, block] of Object.entries<{
+        enabled?: boolean;
+        autoRegisterWithVAMS?: boolean;
+        autoRegisterAutoTriggerOnFileUpload?: boolean;
+    }>({
+        useConversionCadMeshMetadataExtraction:
+            config.app.pipelines.useConversionCadMeshMetadataExtraction,
+        useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
+        usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
+        useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
+    })) {
+        if (
+            block?.enabled &&
+            block.autoRegisterAutoTriggerOnFileUpload &&
+            block.autoRegisterWithVAMS !== true
+        ) {
+            console.warn(
+                `Configuration Warning: pipelines.${name}.autoRegisterAutoTriggerOnFileUpload is true but ` +
+                    "autoRegisterWithVAMS is not, so no registration and no upload trigger are created. " +
+                    "Set autoRegisterWithVAMS to true to arm the trigger."
+            );
+        }
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
@@ -1134,7 +1208,7 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //If using RapidPipeline or ModelOps, make sure Imported VPC has at least one private subnet included
+    //If using a pipeline that runs in (or reaches an endpoint in) private subnets, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -1144,7 +1218,12 @@ export function getConfig(app: cdk.App): Config {
         if (
             config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             config.app.pipelines.useRapidPipeline.useEks.enabled ||
-            config.app.pipelines.useModelOps.enabled
+            config.app.pipelines.useModelOps.enabled ||
+            config.app.pipelines.useSplatToolbox.enabled ||
+            config.app.pipelines.useIsaacLabTraining.enabled ||
+            config.app.pipelines.useNvidiaCosmos.enabled ||
+            config.app.pipelines.useNvidiaCosmos3?.enabled ||
+            config.app.pipelines.useNvidiaGr00t.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -1152,7 +1231,7 @@ export function getConfig(app: cdk.App): Config {
                 config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
             ) {
                 throw new Error(
-                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                    "Configuration Error: Must define at least one private subnet ID when using a pipeline that requires private subnets."
                 );
             }
         }
@@ -1500,14 +1579,11 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //AWS Deadline Cloud is unavailable in GovCloud (aws-us-gov) and EU Sovereign Cloud (aws-eusc),
-    //so the execution type (and its VPC interface endpoint) cannot be enabled there. This partition
-    //check is authoritative regardless of the app.govCloud.enabled flag — a deployment into a
-    //GovCloud/EU-Sovereign partition without that flag set is still blocked.
-    if (
-        config.app.pipelines.deadlineCloudExecutionTypeEnabled &&
-        (config.env.partition === "aws-us-gov" || config.env.partition === "aws-eusc")
-    ) {
+    //AWS Deadline Cloud is offered only in the commercial partition, so the execution type (and its
+    //VPC interface endpoint) cannot be enabled anywhere else. This partition check is authoritative
+    //regardless of the app.govCloud.enabled flag — a deployment into a GovCloud/EU-Sovereign
+    //partition without that flag set is still blocked.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled && config.env.partition !== "aws") {
         throw new Error(
             `Configuration Error: AWS Deadline Cloud is not available in the '${config.env.partition}' partition. ` +
                 "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
@@ -2139,6 +2215,7 @@ export interface ConfigPublic {
             };
             useSplatToolbox: {
                 enabled: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
             };
             useGenAiMetadata3dLabeling: {

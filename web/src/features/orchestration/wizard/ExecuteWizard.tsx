@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import Dialog from "../components/Dialog";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import WizardInputStage from "./WizardInputStage";
 import WizardPipelineStage from "./WizardPipelineStage";
 import WizardReviewStage from "./WizardReviewStage";
@@ -14,6 +15,8 @@ import { useWorkflow, useAllPipelines, useExecuteWorkflow } from "../api/queries
 import { resolvePipelineParams } from "./resolveTemplate";
 import type {
     Workflow,
+    WorkflowSystemConfig,
+    PipelineSystemConfig,
     ExecuteInputFile,
     ExecuteRequest,
     PipelineExecutionParameters,
@@ -33,9 +36,274 @@ export interface PipelineStageData {
     tags: { key: string; value: any }[];
     customTemplateOverride?: string;
     customEditedBody?: string;
+    /** The selected template's `overrides` block, merged over the pipeline systemConfig. */
+    templateOverrides?: Record<string, any>;
     errors: string[];
     params: any;
     mode?: 1 | 2 | 3 | 4 | 5;
+}
+
+// ---------------------------------------------------------------------------
+// Input-selection validation — mirrors backend common/workflows/executionValidation.py so an
+// invalid selection is reported in the wizard instead of surfacing as a launch-time 400.
+// ---------------------------------------------------------------------------
+
+type InputFileFilters = { allow?: string[]; exclude?: string[] };
+
+/** Keys a template's `overrides` may replace on a pipeline's systemConfig. */
+const TEMPLATE_OVERRIDABLE_KEYS = [
+    "inputFileArity",
+    "metadataInputs",
+    "assetScope",
+    "inputFileFilters",
+] as const;
+
+export function resolveEffectivePipelineConfig(
+    systemConfig?: PipelineSystemConfig,
+    templateOverrides?: Record<string, any>
+): PipelineSystemConfig {
+    const effective: Record<string, any> = { ...(systemConfig || {}) };
+    const overrides = templateOverrides || {};
+    TEMPLATE_OVERRIDABLE_KEYS.forEach((key) => {
+        if (overrides[key] !== undefined && overrides[key] !== null) {
+            effective[key] = overrides[key];
+        }
+    });
+    return effective as PipelineSystemConfig;
+}
+
+const isWholeAssetKey = (key?: string) => key === "/";
+
+const isFolderKey = (key?: string) => {
+    const k = key || "";
+    return k.endsWith("/") && k !== "" && k !== "/";
+};
+
+/** The two equivalent extension forms, '*.ext' (canonical) and '.ext' (shorthand). */
+const isExtensionPattern = (pattern: string): boolean => {
+    if (pattern.includes("/")) return false;
+    let ext: string;
+    if (pattern.startsWith("*.")) ext = pattern.slice(1);
+    else if (pattern.startsWith(".")) ext = pattern;
+    else return false;
+    const body = ext.slice(1);
+    return body.length > 0 && /^[a-zA-Z0-9]+$/.test(body);
+};
+
+/** fnmatch-equivalent glob: '*' matches any run of characters (separators included), '?' one
+ *  character, '[seq]'/'[!seq]' a character class. Everything else is literal. */
+const globToRegExp = (pattern: string): RegExp => {
+    let out = "";
+    let i = 0;
+    while (i < pattern.length) {
+        const c = pattern[i];
+        i += 1;
+        if (c === "*") {
+            out += ".*";
+        } else if (c === "?") {
+            out += ".";
+        } else if (c === "[") {
+            const close = pattern.indexOf("]", i + 1);
+            if (close === -1) {
+                out += "\\[";
+            } else {
+                let body = pattern.slice(i, close).replace(/\\/g, "\\\\");
+                i = close + 1;
+                if (body.startsWith("!")) body = `^${body.slice(1)}`;
+                out += `[${body}]`;
+            }
+        } else {
+            out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        }
+    }
+    return new RegExp(`^${out}$`);
+};
+
+/** Case-insensitive match of a file key against allow/exclude patterns (extension, glob or exact). */
+export function matchesAnyPattern(relativeFileKey: string, patterns?: string[]): boolean {
+    const fk = (relativeFileKey || "").toLowerCase();
+    const name = fk.replace(/\/+$/, "").split("/").pop() || "";
+    for (const pattern of patterns || []) {
+        if (!pattern) continue;
+        const pat = pattern.toLowerCase();
+        if (isExtensionPattern(pattern)) {
+            const ext = pat.startsWith("*.") ? pat.slice(1) : pat;
+            if (name.endsWith(ext)) return true;
+        } else if (globToRegExp(pat).test(fk) || globToRegExp(pat).test(name)) {
+            return true;
+        } else if (pat === fk) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const nonExtensionPatterns = (patterns?: string[]): string[] =>
+    (patterns || []).filter((p) => p && !isExtensionPattern(p));
+
+/**
+ * The subset of files passing an {allow, exclude} filter. Empty allow means allow-all.
+ *
+ * A whole-asset ('/') or folder selection names a container rather than a file, so an extension
+ * pattern cannot describe it: extension patterns are dropped from both lists for those entries while
+ * path/name globs and exact keys still apply. An allow list made up only of extension patterns
+ * therefore admits a container selection, leaving its admissibility to the assetScope gates.
+ */
+export function applyInputFileFilters(
+    files: ExecuteInputFile[],
+    filters?: InputFileFilters
+): ExecuteInputFile[] {
+    const allow = filters?.allow || [];
+    const exclude = filters?.exclude || [];
+    return (files || []).filter((file) => {
+        const fk = file.relativeFileKey || "";
+        const isContainer = fk === "" || isWholeAssetKey(fk) || isFolderKey(fk);
+        const entryAllow = isContainer ? nonExtensionPatterns(allow) : allow;
+        const entryExclude = isContainer ? nonExtensionPatterns(exclude) : exclude;
+        if (entryAllow.length > 0 && !matchesAnyPattern(fk, entryAllow)) return false;
+        if (entryExclude.length > 0 && matchesAnyPattern(fk, entryExclude)) return false;
+        return true;
+    });
+}
+
+/** The registration shorthand `wholeAsset` folded into the canonical key; an explicit canonical
+ *  key wins. */
+const normalizeAssetScope = (
+    assetScope?: Record<string, boolean>
+): Record<string, boolean | undefined> => {
+    const scope: Record<string, boolean | undefined> = { ...(assetScope || {}) };
+    if ("wholeAsset" in scope) {
+        const value = scope.wholeAsset;
+        delete scope.wholeAsset;
+        if (!("wholeAssetAllowed" in scope)) scope.wholeAssetAllowed = value;
+    }
+    return scope;
+};
+
+/**
+ * Asset-span and whole-asset/folder checks for one assetScope, prefixed with `subject`.
+ * `declaredOnly` limits the checks to the keys the scope actually declares — a pipeline's assetScope
+ * may be a partial declaration layered under the workflow gate, so an omitted key defers to the
+ * workflow rather than denying.
+ */
+function scopeErrors(
+    assetScope: Record<string, boolean> | undefined,
+    inputs: ExecuteInputFile[],
+    subject: string,
+    declaredOnly = false
+): string[] {
+    const scope = normalizeAssetScope(assetScope);
+    const declared = (key: string) => !declaredOnly || key in scope;
+    const entries = inputs || [];
+    const assetIds = new Set(entries.filter((f) => f.assetId).map((f) => f.assetId));
+    const messages: string[] = [];
+
+    if (declared("singleAssetOnly") && scope.singleAssetOnly && assetIds.size > 1) {
+        messages.push(`${subject} allows a single asset only, but inputs span multiple assets.`);
+    }
+    if (declared("crossAssetAllowed") && !scope.crossAssetAllowed && assetIds.size > 1) {
+        messages.push(
+            `${subject} does not allow cross-asset inputs, but inputs span multiple assets.`
+        );
+    }
+    if (
+        declared("wholeAssetAllowed") &&
+        !scope.wholeAssetAllowed &&
+        entries.some((f) => isWholeAssetKey(f.relativeFileKey))
+    ) {
+        messages.push(`${subject} does not allow whole-asset ('/') selection.`);
+    }
+    if (
+        declared("folderAllowed") &&
+        !scope.folderAllowed &&
+        entries.some((f) => isFolderKey(f.relativeFileKey))
+    ) {
+        messages.push(`${subject} does not allow folder selection.`);
+    }
+    return messages;
+}
+
+const arityViolation = (arity: string, count: number): string | null => {
+    if (arity === "none") return count > 0 ? "expects no input files" : null;
+    if (arity === "one") {
+        if (count === 0) return "requires exactly one input file but none were provided";
+        if (count > 1) return "accepts a single input file but multiple were provided";
+        return null;
+    }
+    if (arity === "multi") {
+        return count === 0 ? "requires at least one input file but none were provided" : null;
+    }
+    return null;
+};
+
+export interface PipelineInputConstraints {
+    label: string;
+    systemConfig?: PipelineSystemConfig;
+    templateOverrides?: Record<string, any>;
+}
+
+/**
+ * Workflow-level and per-pipeline checks on the selected input files. Returns the human-readable
+ * errors the launch would otherwise fail on, plus the incomplete-row check the request model
+ * enforces (an asset and a file must both be chosen).
+ */
+export function validateInputSelection(
+    workflowSystemConfig: WorkflowSystemConfig | undefined,
+    pipelineConstraints: PipelineInputConstraints[],
+    inputFiles: ExecuteInputFile[]
+): string[] {
+    const errors: string[] = [];
+    const wsc = workflowSystemConfig || {};
+    const scope = wsc.assetScope || {};
+    const inputs = inputFiles || [];
+
+    // Rows the request model would reject outright.
+    if (inputs.some((f) => !f.assetId)) {
+        errors.push("Every input row needs an asset.");
+    }
+    if (inputs.some((f) => f.assetId && !f.relativeFileKey)) {
+        errors.push("Every input row needs a file selection.");
+    }
+
+    const workflowArityError = arityViolation(wsc.inputFileArity || "one", inputs.length);
+    if (workflowArityError) {
+        errors.push(`Workflow ${workflowArityError}.`);
+    }
+
+    // Asset span. The assetScope accepts the canonical `*Allowed` keys and the `wholeAsset` shorthand.
+    errors.push(...scopeErrors(scope, inputs, "Workflow"));
+
+    // Workflow input filters.
+    const wfFilters = wsc.inputFileFilters || {};
+    if (
+        (wfFilters.allow?.length || wfFilters.exclude?.length) &&
+        applyInputFileFilters(inputs, wfFilters).length !== inputs.length
+    ) {
+        errors.push("One or more input files fail the workflow input-file filters.");
+    }
+
+    // Per-pipeline effective config (the chosen template's overrides merged over the pipeline's).
+    pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }) => {
+        const effective = resolveEffectivePipelineConfig(systemConfig, templateOverrides);
+        const arity = effective.inputFileArity || "one";
+        // A 'none' pipeline never consumes files, whatever the workflow selected.
+        if (arity === "none") return;
+
+        const pipelineInputs = applyInputFileFilters(inputs, effective.inputFileFilters);
+        if (inputs.length > 0 && pipelineInputs.length === 0) {
+            errors.push(
+                `${label} requires input files but its input-file filters exclude all selected inputs.`
+            );
+            return;
+        }
+        errors.push(...scopeErrors(effective.assetScope, pipelineInputs, label, true));
+        const pipelineArityError = arityViolation(arity, pipelineInputs.length);
+        if (pipelineArityError) {
+            errors.push(`${label} ${pipelineArityError}.`);
+        }
+    });
+
+    return errors;
 }
 
 const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
@@ -45,6 +313,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     databaseId,
     presetAsset,
 }) => {
+    const toast = useToast();
     const { data: workflowData, isLoading: workflowLoading } = useWorkflow(
         workflow.databaseId,
         workflow.workflowId
@@ -93,13 +362,21 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     );
     const [outputAssetId, setOutputAssetId] = useState<string | undefined>(undefined);
     const [outputDatabaseId, setOutputDatabaseId] = useState<string | undefined>(undefined);
+    // undefined = untouched (still eligible for the workflow's default); a string is the user's own
+    // choice, including "" which deliberately means the asset root.
     const [outputPathPrefix, setOutputPathPrefix] = useState<string | undefined>(undefined);
+    const outputPathPrefixSeeded = useRef(false);
 
     // Pipeline stage data (one entry per pipeline)
     const [pipelineData, setPipelineData] = useState<Record<string, PipelineStageData>>({});
 
     // Current stage
     const [currentStageId, setCurrentStageId] = useState<string>("input");
+
+    // Launch outcome. An error keeps the wizard open with the server message; warnings mean the run
+    // launched but has caveats worth reading before the dialog closes.
+    const [launchError, setLaunchError] = useState<string | null>(null);
+    const [launchWarnings, setLaunchWarnings] = useState<string[]>([]);
 
     // Build step list: Input -> Pipeline1 -> Pipeline2 -> ... -> Review
     const steps = useMemo(() => {
@@ -169,6 +446,17 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     // the output asset cannot be inferred from a single input asset, so it must be chosen explicitly
     // before launch. (Results-only workflows write no asset output, so this never applies.)
     const isResultsOnly = effectiveWorkflow.systemConfig?.outputTarget?.locationType === "none";
+
+    // Pre-fill the output path prefix with the workflow's stored default, so the form shows the
+    // layout a run will actually get instead of an empty box. The stored value is UNRESOLVED, so what
+    // is shown (and sent) still carries its {{tag}} placeholders — the backend resolves them at
+    // launch. Seeded once: an edit, including clearing the field, is never overwritten.
+    useEffect(() => {
+        if (outputPathPrefixSeeded.current || !workflowData) return;
+        outputPathPrefixSeeded.current = true;
+        const stored = workflowData.systemConfig?.defaultOutputFileBaseExecutionPathExtension || "";
+        if (stored) setOutputPathPrefix(stored);
+    }, [workflowData]);
     const allowOutputOverride =
         effectiveWorkflow.systemConfig?.outputTarget?.allowOverride || false;
     const distinctInputAssetCount = React.useMemo(
@@ -180,9 +468,55 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     const outputAssetMissing =
         !isResultsOnly && allowOutputOverride && distinctInputAssetCount > 1 && !outputAssetId;
 
+    // A 'none'-arity workflow consumes no files, so any seeded input row (presetAsset launch) is
+    // dropped once the workflow definition resolves — the Input step offers no way to remove it and
+    // the backend rejects a request that carries one.
+    const workflowArity = effectiveWorkflow.systemConfig?.inputFileArity || "one";
+    React.useEffect(() => {
+        if (workflowArity === "none" && inputFiles.length > 0) {
+            setInputFiles([]);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workflowArity, inputFiles.length]);
+
+    // Effective per-pipeline constraints for the input-selection check: the pipeline's own
+    // systemConfig with the selected template's overrides merged over the overridable keys.
+    const pipelineInputConstraints = useMemo(
+        () =>
+            effectiveWorkflow.specifiedPipelines.map((ref) => {
+                // Match on identity, not position: `pipelines` drops refs that did not resolve, so an
+                // index would attach another pipeline's systemConfig to this ref.
+                const pipeline = pipelines.find(
+                    (p) =>
+                        p?.pipelineId === ref.pipelineId &&
+                        p?.databaseId === (ref.pipelineDatabaseId || databaseId)
+                );
+                const compositeKey = `${ref.pipelineDatabaseId || databaseId}:${ref.pipelineId}`;
+                return {
+                    label: `Pipeline "${pipeline?.pipelineName || ref.pipelineId}"`,
+                    systemConfig: pipeline?.systemConfig,
+                    templateOverrides: pipelineData[compositeKey]?.templateOverrides,
+                };
+            }),
+        [effectiveWorkflow.specifiedPipelines, pipelines, pipelineData, databaseId]
+    );
+
+    // Workflow + per-pipeline arity/scope/filter checks on the selection, so an invalid selection is
+    // reported here rather than as a launch-time 400.
+    const inputSelectionErrors = useMemo(
+        () =>
+            validateInputSelection(
+                effectiveWorkflow.systemConfig,
+                pipelineInputConstraints,
+                inputFiles
+            ),
+        [effectiveWorkflow.systemConfig, pipelineInputConstraints, inputFiles]
+    );
+
     const hasValidationErrors =
         Object.values(validationErrors).some((errs) => errs.length > 0) ||
         offendingPipelines.length > 0 ||
+        inputSelectionErrors.length > 0 ||
         outputAssetMissing;
 
     const handleNext = () => {
@@ -198,6 +532,9 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     };
 
     const handleLaunch = async () => {
+        setLaunchError(null);
+        setLaunchWarnings([]);
+
         // Build ExecuteRequest
         const pipelineExecutionParameters: Record<string, PipelineExecutionParameters> = {};
 
@@ -222,7 +559,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             pipelineExecutionParameters,
             triggerType: "manual",
         };
-        if (outputPathPrefix) {
+        if (outputPathPrefix !== undefined) {
             body.outputFileBaseExecutionPathExtension = outputPathPrefix;
         }
 
@@ -233,46 +570,91 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                 body,
             });
 
-            // Surface warnings if any
-            if (
+            // Warnings are non-blocking: the run has launched, so they are shown in place and the
+            // wizard stays open until the user dismisses it.
+            const warnings =
                 result &&
                 typeof result === "object" &&
                 "warnings" in result &&
-                result.warnings &&
-                result.warnings.length > 0
-            ) {
-                console.log("Execution warnings:", result.warnings);
+                Array.isArray((result as any).warnings)
+                    ? ((result as any).warnings as string[])
+                    : [];
+
+            if (warnings.length > 0) {
+                // The run HAS launched; the warnings are shown in place. A toast also confirms the
+                // launch, because the wizard staying open reads like nothing happened.
+                setLaunchWarnings(warnings);
+                toast.warning("Execution started", { description: warnings[0] });
+                return;
             }
 
+            // The wizard closes on success, so the toast is the only confirmation the run started.
+            toast.success("Execution started", {
+                description: `${
+                    effectiveWorkflow.workflowName || effectiveWorkflow.workflowId
+                } was launched.`,
+            });
             onClose();
         } catch (err) {
-            console.error("Execution failed:", err);
+            // Keep the message inline on the Review step (next to the Launch button that failed) AND
+            // raise a toast, so it is visible even if the user has scrolled away from the banner.
+            const message = toastErrorMessage(err, "Execution failed.");
+            setLaunchError(message);
+            toast.error("Execution failed", { description: message });
         }
+    };
+
+    // The same list of unmet input requirements, shown as guidance while the selection is still
+    // being built (Input step) and as a blocking error once the run is about to launch (Review).
+    const renderInputSelectionPanel = (tone: "guidance" | "error") => {
+        if (inputSelectionErrors.length === 0) return null;
+        const toneClasses =
+            tone === "error"
+                ? "bg-red-100 dark:bg-red-900/20 border-red-400 dark:border-red-700 text-red-900 dark:text-red-200"
+                : "bg-yellow-100 dark:bg-yellow-900/20 border-yellow-400 dark:border-yellow-700 text-yellow-900 dark:text-yellow-200";
+        return (
+            <div role="alert" className={`mb-4 p-4 border rounded ${toneClasses}`}>
+                <strong>
+                    {tone === "error"
+                        ? "Cannot Execute: the input selection does not satisfy this workflow:"
+                        : "Input requirements not met yet:"}
+                </strong>
+                <ul className="list-disc list-inside mt-2">
+                    {inputSelectionErrors.map((err, idx) => (
+                        <li key={idx}>{err}</li>
+                    ))}
+                </ul>
+            </div>
+        );
     };
 
     const renderStage = () => {
         if (currentStageId === "input") {
             return (
-                <WizardInputStage
-                    workflow={effectiveWorkflow}
-                    databaseId={databaseId}
-                    presetAsset={presetAsset}
-                    inputFiles={inputFiles}
-                    outputAssetId={outputAssetId}
-                    outputDatabaseId={outputDatabaseId}
-                    outputPathPrefix={outputPathPrefix}
-                    onInputFilesChange={setInputFiles}
-                    onOutputAssetIdChange={setOutputAssetId}
-                    onOutputDatabaseIdChange={setOutputDatabaseId}
-                    onOutputPathPrefixChange={setOutputPathPrefix}
-                    offendingPipelines={offendingPipelines}
-                />
+                <>
+                    {renderInputSelectionPanel("guidance")}
+                    <WizardInputStage
+                        workflow={effectiveWorkflow}
+                        databaseId={databaseId}
+                        presetAsset={presetAsset}
+                        inputFiles={inputFiles}
+                        outputAssetId={outputAssetId}
+                        outputDatabaseId={outputDatabaseId}
+                        outputPathPrefix={outputPathPrefix}
+                        onInputFilesChange={setInputFiles}
+                        onOutputAssetIdChange={setOutputAssetId}
+                        onOutputDatabaseIdChange={setOutputDatabaseId}
+                        onOutputPathPrefixChange={setOutputPathPrefix}
+                        offendingPipelines={offendingPipelines}
+                    />
+                </>
             );
         }
 
         if (currentStageId === "review") {
             return (
                 <>
+                    {renderInputSelectionPanel("error")}
                     {outputAssetMissing && (
                         <div className="mb-4 p-4 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-400 dark:border-yellow-700 rounded text-yellow-900 dark:text-yellow-200">
                             The selected input files span multiple assets. Go back to the Input step
@@ -294,6 +676,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                     )}
                     <WizardReviewStage
                         workflow={effectiveWorkflow}
+                        databaseId={databaseId}
                         pipelines={pipelines}
                         pipelineData={pipelineData}
                         inputFiles={inputFiles}
@@ -341,9 +724,16 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         return true;
     };
 
+    const launched = launchWarnings.length > 0;
+
     // While workflow/pipeline data is still loading, the wizard body is a spinner; suppress the
-    // navigation footer so the user cannot step through stages that have no data yet.
-    const footer = dataLoading ? null : (
+    // navigation footer so the user cannot step through stages that have no data yet. Once the run
+    // has launched with warnings the only remaining action is closing the dialog.
+    const footer = dataLoading ? null : launched ? (
+        <button onClick={onClose} className={btnPrimary}>
+            Close
+        </button>
+    ) : (
         <div className="flex gap-2">
             {currentIndex > 0 && (
                 <button onClick={handleBack} className={btnSecondary}>
@@ -382,10 +772,27 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                             <p className="text-text-secondary">Loading workflow pipelines…</p>
                         </div>
                     </div>
+                ) : launched ? (
+                    <div className="p-4 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-400 dark:border-yellow-700 rounded text-yellow-900 dark:text-yellow-200">
+                        <strong>Execution launched with warnings:</strong>
+                        <ul className="list-disc list-inside mt-2">
+                            {launchWarnings.map((warning, idx) => (
+                                <li key={idx}>{warning}</li>
+                            ))}
+                        </ul>
+                    </div>
                 ) : (
                     <>
                         <Stepper steps={steps} current={currentStageId} />
                         <div className="min-h-[400px]">{renderStage()}</div>
+                        {launchError && (
+                            <div
+                                role="alert"
+                                className="p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200"
+                            >
+                                <strong>Execution failed:</strong> {launchError}
+                            </div>
+                        )}
                     </>
                 )}
             </div>

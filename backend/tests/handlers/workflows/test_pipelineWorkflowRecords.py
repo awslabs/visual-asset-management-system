@@ -118,6 +118,15 @@ class TestWorkflowRecords:
         assert ref["pipelineId"] == "pid"
         assert ref["pipelineDatabaseId:pipelineId"] == "pdb:pid"
 
+    def test_specified_pipeline_ref_model_round_trips_persisted_fields(self):
+        # The model documents the stored ref shape, so parsing a built ref must not drop a field the
+        # builder persists (extra='ignore' would silently discard it). The composite key is derived.
+        from backend.backend.models.workflows import SpecifiedPipelineRef
+        built = wr.build_specified_pipeline_ref("pdb", "pid", "job", "tmpl1")
+        parsed = SpecifiedPipelineRef(**built).dict()
+        assert set(built) - set(parsed) == {"pipelineDatabaseId:pipelineId"}
+        assert parsed["defaultTemplateId"] == "tmpl1"
+
     def test_trigger_record_keys_and_config(self):
         cfg = wr.build_file_upload_trigger_config(
             input_file_filters={"allow": ["*.glb"], "exclude": []},
@@ -233,6 +242,17 @@ class TestDefaultBucketResolver:
         table = self._table_with([])
         with pytest.raises(db.DefaultBucketNotFoundError):
             db.resolve_default_bucket(table)
+
+    def test_multiple_default_buckets_pick_deterministic_winner(self):
+        rows = [
+            {"bucketId": "b2", "bucketName": "zzz-external", "baseAssetsPrefix": "/",
+             "isDefault": True},
+            {"bucketId": "b1", "bucketName": "aaa-vams", "baseAssetsPrefix": "/",
+             "isDefault": True},
+        ]
+        assert db.resolve_default_bucket(self._table_with(rows))["bucketName"] == "aaa-vams"
+        assert db.resolve_default_bucket(
+            self._table_with(list(reversed(rows))))["bucketName"] == "aaa-vams"
 
     def test_paginates_scan(self):
         table = MagicMock()

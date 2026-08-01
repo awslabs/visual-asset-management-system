@@ -406,7 +406,7 @@ Defined in `common/constants.py`. Request: `(sub, obj, act)`; policy line: `(sub
 
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
-Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `workflowId`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
 
 ---
 

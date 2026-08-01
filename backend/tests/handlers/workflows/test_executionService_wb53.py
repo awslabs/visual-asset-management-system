@@ -5,8 +5,10 @@
 (asset-less) permission-filtered list, re-run reconstruction, permanent delete guard, abort-by-group.
 """
 
+import base64
 import json
 import os
+import botocore
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -94,6 +96,131 @@ class TestGlobalListFilters:
         assert le._global_list_matches_filters(row, {"status": "FAILED"}) is False
         assert le._global_list_matches_filters(row, {"groupId": "g1", "triggerType": "Manual"}) is True
         assert le._global_list_matches_filters(row, {"groupId": "other"}) is False
+
+    def test_global_list_row_projects_output_target_from_config_row(self):
+        """The output target lives on the CONFIGURATION row, not the main row, so the projection must
+        take it from the passed-in item. It is threaded in (rather than read here) so the list stays at
+        one configuration read per execution — the visibility check already fetches it."""
+        main = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "db",
+                "executionStatus": "SUCCEEDED", "executionStartDate": "2026-01-01T00:00:00Z",
+                "executionStopDate": "", "triggerType": "Manual", "triggeredByUserId": "u1",
+                "executionGroupId": "g1"}
+        cfg = {"outputLocationType": "asset", "outputAssetId": "a1", "outputDatabaseId": "d1"}
+
+        row = le._global_list_row(main, cfg)
+        assert row["outputLocationType"] == "asset"
+        assert row["outputAssetId"] == "a1"
+        assert row["outputDatabaseId"] == "d1"
+        # The main-row fields are unchanged.
+        assert row["workflowDatabaseId"] == "db"
+        assert row["executionStatus"] == "SUCCEEDED"
+        # No S3/ARN internals leak into the public row.
+        assert not any("arn" in k.lower() or "s3" in k.lower() for k in row)
+
+    def test_global_list_row_defaults_output_target_when_config_row_missing(self):
+        """A missing configuration row (or an execution with no output target) yields empty strings
+        rather than KeyErrors, so the column renders blank instead of failing the page."""
+        main = {"workflowExecutionId": "E1", "workflowId": "wf", "workflowDatabaseId": "db"}
+        for cfg in (None, {}):
+            row = le._global_list_row(main, cfg)
+            assert row["outputLocationType"] == ""
+            assert row["outputAssetId"] == ""
+            assert row["outputDatabaseId"] == ""
+
+    def test_visibility_accepts_prefetched_config_row_without_reading_again(self):
+        """When the caller passes config_row, the visibility check must NOT re-read it — that is what
+        keeps the global list from doubling its configuration reads per page."""
+        with patch(f"{MOD}.claims_and_roles", {"tokens": ["t"]}),              patch(f"{MOD}.get_execution_input_assets", return_value=[]),              patch(f"{MOD}._get_asset_details_cached", return_value={"assetId": "a1"}),              patch(f"{MOD}.get_workflow_execution_configuration_row") as read_cfg:
+            enf = MagicMock()
+            enf.enforce.return_value = True
+            visible = le._execution_visible_to_caller(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, enf,
+                config_row={"outputDatabaseId": "d1", "outputAssetId": "a1"})
+            assert visible is True
+            read_cfg.assert_not_called()
+
+    def test_global_list_reads_the_config_row_once_per_visible_row_and_not_for_hidden_rows(self):
+        """The whole-loop property: with 3 candidates of which 1 is visible only via its OUTPUT asset,
+        the page performs exactly ONE configuration read. Reading eagerly per candidate would make a
+        narrowly-scoped role pay a lookup for the entire page (pageSize up to 100)."""
+        le.claims_and_roles = {"tokens": ["u1"]}
+        rows = [{"workflowExecutionId": f"E{i}", "workflowId": f"wf{i}",
+                 "workflowDatabaseId": "db"} for i in (1, 2, 3)]
+        table = MagicMock()
+        table.query.return_value = {"Items": rows}
+
+        # Only wf3 is visible, and only through its output asset — wf1/wf2 fail workflow GET.
+        def enforce(obj, action):
+            if obj.get("object__type") == "workflow":
+                return obj.get("workflowId") == "wf3"
+            return True
+
+        enf = MagicMock()
+        enf.enforce.side_effect = enforce
+        enf.enforceAPI.return_value = True
+
+        with patch(f"{MOD}.dynamodb") as mock_dynamodb,              patch(f"{MOD}.CasbinEnforcer", return_value=enf),              patch(f"{MOD}.get_execution_input_assets", return_value=[]),              patch(f"{MOD}._get_asset_details_cached", return_value={"assetId": "a1"}),              patch(f"{MOD}.get_workflow_execution_configuration_row",
+                   return_value={"outputDatabaseId": "d1", "outputAssetId": "a1",
+                                 "outputLocationType": "asset"}) as read_cfg:
+            mock_dynamodb.Table.return_value = table
+            resp = le.get_global_executions({}, {"pageSize": "50"})
+
+        items = json.loads(resp["body"])["message"]["Items"]
+        assert [i["workflowExecutionId"] for i in items] == ["E3"]
+        # One read for the single visible row; none for the two discarded ones.
+        assert read_cfg.call_count == 1
+        assert read_cfg.call_args.args[0] == "E3"
+        # And the projection still reports the output target from that same read.
+        assert items[0]["outputAssetId"] == "a1"
+        assert items[0]["outputDatabaseId"] == "d1"
+        assert items[0]["outputLocationType"] == "asset"
+
+    def test_visibility_prefers_the_loader_and_calls_it_only_once(self):
+        """A caller that also needs the row for its own projection passes a loader, so the read is
+        shared rather than issued twice."""
+        calls = []
+
+        def loader():
+            calls.append(1)
+            return {"outputDatabaseId": "d1", "outputAssetId": "a1"}
+
+        with patch(f"{MOD}.claims_and_roles", {"tokens": ["t"]}),              patch(f"{MOD}.get_execution_input_assets", return_value=[]),              patch(f"{MOD}._get_asset_details_cached", return_value={"assetId": "a1"}),              patch(f"{MOD}.get_workflow_execution_configuration_row") as read_cfg:
+            enf = MagicMock()
+            enf.enforce.return_value = True
+            visible = le._execution_visible_to_caller(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, enf,
+                config_row_loader=loader)
+            assert visible is True
+            assert len(calls) == 1
+            read_cfg.assert_not_called()
+
+    def test_visibility_does_not_read_the_config_row_when_an_input_asset_authorizes(self):
+        """The read is LAZY: an execution the caller can see through an input asset is decided before
+        the output-asset branch, so it must cost no configuration read at all."""
+        calls = []
+        with patch(f"{MOD}.claims_and_roles", {"tokens": ["t"]}),              patch(f"{MOD}.get_execution_input_assets", return_value=[("db1", "a1")]),              patch(f"{MOD}._get_asset_details_cached", return_value={"assetId": "a1"}),              patch(f"{MOD}.get_workflow_execution_configuration_row") as read_cfg:
+            enf = MagicMock()
+            enf.enforce.return_value = True
+            visible = le._execution_visible_to_caller(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, enf,
+                config_row_loader=lambda: calls.append(1) or {})
+            assert visible is True
+            assert calls == [], "an input-asset-authorized row must not read the configuration row"
+            read_cfg.assert_not_called()
+
+    def test_visibility_does_not_read_the_config_row_when_workflow_get_is_denied(self):
+        """A row the caller cannot see is discarded before the read. Eagerly reading in the list loop
+        would charge one lookup for every candidate the visibility filter then throws away."""
+        calls = []
+        with patch(f"{MOD}.claims_and_roles", {"tokens": ["t"]}),              patch(f"{MOD}.get_execution_input_assets", return_value=[]),              patch(f"{MOD}.get_workflow_execution_configuration_row") as read_cfg:
+            enf = MagicMock()
+            enf.enforce.return_value = False
+            visible = le._execution_visible_to_caller(
+                "E1", {"workflowId": "wf", "workflowDatabaseId": "db"}, enf,
+                config_row_loader=lambda: calls.append(1) or {})
+            assert visible is False
+            assert calls == []
+            read_cfg.assert_not_called()
 
     def test_visibility_requires_workflow_get(self):
         le.claims_and_roles = {"tokens": ["u1"]}
@@ -613,3 +740,229 @@ class TestSfnHistoryFormatting:
         with patch.object(le, "sfn") as m_sfn:
             m_sfn.describe_state_machine.return_value = {"loggingConfiguration": {"destinations": []}}
             assert le._resolve_sfn_log_group_arn("arn:sm") == ""
+
+
+@pytest.mark.unit
+class TestAssetCachePerInvocation:
+    """The module-level asset memo backs every ABAC decision in the authorization paths, so a warm
+    container must re-read asset rows on each invocation rather than deciding on a carried-over row."""
+
+    def _details_event(self, execution_id="x1"):
+        return {
+            "requestContext": {"http": {"method": "GET",
+                                        "path": f"/workflows/executions/{execution_id}/details"},
+                               "authorizer": {}},
+            "pathParameters": {"executionId": execution_id},
+            "queryStringParameters": {},
+            "headers": {"authorization": "Bearer t"},
+        }
+
+    def test_lambda_handler_clears_the_asset_cache(self):
+        le._asset_details_cache[("db1", "a1")] = {"assetId": "a1", "tags": ["public"]}
+        with patch(f"{MOD}.request_to_claims", return_value={"tokens": []}), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+             patch(f"{MOD}.get_execution_main_row", return_value=None):
+            le.lambda_handler(self._details_event(), MagicMock())
+        assert le._asset_details_cache == {}
+
+    def test_second_invocation_authorizes_against_the_current_asset_row(self):
+        # A tag-based ABAC rule allows GET only while the asset carries the 'public' tag. The row is
+        # retagged between two invocations of the same warm container; the second must be denied.
+        main_item = {"workflowExecutionId": "x1", "workflowId": "wf1", "workflowDatabaseId": "db1"}
+        asset_rows = {("db1", "a1"): {"databaseId": "db1", "assetId": "a1", "tags": ["public"]}}
+
+        def _asset_query(database_id, asset_id):
+            return dict(asset_rows[(database_id, asset_id)])
+
+        enforcer = MagicMock()
+        enforcer.enforceAPI.return_value = True
+        enforcer.enforce.side_effect = lambda obj, action, *a, **k: (
+            obj.get("object__type") != "asset" or "public" in (obj.get("tags") or []))
+
+        statuses = []
+        with patch(f"{MOD}.request_to_claims", return_value={"tokens": ["u1"]}), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}.get_execution_main_row", return_value=main_item), \
+             patch(f"{MOD}.get_execution_input_assets", return_value=[("db1", "a1")]), \
+             patch(f"{MOD}.get_asset_details", side_effect=_asset_query), \
+             patch(f"{MOD}._reconcile_main_status"), \
+             patch(f"{MOD}.assemble_execution_details", return_value={}):
+            statuses.append(le.lambda_handler(self._details_event(), MagicMock())["statusCode"])
+            asset_rows[("db1", "a1")]["tags"] = ["restricted"]
+            statuses.append(le.lambda_handler(self._details_event(), MagicMock())["statusCode"])
+        assert statuses == [200, 403]
+
+
+@pytest.mark.unit
+class TestNumericLogParams:
+    """limit/startTime/endTime reach int() inside the CloudWatch/SFN readers, so a non-numeric value
+    must be a 400 from the logs handler rather than an unhandled ValueError -> 500."""
+
+    def _logs_event(self, query):
+        return {
+            "requestContext": {"http": {"method": "GET", "path": "/workflows/executions/E1/logs"},
+                               "authorizer": {}},
+            "pathParameters": {"executionId": "E1"},
+            "queryStringParameters": query,
+        }
+
+    @pytest.mark.parametrize("query", [
+        {"limit": "abc"}, {"startTime": "now"}, {"endTime": "yesterday"}])
+    def test_non_numeric_returns_400(self, query):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        resp = le.handle_logs_request(self._logs_event(query))
+        assert resp["statusCode"] == 400
+
+    def test_numeric_and_absent_pass_through(self):
+        assert le._numeric_log_param_error({"limit": "50", "startTime": "1700000000"}) == ""
+        assert le._numeric_log_param_error({}) == ""
+        assert le._numeric_log_param_error({"limit": ""}) == ""
+
+
+@pytest.mark.unit
+class TestStartingTokenValidation:
+    def test_undecodable_token_is_a_400(self):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        resp = le.get_global_executions({}, {"startingToken": "not-base64"})
+        assert resp["statusCode"] == 400
+
+    def test_decode_rejects_a_non_mapping(self):
+        token = base64.b64encode(json.dumps([1, 2]).encode("utf-8")).decode("utf-8")
+        assert le._decode_starting_token(token) is None
+
+    def test_decode_returns_the_key(self):
+        token = base64.b64encode(
+            json.dumps({"workflowExecutionId": "E1"}).encode("utf-8")).decode("utf-8")
+        assert le._decode_starting_token(token) == {"workflowExecutionId": "E1"}
+
+
+@pytest.mark.unit
+class TestReconcilePersistIsTargeted:
+    """A read-path reconcile writes only the attributes it reconciled: the end-state lambda can be
+    writing the same row, so a whole-item put would restore the pre-completion snapshot."""
+
+    def test_update_item_names_only_reconciled_attributes(self):
+        table = MagicMock()
+        main = {"workflowExecutionId": "E1", "workflowDatabaseId:workflowId": "db:wf",
+                "executionStatus": "ABORTED", "lastSfnSyncCheckDate": "2026-01-01T00:00:00Z",
+                "triggeredByUserId": "u1", "executionLogGroupArn": "arn:lg"}
+        le._persist_reconciled_main_row(table, main, le.DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES)
+        table.put_item.assert_not_called()
+        kwargs = table.update_item.call_args.kwargs
+        assert set(kwargs["ExpressionAttributeNames"].values()) == {
+            "executionStatus", "lastSfnSyncCheckDate"}
+        assert kwargs["Key"] == {"workflowExecutionId": "E1",
+                                 "workflowDatabaseId:workflowId": "db:wf"}
+
+    def test_no_reconciled_attributes_writes_nothing(self):
+        table = MagicMock()
+        le._persist_reconciled_main_row(
+            table, {"workflowExecutionId": "E1"}, le.DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES)
+        table.update_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestPermanentDeleteExpiredHistory:
+    def _main_row(self):
+        return {"workflowExecutionId": "E1", "executionStatus": "RUNNING", "executionStopDate": "",
+                "workflow_execution_arn": "arn:ex", "workflowDatabaseId:workflowId": "db:wf"}
+
+    def _client_error(self, code):
+        return botocore.exceptions.ClientError(
+            {"Error": {"Code": code, "Message": "x"}}, "DescribeExecution")
+
+    def test_missing_sfn_execution_allows_delete(self):
+        # SFN history expiry makes describe_execution raise ExecutionDoesNotExist; a stale
+        # non-terminal row must still be deletable.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[]), \
+             patch(f"{MOD}._delete_all_rows"), \
+             patch(f"{MOD}.get_workflow_execution_configuration_row", return_value={}), \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.sfn") as m_sfn:
+            m_dynamo.Table.return_value = MagicMock()
+            m_sfn.describe_execution.side_effect = self._client_error("ExecutionDoesNotExist")
+            resp = le.permanent_delete_execution({}, "E1")
+        assert resp["statusCode"] == 200
+
+    def test_other_client_error_still_guards(self):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}.sfn") as m_sfn:
+            m_sfn.describe_execution.side_effect = self._client_error("ThrottlingException")
+            resp = le.permanent_delete_execution({}, "E1")
+        assert resp["statusCode"] == 400
+        assert "in progress" in json.loads(resp["body"])["message"].lower()
+
+
+@pytest.mark.unit
+class TestRerunEnforcesExecuteRoute:
+    """A re-run launches a new execution through a lambdaCrossCall, which enforceAPI auto-approves,
+    so the execute route's Tier-1 check has to run against the caller here."""
+
+    def _main_row(self):
+        return {"workflowExecutionId": "E1", "workflowId": "wf1", "workflowDatabaseId": "db1"}
+
+    def test_execute_route_denied_blocks_rerun(self):
+        le.claims_and_roles = {"tokens": ["u1"], "mfaEnabled": True}
+        enforcer = MagicMock()
+        enforcer.enforceAPI.side_effect = lambda ev, *a, **k: (
+            "/execute" not in ev["requestContext"]["http"]["path"])
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}._execution_visible_to_caller", return_value=True), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch.object(le, "execute_workflow_v2_function", "t-execv2"), \
+             patch(f"{MOD}.lambda_client") as m_lambda:
+            model = type("M", (), {"executionGroupId": None})()
+            resp = le.rerun_execution({"requestContext": {"authorizer": {}}}, "E1", model)
+        assert resp["statusCode"] == 403
+        m_lambda.invoke.assert_not_called()
+
+    def test_execute_route_allowed_proceeds(self):
+        le.claims_and_roles = {"tokens": ["u1"], "mfaEnabled": True}
+
+        class _Payload:
+            def read(self):
+                return json.dumps({
+                    "statusCode": 200,
+                    "body": json.dumps({"message": {"executionId": "E2"}})}).encode("utf-8")
+
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}._execution_visible_to_caller", return_value=True), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+             patch(f"{MOD}.get_workflow_execution_configuration_row", return_value={}), \
+             patch(f"{MOD}._reconstruct_execute_request", return_value={"inputFiles": []}), \
+             patch.object(le, "execute_workflow_v2_function", "t-execv2"), \
+             patch(f"{MOD}.lambda_client") as m_lambda:
+            m_lambda.invoke.return_value = {"Payload": _Payload()}
+            model = type("M", (), {"executionGroupId": None})()
+            resp = le.rerun_execution({"requestContext": {"authorizer": {}}}, "E1", model)
+        assert resp["statusCode"] == 200
+
+
+@pytest.mark.unit
+class TestListReconcileSharedLogBudget:
+    """executionLog + executionError land on the same main row, so their combined size stays within
+    the single-item log budget."""
+
+    def test_log_and_error_share_the_byte_budget(self):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        oversized = "X" * le.er.MAX_LOG_FIELD_BYTES
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        with patch(f"{MOD}.get_asset_details", return_value={"databaseId": "db", "assetId": "a1"}), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}._fetch_execution_logs", return_value=oversized), \
+             patch(f"{MOD}.build_execution_items", return_value=[]) as m_build:
+            m_dynamo.Table.return_value = table
+            le.get_executions({}, "db", "a1", "", "", {})
+            fetcher = m_build.call_args.kwargs["fetch_execution_log_and_error"]
+            error_text, log_text = fetcher(
+                "E1", {"executionLogGroupArn": "arn:lg"}, {"error": oversized, "cause": ""})
+        assert log_text and error_text
+        assert (len(log_text.encode("utf-8"))
+                + len(error_text.encode("utf-8"))) <= le.er.MAX_LOG_FIELD_BYTES

@@ -5,7 +5,7 @@
 
 import { apiClient } from "../../../services/apiClient";
 import { toTuple, pageAll, unwrapMessage } from "./client";
-import type { Pipeline, Template, TagSchemaField } from "../types";
+import type { Pipeline, PipelineCreateRequest, Template, TagSchemaField } from "../types";
 
 /**
  * A pipeline save result: the unwrapped pipeline plus any non-blocking warnings the backend
@@ -76,7 +76,7 @@ export async function getPipeline(
 }
 
 export async function createPipeline(
-    body: Pipeline
+    body: PipelineCreateRequest
 ): Promise<[boolean, PipelineSaveResult | string]> {
     return savePipeline(() => apiClient.post(`database/${body.databaseId}/pipelines`, { body }));
 }
@@ -144,7 +144,12 @@ export async function updateTemplate(
     );
 }
 
-export async function archiveTemplate(
+/**
+ * Permanently delete a template. Unlike a pipeline or workflow delete (a soft archive), the backend
+ * removes the template row, its offloaded S3 config bodies, and its tag schema — there is no archived
+ * state to restore from.
+ */
+export async function deleteTemplate(
     databaseId: string,
     pipelineId: string,
     templateId: string

@@ -9,7 +9,9 @@ import { useTemplates, useTemplateMutations, usePipeline } from "../api/queries"
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import Breadcrumb from "../components/Breadcrumb";
 import RefreshButton from "../components/RefreshButton";
+import SearchInput from "../components/SearchInput";
 import { btnPrimary } from "../components/controlStyles";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 
 interface TemplateEditorProps {
     databaseId: string;
@@ -28,6 +30,7 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
     pipelineName,
 }) => {
     const navigate = useNavigate();
+    const toast = useToast();
     const {
         data: templates = [],
         isLoading,
@@ -35,19 +38,42 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
         refetch,
         isFetching,
     } = useTemplates(databaseId, pipelineId);
-    const { archiveTemplate } = useTemplateMutations();
+    const { deleteTemplate } = useTemplateMutations();
+    const [searchText, setSearchText] = React.useState("");
+    // Client-side filter over the loaded templates (a pipeline's template count is small and the API
+    // returns them in one page), matching how the other boards' search behaves.
+    const visibleTemplates = React.useMemo(() => {
+        const needle = searchText.trim().toLowerCase();
+        if (!needle) return templates;
+        return templates.filter((t: any) =>
+            [t.templateId, t.templateName, t.description, t.configFormat]
+                .filter(Boolean)
+                .some((v: string) => String(v).toLowerCase().includes(needle))
+        );
+    }, [templates, searchText]);
     const { can } = useAllowedRoutes();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
     const pipelineLabel = pipelineName || pipeline?.pipelineName || pipelineId;
 
     const base = `/databases/${databaseId}/pipelines/${pipelineId}/templates`;
 
-    const handleArchive = async (templateId: string) => {
-        if (!confirm("Are you sure you want to archive this template?")) return;
+    // Deleting a template is permanent — the backend also removes its offloaded config bodies and
+    // tag schema, so there is no archived copy to restore.
+    const handleDelete = async (templateId: string) => {
+        if (
+            !confirm(
+                `Permanently delete template "${templateId}" and its stored config body? ` +
+                    "This cannot be undone."
+            )
+        )
+            return;
         try {
-            await archiveTemplate.mutateAsync({ databaseId, pipelineId, templateId });
-        } catch (err: any) {
-            alert(`Failed to archive template: ${err.message}`);
+            await deleteTemplate.mutateAsync({ databaseId, pipelineId, templateId });
+            toast.success("Template deleted", { description: templateId });
+        } catch (err) {
+            toast.error("Delete failed", {
+                description: `${templateId}: ${toastErrorMessage(err)}`,
+            });
         }
     };
 
@@ -56,13 +82,13 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
         "PUT",
         "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}"
     );
-    const canArchive = can(
+    const canDelete = can(
         "DELETE",
         "/database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}"
     );
 
     return (
-        <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+        <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
             <div className="space-y-2">
                 <Breadcrumb
                     items={[
@@ -75,19 +101,20 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                     ]}
                 />
                 <div className="flex justify-between items-center">
-                    <h1 className="text-2xl font-semibold text-text-primary">Templates</h1>
-                    <div className="flex items-center gap-2">
-                        <RefreshButton onClick={() => refetch()} busy={isFetching} />
-                        {canCreate && (
-                            <button
-                                onClick={() => navigate(`${base}/create`)}
-                                className={btnPrimary}
-                            >
-                                Create Template
-                            </button>
-                        )}
-                    </div>
+                    <h1 className="text-text-primary">Templates</h1>
+                    {canCreate && (
+                        <button onClick={() => navigate(`${base}/create`)} className={btnPrimary}>
+                            Create Template
+                        </button>
+                    )}
                 </div>
+            </div>
+
+            {/* Search + refresh on one aligned row, matching the Pipelines/Workflows/Executions
+                toolbars so the pages read the same way. */}
+            <div className="flex items-center gap-2 flex-wrap">
+                <SearchInput value={searchText} onChange={(e) => setSearchText(e.target.value)} />
+                <RefreshButton onClick={() => refetch()} busy={isFetching} />
             </div>
 
             {isLoading ? (
@@ -95,17 +122,21 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
             ) : error ? (
                 <div className="text-vams-error">Error loading templates</div>
             ) : (
-                <div className="space-y-2">
-                    {templates.length === 0 ? (
-                        <p className="text-text-secondary">No templates found</p>
+                <div className="orch-outline border border-border-default rounded-lg bg-surface-container overflow-hidden">
+                    {visibleTemplates.length === 0 ? (
+                        <p className="text-text-secondary p-4">
+                            {templates.length === 0
+                                ? "No templates found"
+                                : "No templates match the search"}
+                        </p>
                     ) : (
-                        templates.map((template) => (
+                        visibleTemplates.map((template) => (
                             <div
                                 key={template.templateId}
-                                className="border border-border-default rounded-lg bg-surface-container p-4 flex justify-between items-start"
+                                className="orch-outline border-b border-border-default last:border-0 px-4 py-1.5 flex justify-between items-center gap-4 hover:bg-surface-hover"
                             >
                                 <div>
-                                    <h3 className="font-medium text-text-primary flex items-center gap-2">
+                                    <h3 className="font-bold text-text-primary flex items-center gap-2 leading-snug">
                                         {template.templateName}
                                         {template.isDefault && (
                                             <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
@@ -114,11 +145,11 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                                         )}
                                     </h3>
                                     {template.description && (
-                                        <p className="text-sm text-text-secondary mt-1">
+                                        <p className="text-sm text-text-secondary leading-snug">
                                             {template.description}
                                         </p>
                                     )}
-                                    <p className="text-xs text-text-secondary mt-1">
+                                    <p className="text-xs text-text-secondary leading-snug">
                                         Format: {template.configFormat}
                                     </p>
                                 </div>
@@ -133,12 +164,12 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
                                             Edit
                                         </button>
                                     )}
-                                    {canArchive && (
+                                    {canDelete && (
                                         <button
-                                            onClick={() => handleArchive(template.templateId)}
+                                            onClick={() => handleDelete(template.templateId)}
                                             className="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
                                         >
-                                            Archive
+                                            Delete
                                         </button>
                                     )}
                                 </div>

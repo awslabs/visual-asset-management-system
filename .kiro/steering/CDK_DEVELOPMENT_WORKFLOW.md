@@ -642,7 +642,73 @@ backendPipelines/
 └── [useCase]/                  # New use case pipelines
     ├── lambda/                 # Lambda handlers
     ├── container/              # Container code
+    ├── vamsSchema/             # Registration bundle (see below)
     └── README.md               # Documentation
+```
+
+### **vamsSchema Registration (required for a pipeline to be usable)**
+
+A pipeline's CDK stack only creates AWS resources. What makes it appear in VAMS -- as a pipeline, its
+templates, and a runnable workflow -- is a `vamsSchema/` bundle uploaded to the artefacts bucket and
+imported at deploy time through `SYSTEM_USER` cross-calls
+(`backend/backend/common/workflows/vamsSchemaImport.py`):
+
+```
+backendPipelines/{useCase}/{name}/vamsSchema/
+    pipeline.json                  # required
+    workflow.json                  # optional -- one built-in workflow per pipeline
+    templates/{templateId}.json    # optional -- one file per template
+```
+
+Register it from the pipeline's nested stack with the `VamsSchemaRegistration` construct, passing the
+deploy-time resolved resource values:
+
+```typescript
+new VamsSchemaRegistration(this, "MyPipelineSchema", {
+    schemaPath: path.join(__dirname, "../../../../../backendPipelines/{useCase}/{name}/vamsSchema"),
+    resourceOverrides: { lambdaName: myPipelineFunction.functionName },
+    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+});
+```
+
+`pipeline.json` carries **no ARNs or account ids** -- the execution target is injected per
+`executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`, `eventBridge.busArn`,
+`deadlineCloud.farmId`), so the same file works in every account and partition. Registration is
+idempotent: a redeploy overwrites the definition and clears the archived flag.
+
+Several `systemConfig` conditions each produce a silently unusable pipeline or workflow when wrong:
+
+1. **`inputFileFilters.allow` must match the file types the container handles.** These globs are what
+   the execute API and the file-upload trigger match against; a missing extension makes the pipeline
+   unselectable for that type with no error.
+2. **`requireTemplate: true` needs a default template.** Execute auto-selects the default; with none,
+   every caller must name a `templateId`. A bundle with exactly one template has it promoted
+   automatically -- with two or more, mark one `"isDefault": true`.
+3. **`inputFileArity: "none"`** means no input files, so `assetId` / `databaseId` resolve from the
+   execution's output target (`outputAssetId` / `outputDatabaseId`).
+4. **`assetScope` accepts two vocabularies** -- the shorthand `{"wholeAsset": true|false}` and the
+   canonical four `*Allowed` keys. A malformed value can fail the import while the deploy still exits
+   0, so confirm the row landed after deploying:
+5. **A partial `systemConfig` is safe — registration fills every omitted field with its default.**
+   The stored record replaces `systemConfig` wholesale rather than merging, so the importer completes a
+   bundle's block first: the declaration wins, omissions become the documented defaults (nested maps
+   filled key-by-key). Declare only what differs. This also keeps a newly-added `systemConfig` field
+   from changing the meaning of bundles written before it existed.
+6. **`allowWorkflowTriggerChaining` (default `false`)** lets ANOTHER workflow's output fire this
+   workflow's triggers -- how a preview or metadata built-in runs on a conversion pipeline's result. A
+   workflow never fires on its own output whatever the value, so it cannot loop on its own files; a
+   chained file must still match the trigger's `inputFileFilters`.
+7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
+   an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
+   one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
+   immediately before each output file's own name, so a container's own output folders are preserved.
+   **A container must therefore not create its own per-job folder** -- the workflow prefix is what
+   separates runs, and a container-side folder shows up as a stray level inside every asset. The
+   Gaussian Splat and Isaac Lab bundles use it for exactly this.
+
+```bash
+vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
+vamscli pipeline template list -d GLOBAL -p {pipelineId}
 ```
 
 ### **Pipeline Configuration Management**
@@ -1160,7 +1226,8 @@ export interface WafPolicyConfig {
         priority: number;
         block?: boolean; // true => group's own block actions apply; false => count-only
         // Per-rule overrides within the group: set one rule to count/allow/block without
-        // disabling the group (e.g. SizeRestrictions_BODY -> count so large upload bodies pass).
+        // disabling the group (e.g. SizeRestrictions_BODY -> count so large upload bodies pass,
+        // SizeRestrictions_QUERYSTRING -> count so long presigned-URL query strings pass).
         ruleActionOverrides?: Array<{ name: string; action: "count" | "block" | "allow" }>;
     }>;
     rateBasedRules?: Array<{
@@ -1237,7 +1304,7 @@ export class Wafv2BasicConstruct extends Construct {
 }
 ```
 
-The shipped `wafPolicyConfig.json` overrides the Common Rule Set's `SizeRestrictions_BODY` rule to `count` — it is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking.
+The shipped `wafPolicyConfig.json` overrides two Common Rule Set rules to `count`. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass while every other managed rule keeps blocking. `SizeRestrictions_QUERYSTRING` is likewise overridden to `count`: it blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter. A presigned URL carrying a session security token already approaches that limit, and the viewer requires the value double-encoded to survive its own two decode passes, which roughly doubles it again — so the iframe request for the static viewer page was blocked with a 403 before it ever reached S3.
 
 The shipped `VAMS-RateLimit` rate-based rule uses `aggregateKeyType: FORWARDED_IP` (with `forwardedIPConfig` on `X-Forwarded-For`, `NO_MATCH` fallback) so it counts the real client IP behind CloudFront, an ALB, or a shared NAT/VPN egress — the same policy applies to both the CloudFront-scoped and regional web ACLs. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. Unit test: `infra/test/wafRateLimit.test.ts`.
 

@@ -266,8 +266,10 @@ class TestVamsExecuteGr00tFinetunePipeline:
             mod.lambda_handler({"body": json.dumps(body_inline)}, MagicMock())
         cfg_from_inline = json.loads(json.loads(invoke_b.call_args.kwargs["Payload"].decode("utf-8"))["gr00tConfig"])
 
-        # Same merged config either way: metadata wins on maxSteps, params contribute batchSize.
-        expected = {"maxSteps": 9999, "batchSize": 8, "baseModelPath": "/m/base"}
+        # Same merged config either way. The input CONFIGURATION wins on maxSteps (100, not the
+        # asset's 9999) because it is what the operator supplied at execute time; asset metadata still
+        # supplies baseModelPath, which the configuration does not mention — the fallback layer.
+        expected = {"maxSteps": 100, "batchSize": 8, "baseModelPath": "/m/base"}
         assert cfg_from_s3 == expected
         assert cfg_from_inline == expected
         assert cfg_from_s3 == cfg_from_inline
@@ -289,11 +291,12 @@ class TestVamsExecuteGr00tFinetunePipeline:
         assert payload["inputS3AssetPath"] == "s3://abkt/legacy/asset/"
         assert payload["assetId"] == "" and payload["databaseId"] == ""
         assert payload["outputS3AssetFilesPath"] == "s3://abkt/legacy/files/"
-        # Inline metadata still drives the merge through the legacy fallback path.
+        # The merge still happens on the legacy fallback path, with the same precedence: the input
+        # configuration overrides asset metadata, and metadata fills what it omits.
         merged = json.loads(payload["gr00tConfig"])
-        assert merged["maxSteps"] == 9999            # metadata override
-        assert merged["baseModelPath"] == "/m/base"  # metadata
-        assert merged["batchSize"] == 8              # inputParameters
+        assert merged["maxSteps"] == 100             # input configuration overrides metadata's 9999
+        assert merged["baseModelPath"] == "/m/base"  # metadata supplies what config omits
+        assert merged["batchSize"] == 8              # input configuration only
         assert "inputMetadata" not in payload
         assert "inputParameters" not in payload
 

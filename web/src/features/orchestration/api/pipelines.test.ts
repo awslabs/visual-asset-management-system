@@ -24,7 +24,7 @@ import {
     getTemplate,
     createTemplate,
     updateTemplate,
-    archiveTemplate,
+    deleteTemplate,
     getTagSchema,
     setTagSchema,
 } from "./pipelines";
@@ -170,10 +170,10 @@ describe("pipelines service", () => {
         });
     });
 
-    describe("archiveTemplate", () => {
+    describe("deleteTemplate", () => {
         it("deletes the template path", async () => {
-            (apiClient.del as jest.Mock).mockResolvedValue({ message: "archived" });
-            await archiveTemplate("db1", "p1", "t1");
+            (apiClient.del as jest.Mock).mockResolvedValue({ message: "deleted" });
+            await deleteTemplate("db1", "p1", "t1");
             expect(apiClient.del).toHaveBeenCalledWith(
                 "database/db1/pipelines/p1/templates/t1",
                 {}

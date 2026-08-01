@@ -43,12 +43,22 @@ except Exception as e:
 
 FAILED_STATUS = "FAILED"
 
+# executionError and executionLog land on the same main-row item, so they share the item's
+# free-form text budget: the error message keeps a small reserved slice and the log takes the
+# rest, keeping the finalized item under the DynamoDB 400 KB limit.
+MAX_ERROR_FIELD_BYTES = 16 * 1024
+MAX_ERROR_LOG_FIELD_BYTES = er.MAX_LOG_FIELD_BYTES - MAX_ERROR_FIELD_BYTES
+
 
 def _extract_error_message(error_info):
     """Build a human-readable failure message from the captured SFN error object
-    ($.errorInfo = {Error, Cause}). Cause is often a JSON string with errorMessage."""
+    ($.errorInfo = {Error, Cause}). Cause is often a JSON string with errorMessage. The result is
+    trimmed to MAX_ERROR_FIELD_BYTES so a multi-KB Cause cannot push the main row item over the
+    DynamoDB item limit."""
     if not isinstance(error_info, dict):
-        return str(error_info) if error_info else ""
+        text, _ = er.truncate_text(str(error_info) if error_info else "",
+                                   limit=MAX_ERROR_FIELD_BYTES)
+        return text
     err = error_info.get('Error', '')
     cause = error_info.get('Cause', '')
     # Cause may itself be a JSON string (Lambda error) with errorMessage/errorType.
@@ -59,7 +69,9 @@ def _extract_error_message(error_info):
                 cause = parsed.get('errorMessage')
         except (json.JSONDecodeError, TypeError):
             pass
-    return ": ".join(p for p in (err, cause) if p)
+    message, _ = er.truncate_text(": ".join(p for p in (err, cause) if p),
+                                  limit=MAX_ERROR_FIELD_BYTES)
+    return message
 
 
 def _fetch_execution_log(execution_id):
@@ -77,7 +89,7 @@ def _fetch_execution_log(execution_id):
         resp = logs_client.filter_log_events(
             logGroupName=log_group_name, filterPattern=f'"{execution_id}"', limit=50)
         text = "\n".join(e.get('message', '') for e in resp.get('events', []))
-        text, _ = er.truncate_text(text, limit=er.MAX_LOG_FIELD_BYTES)
+        text, _ = er.truncate_text(text, limit=MAX_ERROR_LOG_FIELD_BYTES)
         return text
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")

@@ -16,6 +16,10 @@ unit-testable and free of module-level AWS/environment coupling: callers resolve
 
 from boto3.dynamodb.conditions import Attr
 
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="DefaultBucket")
+
 
 class DefaultBucketNotFoundError(Exception):
     """Raised when no bucket row is flagged as the VAMS default."""
@@ -45,12 +49,22 @@ def resolve_default_bucket(buckets_table) -> dict:
             "populated the S3 asset buckets table with a default bucket."
         )
 
-    # Prefer the bucket-root row when a default bucket is registered under multiple prefixes.
+    # Prefer the bucket-root row when a default bucket is registered under multiple prefixes;
+    # bucketName keeps the order total so the winner never depends on scan order.
     def _prefix_rank(item):
         prefix = (item.get("baseAssetsPrefix") or "").strip("/")
-        return (0 if prefix == "" else 1, prefix)
+        return (0 if prefix == "" else 1, prefix, item.get("bucketName") or "")
 
-    chosen = sorted(items, key=_prefix_rank)[0]
+    ordered = sorted(items, key=_prefix_rank)
+    distinct_buckets = {item.get("bucketName") for item in items}
+    if len(distinct_buckets) > 1:
+        logger.error(
+            f"More than one bucket is flagged as the VAMS default ({sorted(distinct_buckets)}); "
+            f"using {ordered[0].get('bucketName')}. Clear the stale isDefault row(s) in the S3 asset "
+            "buckets table."
+        )
+
+    chosen = ordered[0]
     return {
         "bucketId": chosen.get("bucketId"),
         "bucketName": chosen.get("bucketName"),

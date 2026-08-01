@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 
 import click
 
-from ..constants import MAX_WORKFLOW_EXECUTION_PAGE_SIZE
+from ..constants import MAX_EXECUTION_AUTO_PAGINATE_PAGES, MAX_GLOBAL_EXECUTION_PAGE_SIZE
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
@@ -32,6 +32,25 @@ def _api(ctx: click.Context) -> APIClient:
 
 def _message(result: Dict[str, Any]) -> Any:
     return result.get('message', result) if isinstance(result, dict) else result
+
+
+def _warnings(result: Dict[str, Any]) -> Any:
+    """The top-level `warnings` array a save/abort returns as a sibling of `message`."""
+    return result.get('warnings') if isinstance(result, dict) else None
+
+
+def _payload_with_warnings(result: Dict[str, Any]) -> Any:
+    """Unwrap the `message` envelope, carrying any top-level `warnings` into the payload."""
+    message = _message(result)
+    warnings = _warnings(result)
+    if not warnings:
+        return message
+    if isinstance(message, dict):
+        payload = dict(message)
+    else:
+        payload = {'message': message}
+    payload['warnings'] = warnings
+    return payload
 
 
 @click.group()
@@ -52,7 +71,8 @@ def execution():
                    '(default: 90 days ago). The list shows recent executions by default.')
 @click.option('--filter-end-date',
               help='Only executions started on/before this ISO-8601 date-time (optional upper bound).')
-@click.option('--page-size', type=int, help='Number of items per page (max 100)')
+@click.option('--page-size', type=int,
+              help=f'Number of items per page (max {MAX_GLOBAL_EXECUTION_PAGE_SIZE})')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all items')
@@ -85,6 +105,11 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
     if max_items and not auto_paginate:
         output_warning("--max-items only applies with --auto-paginate. Ignoring.", json_output)
         max_items = None
+    if page_size and page_size > MAX_GLOBAL_EXECUTION_PAGE_SIZE:
+        output_warning(
+            f"--page-size above {MAX_GLOBAL_EXECUTION_PAGE_SIZE} is clamped by the service. "
+            f"Using {MAX_GLOBAL_EXECUTION_PAGE_SIZE}.", json_output)
+        page_size = MAX_GLOBAL_EXECUTION_PAGE_SIZE
 
     def _base_params() -> Dict[str, Any]:
         params: Dict[str, Any] = {}
@@ -111,6 +136,13 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])
         if not items:
+            # The backend applies filters after the DynamoDB page limit, so an empty page may still
+            # carry a NextToken for later pages that do contain matches.
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                return ("No executions on this page; more pages available."
+                        f"\n\nNext token: {data['NextToken']}")
+            if data.get('note'):
+                return f"No executions found.\n\n{data['note']}"
             return "No executions found."
         out = []
         if data.get('autoPaginated'):
@@ -125,9 +157,18 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             out.append(f"  Started: {ex.get('executionStartDate', 'N/A')}")
             if ex.get('executionGroupId'):
                 out.append(f"  Group: {ex['executionGroupId']}")
+            # Output target of the run. Omitted for a results-only execution, which writes no files
+            # and therefore has no destination asset.
+            if ex.get('outputLocationType'):
+                out.append(f"  Output Type: {ex['outputLocationType']}")
+            if ex.get('outputAssetId') or ex.get('outputDatabaseId'):
+                out.append(f"  Output Asset: {ex.get('outputDatabaseId', 'N/A')}:"
+                           f"{ex.get('outputAssetId', 'N/A')}")
             out.append("-" * 80)
         if not data.get('autoPaginated') and data.get('NextToken'):
             out.append(f"\nNext token: {data['NextToken']}")
+        if data.get('note'):
+            out.append(f"\n{data['note']}")
         return '\n'.join(out)
 
     try:
@@ -148,12 +189,18 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
-                if not next_token or len(all_items) >= max_total:
+                if (not next_token or len(all_items) >= max_total
+                        or page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES):
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count}
             if next_token and len(all_items) >= max_total:
                 result['note'] = f"Reached maximum of {max_total} items. More may be available."
+            elif next_token and page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Stopped after {page_count} pages. More may be available — narrow the filters, "
+                    f"or resume with --starting-token {next_token}")
             output_result(_message(result), json_output, cli_formatter=_fmt)
             return result
 
@@ -307,18 +354,22 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
 @execution.command('abort')
 @click.argument('execution_id', required=False)
 @click.option('--group-id', help='Abort every active execution in this execution group')
+@click.option('--yes', is_flag=True, help='Skip the interactive confirmation prompt for --group-id')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[str], json_output: bool):
+def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[str], yes: bool,
+          json_output: bool):
     """Abort a running execution, or an entire execution group with --group-id.
 
     Provide either an EXECUTION_ID (abort one) or --group-id (abort the group). When aborting a
     group, pass any member execution id as EXECUTION_ID (the id in the path is ignored for grouping).
+    A group abort terminates every active execution the caller can reach in the group, so it is
+    confirmed interactively unless `--yes` is passed; `--yes` is required in JSON mode.
 
     Examples:
         vamscli execution abort my-execution-id
-        vamscli execution abort my-execution-id --group-id grp-123
+        vamscli execution abort my-execution-id --group-id grp-123 --yes
     """
     api_client = _api(ctx)
     if not execution_id and not group_id:
@@ -328,6 +379,10 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
         raise click.ClickException(
             "Provide a member EXECUTION_ID along with --group-id (the group abort route is keyed on "
             "an execution id).")
+    if group_id and not yes and not json_output:
+        click.confirm(
+            f"Abort every active execution in group '{group_id}'? This cannot be undone.",
+            abort=True)
 
     target = f"group '{group_id}'" if group_id else f"execution '{execution_id}'"
     output_status(f"Aborting {target}...", json_output)
@@ -346,11 +401,16 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
                     out.append(f"Skipped (inaccessible): {message['skippedInaccessibleCount']}")
                 if message.get('moreRemaining'):
                     out.append("More executions remain; run again to continue aborting the group.")
-                return '\n'.join(out)
-            return str(message)
+            else:
+                out = [str(message)]
+            warnings = _warnings(result)
+            if warnings:
+                out.append("Warnings:")
+                out.extend(f"  - {w}" for w in warnings)
+            return '\n'.join(out)
 
-        output_result(_message(result), json_output, success_message="✓ Abort request submitted.",
-                      cli_formatter=_fmt)
+        output_result(_payload_with_warnings(result), json_output,
+                      success_message="✓ Abort request submitted.", cli_formatter=_fmt)
         return result
     except ExecutionNotFoundError as e:
         output_error(e, json_output, error_type="Execution Not Found")

@@ -1,21 +1,22 @@
 # Building custom pipelines
 
-VAMS provides a flexible pipeline framework that supports three execution types for processing 3D assets: AWS Lambda, Amazon Simple Queue Service (Amazon SQS), and Amazon EventBridge. This guide covers the architecture patterns, development workflow, and conventions for building custom pipelines.
+VAMS provides a flexible pipeline framework that supports four execution types for processing 3D assets: AWS Lambda, Amazon Simple Queue Service (Amazon SQS), Amazon EventBridge, and AWS Deadline Cloud. This guide covers the architecture patterns, development workflow, and conventions for building custom pipelines.
 
 ## Pipeline execution types
 
-VAMS supports three pipeline execution types. Each type determines how the pipeline receives work and reports completion.
+VAMS supports four pipeline execution types. Each type determines how the pipeline receives work and reports completion.
 
-| Execution type  | Transport                | Sync/Async | Best for                                                            |
-| --------------- | ------------------------ | ---------- | ------------------------------------------------------------------- |
-| **Lambda**      | AWS Lambda invoke        | Both       | Quick processing tasks, internal pipelines, container orchestration |
-| **SQS**         | Amazon SQS message       | Async only | External systems that poll for work, fan-out patterns               |
-| **EventBridge** | Amazon EventBridge event | Async only | Loosely coupled integrations, cross-account pipelines               |
+| Execution type    | Transport                | Sync/Async | Best for                                                            |
+| ----------------- | ------------------------ | ---------- | ------------------------------------------------------------------- |
+| **Lambda**        | AWS Lambda invoke        | Both       | Quick processing tasks, internal pipelines, container orchestration |
+| **SQS**           | Amazon SQS message       | Async only | External systems that poll for work, fan-out patterns               |
+| **EventBridge**   | Amazon EventBridge event | Async only | Loosely coupled integrations, cross-account pipelines               |
+| **DeadlineCloud** | AWS Deadline Cloud job   | Async only | Render-farm and batch job submission (callback always required)     |
 
 ### Synchronous vs. asynchronous execution
 
 -   **Synchronous (Lambda only)** -- The VAMS workflow invokes the Lambda function and waits for a response. Suitable for operations that complete within the Lambda timeout (15 minutes).
--   **Asynchronous (all types)** -- The VAMS workflow sends work and waits for a callback via an AWS Step Functions task token. The pipeline must call `SendTaskSuccess` or `SendTaskFailure` when processing is complete. Set `waitForCallback` to `"Enabled"` when registering the pipeline.
+-   **Asynchronous (all other types)** -- The VAMS workflow sends work and waits for a callback via an AWS Step Functions task token. The pipeline must call `SendTaskSuccess` or `SendTaskFailure` when processing is complete. Set `waitForCallback` to `"Enabled"` when registering the pipeline.
 
 ```mermaid
 flowchart TD
@@ -66,14 +67,16 @@ This is the entry point that VAMS calls. It receives the workflow payload and fo
 import os
 import boto3
 import json
+import manifestHelper
 from customLogging.logger import safeLogger
 
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 logger = safeLogger(service="VamsExecuteYourPipeline")
 lambda_client = boto3.client("lambda")
+s3_client = boto3.client("s3")
 
 def lambda_handler(event, context):
-    # Parse the VAMS workflow payload
+    # The workflow payload carries the identity fields plus the manifest location.
     data = json.loads(event["body"]) if isinstance(event.get("body"), str) else event["body"]
 
     # Task token is required for async pipelines
@@ -81,15 +84,20 @@ def lambda_handler(event, context):
     if not external_task_token:
         raise Exception("TaskToken not found in pipeline input")
 
+    # Input files, output locations, and asset identity all come from the manifest.
+    resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+
     # Forward all S3 paths -- never hardcode empty strings
     message_payload = {
-        "inputS3AssetFilePath": data["inputS3AssetFilePath"],
-        "outputS3AssetFilesPath": data["outputS3AssetFilesPath"],
-        "outputS3AssetPreviewPath": data["outputS3AssetPreviewPath"],
-        "outputS3AssetMetadataPath": data["outputS3AssetMetadataPath"],
-        "inputOutputS3AssetAuxiliaryFilesPath": data["inputOutputS3AssetAuxiliaryFilesPath"],
-        "inputMetadata": data.get("inputMetadata", ""),
-        "inputParameters": data.get("inputParameters", ""),
+        "inputS3AssetFilePath": resolved["inputS3AssetFilePath"],
+        "outputS3AssetFilesPath": resolved["outputS3AssetFilesPath"],
+        "outputS3AssetPreviewPath": resolved["outputS3AssetPreviewPath"],
+        "outputS3AssetMetadataPath": resolved["outputS3AssetMetadataPath"],
+        "inputOutputS3AssetAuxiliaryFilesPath": resolved["inputOutputS3AssetAuxiliaryFilesPath"],
+        "assetId": resolved["assetId"],
+        "databaseId": resolved["databaseId"],
+        "inputMetadataS3Location": resolved["inputMetadataS3Location"],
+        "inputConfigurationS3Location": resolved["inputConfigurationS3Location"],
         "sfnExternalTaskToken": external_task_token,
     }
 
@@ -102,8 +110,13 @@ def lambda_handler(event, context):
     return {"statusCode": 200, "body": "Success"}
 ```
 
-:::warning[Always pass through all S3 output paths]
-The `vamsExecute` Lambda must forward all output paths (`outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, `inputOutputS3AssetAuxiliaryFilesPath`) from the workflow payload. Never hardcode empty strings. The workflow's process-output step relies on finding files at these locations.
+:::warning[Resolve inputs from the manifest, then pass every output path through]
+The payload does **not** contain `inputS3AssetFilePath` or the output paths -- resolve them from the
+manifest with `manifestHelper.resolve_pipeline_inputs()`. Then forward all of them
+(`outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`,
+`inputOutputS3AssetAuxiliaryFilesPath`) to `constructPipeline`, and never hardcode empty strings: the
+workflow's process-output step relies on finding files at those locations. See
+[The pipeline input contract](#the-pipeline-input-contract).
 :::
 
 #### constructPipeline Lambda
@@ -124,6 +137,10 @@ def lambda_handler(event, context):
 
     definition = {
         "jobName": event.get("jobName"),
+        # assetId is threaded through so the container can preserve each input file's
+        # relative path within the asset. Never derive it from S3 path segments.
+        "assetId": event.get("assetId", ""),
+        "databaseId": event.get("databaseId", ""),
         "stages": [{
             "type": "YOUR_STAGE",
             "inputFile": {
@@ -331,91 +348,350 @@ definition = {
 asset_id = pipeline_definition.get("assetId")
 ```
 
-## Amazon SQS pipeline pattern
+## The pipeline input contract
 
-Amazon SQS pipelines send processing requests to an Amazon SQS queue. An external consumer polls the queue, processes the message, and optionally sends a callback.
+Every pipeline -- regardless of execution type -- receives the **same input body**. Only the envelope
+differs: an AWS Lambda `Payload`, an Amazon SQS `MessageBody`, an Amazon EventBridge event `Detail`, or
+AWS Deadline Cloud job parameters.
 
-### Registration
+The body is deliberately small. It carries the workflow-execution identity, the run's I/O bucket, the
+executing-user context, and the **S3 locations of two files**. Everything about the pipeline's inputs
+and outputs -- the resolved input files, output and auxiliary locations, asset identity, and
+orchestration configuration -- is read from the manifest, not from the body. That keeps the body
+input-file-agnostic and multi-file ready.
+
+### Body fields
+
+| Field                                  | Always present | Purpose                                                                    |
+| -------------------------------------- | -------------- | -------------------------------------------------------------------------- |
+| `workflowDatabaseId`                   | Yes            | Database owning the workflow                                               |
+| `workflowId`                           | Yes            | Workflow being executed                                                    |
+| `workflowExecutionId`                  | Yes            | This execution's identifier                                                |
+| `workflowExecutionS3InputOutputBucket` | Yes            | Bucket holding the run's input manifest, configuration, and output staging |
+| `executingUserName`                    | Yes            | User who started the execution                                             |
+| `executingRequestContext`              | Yes            | Request context of the caller                                              |
+| `inputManifestS3Location`              | Yes            | **The manifest** -- the pipeline's real input contract (see below)         |
+| `inputConfigurationS3Location`         | Yes            | The rendered per-pipeline configuration (the resolved template body)       |
+| `TaskToken`                            | Callback only  | Present only when the pipeline sets `waitForCallback` to `"Enabled"`       |
+
+:::warning[Input and output paths are not in the body]
+Earlier VAMS versions passed fields such as `inputS3AssetFilePath` and `outputS3AssetFilesPath`
+directly in the payload. They are no longer there. Read them from the manifest instead -- a pipeline
+that indexes the body for those keys fails on its first invocation.
+:::
+
+### Reading the manifest
+
+Fetch the object at `inputManifestS3Location` and resolve it with the shared helper each pipeline
+vendors as `manifestHelper.py`. The helper returns a flat dictionary of resolved values, so pipeline
+code does not parse the envelope itself:
 
 ```python
-# Register via API or auto-registration
-{
-    "pipelineId": "my-sqs-pipeline",
-    "pipelineExecutionType": "SQS",
-    "sqsQueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue",
-    "waitForCallback": "Enabled"
-}
+import manifestHelper
+
+data = json.loads(event["body"]) if isinstance(event.get("body"), str) else event["body"]
+resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+
+resolved["inputFiles"]                              # every resolved input file
+resolved["inputS3AssetFilePath"]                    # first input file, as s3://bucket/key
+resolved["assetId"], resolved["databaseId"]         # asset identity
+resolved["outputS3AssetFilesPath"]                  # file-level outputs
+resolved["outputS3AssetPreviewPath"]                # asset-level previews
+resolved["outputS3AssetMetadataPath"]               # metadata outputs
+resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
 ```
 
-### Message format
+Two behaviors are worth knowing:
 
-The VAMS workflow sends a JSON message to the queue containing the input file path, output paths, metadata, parameters, and (when callback is enabled) an AWS Step Functions task token.
+-   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
+    `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
+    target (`outputAssetId` / `outputDatabaseId`).
+-   **Metadata arrives as a grouped envelope** (`{"schemaVersion": 2, "assets": [...]}`) at
+    `inputMetadataS3Location`, grouped by asset. Use the helper's accessors -- `asset_metadata_for`,
+    `file_metadata_for`, `file_attributes_for` -- to resolve records for a specific
+    `(databaseId, assetId, fileKey)` rather than indexing the envelope directly.
 
-### Callback
+### Writing outputs
 
-When `waitForCallback` is `"Enabled"`, the message includes a `TaskToken` field. The consumer must call `SendTaskSuccess` or `SendTaskFailure` on the AWS Step Functions API when processing is complete.
+Write to the resolved output locations, preserving each input file's relative path within the asset.
+The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
+own file convention:
+
+| Output         | Location                      | Naming                                                     |
+| -------------- | ----------------------------- | ---------------------------------------------------------- |
+| Files          | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
+| File previews  | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
+| Asset preview  | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
+| File metadata  | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
+| Asset metadata | `outputS3AssetMetadataPath`   | `asset.metadata.json`                                      |
+| Results        | The manifest's results prefix | Any name                                                   |
+
+Metadata files use the body
+`{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
+`"type": "metadata"` for file-level metadata. Only keys ending in `.metadata.json` are consumed -- a
+differently-named file is ignored silently, which looks like a pipeline that simply produced no
+metadata.
+
+## Callbacks
+
+When `waitForCallback` is `"Enabled"`, the body includes `TaskToken` and the workflow waits. The
+pipeline must report completion, or the execution waits until its task timeout:
 
 ```python
-import boto3
+import boto3, json
 
 sfn_client = boto3.client("stepfunctions")
 
 # On success
-sfn_client.send_task_success(
-    taskToken=task_token,
-    output=json.dumps({"status": "SUCCEEDED"})
-)
+sfn_client.send_task_success(taskToken=task_token, output=json.dumps({"status": "SUCCEEDED"}))
 
-# On failure
+# On failure -- always send this, or the workflow hangs to its timeout instead of failing fast
 sfn_client.send_task_failure(
-    taskToken=task_token,
-    error="ProcessingError",
-    cause="Description of what went wrong"
+    taskToken=task_token, error="ProcessingError", cause="Description of what went wrong"
 )
 ```
 
-## Amazon EventBridge pipeline pattern
+The pipeline's execution role needs both `states:SendTaskSuccess` and `states:SendTaskFailure`.
+Granting only success is a common omission: the pipeline then cannot report failure, so a failed run
+waits for the full task timeout instead of failing immediately.
 
-Amazon EventBridge pipelines publish processing requests as events to an Amazon EventBridge event bus. This pattern enables loosely coupled integrations with external systems and cross-account pipelines.
+Synchronous AWS Lambda pipelines (`waitForCallback` disabled) return normally and receive no
+`TaskToken`. Amazon SQS, Amazon EventBridge, and AWS Deadline Cloud pipelines are asynchronous;
+Deadline Cloud always uses the callback.
 
-### Registration
+## Per-type envelopes
+
+### AWS Lambda
+
+The body arrives as the Lambda event payload. `waitForCallback` may be disabled (synchronous) or
+enabled (task-token callback).
 
 ```python
-{
-    "pipelineId": "my-eventbridge-pipeline",
-    "pipelineExecutionType": "EventBridge",
-    "eventBridgeBusArn": "arn:aws:events:us-east-1:123456789012:event-bus/my-bus",
-    "eventBridgeSource": "vams.pipeline",
-    "eventBridgeDetailType": "PipelineExecution",
-    "waitForCallback": "Enabled"
-}
+def lambda_handler(event, context):
+    data = json.loads(event["body"]) if isinstance(event.get("body"), str) else event["body"]
+    task_token = data.get("TaskToken")          # present only when callback is enabled
+    resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
 ```
 
-### Event format
+### Amazon SQS
 
-The VAMS workflow publishes an event with the configured source and detail type. The event detail contains the input file path, output paths, metadata, parameters, and (when callback is enabled) an AWS Step Functions task token.
-
-### Callback
-
-The callback mechanism is identical to the Amazon SQS pattern. The event consumer calls `SendTaskSuccess` or `SendTaskFailure` with the task token from the event detail.
-
-## Auto-registration and auto-trigger
-
-Pipelines can be automatically registered with VAMS at deploy time using a CDK custom resource. This eliminates the need for manual pipeline registration through the API.
-
-### Auto-registration
-
-Set `autoRegisterWithVAMS` to `true` in the pipeline configuration. The CDK construct uses a custom resource provider to call the VAMS pipeline/workflow import function during deployment.
-
-### Auto-trigger on file upload
-
-Set `autoRegisterAutoTriggerOnFileUpload` to `true` and specify the file extensions that should trigger the workflow. When a file with a matching extension is uploaded to VAMS, the workflow runs automatically.
+The body is the message body. An external consumer polls the queue, processes the work, and calls back:
 
 ```json
 {
-    "autoTriggerOnFileExtensionsUpload": ".stl,.obj,.ply,.glb"
+    "executionType": "SQS",
+    "waitForCallback": "Enabled",
+    "sqs": { "queueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue" }
 }
 ```
+
+### Amazon EventBridge
+
+The body is the event `Detail`, published to the configured bus with the configured source and detail
+type. This suits loosely coupled and cross-account integrations:
+
+```json
+{
+    "executionType": "EventBridge",
+    "waitForCallback": "Enabled",
+    "eventBridge": {
+        "busArn": "arn:aws:events:us-east-1:123456789012:event-bus/my-bus",
+        "source": "vams.pipeline",
+        "detailType": "PipelineExecution"
+    }
+}
+```
+
+When `detailType` is omitted, the pipeline id is used instead.
+
+### AWS Deadline Cloud
+
+Deadline Cloud submits a job to a farm queue and always waits for the callback. The body cannot be
+passed as a single object, because Deadline caps a string job parameter at **1024 characters** and the
+body is a multi-KB JSON object. Instead, **each body field becomes its own string-typed OpenJD job
+parameter**, named `Vams` followed by the field name with its first letter capitalized:
+
+| Body field                             | OpenJD job parameter                       |
+| -------------------------------------- | ------------------------------------------ |
+| `workflowDatabaseId`                   | `VamsWorkflowDatabaseId`                   |
+| `workflowId`                           | `VamsWorkflowId`                           |
+| `workflowExecutionId`                  | `VamsWorkflowExecutionId`                  |
+| `workflowExecutionS3InputOutputBucket` | `VamsWorkflowExecutionS3InputOutputBucket` |
+| `executingUserName`                    | `VamsExecutingUserName`                    |
+| `inputManifestS3Location`              | `VamsInputManifestS3Location`              |
+| `inputConfigurationS3Location`         | `VamsInputConfigurationS3Location`         |
+| `TaskToken`                            | `VamsTaskToken`                            |
+| `pipelineExecutionId`                  | `VamsPipelineExecutionId`                  |
+
+`executingRequestContext` is **not** forwarded -- it can exceed the 1024-character cap.
+
+:::danger[The OpenJD template must declare every reserved parameter]
+`createJob` validates the submitted parameters against the registered job template. A template missing
+any reserved `Vams*` parameter fails OpenJD validation and the job is never submitted. Declare all of
+them as `type: STRING` in the template's `parameterDefinitions`, including any the job does not read.
+:::
+
+```json
+{
+    "executionType": "DeadlineCloud",
+    "waitForCallback": "Enabled",
+    "deadlineCloud": { "farmId": "farm-...", "queueId": "queue-..." }
+}
+```
+
+The job reads the manifest from `VamsInputManifestS3Location` and calls `SendTaskSuccess` or
+`SendTaskFailure` with `VamsTaskToken`. The `DeadlineCloud` execution type is available only when the
+deployment sets `app.pipelines.deadlineCloudExecutionTypeEnabled`, and is unavailable in the AWS
+GovCloud and European Sovereign Cloud partitions.
+
+## Registration with the vamsSchema bundle
+
+Deploying a pipeline's AWS resources does not make it usable. A pipeline becomes selectable in VAMS —
+with its configuration templates and a runnable workflow — only once it is **registered** into the
+pipeline and workflow tables. Registration is driven by a `vamsSchema/` bundle: a set of static JSON
+files describing the pipeline, its optional workflow, and its optional templates.
+
+```
+backendPipelines/{useCase}/{name}/vamsSchema/
+    pipeline.json                  # required
+    workflow.json                  # optional -- one built-in workflow for the pipeline
+    templates/{templateId}.json    # optional -- one file per configuration template
+```
+
+Registration is idempotent. Re-deploying overwrites the existing definition and clears the archived
+flag, so a redeploy neither duplicates a pipeline nor leaves a previously archived one hidden.
+
+### pipeline.json
+
+The bundle contains no account identifiers or ARNs. The execution target is injected at deploy time
+according to `executionConfig.executionType`, so the same file works in any account, Region, and
+partition. Include the block for the execution type with its resource fields left empty:
+
+```json
+{
+    "pipelineName": "3D Basic Conversion",
+    "category": "Conversion",
+    "description": "Convert between 3D mesh formats.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Disabled",
+        "taskTimeout": "900",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": { "wholeAsset": false },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": { "allow": ["*.stl", "*.obj", "*.glb"], "exclude": [] }
+    }
+}
+```
+
+`systemConfig` is the admin-only contract that governs how the pipeline may be run:
+
+| Field                         | Purpose                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline. |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                       |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes). |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.         |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                   |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                 |
+
+Four points determine whether a registered pipeline is actually usable:
+
+-   **`inputFileFilters.allow` must match the file types the pipeline handles.** These patterns are what
+    the execute API and the file-upload trigger match against. A missing extension makes the pipeline
+    unselectable for that file type without producing an error.
+-   **A `requireTemplate` pipeline needs a default template.** Execution auto-selects the pipeline's
+    default template; without one, every caller must name a `templateId` explicitly. A bundle shipping
+    exactly one template has it promoted to the default automatically. With two or more templates the
+    choice is ambiguous, so mark the intended one with `"isDefault": true` in its template file.
+-   **`inputFileArity: "none"` takes its asset identity from the output target.** There are no input
+    files, so `assetId` and `databaseId` are resolved from the execution's `outputAssetId` and
+    `outputDatabaseId`.
+-   **Confirm the registration landed.** A malformed bundle can fail to import while the deployment
+    still reports success. Verify with the CLI after deploying:
+
+    ```bash
+    vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
+    vamscli pipeline template list -d GLOBAL -p {pipelineId}
+    ```
+
+### Built-in pipelines: registration through the CDK
+
+For a pipeline deployed as part of the VAMS solution, the `VamsSchemaRegistration` construct handles
+registration. It uploads the bundle to the artefacts bucket and invokes the import function through a
+custom resource during deployment, passing the deploy-time resolved resource values:
+
+```typescript
+new VamsSchemaRegistration(this, "MyPipelineSchema", {
+    schemaPath: path.join(__dirname, "../../../../../backendPipelines/{useCase}/{name}/vamsSchema"),
+    resourceOverrides: { lambdaName: myPipelineFunction.functionName },
+    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+});
+```
+
+Set `autoRegisterWithVAMS` to `true` in the pipeline's configuration to enable registration. To also
+create a file-upload trigger on the registered workflow, a pipeline uses one of two configuration
+fields, depending on which the pipeline's construct reads:
+
+-   `autoRegisterAutoTriggerOnFileUpload` (boolean) — enables the trigger directly.
+-   `autoTriggerOnFileExtensionsUpload` (string) — a legacy comma-separated extension list, used by the
+    NVIDIA Cosmos and Cosmos 3 pipelines. Only whether the value is **non-empty** is significant: it
+    switches the trigger on. The extensions themselves are not used for matching.
+
+:::note[Trigger matching comes from inputFileFilters]
+Whichever field enables the trigger, matching is performed with the workflow's `inputFileFilters`
+globs — not with an extension list in the configuration. Setting
+`autoTriggerOnFileExtensionsUpload` to `".jpg,.png"` on a pipeline whose filters allow only `*.mp4`
+enables the trigger but never matches a `.jpg` upload. Keep `inputFileFilters` authoritative and use
+the configuration field only as the on/off switch.
+:::
+
+### External pipelines: registering outside the VAMS CDK solution
+
+A pipeline can be deployed and operated entirely outside the VAMS solution — in a separate stack, a
+separate account, or by a third party — and still register itself with VAMS. The import path is the
+same one the CDK uses; only the caller differs.
+
+Two options are available:
+
+1.  **Call the pipeline and workflow APIs directly.** Create the pipeline, its templates, and its
+    workflow through the standard endpoints, supplying your own resource identifiers in
+    `executionConfig` (for example the Lambda function name, Amazon SQS queue URL, or Amazon
+    EventBridge bus ARN that your solution owns). This is the most direct route and needs no VAMS
+    deployment artifacts:
+
+    ```bash
+    vamscli pipeline create -d GLOBAL -p my-external-pipeline -n "My External Pipeline" \
+        --execution-config '{"executionType":"SQS","sqs":{"queueUrl":"https://sqs.../my-queue"}}' \
+        --system-config '{"inputFileArity":"one","requireTemplate":false,
+                          "inputFileFilters":{"allow":["*.glb"],"exclude":[]}}'
+    vamscli workflow create -d GLOBAL -w my-external-workflow -n "My External Workflow" \
+        --pipeline GLOBAL:my-external-pipeline
+    ```
+
+2.  **Invoke the import function with a vamsSchema bundle.** The import function accepts the same
+    bundle structure the built-in pipelines use, so an external solution can keep its pipeline
+    definition as versioned JSON and register it idempotently on each of its own deployments. Because
+    the schema files carry no ARNs, supply your resource identifiers as the resource overrides. This
+    requires permission to invoke the import function in the target VAMS deployment.
+
+Because registration is idempotent in both cases, an external solution may safely re-register on every
+deployment to keep its definition current.
+
+An externally registered pipeline is a normal VAMS pipeline: it appears in the pipelines list, can be
+referenced by workflows, honors the same `systemConfig` contract, and is governed by the same two-tier
+authorization. Its execution target simply lives outside the VAMS stack. For asynchronous types, the
+pipeline is responsible for calling `SendTaskSuccess` or `SendTaskFailure` with the task token when
+`waitForCallback` is enabled, exactly as a built-in pipeline does.
 
 ## Input-configuration template tags
 
@@ -459,7 +735,7 @@ An unrecognized tag causes the execution to fail, so a typo is caught rather tha
 
 **Deadline Cloud** (`{{deadlineFarmId}}`, `{{deadlineQueueId}}`, `{{deadlineStorageProfileId}}`): recognized so a Deadline Cloud job template can reference them today, but they resolve to empty values until a future pipeline configuration supplies the pipeline's farm, queue, and storage profile.
 
-The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request can request a per-run output sub-folder such as `/{{executionId}}/` or `/{{jobStartDate}}/`.
+The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs.
 
 :::note
 Two dynamic tag families are planned but not yet available: `{{metadata_<key>}}` for looking up an individual metadata field by name, and user-defined per-pipeline tags declared on the pipeline definition. Using either today fails the execution as an unrecognized tag.

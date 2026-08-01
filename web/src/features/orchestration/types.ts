@@ -17,6 +17,7 @@ export type ExecutionStatus =
     | "FAILED"
     | "ABORTED"
     | "TIMED_OUT"
+    // Legacy terminal value carried by migrated execution rows; treated as a success.
     | "COMPLETE";
 
 export interface PipelineExecutionConfig {
@@ -64,6 +65,9 @@ export interface Pipeline {
     templates?: Array<Record<string, any>>;
 }
 
+/** Create body: pipelineId is null when the backend generates it. */
+export type PipelineCreateRequest = Omit<Pipeline, "pipelineId"> & { pipelineId?: string | null };
+
 export interface TagSchemaField {
     tagKey: string;
     type: TagType;
@@ -75,7 +79,10 @@ export interface TagSchemaField {
 }
 
 export interface Template {
-    databaseId: string;
+    // Create bodies carry databaseId; template responses key the owning database as
+    // pipelineDatabaseId.
+    databaseId?: string;
+    pipelineDatabaseId?: string;
     pipelineId: string;
     templateId: string;
     templateName: string;
@@ -106,6 +113,12 @@ export interface WorkflowSystemConfig {
     inputFileFilters?: { allow?: string[]; exclude?: string[] };
     concurrencyRestriction?: ConcurrencyRestriction;
     outputTarget?: { locationType?: OutputLocationType; allowOverride?: boolean };
+    // Whether a file written by ANOTHER workflow may fire this workflow's triggers. A workflow never
+    // fires on output it wrote itself, whatever this is set to, so an A->A loop cannot be enabled.
+    allowWorkflowTriggerChaining?: boolean;
+    // Output path prefix used when an execution supplies none. Stored UNRESOLVED, so its {{tag}}
+    // placeholders are substituted per run (e.g. "/{{jobName}}/" gives each run its own folder).
+    defaultOutputFileBaseExecutionPathExtension?: string;
 }
 
 export interface Workflow {
@@ -125,6 +138,9 @@ export interface Workflow {
     // Total executions for this workflow; present on list responses (computed server-side per page).
     executionCount?: number;
 }
+
+/** Create body: workflowId is null when the backend generates it. */
+export type WorkflowCreateRequest = Omit<Workflow, "workflowId"> & { workflowId?: string | null };
 
 export interface WorkflowTrigger {
     triggerType: "fileUpload";
@@ -169,18 +185,23 @@ export interface Execution {
     executionStopDate?: string;
     executionGroupId?: string;
     executionError?: string;
+    // Output target of the run: "none" (results-only) or "asset" with the destination ids. Present on
+    // the global list rows too — the backend projects them from the execution's configuration row,
+    // which it already reads to authorize output-asset visibility.
+    outputLocationType?: string;
+    outputAssetId?: string;
+    outputDatabaseId?: string;
 }
 
 export interface ExecutionDetail extends Execution {
+    workflowName?: string;
+    workflowDescription?: string;
     pipelines?: any[];
     inputFiles?: any[];
     inputMetadata?: any[];
     outputs?: { files?: any[]; metadata?: any[]; results?: any[] };
     truncatedCollections?: string[];
-    // Output target of the run: "none" (results-only) or "asset" with the destination ids.
-    outputLocationType?: string;
-    outputDatabaseId?: string;
-    outputAssetId?: string;
+    // outputLocationType / outputAssetId / outputDatabaseId are inherited from Execution.
     outputFileBaseExecutionPathExtension?: string;
 }
 

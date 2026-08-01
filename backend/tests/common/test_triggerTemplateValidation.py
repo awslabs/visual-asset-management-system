@@ -65,7 +65,7 @@ class TestValidateTriggerDefaultTemplates:
 
 def _triggers_table_with(rows):
     table = MagicMock()
-    table.scan.return_value = {"Items": rows}
+    table.query.return_value = {"Items": rows}
     return table
 
 
@@ -91,7 +91,9 @@ class TestTemplateNotBreakingTriggers:
             table, MagicMock(), "db1", "pipe1", "tmpl1",
             [{"tagKey": "q", "required": True}])
         assert len(errors) == 1
-        assert "db1:wf1" in errors[0]
+        assert "q" in errors[0]
+        # The client-facing message names no workflow/database ids (backend Rule 11).
+        assert "db1:wf1" not in errors[0]
 
     def test_not_referenced_no_error(self):
         table = _triggers_table_with([
@@ -154,3 +156,10 @@ class TestTriggersReferencingTemplate:
         ])
         hits = triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1")
         assert hits == [("db1", "wf1", "fileUpload")]
+        assert table.query.call_args.kwargs["IndexName"] == "TriggersByTypeGSI"
+        table.scan.assert_not_called()
+
+    def test_read_error_returns_empty(self):
+        table = MagicMock()
+        table.query.side_effect = RuntimeError("throttled")
+        assert triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1") == []

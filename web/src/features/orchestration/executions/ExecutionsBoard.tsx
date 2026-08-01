@@ -15,8 +15,17 @@ import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
 import { control, btnSecondary } from "../components/controlStyles";
 import RefreshButton from "../components/RefreshButton";
 import SearchInput from "../components/SearchInput";
-import { useExecutions, useExecutionActions, type ExecutionScope } from "../api/queries";
+import Breadcrumb from "../components/Breadcrumb";
+import {
+    useExecutions,
+    useExecutionActions,
+    useAllWorkflows,
+    useDatabases,
+    useWorkflow,
+    type ExecutionScope,
+} from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import type { Execution } from "../types";
 
 interface ExecutionsBoardProps {
@@ -24,17 +33,30 @@ interface ExecutionsBoardProps {
 }
 
 const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
+    const toast = useToast();
     const navigate = useNavigate();
     const [quickViewExecutionId, setQuickViewExecutionId] = useState<string | null>(null);
+    // The group id is captured with the row so a list refetch (poll / mutation invalidation) while
+    // the dialog is open cannot downgrade a group abort to a single-execution abort.
     const [abortConfirm, setAbortConfirm] = useState<{
         executionId: string;
         isGroup: boolean;
+        executionGroupId?: string;
     } | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [deleteTypedValue, setDeleteTypedValue] = useState("");
+    // Failure message from the last abort / rerun / permanent-delete attempt. Shown inside the
+    // confirmation dialog that triggered it (the dialog stays open so the action can be retried or
+    // cancelled), and in a page-level banner for rerun, which has no dialog.
+    const [actionError, setActionError] = useState<string | null>(null);
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
+    // Workflow-database / workflow filters. Only meaningful in the global scope: an asset- or
+    // workflow-scoped board already has these pinned by the scope (see useExecutions), so the
+    // controls are hidden there rather than offering a choice that would be overridden.
+    const [workflowDatabaseFilter, setWorkflowDatabaseFilter] = useState("");
+    const [workflowFilter, setWorkflowFilter] = useState("");
     // Time-window filter (executions started within the window). A preset ("90"/"120"/"180" days)
     // resolves to a filterStartDate N days before now; "custom" reveals an explicit from/to date
     // range. Default is the last 90 days (matching the backend default).
@@ -48,6 +70,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         const f: Record<string, string> = {};
         if (statusFilter) f.status = statusFilter;
         if (triggerFilter) f.triggerType = triggerFilter;
+        if (workflowDatabaseFilter) f.workflowDatabaseId = workflowDatabaseFilter;
+        if (workflowFilter) f.workflowId = workflowFilter;
         if (dateWindow === "custom") {
             if (startDateFilter) f.filterStartDate = `${startDateFilter}T00:00:00Z`;
             if (endDateFilter) f.filterEndDate = `${endDateFilter}T23:59:59Z`;
@@ -57,10 +81,56 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             f.filterStartDate = cutoff.toISOString().replace(/\.\d{3}Z$/, "Z");
         }
         return f;
-    }, [statusFilter, triggerFilter, dateWindow, startDateFilter, endDateFilter]);
+    }, [
+        statusFilter,
+        triggerFilter,
+        workflowDatabaseFilter,
+        workflowFilter,
+        dateWindow,
+        startDateFilter,
+        endDateFilter,
+    ]);
 
-    const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage, refetch, isFetching } =
-        useExecutions(scope, filters, {});
+    // Only the global board offers workflow/database filters: useExecutions pins both from the scope
+    // for asset- and workflow-scoped boards, so a control there would be silently overridden.
+    const isGlobalScope = scope.kind === "global";
+    // Only fetched for the workflow-scoped board, to label its breadcrumb.
+    const { data: scopedWorkflow } = useWorkflow(
+        scope.kind === "workflow" ? scope.databaseId : "",
+        scope.kind === "workflow" ? scope.workflowId : ""
+    );
+    const scopedWorkflowName =
+        scope.kind === "workflow" ? (scopedWorkflow as any)?.workflowName || scope.workflowId : "";
+    const { data: allDatabases } = useDatabases(isGlobalScope);
+    const { data: allWorkflows } = useAllWorkflows(workflowDatabaseFilter || undefined);
+
+    // Database ids for the filter: the databases the caller can see, unioned with any id already
+    // present on a loaded row (mirrors WorkflowsPage) so a row's database is always selectable.
+    const databaseOptions = React.useMemo(() => {
+        if (!isGlobalScope) return [] as string[];
+        const ids = new Set<string>();
+        (allDatabases || []).forEach((d: any) => d?.databaseId && ids.add(d.databaseId));
+        return Array.from(ids).sort();
+    }, [allDatabases, isGlobalScope]);
+
+    // Workflows for the filter, narrowed to the selected database when one is chosen.
+    const workflowOptions = React.useMemo(() => {
+        if (!isGlobalScope) return [] as any[];
+        return [...(allWorkflows || [])].sort((a: any, b: any) =>
+            (a.workflowName || a.workflowId).localeCompare(b.workflowName || b.workflowId)
+        );
+    }, [allWorkflows, isGlobalScope]);
+
+    const {
+        data,
+        isLoading,
+        error: loadError,
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+        refetch,
+        isFetching,
+    } = useExecutions(scope, filters, {});
     const { abortExecution, rerunExecution, permanentDeleteExecution } = useExecutionActions();
     const { can } = useAllowedRoutes();
 
@@ -89,42 +159,75 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         });
     }, [executions]);
 
-    // Client-side text search over the loaded rows (id / workflow / database). Server-side filters
-    // (status, trigger, date window) are applied via the query; this narrows what's already loaded.
+    // Client-side text search over the loaded rows (id / workflow / database / group). Server-side
+    // filters (status, trigger, date window) are applied via the query; this narrows what's already
+    // loaded.
     const visibleExecutions = useMemo(() => {
         const q = searchText.trim().toLowerCase();
         if (!q) return sortedExecutions;
         return sortedExecutions.filter((e) =>
-            [e.workflowExecutionId, e.workflowId, e.workflowDatabaseId].some((v) =>
-                (v || "").toLowerCase().includes(q)
+            [e.workflowExecutionId, e.workflowId, e.workflowDatabaseId, e.executionGroupId].some(
+                (v) => (v || "").toLowerCase().includes(q)
             )
         );
     }, [sortedExecutions, searchText]);
 
+    // Abort and permanent-delete are raised from a confirm dialog, so their failure also stays inline
+    // in that dialog (the message sits next to the action that caused it). The toast is what carries
+    // the outcome once the dialog closes, and is the only feedback for actions with no dialog.
+    // Surface a load failure once per occurrence; the inline message above stays for reference.
+    React.useEffect(() => {
+        if (loadError) {
+            toast.error("Load failed", {
+                description: `Executions: ${toastErrorMessage(loadError)}`,
+            });
+        }
+    }, [loadError, toast]);
+
     const handleAbort = async (executionId: string, groupId?: string) => {
+        setActionError(null);
         try {
             await abortExecution.mutateAsync({ executionId, groupId });
             setAbortConfirm(null);
+            toast.success(groupId ? "Aborting execution group" : "Aborting execution", {
+                description: groupId
+                    ? `Every active execution in group ${groupId} was signalled to stop.`
+                    : `Execution ${executionId.slice(0, 12)}… was signalled to stop.`,
+            });
         } catch (err) {
-            console.error("Failed to abort execution:", err);
+            const message = toastErrorMessage(err, "Failed to abort execution");
+            setActionError(message);
+            toast.error("Abort failed", { description: message });
         }
     };
 
     const handleRerun = async (executionId: string, groupId?: string) => {
+        setActionError(null);
         try {
             await rerunExecution.mutateAsync({ executionId, executionGroupId: groupId });
+            toast.success("Re-run started", {
+                description: "A new execution was launched from the stored inputs.",
+            });
         } catch (err) {
-            console.error("Failed to rerun execution:", err);
+            const message = toastErrorMessage(err, "Failed to rerun execution");
+            setActionError(message);
+            toast.error("Re-run failed", { description: message });
         }
     };
 
     const handlePermanentDelete = async (executionId: string) => {
+        setActionError(null);
         try {
             await permanentDeleteExecution.mutateAsync(executionId);
             setDeleteConfirm(null);
             setDeleteTypedValue("");
+            toast.success("Execution deleted", {
+                description: `${executionId.slice(0, 12)}… was permanently removed.`,
+            });
         } catch (err) {
-            console.error("Failed to delete execution:", err);
+            const message = toastErrorMessage(err, "Failed to delete execution");
+            setActionError(message);
+            toast.error("Delete failed", { description: message });
         }
     };
 
@@ -176,7 +279,9 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             },
             {
                 accessorKey: "workflowDatabaseId",
-                header: "Database",
+                // "Workflow Database" rather than "Database": the row also carries an OUTPUT database,
+                // so an unqualified label was ambiguous once that column existed.
+                header: "Workflow Database",
                 cell: ({ row }) => (
                     <span className="text-sm">{row.original.workflowDatabaseId || "—"}</span>
                 ),
@@ -195,6 +300,42 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     </div>
                 ),
             },
+            // Output-target columns, global scope only. The per-asset list is built by joining the
+            // execution-inputs rows with the main rows and never reads the configuration row the
+            // output target lives on, so on the asset tab these would be permanently blank. Adding
+            // them there would cost one extra read per row, which is the N+1 the global list is
+            // deliberately shaped to avoid.
+            ...(isGlobalScope
+                ? [
+                      {
+                          accessorKey: "outputLocationType",
+                          header: "Output Type",
+                          cell: ({ row }: { row: { original: Execution } }) => (
+                              <span className="text-sm">
+                                  {row.original.outputLocationType || "—"}
+                              </span>
+                          ),
+                      },
+                      {
+                          accessorKey: "outputDatabaseId",
+                          header: "Output Database",
+                          cell: ({ row }: { row: { original: Execution } }) => (
+                              <span className="text-sm">
+                                  {row.original.outputDatabaseId || "—"}
+                              </span>
+                          ),
+                      },
+                      {
+                          accessorKey: "outputAssetId",
+                          header: "Output Asset ID",
+                          cell: ({ row }: { row: { original: Execution } }) => (
+                              <span className="font-mono text-xs">
+                                  {row.original.outputAssetId || "—"}
+                              </span>
+                          ),
+                      },
+                  ]
+                : []),
             {
                 accessorKey: "executionStartDate",
                 header: "Started",
@@ -230,19 +371,23 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             execution={row.original}
                             can={can}
                             onView={() => setQuickViewExecutionId(row.original.workflowExecutionId)}
-                            onAbort={() =>
+                            onAbort={() => {
+                                setActionError(null);
                                 setAbortConfirm({
                                     executionId: row.original.workflowExecutionId,
                                     isGroup: false,
-                                })
-                            }
+                                });
+                            }}
                             onAbortGroup={
                                 row.original.executionGroupId
-                                    ? () =>
+                                    ? () => {
+                                          setActionError(null);
                                           setAbortConfirm({
                                               executionId: row.original.workflowExecutionId,
                                               isGroup: true,
-                                          })
+                                              executionGroupId: row.original.executionGroupId,
+                                          });
+                                      }
                                     : undefined
                             }
                             onRerun={() =>
@@ -256,9 +401,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                     `/executions/${row.original.workflowExecutionId}?tab=logs`
                                 );
                             }}
-                            onPermanentDelete={() =>
-                                setDeleteConfirm(row.original.workflowExecutionId)
-                            }
+                            onPermanentDelete={() => {
+                                setActionError(null);
+                                setDeleteConfirm(row.original.workflowExecutionId);
+                            }}
                             onOpenDetails={() =>
                                 navigate(`/executions/${row.original.workflowExecutionId}`)
                             }
@@ -267,13 +413,35 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 ),
             },
         ],
-        [can, navigate, handleRerun, setQuickViewExecutionId, setAbortConfirm, setDeleteConfirm]
+        [
+            can,
+            navigate,
+            handleRerun,
+            setQuickViewExecutionId,
+            setAbortConfirm,
+            setDeleteConfirm,
+            isGlobalScope,
+        ]
     );
 
     return (
-        <div className="orchestration-root px-6 pb-6 pt-4 space-y-4 bg-surface">
+        <div className="orchestration-root orchestration-page space-y-4 bg-surface">
+            {/* Workflow-scoped board (navigated from a workflow): trail back to the Workflows list and
+                that workflow, so the filtered view says what it is filtered to. */}
+            {scope.kind === "workflow" && (
+                <Breadcrumb
+                    items={[
+                        { label: "Workflows", to: "/workflows" },
+                        {
+                            label: scopedWorkflowName,
+                            to: `/databases/${scope.databaseId}/workflows/${scope.workflowId}`,
+                        },
+                        { label: "Executions" },
+                    ]}
+                />
+            )}
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-semibold text-text-primary">Executions</h1>
+                <h1 className="text-text-primary">Executions</h1>
                 {/* Execute sits in the header row (matching Pipelines/Workflows) and is available
                     wherever the board is shown (global page + asset tab). */}
                 <ExecuteWorkflowButton scope={scope} />
@@ -309,10 +477,50 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         onChange={(e) => setTriggerFilter(e.target.value)}
                         className={control}
                     >
+                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"), which
+                            is what the server-side triggerType filter compares against. */}
                         <option value="">All triggers</option>
                         <option value="Manual">Manual</option>
-                        <option value="fileUpload">File upload</option>
+                        <option value="File-Upload">File upload</option>
                     </select>
+                    {isGlobalScope && (
+                        <select
+                            aria-label="Filter by workflow database"
+                            value={workflowDatabaseFilter}
+                            onChange={(e) => {
+                                setWorkflowDatabaseFilter(e.target.value);
+                                // The workflow list is scoped to the chosen database, so a stale
+                                // selection from another database would filter to nothing.
+                                setWorkflowFilter("");
+                            }}
+                            className={control}
+                        >
+                            <option value="">All workflow databases</option>
+                            {databaseOptions.map((id) => (
+                                <option key={id} value={id}>
+                                    {id}
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                    {isGlobalScope && (
+                        <select
+                            aria-label="Filter by workflow"
+                            value={workflowFilter}
+                            onChange={(e) => setWorkflowFilter(e.target.value)}
+                            className={control}
+                        >
+                            <option value="">All workflows</option>
+                            {workflowOptions.map((w) => (
+                                <option
+                                    key={`${w.databaseId}:${w.workflowId}`}
+                                    value={w.workflowId}
+                                >
+                                    {w.workflowName || w.workflowId}
+                                </option>
+                            ))}
+                        </select>
+                    )}
                     {/* Time window: preset day-counts (default 90) or a custom from/to range. */}
                     <select
                         aria-label="Time window"
@@ -350,6 +558,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     )}
                     {(statusFilter ||
                         triggerFilter ||
+                        workflowDatabaseFilter ||
+                        workflowFilter ||
                         dateWindow !== "90" ||
                         startDateFilter ||
                         endDateFilter) && (
@@ -357,6 +567,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             onClick={() => {
                                 setStatusFilter("");
                                 setTriggerFilter("");
+                                setWorkflowDatabaseFilter("");
+                                setWorkflowFilter("");
                                 setDateWindow("90");
                                 setStartDateFilter("");
                                 setEndDateFilter("");
@@ -369,35 +581,56 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 </div>
             </div>
 
+            {/* Rerun has no confirmation dialog, so its failures surface here. Abort / permanent
+                delete render the same message inside their own dialog. */}
+            {actionError && !abortConfirm && !deleteConfirm && (
+                <div
+                    role="alert"
+                    className="p-3 rounded bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400"
+                >
+                    {actionError}
+                </div>
+            )}
+
             {isLoading && <div className="text-text-secondary">Loading executions...</div>}
 
-            {!isLoading && visibleExecutions.length === 0 && (
+            {/* A failed fetch is reported explicitly: falling through to the empty state below made a
+                load failure indistinguishable from a genuinely empty board. */}
+            {!isLoading && loadError && (
+                <div role="alert" className="p-4 text-vams-error">
+                    Error loading executions: {toastErrorMessage(loadError)}
+                </div>
+            )}
+
+            {!isLoading && !loadError && visibleExecutions.length === 0 && (
                 <div className="text-text-secondary">No executions found.</div>
             )}
 
             {!isLoading && visibleExecutions.length > 0 && (
-                <>
-                    <DataTable
-                        columns={columns}
-                        rows={visibleExecutions}
-                        paginate={false}
-                        // The board owns the search box (in the filter row); the table's own search
-                        // is disabled so it doesn't render a second, redundant search bar.
-                        filtering={false}
-                        onRowClick={(row) => setQuickViewExecutionId(row.workflowExecutionId)}
-                    />
-                    {hasNextPage && (
-                        <div className="flex justify-center mt-4">
-                            <button
-                                onClick={() => fetchNextPage()}
-                                disabled={isFetchingNextPage}
-                                className={btnSecondary}
-                            >
-                                {isFetchingNextPage ? "Loading more..." : "Load more"}
-                            </button>
-                        </div>
-                    )}
-                </>
+                <DataTable
+                    columns={columns}
+                    rows={visibleExecutions}
+                    paginate={false}
+                    // The board owns the search box (in the filter row); the table's own search
+                    // is disabled so it doesn't render a second, redundant search bar.
+                    filtering={false}
+                    onRowClick={(row) => setQuickViewExecutionId(row.workflowExecutionId)}
+                />
+            )}
+
+            {/* Pagination sits outside the rows branch: a server page can drop every row it returned
+                (server-side filters, per-object visibility) or the client search can match nothing on
+                the loaded pages while more pages remain, so the control must stay reachable. */}
+            {!isLoading && hasNextPage && (
+                <div className="flex justify-center mt-4">
+                    <button
+                        onClick={() => fetchNextPage()}
+                        disabled={isFetchingNextPage}
+                        className={btnSecondary}
+                    >
+                        {isFetchingNextPage ? "Loading more..." : "Load more"}
+                    </button>
+                </div>
             )}
 
             {/* Quick view drawer */}
@@ -413,28 +646,33 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {abortConfirm && (
                 <Dialog
                     open={!!abortConfirm}
-                    onOpenChange={(open) => !open && setAbortConfirm(null)}
+                    onOpenChange={(open) => {
+                        if (!open) {
+                            setAbortConfirm(null);
+                            setActionError(null);
+                        }
+                    }}
                     title={abortConfirm.isGroup ? "Abort Execution Group" : "Abort Execution"}
                     footer={
                         <>
-                            <button onClick={() => setAbortConfirm(null)} className={btnSecondary}>
+                            <button
+                                onClick={() => {
+                                    setAbortConfirm(null);
+                                    setActionError(null);
+                                }}
+                                className={btnSecondary}
+                            >
                                 Cancel
                             </button>
                             <button
-                                onClick={() => {
-                                    if (abortConfirm.isGroup) {
-                                        const exec = executions.find(
-                                            (e) =>
-                                                e.workflowExecutionId === abortConfirm.executionId
-                                        );
-                                        handleAbort(
-                                            abortConfirm.executionId,
-                                            exec?.executionGroupId
-                                        );
-                                    } else {
-                                        handleAbort(abortConfirm.executionId);
-                                    }
-                                }}
+                                onClick={() =>
+                                    handleAbort(
+                                        abortConfirm.executionId,
+                                        abortConfirm.isGroup
+                                            ? abortConfirm.executionGroupId
+                                            : undefined
+                                    )
+                                }
                                 className="px-4 py-2 bg-red-600 text-white rounded"
                             >
                                 Abort
@@ -446,6 +684,14 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         Are you sure you want to abort{" "}
                         {abortConfirm.isGroup ? "this execution group" : "this execution"}?
                     </p>
+                    {actionError && (
+                        <div
+                            role="alert"
+                            className="mt-4 p-3 rounded bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400"
+                        >
+                            {actionError}
+                        </div>
+                    )}
                 </Dialog>
             )}
 
@@ -457,12 +703,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         if (!open) {
                             setDeleteConfirm(null);
                             setDeleteTypedValue("");
+                            setActionError(null);
                         }
                     }}
                     title="Permanent Delete"
                     footer={
                         <>
-                            <button onClick={() => setDeleteConfirm(null)} className={btnSecondary}>
+                            <button
+                                onClick={() => {
+                                    setDeleteConfirm(null);
+                                    setDeleteTypedValue("");
+                                    setActionError(null);
+                                }}
+                                className={btnSecondary}
+                            >
                                 Cancel
                             </button>
                             <button
@@ -479,7 +733,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         This will permanently delete the execution record. This action cannot be
                         undone.
                     </p>
-                    <p className="font-semibold">
+                    <p className="font-semibold mt-2">
                         Type <code className="bg-surface-secondary px-1">CONFIRM</code> to proceed:
                     </p>
                     <input
@@ -494,6 +748,14 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             }
                         }}
                     />
+                    {actionError && (
+                        <div
+                            role="alert"
+                            className="mt-4 p-3 rounded bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400"
+                        >
+                            {actionError}
+                        </div>
+                    )}
                 </Dialog>
             )}
         </div>

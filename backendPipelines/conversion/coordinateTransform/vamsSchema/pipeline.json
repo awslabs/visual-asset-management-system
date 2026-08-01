@@ -19,7 +19,7 @@
             "fileMetadata": false,
             "fileAttributes": false
         },
-        "requireTemplate": false,
+        "requireTemplate": true,
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
             "allow": ["*.e57", "*.las", "*.laz", "*.ply"],

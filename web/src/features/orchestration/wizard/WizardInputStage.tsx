@@ -295,17 +295,27 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                         <input
                             type="text"
                             aria-label="Output path prefix"
-                            placeholder="/ (asset root)"
+                            placeholder="No prefix"
                             value={outputPathPrefix || ""}
-                            onChange={(e) => onOutputPathPrefixChange(e.target.value || undefined)}
+                            // Pass "" through rather than collapsing it to undefined: clearing
+                            // the field means "no prefix", whereas undefined means "untouched" and
+                            // lets the workflow default apply.
+                            onChange={(e) => onOutputPathPrefixChange(e.target.value)}
                             className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
-                        {/* Output files are written under this sub-path of the output asset. Dynamic
-                            tags resolved at launch are supported. Must not contain ".." or backslashes. */}
+                        {/* Inserted just above each output file's own name, so a pipeline's output
+                            folders are kept. System + dynamic tags are resolved at launch. Must not
+                            contain ".." or backslashes. Pre-filled from the workflow's default. */}
                         <span className="block text-xs text-text-secondary mt-1">
-                            Written beneath the output asset. Supports dynamic tags, e.g.{" "}
-                            <code>{"{{firstAssetFileFileNameNoExt}}"}</code>. Leave blank for the
-                            asset root.
+                            Inserted immediately before each output file's name, so the folders a
+                            pipeline creates are preserved — <code>/path/file.txt</code> with{" "}
+                            <code>/run/</code> becomes <code>/path/run/file.txt</code>. A trailing{" "}
+                            <code>/</code> makes it a folder; without one it joins onto the file
+                            name (<code>run</code> gives <code>/path/runfile.txt</code>). Supports
+                            system and dynamic tags, resolved per execution — e.g.{" "}
+                            <code>{"{{executionId}}"}</code> or{" "}
+                            <code>{"{{firstAssetFileFileNameNoExt}}"}</code>. Clear it to add no
+                            prefix to the final output paths.
                         </span>
                     </label>
                 </div>

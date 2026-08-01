@@ -71,6 +71,96 @@ Workflow event (assetId, databaseId, paths, ...)
       → Container: read assetId from PipelineDefinition, use for relative path computation
 ```
 
+## vamsSchema Registration (how a built-in becomes usable)
+
+A pipeline's CDK stack only creates AWS resources. What makes it appear in VAMS — as a pipeline, its
+templates, and a runnable workflow — is a **`vamsSchema/` bundle** the CDK uploads to the artefacts
+bucket and imports at deploy time through `SYSTEM_USER` cross-calls
+(`backend/backend/common/workflows/vamsSchemaImport.py`). Registration is idempotent: a redeploy
+overwrites and unarchives, so re-deploying never duplicates or strips a built-in.
+
+```
+backendPipelines/{useCase}/{name}/vamsSchema/
+    pipeline.json                  # required
+    workflow.json                  # optional (one built-in workflow per pipeline)
+    templates/{templateId}.json    # optional, one file per template
+```
+
+`pipeline.json` carries no ARNs — the execution target is injected at deploy time from
+`resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,
+`eventBridge.busArn`, `deadlineCloud.farmId`, …), so the same file works in every account and
+partition. Author it with the block for your execution type present but empty:
+
+```json
+{
+    "pipelineName": "3D Basic Conversion",
+    "category": "Conversion",
+    "description": "…",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Disabled",
+        "taskTimeout": "900",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": { "wholeAsset": false },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": { "allow": ["*.glb", "*.stl"], "exclude": [] }
+    }
+}
+```
+
+**Rules that bite if you get them wrong:**
+
+1. **`inputFileFilters.allow` must match what the container actually accepts.** The filter is what
+   the execute API and the file-upload trigger match against — a missing extension makes the pipeline
+   silently unselectable for that file type.
+2. **`requireTemplate: true` needs a default template.** Execute auto-selects the pipeline's default;
+   with no default the caller _must_ name a `templateId` or the run is rejected. The importer
+   promotes a **single** template to default automatically, but with two or more templates the choice
+   is ambiguous — mark one `"isDefault": true` in its template file.
+3. **`inputFileArity: "none"`** (a results-only or generate-from-nothing pipeline) means the manifest
+   has no input files, so the asset identity comes from the execution's **output target**
+   (`outputAssetId` / `outputDatabaseId`, resolved in `manifestHelper.resolve_inputs`). Do not read
+   `assetId` from an input file in that case.
+4. **`assetScope` accepts two vocabularies** — the CDK shorthand `{"wholeAsset": true|false}` and the
+   canonical four `*Allowed` keys. Validation accepts both; a malformed value can fail the import
+   while the deploy still exits 0, so confirm the row landed in `PipelineStorageTableV2` after
+   deploying.
+5. **A partial `systemConfig` is safe — the importer fills every field you omit with its default.**
+   The stored record replaces `systemConfig` wholesale rather than merging it, so registration completes
+   a bundle's block before writing: whatever the bundle declares wins, everything else becomes the
+   documented default (nested maps like `assetScope` / `metadataInputs` are filled key-by-key, so
+   naming one rule does not drop its siblings). Declare only what differs from the defaults. This is
+   also what keeps a NEW `systemConfig` field from changing the meaning of bundles written before it
+   existed.
+6. **`allowWorkflowTriggerChaining` (default `false`) lets ANOTHER workflow's output fire this
+   workflow's triggers** — how a preview or metadata built-in runs on a conversion pipeline's result. A
+   workflow never fires on output it wrote itself whatever the value, so it cannot loop on its own
+   files; a chained file must still match the trigger's `inputFileFilters`. The Potree preview, 3D
+   preview thumbnail, and GenAI 3D metadata labeling bundles enable it.
+7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
+   an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
+   one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
+   immediately before each output file's own name, so a container's own output folders are preserved.
+   **A container must therefore not create its own per-job folder** -- the workflow prefix is what
+   separates runs, and a container-side folder shows up as a stray level inside every asset. The
+   Gaussian Splat and Isaac Lab bundles use it for exactly this.
+
+Verify registration after a deploy rather than assuming it:
+
+```bash
+vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
+vamscli pipeline template list -d GLOBAL -p {pipelineId}
+```
+
 ## Adding a New Processing Pipeline
 
 1. Create directory under `backendPipelines/{useCase}/`.
@@ -83,17 +173,21 @@ Workflow event (assetId, databaseId, paths, ...)
     Without these files, Lambda will fail at import time with `No module named 'customLogging'`. The Lambda layer provides a fallback, but the local `customLogging/` package is required in each pipeline's code asset.
 
 3. Add container if needed in `container/` subdirectory.
-4. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`.
-5. Add pipeline config to `config.ts` under `pipelines` section.
-6. Register in pipeline builder nested stack.
-7. Add feature switch if pipeline is optional.
-8. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** of these condition blocks in the VPC builder (search for `useSplatToolbox` to find them all):
+4. **Author the `vamsSchema/` bundle** (`pipeline.json`, plus `workflow.json` and `templates/` as
+   needed) and register it with the `VamsSchemaRegistration` construct from the pipeline's nested
+   stack. Without this the AWS resources deploy but nothing appears in VAMS. See
+   [vamsSchema Registration](#vamsschema-registration-how-a-built-in-becomes-usable).
+5. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`.
+6. Add pipeline config to `config.ts` under `pipelines` section.
+7. Register in pipeline builder nested stack.
+8. Add feature switch if pipeline is optional.
+9. **Add pipeline flag to VPC builder** (`infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`). Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** of these condition blocks in the VPC builder (search for `useSplatToolbox` to find them all):
     - **Subnet creation condition** (~line 341): The `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. Without this, the VPC has no private subnets and Batch compute environments will fail with "Resource subnets are required".
     - **VPC endpoint condition** (~line 540): The `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 619): The `needsEcsPrivate` variable that controls whether the ECS VPC endpoint includes private subnets. Without this, the ECS agent on Batch instances cannot communicate with the ECS service.
-9. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
-10. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
-11. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.
-12. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
-13. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
-14. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _fourteen_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.
+10. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
+11. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).
+12. **Preserve relative paths** in container output. When writing asset-adjacent files (e.g., `.previewFile.X`), the container must maintain the input file's relative subdirectory within the asset so process-output can locate outputs correctly. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for the derivation pattern.
+13. **Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`** with all new pipeline configuration options (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, and any pipeline-specific settings). Follow the existing format: `-   \`app.pipelines.{pipelineName}.{option}\` | default: {value} | #{description}`.
+14. **Update licenses/attributions** when a pipeline adds, removes, or changes a third-party model, container base image, or dependency with its own license. Update **both** `NOTICE.md` (the per-pipeline dependency table + attribution note at the repo root) **and** `documentation/docusaurus-site/docs/additional/notices.md` (the per-pipeline license paragraph + the closing attribution/reference list). Record the exact license (e.g. NVIDIA Open Model License, OpenMDW-1.1, Apache-2.0) and any required attribution string. A model under a new license (as Cosmos 3 uses OpenMDW-1.1 rather than the NVIDIA Open Model License) must be reflected in both files, and the pipeline doc page's Prerequisites + Attribution sections.
+15. **Update the pipeline count** wherever the docs state one. `documentation/docusaurus-site/docs/overview/features.md` opens the "Built-In Pipelines" section with a spelled-out count ("VAMS includes _fourteen_ built-in processing pipelines…") followed by a table — bump the number to match the new table row count when adding or removing a pipeline. Grep the docs for the current number word to catch any other count references.

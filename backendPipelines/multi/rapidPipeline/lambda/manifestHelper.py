@@ -107,6 +107,109 @@ def fetch_metadata(s3_client, input_metadata_s3_location):
     return body if isinstance(body, dict) else {}
 
 
+# Schema version of the grouped-by-asset (v2) input-metadata envelope. A v1 body is the legacy
+# {"schemaVersion": 1, "metadata": {...}} wrapper that fetch_metadata unwraps to the inner object.
+METADATA_SCHEMA_VERSION_GROUPED = 2
+
+
+def _normalize_file_key(file_key):
+    """Asset-relative file keys are stored with a single leading slash ('/folder/a.glb'). Accepts
+    either form so callers can pass a manifest relativePath verbatim."""
+    if not file_key:
+        return "/"
+    return "/" + str(file_key).lstrip("/")
+
+
+def get_asset_file_record(envelope, database_id, asset_id, file_key):
+    """Return the ``{fileKey, metadata, attributes?}`` record for a (databaseId, assetId, fileKey)
+    from a v2 grouped envelope, or ``None`` when absent. The file key is normalized before
+    comparison. Asset-level metadata is the fileKey '/' record."""
+    fk = _normalize_file_key(file_key)
+    for asset in (envelope or {}).get("assets", []) or []:
+        if asset.get("databaseId") == database_id and asset.get("assetId") == asset_id:
+            for file_record in asset.get("files", []) or []:
+                if file_record.get("fileKey") == fk:
+                    return file_record
+    return None
+
+
+def _legacy_scope(metadata_body, scope):
+    """Read one scope out of a legacy ``{"VAMS": {...}}`` body."""
+    if not isinstance(metadata_body, dict):
+        return {}
+    return ((metadata_body.get("VAMS") or {}).get(scope)) or {}
+
+
+def asset_metadata_for(metadata_body, database_id, asset_id):
+    """Asset-level metadata for an asset. Reads the v2 fileKey '/' record, falling back to the
+    legacy ``VAMS.assetMetadata`` scope for a v1 body."""
+    if isinstance(metadata_body, dict) and "assets" in metadata_body:
+        record = get_asset_file_record(metadata_body, database_id, asset_id, "/") or {}
+        return record.get("metadata") or {}
+    return _legacy_scope(metadata_body, "assetMetadata")
+
+
+def file_metadata_for(metadata_body, database_id, asset_id, file_key):
+    """Per-file metadata for a file, falling back to the legacy ``VAMS.fileMetadata`` scope."""
+    if isinstance(metadata_body, dict) and "assets" in metadata_body:
+        record = get_asset_file_record(metadata_body, database_id, asset_id, file_key) or {}
+        return record.get("metadata") or {}
+    return _legacy_scope(metadata_body, "fileMetadata")
+
+
+def file_attributes_for(metadata_body, database_id, asset_id, file_key):
+    """Per-file attributes for a file, falling back to the legacy ``VAMS.fileAttributes`` scope."""
+    if isinstance(metadata_body, dict) and "assets" in metadata_body:
+        record = get_asset_file_record(metadata_body, database_id, asset_id, file_key) or {}
+        return record.get("attributes") or {}
+    return _legacy_scope(metadata_body, "fileAttributes")
+
+
+def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key=""):
+    """Project a metadata payload onto the legacy ``{"VAMS": {assetData, assetMetadata,
+    fileMetadata, fileAttributes}}`` view existing pipeline readers dig into.
+
+    - A v2 grouped body is projected for the given (databaseId, assetId, fileKey): assetData +
+      assetMetadata come from the asset's '/' record, fileMetadata/fileAttributes from the fileKey
+      record. A fileKey of '/' (whole-asset selection) resolves to the asset-level record only,
+      leaving the file scopes empty — mirroring the writer, which emits no per-file record for a
+      whole-asset selection.
+    - A body already in the ``{"VAMS": {...}}`` shape (or any non-grouped dict) passes through
+      unchanged; ``{}`` when it is not a usable dict.
+
+    Mirrors backend ``executionRecords.to_legacy_vams_view`` so the backend render path and the
+    pipeline read path resolve metadata identically."""
+    body = metadata_body or {}
+    if not isinstance(body, dict):
+        return {}
+    if body.get("schemaVersion") == METADATA_SCHEMA_VERSION_GROUPED and "assets" in body:
+        asset_group = {}
+        for asset in body.get("assets", []) or []:
+            if asset.get("databaseId") == database_id and asset.get("assetId") == asset_id:
+                asset_group = asset
+                break
+        asset_record = get_asset_file_record(body, database_id, asset_id, "/") or {}
+        is_asset_level = _normalize_file_key(file_key) == "/"
+        file_record = {} if is_asset_level else (
+            get_asset_file_record(body, database_id, asset_id, file_key) or {})
+        return {"VAMS": {
+            "assetData": asset_group.get("assetData") or {},
+            "assetMetadata": asset_record.get("metadata") or {},
+            "fileMetadata": file_record.get("metadata") or {},
+            "fileAttributes": file_record.get("attributes") or {},
+        }}
+    return body
+
+
+def resolved_file_key(resolved):
+    """The per-file metadata key for a resolved manifest: the first input file's relative path,
+    or '/' (asset level) when the selection carries no input files."""
+    input_files = (resolved or {}).get("inputFiles") or []
+    if not input_files:
+        return "/"
+    return _normalize_file_key(input_files[0].get("relativePath"))
+
+
 def fetch_input_configuration(s3_client, input_configuration_s3_location):
     """Fetch + parse the per-pipeline input configuration file (the user-defined
     ``inputParameters``) from S3, returning the parsed object. The configuration file is the
@@ -192,6 +295,15 @@ def resolve_inputs(data, manifest=None):
         "manifestUsed": False,
     }
 
+    # A results-only pipeline (inputFileArity "none") has no input files, so the asset identity
+    # falls back to the execution's output target, which the Step Functions body always carries.
+    # Applied before the no-manifest return so both paths get it; a manifest input file below
+    # still wins when one is present.
+    if not resolved["assetId"] and data.get("outputAssetId"):
+        resolved["assetId"] = data["outputAssetId"]
+    if not resolved["databaseId"] and data.get("outputDatabaseId"):
+        resolved["databaseId"] = data["outputDatabaseId"]
+
     if not manifest:
         return resolved
 
@@ -276,3 +388,53 @@ def enforce_single_input_file(resolved):
             f"This pipeline processes a single input file per execution, but the workflow "
             f"manifest supplied {len(input_files)} input files. Multi-file input is not yet "
             f"supported for this pipeline.")
+
+
+def resolve_input_setting(input_configuration, metadata, config_keys, metadata_key,
+                          metadata_scopes=("assetMetadata",)):
+    """One pipeline input setting, resolved CONFIG-FIRST with an ASSET-METADATA fallback.
+
+    Precedence is deliberately configuration-first: the input configuration is what the person
+    launching the run just supplied on the execute screen (a template's dynamic tag, e.g. a prompt),
+    so it must win over a value saved on the asset earlier. When the configuration leaves the field
+    BLANK, the asset's metadata supplies it — which is what lets an asset carry a standing default
+    while still being overridable per execution.
+
+    Only ``assetMetadata`` is consulted by default: these settings describe the RUN (a prompt, a seed,
+    a frame count), not an individual file, and a workflow may select many files. Pass
+    ``metadata_scopes`` explicitly for a pipeline whose setting genuinely is per-file.
+
+    ``config_keys`` is tried in order, so a template may use either the canonical upper-case key or a
+    lower-case alias. Returns "" when neither source has a value.
+    """
+    config = input_configuration
+    if isinstance(config, str):
+        try:
+            config = json.loads(config) if config else {}
+        except (ValueError, TypeError):
+            config = {}
+    if isinstance(config, dict):
+        for key in (config_keys if isinstance(config_keys, (list, tuple)) else [config_keys]):
+            value = config.get(key)
+            # A blank/whitespace value counts as "not supplied" so it falls through to metadata.
+            if value is not None and str(value).strip() != "":
+                return value
+
+    md = metadata
+    if isinstance(md, str):
+        try:
+            md = json.loads(md) if md else {}
+        except (ValueError, TypeError):
+            md = {}
+    if not isinstance(md, dict):
+        return ""
+    vams = md.get("VAMS", {})
+    if not isinstance(vams, dict):
+        return ""
+    for scope in metadata_scopes:
+        scope_md = vams.get(scope, {})
+        if isinstance(scope_md, dict):
+            value = scope_md.get(metadata_key)
+            if value is not None and str(value).strip() != "":
+                return value
+    return ""

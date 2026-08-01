@@ -86,6 +86,38 @@ class TestTruncateAndBuilders:
         assert len(text.encode("utf-8")) <= 15
         text.encode("utf-8")  # must not raise / must be valid UTF-8
 
+    def test_truncate_text_budget_shares_one_limit(self):
+        # Two maximal fields of one item share the budget rather than each taking the full cap.
+        results = er.truncate_text_budget(["a" * 1000, "b" * 1000], total_limit=100)
+        assert sum(len(t.encode("utf-8")) for t, _ in results) <= 100
+        assert all(truncated for _, truncated in results)
+
+    def test_truncate_text_budget_redistributes_unused_bytes(self):
+        # A small field is kept whole and its unused share goes to the oversized field.
+        (small, small_truncated), (big, big_truncated) = er.truncate_text_budget(
+            ["ok", "b" * 1000], total_limit=100)
+        assert small == "ok" and small_truncated is False
+        assert big_truncated is True
+        assert len(big.encode("utf-8")) == 98
+
+    def test_truncate_text_budget_under_total_keeps_both(self):
+        results = er.truncate_text_budget(["one", "two"], total_limit=100)
+        assert results == [("one", False), ("two", False)]
+
+    def test_input_configuration_record_two_max_fields_fit_one_item(self):
+        # A large customTemplateOverride and the config rendered from it co-occur on one item, so
+        # their combined size must stay inside the single-item budget.
+        body = "z" * (er.MAX_TEXT_FIELD_BYTES + 10)
+        rec = er.build_input_configuration_record(
+            pipeline_execution_id="P1", input_configuration=body,
+            input_configuration_file_s3_key="ic/x.json",
+            custom_template_override_used=True, custom_template_override=body)
+        total = (len(rec["inputConfiguration"].encode("utf-8"))
+                 + len(rec["customTemplateOverride"].encode("utf-8")))
+        assert total <= er.MAX_TEXT_FIELD_BYTES
+        assert rec["inputConfigurationTruncated"] is True
+        assert rec["customTemplateOverrideTruncated"] is True
+
     def test_build_workflow_execution_record_shape(self):
         rec = er.build_workflow_execution_record(
             execution_id="E1", workflow_database_id="db", workflow_id="wf",

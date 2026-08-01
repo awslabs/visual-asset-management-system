@@ -37,6 +37,11 @@ the update-shaped bodies so the lambda can pick.
 
 GLOBAL_DATABASE = "GLOBAL"
 
+# assetScope shorthand -> canonical key (mirrors executionValidation._ASSET_SCOPE_SHORTHAND). A bundle
+# may spell whole-asset support either way, so a shorthand declaration must suppress the canonical
+# default rather than being silently overridden by it.
+_ASSET_SCOPE_SHORTHAND = {"wholeAsset": "wholeAssetAllowed"}
+
 # Cross-call targets (mapped to concrete function names by the lambda).
 TARGET_PIPELINE_SERVICE = "pipelineService"
 TARGET_TEMPLATE_SERVICE = "templateService"
@@ -99,6 +104,54 @@ def _inject_execution_resources(execution_config, resource_overrides):
     return config
 
 
+def _fill_system_config_defaults(declared, defaults):
+    """A bundle's partial systemConfig, completed with the builder defaults for every field it omits.
+
+    Both the pipeline and workflow records store systemConfig WHOLESALE — create/update replace the
+    field rather than merging it — so a bundle that declares only some fields would otherwise persist a
+    partial block, and adding a new systemConfig field later would silently change the stored meaning
+    of every existing bundle. Filling here keeps a bundle's declaration authoritative for what it says
+    while making omissions explicitly the documented defaults, so a new field is inert for bundles
+    written before it existed.
+
+    Nested boolean maps (`assetScope`, `metadataInputs`) and `inputFileFilters` are filled key-by-key
+    for the same reason: a partial `{"wholeAsset": true}` should not drop the other three scope rules.
+    A declared `assetScope` shorthand suppresses its canonical counterpart's default, since both
+    spellings mean the same thing and supplying both would let the default contradict the declaration.
+
+    `declared` is not mutated; a `None`/empty declaration yields the defaults unchanged.
+    """
+    merged = dict(defaults)
+    for key, declared_value in (declared or {}).items():
+        merged[key] = declared_value
+    for key, default_value in defaults.items():
+        declared_value = (declared or {}).get(key)
+        if not isinstance(default_value, dict) or not isinstance(declared_value, dict):
+            continue
+        nested = dict(default_value)
+        if key == "assetScope":
+            for shorthand, canonical in _ASSET_SCOPE_SHORTHAND.items():
+                if shorthand in declared_value:
+                    nested.pop(canonical, None)
+        nested.update(declared_value)
+        merged[key] = nested
+    return merged
+
+
+def _pipeline_system_config(pipeline):
+    """The pipeline systemConfig to store: what the bundle declares, defaults for the rest."""
+    from common.workflows.pipelineRecords import build_pipeline_system_config
+    return _fill_system_config_defaults(
+        pipeline.get("systemConfig") or {}, build_pipeline_system_config())
+
+
+def _workflow_system_config(workflow):
+    """The workflow systemConfig to store: what the bundle declares, defaults for the rest."""
+    from common.workflows.workflowRecords import build_workflow_system_config
+    return _fill_system_config_defaults(
+        workflow.get("systemConfig") or {}, build_workflow_system_config())
+
+
 def _pipeline_create_body(pipeline, database_id, pipeline_id, execution_config):
     return {
         "databaseId": database_id,
@@ -107,7 +160,7 @@ def _pipeline_create_body(pipeline, database_id, pipeline_id, execution_config):
         "category": pipeline.get("category", "") or "",
         "description": pipeline.get("description", "") or "",
         "executionConfig": execution_config,
-        "systemConfig": pipeline.get("systemConfig", {}) or {},
+        "systemConfig": _pipeline_system_config(pipeline),
         "enabled": pipeline.get("enabled", True),
     }
 
@@ -119,7 +172,7 @@ def _pipeline_update_body(pipeline, execution_config):
         "category": pipeline.get("category", "") or "",
         "description": pipeline.get("description", "") or "",
         "executionConfig": execution_config,
-        "systemConfig": pipeline.get("systemConfig", {}) or {},
+        "systemConfig": _pipeline_system_config(pipeline),
         "enabled": True,
     }
 
@@ -136,6 +189,9 @@ def _template_create_body(template, template_id):
         "inputInstructions": template.get("inputInstructions", "") or "",
         "overrides": template.get("overrides", {}) or {},
         "tagSchema": template.get("tagSchema"),
+        # The pipeline's default template is auto-selected at execute time, which is what lets a
+        # requireTemplate pipeline run without the caller naming a template.
+        "isDefault": bool(template.get("isDefault", False)),
     }
 
 
@@ -152,7 +208,7 @@ def _workflow_create_body(workflow, database_id, workflow_id, pipeline_database_
         "category": workflow.get("category", "") or "",
         "description": workflow.get("description", "") or "",
         "specifiedPipelines": specified,
-        "systemConfig": workflow.get("systemConfig", {}) or {},
+        "systemConfig": _workflow_system_config(workflow),
         "subDashboardUrl": workflow.get("subDashboardUrl", "") or "",
     }
 
@@ -161,15 +217,24 @@ def _workflow_update_body(workflow, pipeline_database_id, pipeline_id):
     specified = workflow.get("specifiedPipelines")
     if not specified:
         specified = [{"pipelineDatabaseId": pipeline_database_id, "pipelineId": pipeline_id}]
-    return {
+    body = {
         "workflowName": workflow.get("workflowName"),
         "category": workflow.get("category", "") or "",
         "description": workflow.get("description", "") or "",
         "specifiedPipelines": specified,
-        "systemConfig": workflow.get("systemConfig", {}) or {},
         "subDashboardUrl": workflow.get("subDashboardUrl", "") or "",
         "enabled": True,
     }
+    # systemConfig is always sent FILLED — the bundle's declaration plus the defaults for whatever it
+    # omits. Sending the raw `{}` of a bundle that declares nothing is what once blanked the stored
+    # block on every redeploy (update_workflow stores the field verbatim), and merely OMITTING it
+    # instead left rows already blanked that way stuck empty, since nothing ever rewrote them. Sending
+    # the completed block makes registration idempotent and self-healing: after any deploy the stored
+    # row equals declaration + current defaults, which is what keeps a newly-added field from changing
+    # an existing bundle's meaning. A built-in's systemConfig is therefore deploy-owned; an operator
+    # edit to one is re-asserted on the next deploy.
+    body["systemConfig"] = _workflow_system_config(workflow)
+    return body
 
 
 def _trigger_body(trigger, trigger_enabled_override=None):
@@ -256,7 +321,19 @@ def build_import_requests(bundle, resource_overrides=None, id_overrides=None,
 
     # 2) Templates (optional). Each is scoped to the owning pipeline; the template service is
     #    create(POST)/update(PUT) keyed on templateId under the pipeline.
-    for template in bundle.get("templates") or []:
+    templates = bundle.get("templates") or []
+
+    # A requireTemplate pipeline cannot execute unless the caller names a template or the pipeline
+    # has a default to auto-select. When the bundle ships exactly one template and marks none as
+    # default, that single template is the only possible choice, so promote it.
+    if (
+        len(templates) == 1
+        and (pipeline.get("systemConfig") or {}).get("requireTemplate")
+        and not any(t.get("isDefault") for t in templates)
+    ):
+        templates = [{**templates[0], "isDefault": True}]
+
+    for template in templates:
         _require(template, "templateName", "template")
         tpl_id = template.get("templateId")
         if not tpl_id:

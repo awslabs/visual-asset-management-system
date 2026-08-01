@@ -15,8 +15,8 @@ combined cap is enforced by callers via `assert_within_cap` at BOTH the API and 
 Size budget (UTF-8 bytes):
   - INLINE_THRESHOLD_BYTES: at or below, keep inline on the row.
   - ABSOLUTE_CAP_BYTES: hard ceiling on the combined body; beyond this the request is rejected.
-    The gap between the cap and the sync-invoke payload limit reserves headroom for the other row
-    fields (ids, timestamps) and the separately-stored tag schema.
+    The gap between the cap and the 6 MiB sync-invoke payload limit reserves headroom for the other
+    row fields (ids, timestamps) and the separately-stored tag schema.
 """
 
 import hashlib
@@ -28,11 +28,13 @@ import hashlib
 # co-resident fields still fits comfortably under 400 KB.
 INLINE_THRESHOLD_BYTES = 320 * 1024
 
-# ~6 MB absolute combined ceiling for configBody + webFormJson, enforced at the API and at CDK
-# ingestion. Set below the effective Lambda sync-invoke / API Gateway payload limits, leaving
-# headroom for the rest of the request and the separately-stored tag schema. A body needing more
-# than this becomes a future presigned-upload flow.
-ABSOLUTE_CAP_BYTES = 6 * 1024 * 1024
+# ~5 MB absolute combined ceiling for configBody + webFormJson, enforced at the API and at CDK
+# ingestion. Set below the 6 MiB Lambda sync-invoke / API Gateway payload limits, leaving over 1 MiB
+# of headroom for the rest of the request (JSON-string escaping of the bodies, the other template
+# fields, and the separately-stored tag schema) so an at-cap body is rejected with a 400 rather than
+# an opaque payload-too-large error. A body needing more than this becomes a future presigned-upload
+# flow.
+ABSOLUTE_CAP_BYTES = 5 * 1024 * 1024
 
 BODY_STORAGE_INLINE = "inline"
 BODY_STORAGE_S3 = "s3"

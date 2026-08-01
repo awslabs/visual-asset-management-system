@@ -3,13 +3,14 @@
 Covers the workflow CRUD surface, the fileUpload trigger sub-resources, the asset-less multi-file
 execute, and the per-asset execution history list:
 
-    workflow create / get / list / update / delete
+    workflow create / get / list / update / delete / unarchive
     workflow trigger list / get / set / delete
     workflow execute            asset-less, multi-file
     workflow list-executions    per-asset execution history
 
 Workflows are database-scoped (PK databaseId, SK workflowId) and reference their pipelines by
-composite id. Create is a POST to the database-scoped collection; delete is a soft archive.
+composite id. Create is a POST to the database-scoped collection; delete is a soft archive, which
+`unarchive` reverses.
 Global execution operations (details, logs, abort, rerun, delete) live under `vamscli execution`.
 """
 
@@ -162,6 +163,11 @@ def list_workflows(ctx: click.Context, database_id: Optional[str], include_archi
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])
         if not items:
+            # The backend filters archived + unauthorized rows after the DynamoDB page limit, so an
+            # empty page may still carry a NextToken for later pages that do contain matches.
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                return ("No workflows on this page; more pages available."
+                        f"\n\nNext token: {data['NextToken']}")
             return "No workflows found."
         out = []
         if data.get('autoPaginated'):
@@ -393,6 +399,49 @@ def delete_workflow(ctx: click.Context, database_id: str, workflow_id: str, json
         raise click.ClickException(str(e))
 
 
+@workflow.command('unarchive')
+@click.option('-d', '--database-id', required=True, help='Database ID containing the workflow')
+@click.option('-w', '--workflow-id', required=True, help='Archived workflow ID to unarchive')
+@click.option('--keep-disabled', is_flag=True,
+              help='Leave the workflow disabled after unarchiving (default re-enables it)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def unarchive_workflow(ctx: click.Context, database_id: str, workflow_id: str,
+                       keep_disabled: bool, json_output: bool):
+    """Unarchive an archived workflow.
+
+    Clears the archived flag set by `workflow delete`, returning the workflow to the default
+    listing. An archived workflow keeps its ID, so no other workflow can take that ID while it is
+    archived.
+
+    Archiving also disables the workflow, so unarchiving re-enables it to leave it executable.
+    Pass --keep-disabled to unarchive without re-enabling.
+
+    Examples:
+        vamscli workflow unarchive -d my-db -w my-workflow
+        vamscli workflow unarchive -d my-db -w my-workflow --keep-disabled
+    """
+    api_client = _api(ctx)
+    body: Dict[str, Any] = {'archived': False}
+    if not keep_disabled:
+        body['enabled'] = True
+    output_status(f"Unarchiving workflow '{workflow_id}'...", json_output)
+    try:
+        result = api_client.update_workflow(database_id, workflow_id, body)
+        output_result(_message(result), json_output, success_message="✓ Workflow unarchived.",
+                      cli_formatter=lambda _r: format_workflow_output(_message(result)))
+        return result
+    except WorkflowNotFoundError as e:
+        output_error(e, json_output, error_type="Workflow Not Found",
+                     helpful_message="Use 'vamscli workflow list -d <db> --include-archived' to see "
+                                     "archived workflows.")
+        raise click.ClickException(str(e))
+    except InvalidWorkflowDataError as e:
+        output_error(e, json_output, error_type="Invalid Workflow Data")
+        raise click.ClickException(str(e))
+
+
 # ---------------------------------------------------------------------------
 # Trigger sub-group
 # ---------------------------------------------------------------------------
@@ -544,11 +593,15 @@ def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigg
               help='Output database ID. Supply with --output-asset-id when inputs resolve to zero or '
                    'multiple assets; falls back to the input asset\'s database on a single-asset override')
 @click.option('--output-path-prefix',
-              help='Optional base path (under the output asset) that output files are written beneath. '
-                   'May contain dynamic tag placeholders (e.g. {{firstAssetFileFileNameNoExt}}) '
-                   'resolved at launch. Omit for the asset root. Must not contain ".." or backslashes')
-@click.option('--pipeline-parameters', help='pipelineExecutionParameters as inline JSON '
-                                            '({"pipelineId": {"templateId": ..., "templateTags": [...]}})')
+              help='Optional base path (under the output asset) that output files are written beneath, '
+                   "inserted just above each output file's own name. May contain dynamic tag "
+                   'placeholders (e.g. {{firstAssetFileFileNameNoExt}}) resolved at launch. A trailing '
+                   '"/" makes it a folder; without one it joins onto the file name. OMIT to inherit the '
+                   "workflow's default prefix (systemConfig.defaultOutputFileBaseExecutionPathExtension); "
+                   'pass an empty string to force the asset root. Must not contain ".." or backslashes')
+@click.option('--pipeline-parameters', help='pipelineExecutionParameters as inline JSON ({"pipelineId": '
+                                            '{"templateId": ..., "templateTags": [...], '
+                                            '"customTemplateOverride": "..."}})')
 @click.option('--pipeline-parameters-file', type=click.Path(exists=True),
               help='pipelineExecutionParameters from a JSON file')
 @click.option('--execution-group-id', help='Group this execution under an executionGroupId')
@@ -564,13 +617,18 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
     """Execute a workflow on a set of input files (asset-less, multi-file).
 
     Input files may span multiple assets. A relativeFileKey of '/' selects the whole asset;
-    '/folder/' selects a folder. Per-pipeline template selection + tag values are supplied via
-    --pipeline-parameters (keyed by pipelineId).
+    '/folder/' selects a folder. Per-pipeline template selection, tag values, and a one-off custom
+    config body are supplied via --pipeline-parameters (keyed by pipelineId, with the keys
+    templateId / templateTags / customTemplateOverride).
 
     Output target: when the inputs resolve to a single input asset the output is locked to that
     asset unless the workflow allows override; when they resolve to zero or multiple assets, supply
     both --output-asset-id and --output-database-id. Omit both for a results-only workflow
     (outputTarget.locationType "none"), which records only results text + logs and writes no asset.
+
+    Output path prefix: omitting --output-path-prefix inherits the workflow's default prefix, which
+    may carry template tags resolved per run (e.g. '/{{jobName}}/'). Pass an empty string to write at
+    the asset root regardless of that default.
 
     Examples:
         vamscli workflow execute --workflow-database-id global -w my-workflow \\
@@ -604,7 +662,10 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
         body['outputAssetId'] = output_asset_id
     if output_database_id:
         body['outputDatabaseId'] = output_database_id
-    if output_path_prefix:
+    # Sent whenever the flag was given at all, "" included: omitting it means "inherit the workflow's
+    # default prefix", so dropping an explicit empty string would re-apply the very default the caller
+    # asked to opt out of.
+    if output_path_prefix is not None:
         body['outputFileBaseExecutionPathExtension'] = output_path_prefix
     if pipeline_params is not None:
         body['pipelineExecutionParameters'] = pipeline_params
@@ -690,6 +751,11 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])
         if not items:
+            # The backend applies authorization and filters after the candidate cap, so an empty
+            # page may still carry a NextToken for later pages that do contain matches.
+            if not data.get('autoPaginated') and data.get('NextToken'):
+                return ("No workflow executions on this page; more pages available."
+                        f"\n\nNext token: {data['NextToken']}")
             return "No workflow executions found."
         out = []
         if data.get('autoPaginated'):

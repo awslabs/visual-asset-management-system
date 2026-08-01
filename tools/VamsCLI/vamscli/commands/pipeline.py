@@ -2,16 +2,17 @@
 
 Covers the pipeline CRUD surface plus the template and tag-schema sub-resources:
 
-    pipeline create / get / list / update / delete
+    pipeline create / get / list / update / delete / unarchive
     pipeline template create / get / list / update / delete
     pipeline tag-schema get / set
 
 Pipelines are database-scoped (PK databaseId, SK pipelineId). Create is a POST to the
 database-scoped collection; the bare `pipeline list` (no database) lists all pipelines the caller
-can access. Delete is a soft archive.
+can access. Delete is a soft archive, which `unarchive` reverses.
 """
 
 import json
+import sys
 from typing import Dict, Any, Optional
 
 import click
@@ -78,9 +79,23 @@ def _message(result: Dict[str, Any]) -> Any:
     return result.get('message', result) if isinstance(result, dict) else result
 
 
+def _message_with_warnings(result: Dict[str, Any]) -> Any:
+    """Unwrap the `message` envelope, carrying any top-level `warnings` array into the payload so
+    the array survives `--json-output`. Non-dict payloads are returned unchanged."""
+    message = _message(result)
+    if not isinstance(result, dict) or not isinstance(message, dict):
+        return message
+    warnings = result.get('warnings')
+    if not warnings:
+        return message
+    payload = dict(message)
+    payload['warnings'] = warnings
+    return payload
+
+
 def _emit_warnings(result: Dict[str, Any], json_output: bool) -> None:
     """Print any top-level `warnings` array from a successful save as a visible warning.
-    Suppressed in JSON mode (the raw JSON already carries the warnings)."""
+    Suppressed in JSON mode, where the emitted payload carries the `warnings` array."""
     if not isinstance(result, dict):
         return
     warnings = result.get('warnings')
@@ -124,6 +139,9 @@ def format_template(template: Dict[str, Any]) -> str:
         f"Allow Custom Edit: {template.get('allowCustomEdit', False)}",
         f"Default: {template.get('isDefault', False)}",
     ]
+    description = template.get('description')
+    if description:
+        lines.append(f"Description: {description}")
     tag_schema = template.get('tagSchema')
     if tag_schema:
         lines.append(f"Tag Fields: {', '.join(f.get('tagKey', '?') for f in tag_schema)}")
@@ -174,6 +192,11 @@ def list_pipelines(ctx: click.Context, database_id: Optional[str], include_archi
         def _fmt(_r):
             items = message.get('Items', [])
             if not items:
+                # The backend filters archived + unauthorized rows after the DynamoDB page limit, so
+                # an empty page may still carry a NextToken for later pages that do contain matches.
+                if message.get('NextToken'):
+                    return ("No pipelines on this page; more pages available."
+                            f"\n\nNext token: {message['NextToken']}")
                 return "No pipelines found."
             out = [f"Found {len(items)} pipeline(s):", "-" * 80]
             for item in items:
@@ -271,7 +294,8 @@ def create_pipeline(ctx: click.Context, database_id: str, pipeline_name: str,
     output_status(f"Creating pipeline '{pipeline_name}'...", json_output)
     try:
         result = api_client.create_pipeline(database_id, body)
-        output_result(_message(result), json_output, success_message="✓ Pipeline created successfully!",
+        output_result(_message_with_warnings(result), json_output,
+                      success_message="✓ Pipeline created successfully!",
                       cli_formatter=lambda _r: format_pipeline(_message(result)))
         _emit_warnings(result, json_output)
         return result
@@ -335,7 +359,8 @@ def update_pipeline(ctx: click.Context, database_id: str, pipeline_id: str,
     output_status(f"Updating pipeline '{pipeline_id}'...", json_output)
     try:
         result = api_client.update_pipeline(database_id, pipeline_id, body)
-        output_result(_message(result), json_output, success_message="✓ Pipeline updated successfully!",
+        output_result(_message_with_warnings(result), json_output,
+                      success_message="✓ Pipeline updated successfully!",
                       cli_formatter=lambda _r: format_pipeline(_message(result)))
         _emit_warnings(result, json_output)
         return result
@@ -367,6 +392,51 @@ def delete_pipeline(ctx: click.Context, database_id: str, pipeline_id: str, json
         return result
     except PipelineNotFoundError as e:
         output_error(e, json_output, error_type="Pipeline Not Found")
+        raise click.ClickException(str(e))
+
+
+@pipeline.command('unarchive')
+@click.option('-d', '--database-id', required=True, help='Database ID containing the pipeline')
+@click.option('-p', '--pipeline-id', required=True, help='Archived pipeline ID to unarchive')
+@click.option('--keep-disabled', is_flag=True,
+              help='Leave the pipeline disabled after unarchiving (default re-enables it)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def unarchive_pipeline(ctx: click.Context, database_id: str, pipeline_id: str,
+                       keep_disabled: bool, json_output: bool):
+    """Unarchive an archived pipeline.
+
+    Clears the archived flag set by `pipeline delete`, returning the pipeline to the default
+    listing. An archived pipeline keeps its ID, so no other pipeline can take that ID while it is
+    archived.
+
+    Archiving also disables the pipeline, so unarchiving re-enables it to leave it executable.
+    Pass --keep-disabled to unarchive without re-enabling.
+
+    Examples:
+        vamscli pipeline unarchive -d my-db -p my-pipeline
+        vamscli pipeline unarchive -d my-db -p my-pipeline --keep-disabled
+    """
+    api_client = _api(ctx)
+    body: Dict[str, Any] = {'archived': False}
+    if not keep_disabled:
+        body['enabled'] = True
+    output_status(f"Unarchiving pipeline '{pipeline_id}'...", json_output)
+    try:
+        result = api_client.update_pipeline(database_id, pipeline_id, body)
+        output_result(_message_with_warnings(result), json_output,
+                      success_message="✓ Pipeline unarchived.",
+                      cli_formatter=lambda _r: format_pipeline(_message(result)))
+        _emit_warnings(result, json_output)
+        return result
+    except PipelineNotFoundError as e:
+        output_error(e, json_output, error_type="Pipeline Not Found",
+                     helpful_message="Use 'vamscli pipeline list -d <db> --include-archived' to see "
+                                     "archived pipelines.")
+        raise click.ClickException(str(e))
+    except InvalidPipelineDataError as e:
+        output_error(e, json_output, error_type="Invalid Pipeline Data")
         raise click.ClickException(str(e))
 
 
@@ -438,6 +508,7 @@ def get_template(ctx: click.Context, database_id: str, pipeline_id: str, templat
 @click.option('-p', '--pipeline-id', required=True, help='Pipeline ID to add the template to')
 @click.option('-n', '--name', 'template_name', required=True, help='Human-readable template name')
 @click.option('-t', '--template-id', help='Explicit template ID (a GUID is generated when omitted)')
+@click.option('--description', default='', help='Template description')
 @click.option('--config-format', default='json',
               type=click.Choice(['json', 'yaml', 'openjd', 'xml', 'raw']), help='Config body format')
 @click.option('--config-body', help='Config body inline')
@@ -456,7 +527,7 @@ def get_template(ctx: click.Context, database_id: str, pipeline_id: str, templat
 @click.pass_context
 @requires_setup_and_auth
 def create_template(ctx: click.Context, database_id: str, pipeline_id: str, template_name: str,
-                    template_id: Optional[str], config_format: str,
+                    template_id: Optional[str], description: str, config_format: str,
                     config_body: Optional[str], config_body_file: Optional[str],
                     web_form_json: Optional[str], web_form_file: Optional[str],
                     allow_custom_edit: bool, is_default: bool, input_instructions: str,
@@ -476,6 +547,7 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 
     body: Dict[str, Any] = {
         'templateName': template_name,
+        'description': description,
         'configFormat': config_format,
         'allowCustomEdit': allow_custom_edit,
         'isDefault': is_default,
@@ -515,6 +587,7 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 @click.option('-p', '--pipeline-id', required=True, help='Pipeline ID owning the template')
 @click.option('-t', '--template-id', required=True, help='Template ID to update')
 @click.option('-n', '--name', 'template_name', help='New template name')
+@click.option('--description', help='New template description')
 @click.option('--config-format', type=click.Choice(['json', 'yaml', 'openjd', 'xml', 'raw']),
               help='New config body format')
 @click.option('--config-body', help='New config body inline')
@@ -534,7 +607,8 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 @click.pass_context
 @requires_setup_and_auth
 def update_template(ctx: click.Context, database_id: str, pipeline_id: str, template_id: str,
-                    template_name: Optional[str], config_format: Optional[str],
+                    template_name: Optional[str], description: Optional[str],
+                    config_format: Optional[str],
                     config_body: Optional[str], config_body_file: Optional[str],
                     web_form_json: Optional[str], web_form_file: Optional[str],
                     allow_custom_edit: Optional[bool], is_default: Optional[bool],
@@ -551,6 +625,8 @@ def update_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
     body: Dict[str, Any] = {}
     if template_name is not None:
         body['templateName'] = template_name
+    if description is not None:
+        body['description'] = description
     if config_format is not None:
         body['configFormat'] = config_format
     if body_text is not None:
@@ -588,13 +664,29 @@ def update_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
 @click.option('-d', '--database-id', required=True, help='Database ID containing the pipeline')
 @click.option('-p', '--pipeline-id', required=True, help='Pipeline ID owning the template')
 @click.option('-t', '--template-id', required=True, help='Template ID to delete')
+@click.option('--yes', is_flag=True, help='Skip the interactive confirmation prompt')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def delete_template(ctx: click.Context, database_id: str, pipeline_id: str, template_id: str,
-                    json_output: bool):
-    """Delete a pipeline template."""
+                    yes: bool, json_output: bool):
+    """Delete a pipeline template.
+
+    This is a hard delete of the template row, its offloaded config bodies, and its tag schema —
+    unlike `pipeline delete`, which is a soft archive. `--yes` is required in JSON mode, where no
+    interactive prompt is possible.
+    """
     api_client = _api(ctx)
+    if not yes:
+        if json_output:
+            output_result({"error": "Confirmation required",
+                           "message": "Deleting a template requires the --yes flag",
+                           "templateId": template_id}, json_output=True)
+            sys.exit(1)
+        click.confirm(
+            f"Permanently delete template '{template_id}' and its stored config bodies? "
+            "This is irreversible.", abort=True)
+
     output_status(f"Deleting template '{template_id}'...", json_output)
     try:
         result = api_client.delete_pipeline_template(database_id, pipeline_id, template_id)
@@ -661,9 +753,12 @@ def set_tag_schema(ctx: click.Context, database_id: str, pipeline_id: str, templ
                    fields: Optional[str], fields_file: Optional[str], json_output: bool):
     """Set (replace) a template's tag schema. Provide the fields list as JSON.
 
+    The stored schema is replaced by the supplied list; pass an explicit empty list to clear it.
+
     Examples:
         vamscli pipeline tag-schema set -d my-db -p my-pipe -t my-template \\
             --fields '[{"tagKey": "quality", "type": "enum", "enumValues": ["low", "high"]}]'
+        vamscli pipeline tag-schema set -d my-db -p my-pipe -t my-template --fields '[]'
     """
     api_client = _api(ctx)
     fields_obj = _load_json_option(fields, fields_file, "fields")

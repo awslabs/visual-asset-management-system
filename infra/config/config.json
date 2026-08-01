@@ -120,6 +120,7 @@
             },
             "useSplatToolbox": {
                 "enabled": false,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {

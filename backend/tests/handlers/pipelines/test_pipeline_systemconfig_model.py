@@ -76,6 +76,115 @@ class TestPipelineAssetScope:
 
 
 @pytest.mark.unit
+class TestPipelineInputFileFilters:
+    """inputFileFilters keys are restricted to allow/exclude — an absent `allow` list means
+    allow-all at execute time, so a typo would silently widen the filter."""
+
+    def test_allow_exclude_accepted(self):
+        m = _create({"inputFileFilters": {"allow": ["*.glb"], "exclude": ["*.tmp"]}})
+        assert m.systemConfig["inputFileFilters"]["allow"] == ["*.glb"]
+
+    def test_unknown_filter_key_rejected(self):
+        with pytest.raises(ValidationError):
+            _create({"inputFileFilters": {"allowed": ["*.glb"]}})
+
+    def test_update_model_rejects_unknown_filter_key(self):
+        with pytest.raises(ValidationError):
+            UpdatePipelineRequestModel(systemConfig={"inputFileFilters": {"deny": ["*.glb"]}})
+
+
+@pytest.mark.unit
+class TestSqsResourceValidation:
+    """SQS pipelines must name a queue: the URL becomes the sendMessage task's QueueUrl, so an
+    absent value would deploy a state machine with an empty target."""
+
+    def _create(self, execution_config):
+        return CreatePipelineRequestModel(
+            databaseId="db1", pipelineName="P", executionConfig=execution_config, systemConfig={})
+
+    def test_queue_url_required(self):
+        with pytest.raises(ValidationError):
+            self._create({"executionType": "SQS"})
+
+    def test_empty_sqs_block_rejected(self):
+        with pytest.raises(ValidationError):
+            self._create({"executionType": "SQS", "sqs": {}})
+
+    def test_valid_queue_url_accepted(self):
+        url = "https://sqs.us-west-2.amazonaws.com/123456789012/my-queue"
+        m = self._create({"executionType": "SQS", "sqs": {"queueUrl": url}})
+        assert m.executionConfig["sqs"]["queueUrl"] == url
+
+    def test_update_model_rejects_sqs_without_queue(self):
+        with pytest.raises(ValidationError):
+            UpdatePipelineRequestModel(executionConfig={"executionType": "SQS", "sqs": {}})
+
+
+@pytest.mark.unit
+class TestDeadlineCloudResourceValidation:
+    """DeadlineCloud createJob only queues the job — completion arrives via the task-token callback,
+    so waitForCallback Enabled plus the target farm + queue are required at authoring time."""
+
+    def _create(self, execution_config):
+        return CreatePipelineRequestModel(
+            databaseId="db1", pipelineName="P", executionConfig=execution_config, systemConfig={})
+
+    def _config(self, **overrides):
+        config = {"executionType": "DeadlineCloud", "waitForCallback": "Enabled",
+                  "deadlineCloud": {"farmId": "farm-1", "queueId": "queue-1"}}
+        config.update(overrides)
+        return config
+
+    def test_complete_config_accepted(self):
+        m = self._create(self._config())
+        assert m.executionConfig["deadlineCloud"]["farmId"] == "farm-1"
+
+    def test_callback_disabled_rejected(self):
+        with pytest.raises(ValidationError):
+            self._create(self._config(waitForCallback="Disabled"))
+
+    def test_callback_omitted_rejected(self):
+        config = self._config()
+        del config["waitForCallback"]
+        with pytest.raises(ValidationError):
+            self._create(config)
+
+    @pytest.mark.parametrize("missing", ["farmId", "queueId"])
+    def test_missing_target_rejected(self, missing):
+        config = self._config()
+        del config["deadlineCloud"][missing]
+        with pytest.raises(ValidationError):
+            self._create(config)
+
+    def test_update_model_rejects_callback_disabled(self):
+        with pytest.raises(ValidationError):
+            UpdatePipelineRequestModel(
+                executionConfig=self._config(waitForCallback="Disabled"))
+
+    @pytest.mark.parametrize("field", ["priority", "maxRetriesPerTask", "maxFailedTasksCount"])
+    def test_non_integer_setting_rejected(self, field):
+        # The createJob task state casts these to int; catch a bad value on the pipeline that holds
+        # it rather than later at workflow save.
+        config = self._config()
+        config["deadlineCloud"][field] = "abc"
+        with pytest.raises(ValidationError):
+            self._create(config)
+
+    @pytest.mark.parametrize("field", ["priority", "maxRetriesPerTask", "maxFailedTasksCount"])
+    def test_negative_setting_rejected(self, field):
+        config = self._config()
+        config["deadlineCloud"][field] = -1
+        with pytest.raises(ValidationError):
+            self._create(config)
+
+    def test_zero_priority_accepted(self):
+        # 0 is the lowest valid Deadline priority, not an absent value.
+        config = self._config()
+        config["deadlineCloud"]["priority"] = 0
+        assert self._create(config).executionConfig["deadlineCloud"]["priority"] == 0
+
+
+@pytest.mark.unit
 class TestLambdaResourceIdValidation:
     def _create(self, execution_config):
         return CreatePipelineRequestModel(

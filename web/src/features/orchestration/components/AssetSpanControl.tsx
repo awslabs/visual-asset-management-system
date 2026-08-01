@@ -16,9 +16,18 @@ export interface AssetScope {
     singleAssetOnly?: boolean;
     wholeAssetAllowed?: boolean;
     folderAllowed?: boolean;
+    /** Shorthand for `wholeAssetAllowed` emitted by the CDK pipeline registration schemas. */
+    wholeAsset?: boolean;
 }
 
 export type AssetSpan = "single" | "multiple";
+
+/** Fold the `wholeAsset` shorthand into the canonical key. An explicit canonical key wins. */
+export function normalizeAssetScope(scope: AssetScope | undefined): AssetScope {
+    const { wholeAsset, ...rest } = scope || {};
+    if (wholeAsset === undefined || rest.wholeAssetAllowed !== undefined) return rest;
+    return { ...rest, wholeAssetAllowed: wholeAsset };
+}
 
 /** Read the effective span from a stored scope: multiple only when cross-asset is allowed AND
  *  single-asset-only is not set. Everything else means single. */
@@ -29,7 +38,7 @@ export function assetSpanFromScope(scope: AssetScope | undefined): AssetSpan {
 
 /** Produce the backend boolean pair from the single choice, preserving the whole-asset/folder flags. */
 export function scopeWithSpan(scope: AssetScope | undefined, span: AssetSpan): AssetScope {
-    const s = scope || {};
+    const s = normalizeAssetScope(scope);
     if (span === "multiple") {
         return { ...s, crossAssetAllowed: true, singleAssetOnly: false };
     }
@@ -46,7 +55,12 @@ interface AssetSpanControlProps {
  * Single-choice asset-span selector plus the independent whole-asset / folder toggles. Replaces the
  * four free checkboxes that allowed the impossible "multiple assets" + "single asset only" combo.
  */
-const AssetSpanControl: React.FC<AssetSpanControlProps> = ({ scope, onChange, disabled }) => {
+const AssetSpanControl: React.FC<AssetSpanControlProps> = ({
+    scope: rawScope,
+    onChange,
+    disabled,
+}) => {
+    const scope = normalizeAssetScope(rawScope);
     const span = assetSpanFromScope(scope);
     return (
         <div className="space-y-3">

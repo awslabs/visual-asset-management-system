@@ -2,7 +2,7 @@
 
 The Pipelines API allows you to create, retrieve, update, and delete processing pipelines. Pipelines define transformation or analysis steps that can be composed into [workflows](workflows.md) and executed against assets.
 
-VAMS supports these pipeline execution types: **Lambda** (synchronous or asynchronous invocation of an AWS Lambda function), **SQS** (asynchronous message to an Amazon SQS queue), **EventBridge** (asynchronous event to an Amazon EventBridge bus), and **DeadlineCloud** (asynchronous submission to AWS Deadline Cloud, with a mandatory task token callback).
+VAMS supports these pipeline execution types: **Lambda** (synchronous or asynchronous invocation of an AWS Lambda function), **SQS** (asynchronous message to an Amazon SQS queue), **EventBridge** (asynchronous event to an Amazon EventBridge bus), and **DeadlineCloud** (asynchronous submission to AWS Deadline Cloud, with a mandatory task token callback, available only when the deployment enables it).
 
 Pipelines are scoped to a database. A pipeline can carry one or more **templates** — reusable configuration bodies (for example JSON, YAML, OpenJD, or XML) that supply the parameters an execution passes to the pipeline. Each template can define a **tag schema** describing the typed tags that resolve `{{tagName}}` placeholders in the template body.
 
@@ -219,20 +219,22 @@ POST /database/{databaseId}/pipelines
 
 ### Request body
 
-| Field             | Type    | Required | Description                                                                                |
-| ----------------- | ------- | -------- | ------------------------------------------------------------------------------------------ |
-| `pipelineId`      | string  | No       | Pipeline identifier (GUID). Generated when omitted.                                        |
-| `pipelineName`    | string  | Yes      | Human-readable pipeline name.                                                              |
-| `category`        | string  | No       | Optional grouping label.                                                                   |
-| `description`     | string  | No       | Pipeline description.                                                                      |
-| `executionConfig` | object  | Yes      | Execution binding. See [Execution configuration](#execution-configuration).                |
-| `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration). |
-| `enabled`         | boolean | No       | Whether the pipeline is enabled (default `true`).                                          |
+| Field             | Type    | Required | Description                                                                                          |
+| ----------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `databaseId`      | string  | Yes      | Database identifier. Must match the `databaseId` path parameter. Use `GLOBAL` for a global pipeline. |
+| `pipelineId`      | string  | No       | Pipeline identifier. Send `null` or omit to have one generated. Must be unique across all databases. |
+| `pipelineName`    | string  | Yes      | Human-readable pipeline name.                                                                        |
+| `category`        | string  | No       | Optional grouping label.                                                                             |
+| `description`     | string  | No       | Pipeline description.                                                                                |
+| `executionConfig` | object  | Yes      | Execution binding. See [Execution configuration](#execution-configuration).                          |
+| `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration).           |
+| `enabled`         | boolean | No       | Whether the pipeline is enabled (default `true`).                                                    |
 
 ### Request body example
 
 ```json
 {
+    "databaseId": "my-database",
     "pipelineName": "Convert to glTF",
     "category": "conversion",
     "description": "Converts FBX files to glTF format",
@@ -533,6 +535,31 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 
 A pipeline may designate one template as its default by setting `isDefault` to `true`. The default is pre-selected on the execute form, and when a pipeline that requires a template (`requireTemplate`) is executed without a `templateId`, the backend resolves the run against the default template. At most one template per pipeline is the default: setting `isDefault` on a template clears it on any other template of the same pipeline.
 
+#### System template tags
+
+A template's config body may contain `{{tagName}}` placeholders. There are two kinds:
+
+-   **Template tags** — the typed fields defined by the template's own `tagSchema` (see [Set a template's tag schema](#set-a-templates-tag-schema)). A person supplies their values when running an execution.
+-   **System tags** — a fixed set of placeholders the engine resolves automatically per pipeline task when the config body renders. A caller never supplies them, and a template's own tag key may **not** collide with a system tag name (or use the reserved `metadata_` prefix) — such a key is rejected. System tags expose the execution's identity, input files, output/auxiliary locations, and resolved metadata.
+
+The complete set of system tags, grouped by category:
+
+| Group                              | Tags                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution & workflow identity      | `executionId`, `workflowId`, `workflowDatabaseId`, `triggerType`, `executingUserName`                                                                                                                                                                                                                                                                                            |
+| Pipeline-task identity             | `pipelineExecutionId`, `pipelineId`, `pipelineName`, `pipelineDatabaseId`, `jobName`                                                                                                                                                                                                                                                                                             |
+| Timestamps                         | `jobStartTimestamp`, `jobStartTimestampUnix`, `jobStartDate`, `executionStartTimestamp`                                                                                                                                                                                                                                                                                          |
+| First input file                   | `firstAssetFileDatabaseId`, `firstAssetFileAssetId`, `firstAssetFileAssetBucket`, `firstAssetFileAssetRootS3Key`, `firstAssetFileRelativePath`, `firstAssetFileKey`, `firstAssetFileVersionId`, `firstAssetFileAuxPreviewPrefix`, `firstAssetFileS3Uri`, `firstAssetFileAuxPreviewS3Uri`, `firstAssetFileFileName`, `firstAssetFileFileNameNoExt`, `firstAssetFileFileExtension` |
+| Input-file collections (JSON)      | `assetFileKeyArray`, `assetFileRelativePathArray`, `assetFileS3UriArray`, `assetFileVersionIdArray`, `assetFileObjectArray`, `assetFileAssetIdArray`, `assetFileUniqueAssetIdArray`, `assetFileDatabaseIdArray`, `assetFileUniqueDatabaseIdArray`, `assetFileCount`                                                                                                              |
+| Output locations                   | `outputBucket`, `outputFilesPrefix`, `outputFilesS3Uri`, `outputPreviewsPrefix`, `outputPreviewsS3Uri`, `outputMetadataPrefix`, `outputMetadataS3Uri`, `outputResultsPrefix`, `outputResultsS3Uri`, `outputTargetAssetId`, `outputTargetDatabaseId`, `outputTargetLocationType`, `outputTargetAssetRootS3Key`, `outputFileBaseExecutionPathExtension`                            |
+| Auxiliary locations                | `auxBucket`, `auxTempPrefix`, `auxTempS3Uri`, `auxPreviewPipelineSuffix`                                                                                                                                                                                                                                                                                                         |
+| Metadata / configuration locations | `inputMetadataS3Location`, `inputConfigurationS3Location`                                                                                                                                                                                                                                                                                                                        |
+| System / orchestration             | `orchestrationBusArn`, `orchestrationEventPrefix`                                                                                                                                                                                                                                                                                                                                |
+| Metadata content (JSON)            | `inputMetadataObject`, `assetMetadataObject`, `fileMetadataObject`, `fileAttributesObject`, `assetDataObject`                                                                                                                                                                                                                                                                    |
+| AWS Deadline Cloud                 | `deadlineFarmId`, `deadlineQueueId`, `deadlineStorageProfileId` (empty until the pipeline's Deadline Cloud configuration supplies them)                                                                                                                                                                                                                                          |
+
+Dynamic metadata placeholders of the form `{{metadata_<key>}}` are also reserved for a metadata value keyed by `<key>`. The web template editor shows this same catalog inline beneath the config-body editor so authors can reference it without leaving the form.
+
 ### Get a template
 
 Retrieves a single template. The `configBody` and `webFormJson` are returned inline, and the response includes the template's `tagSchema`.
@@ -624,7 +651,9 @@ As with [Create a template](#create-a-template), when the template is referenced
 
 ### Delete a template
 
-Deletes a template and its tag schema.
+Deletes a template and its tag schema. This is a permanent delete: the template row, any offloaded S3
+config bodies, and the tag schema are all removed. Unlike deleting a pipeline or a workflow — a soft
+archive that leaves a restorable record — a deleted template cannot be recovered.
 
 ```
 DELETE /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
@@ -764,15 +793,15 @@ Returns the stored tag schema wrapped in `message`, alongside `pipelineDatabaseI
 
 Each entry in a template's tag schema defines one tag:
 
-| Field         | Type    | Required | Description                                                                   |
-| ------------- | ------- | -------- | ----------------------------------------------------------------------------- |
-| `tagKey`      | string  | Yes      | Tag key. Reserved system tag keys and the `metadata_` prefix are not allowed. |
-| `type`        | string  | Yes      | One of `string`, `integer`, `number`, `boolean`, `string-list`, or `enum`.    |
-| `required`    | boolean | No       | Whether a value must be supplied.                                             |
-| `default`     | any     | No       | Default value (type matches `type`).                                          |
-| `label`       | string  | No       | Human-readable label shown in forms.                                          |
-| `description` | string  | No       | Field description.                                                            |
-| `enumValues`  | array   | No       | Allowed values. Required when `type` is `enum`.                               |
+| Field         | Type    | Required | Description                                                                                      |
+| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `tagKey`      | string  | Yes      | Tag key. Reserved system tag keys and the `metadata_` prefix are not allowed.                    |
+| `type`        | string  | No       | One of `string`, `integer`, `number`, `boolean`, `string-list`, or `enum`. Defaults to `string`. |
+| `required`    | boolean | No       | Whether a value must be supplied.                                                                |
+| `default`     | any     | No       | Default value (type matches `type`).                                                             |
+| `label`       | string  | No       | Human-readable label shown in forms.                                                             |
+| `description` | string  | No       | Field description.                                                                               |
+| `enumValues`  | array   | No       | Allowed values. Required when `type` is `enum`.                                                  |
 
 ---
 
@@ -780,16 +809,16 @@ Each entry in a template's tag schema defines one tag:
 
 The `executionConfig` object binds a pipeline to the resource that runs it. The `executionType` selects the binding, and the matching nested block supplies the target.
 
-| Field                  | Type   | Description                                                                                                                     |
-| ---------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `executionType`        | string | `Lambda`, `SQS`, `EventBridge`, or `DeadlineCloud`.                                                                             |
-| `waitForCallback`      | string | `Enabled` to have Step Functions wait for a task token callback; `Disabled` otherwise. Mandatory `Enabled` for `DeadlineCloud`. |
-| `taskTimeout`          | string | Timeout in seconds (string) for a callback (max 604800 = 1 week). Applies when `waitForCallback` is `Enabled`.                  |
-| `taskHeartbeatTimeout` | string | Heartbeat timeout in seconds (string). Must be smaller than `taskTimeout`.                                                      |
-| `lambda`               | object | `{ "resourceId": "<lambda name or ARN>" }` for the `Lambda` type.                                                               |
-| `sqs`                  | object | `{ "queueUrl": "<queue URL>" }` for the `SQS` type.                                                                             |
-| `eventBridge`          | object | `{ "busArn": "<bus ARN>", "source": "<source>", "detailType": "<detail-type>" }` for the `EventBridge` type.                    |
-| `deadlineCloud`        | object | Target settings for the `DeadlineCloud` type.                                                                                   |
+| Field                  | Type   | Description                                                                                                                                                          |
+| ---------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executionType`        | string | `Lambda`, `SQS`, `EventBridge`, or `DeadlineCloud` (the last requires the deployment switch — see [DeadlineCloud](#deadlinecloud)).                                  |
+| `waitForCallback`      | string | `Enabled` to have Step Functions wait for a task token callback; `Disabled` otherwise. Mandatory `Enabled` for `DeadlineCloud`.                                      |
+| `taskTimeout`          | string | Timeout in seconds (string) for a callback (max 604800 = 1 week). Applies when `waitForCallback` is `Enabled`.                                                       |
+| `taskHeartbeatTimeout` | string | Heartbeat timeout in seconds (string, max 604800 = 1 week). Set it below `taskTimeout` so a stalled task is caught by the heartbeat rather than the overall timeout. |
+| `lambda`               | object | `{ "resourceId": "<lambda name or ARN>" }` for the `Lambda` type.                                                                                                    |
+| `sqs`                  | object | `{ "queueUrl": "<queue URL>" }` for the `SQS` type.                                                                                                                  |
+| `eventBridge`          | object | `{ "busArn": "<bus ARN>", "source": "<source>", "detailType": "<detail-type>" }` for the `EventBridge` type.                                                         |
+| `deadlineCloud`        | object | Target settings for the `DeadlineCloud` type.                                                                                                                        |
 
 ## System configuration
 
@@ -849,6 +878,10 @@ VAMS submits work to AWS Deadline Cloud. This is ideal for render-farm style bat
 
 -   Asynchronous only. A task token callback is mandatory, so `waitForCallback` is always enabled.
 -   The callback reports completion back to the Step Functions workflow.
+
+:::warning[Deployment gate]
+`DeadlineCloud` is selectable only when the deployment enables `app.pipelines.deadlineCloudExecutionTypeEnabled` (default `false`). Create and update reject the type with `400` on a deployment that has it off. It is unavailable in the GovCloud and EU Sovereign partitions. See the [configuration reference](../deployment/configuration-reference.md).
+:::
 
 :::tip[Callback pattern]
 When `waitForCallback` is set to `Enabled`, the Step Functions workflow pauses and waits for the external system to call back with a task token. The token is included in the pipeline payload. Set `taskTimeout` to define how long to wait before the task is considered failed.

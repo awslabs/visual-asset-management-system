@@ -89,6 +89,8 @@ export function buildDatabaseService(
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);

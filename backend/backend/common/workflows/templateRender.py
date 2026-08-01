@@ -35,6 +35,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from xml.sax.saxutils import escape as _xml_escape
 
 from common.workflows import templateTags as tags
 
@@ -67,6 +68,27 @@ class MissingTemplateTagError(Exception):
 def _s(value):
     """A scalar tag value: coerce to string, empty string for None."""
     return "" if value is None else str(value)
+
+
+# The config format whose quoted scalars are escaped with XML character references rather than JSON
+# string escapes (mirrors the 'xml' member of pipelineRecords.TEMPLATE_CONFIG_FORMATS).
+CONFIG_FORMAT_XML = "xml"
+
+
+def escape_scalar(value, config_format="json"):
+    """Escape a scalar tag value for substitution inside the template's own quoting, per config
+    format.
+
+    ``xml`` gets XML character references (``&``, ``<``, ``>``, and both quote styles, so the value is
+    safe in element text and in an attribute). Every other format gets JSON string escapes with the
+    surrounding quotes stripped: that is the quoted-scalar syntax of ``json`` and of the
+    double-quoted scalars of ``yaml`` / ``openjd``, and it is also what ``raw`` receives — a raw body
+    carries no declared syntax, so the JSON escape keeps a control character or quote from
+    terminating the value."""
+    text = _s(value)
+    if (config_format or "").strip().lower() == CONFIG_FORMAT_XML:
+        return _xml_escape(text, {'"': "&quot;", "'": "&apos;"})
+    return json.dumps(text)[1:-1]
 
 
 def _join_s3(bucket, key):
@@ -121,8 +143,9 @@ def build_template_context(manifest, execution, now=None):
     ``manifest`` is the per-pipeline manifest envelope for THIS task (see executionRecords.
     build_manifest_envelope). ``execution`` is a dict of the pure-execution scalars the manifest
     does not carry: executionId, workflowId, workflowDatabaseId, pipelineExecutionId, pipelineId,
-    pipelineDatabaseId, jobName, triggerType, executingUserName, executionStartTimestamp. Any
-    missing key resolves to an empty string (no-input / partial-context safe)."""
+    pipelineName, pipelineDatabaseId, jobName, triggerType, executingUserName,
+    executionStartTimestamp. Any missing key resolves to an empty string (no-input / partial-context
+    safe)."""
     manifest = manifest or {}
     execution = execution or {}
 
@@ -180,7 +203,8 @@ def build_template_context(manifest, execution, now=None):
     # --- B. Pipeline-task identity ---
     scalar(tags.PIPELINE_EXECUTION_ID, execution.get("pipelineExecutionId", ""))
     scalar(tags.PIPELINE_ID, execution.get("pipelineId", ""))
-    scalar(tags.PIPELINE_NAME, execution.get("pipelineId", ""))
+    # The pipeline's display name; its id when the context carries no name.
+    scalar(tags.PIPELINE_NAME, execution.get("pipelineName") or execution.get("pipelineId", ""))
     scalar(tags.PIPELINE_DATABASE_ID, execution.get("pipelineDatabaseId", ""))
     scalar(tags.JOB_NAME, execution.get("jobName", ""))
 
@@ -275,11 +299,11 @@ def _metadata_context(metadata_payload):
     return context
 
 
-def _substitute(text, context):
+def _substitute(text, context, config_format="json"):
     """Replace every ``{{tag}}`` in ``text`` using ``context`` ({tag: (kind, value)}). Raises
-    MissingTemplateTagError listing any tags not in the context. Scalars are JSON-string-escaped
-    (surrounding quotes stripped, so they sit inside the template's own quotes); json values are
-    emitted as JSON literals."""
+    MissingTemplateTagError listing any tags not in the context. Scalars are escaped for
+    ``config_format`` (see escape_scalar) so they sit safely inside the template's own quotes; json
+    values are emitted as JSON literals."""
     found = set(_TAG_PATTERN.findall(text))
     unknown = found - set(context.keys())
     if unknown:
@@ -290,9 +314,7 @@ def _substitute(text, context):
         kind, value = context[name]
         if kind == "json":
             return json.dumps(value)
-        # scalar: JSON-escape the string body without the surrounding quotes so it is safe to sit
-        # inside the template's existing quotes (handles embedded quotes/backslashes/control chars).
-        return json.dumps(_s(value))[1:-1]
+        return escape_scalar(value, config_format)
 
     return _TAG_PATTERN.sub(_replace, text)
 
@@ -302,13 +324,15 @@ def uses_template_tags(text):
     return bool(text) and bool(_TAG_PATTERN.search(text))
 
 
-def render_config(text, manifest, execution, metadata_loader=None, now=None):
+def render_config(text, manifest, execution, metadata_loader=None, now=None,
+                  config_format="json"):
     """Render an input-configuration text (or any templated field) against a task's manifest +
     execution context. Returns the rendered text unchanged when it contains no tags.
 
     ``metadata_loader`` is an optional zero-arg callable returning the metadata payload dict; it is
     invoked at most once, and only when a metadata-content tag is actually present (lazy read).
-    Raises MissingTemplateTagError on an unknown tag (strict)."""
+    ``config_format`` is the template's configuration format, which decides how a scalar tag value is
+    escaped (see escape_scalar). Raises MissingTemplateTagError on an unknown tag (strict)."""
     if not uses_template_tags(text):
         return text
 
@@ -323,4 +347,4 @@ def render_config(text, manifest, execution, metadata_loader=None, now=None):
         # they are not populated; they never trip the strict unknown-tag check.
         context.update(_metadata_context({}))
 
-    return _substitute(text, context)
+    return _substitute(text, context, config_format)

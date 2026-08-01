@@ -5,5 +5,6 @@
     "configFormat": "json",
     "configBody": "{\"MODEL_VARIANT\":\"super-text2image\",\"TASK_MODE\":\"text2image\",\"DISABLE_GUARDRAILS\":\"true\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Provide the generation prompt via the COSMOS3_PROMPT asset/file metadata key."
+    "inputInstructions": "Provide the generation prompt via the COSMOS3_PROMPT asset/file metadata key.",
+    "isDefault": true
 }

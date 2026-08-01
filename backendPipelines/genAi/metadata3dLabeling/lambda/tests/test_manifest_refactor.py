@@ -390,6 +390,43 @@ class TestMetadataGenerationReadsFromS3:
         assert s3.put_object.called
         assert result == {"definition": [json.dumps(self._definition())]} or "definition" in result
 
+    def test_grouped_metadata_envelope_seeds_prompt(self):
+        """The run metadata file is the grouped-by-asset envelope; every scope (asset metadata,
+        file metadata, file attributes) still seeds the prompt."""
+        mod = self._load()
+        config_obj = {"seedMetadataGenerationWithInputMetadata": "True"}
+        metadata_envelope = {
+            "schemaVersion": 2,
+            "assets": [{
+                "databaseId": "dbM", "assetId": "xidM",
+                "assetData": {"assetName": "Pump"},
+                "files": [
+                    {"fileKey": "/", "metadata": {"PART": "centrifugal pump"}},
+                    {"fileKey": "/test/pump.glb", "metadata": {"REVISION": "C"},
+                     "attributes": {"UNITS": "mm"}},
+                ],
+            }],
+        }
+        prompts, _result, s3 = self._run(mod, config_obj, metadata_envelope)
+        per_image_prompt = prompts[0]
+        assert "PART:::centrifugal pump" in per_image_prompt
+        assert "REVISION:::C" in per_image_prompt
+        assert "UNITS:::mm" in per_image_prompt
+        assert s3.put_object.called
+
+    def test_grouped_metadata_envelope_ignored_when_gate_off(self):
+        mod = self._load()
+        config_obj = {"seedMetadataGenerationWithInputMetadata": "False"}
+        metadata_envelope = {
+            "schemaVersion": 2,
+            "assets": [{
+                "databaseId": "dbM", "assetId": "xidM", "assetData": {},
+                "files": [{"fileKey": "/", "metadata": {"PART": "centrifugal pump"}}],
+            }],
+        }
+        prompts, _result, _s3 = self._run(mod, config_obj, metadata_envelope)
+        assert "PART:::centrifugal pump" not in prompts[0]
+
     def test_seed_gate_off_does_not_seed_prompt(self):
         mod = self._load()
         # Gate defaults to off / not "True": metadata content is NOT injected into the prompt.

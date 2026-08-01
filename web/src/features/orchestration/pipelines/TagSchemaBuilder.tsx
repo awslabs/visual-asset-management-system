@@ -6,26 +6,75 @@
 import React, { useState, useEffect } from "react";
 import type { TagSchemaField, TagType } from "../types";
 import { isReservedTagKey } from "../reservedTagKeys";
+import StringListInput from "../components/StringListInput";
 
 interface TagSchemaBuilderProps {
     value: TagSchemaField[];
     onChange: (value: TagSchemaField[]) => void;
+    /** Reports whether every row is currently valid. Invalid rows are withheld from onChange. */
+    onValidityChange?: (valid: boolean) => void;
 }
 
 interface ValidationError {
     index: number;
     message: string;
+    /** Which input the message belongs beside. Defaults to the tag key. */
+    field?: "tagKey" | "enumValues";
 }
 
 const TAG_TYPES: TagType[] = ["string", "integer", "number", "boolean", "string-list", "enum"];
 
-const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) => {
+/**
+ * Coerce a default-value editor input to the tag's declared type. A blank input carries no default,
+ * so it resolves to undefined rather than "" (the backend validates a present default against the
+ * type, and "" is not a valid integer/number/boolean/list/enum value).
+ */
+const coerceDefault = (type: TagType, raw: string): any => {
+    if (raw === "") return undefined;
+    if (type === "integer" || type === "number") {
+        const parsed = Number(raw);
+        return Number.isNaN(parsed) ? raw : parsed;
+    }
+    if (type === "boolean") return raw === "true";
+    return raw;
+};
+
+/** Re-read an existing default through a newly chosen type, dropping it when it cannot represent it. */
+const retypeDefault = (type: TagType, current: any, enumValues?: any[]): any => {
+    if (current === undefined || current === null || current === "") return undefined;
+    if (type === "string-list") return Array.isArray(current) ? current : undefined;
+    if (Array.isArray(current)) return undefined;
+    if (type === "boolean") {
+        if (typeof current === "boolean") return current;
+        const text = String(current).toLowerCase();
+        return text === "true" || text === "false" ? text === "true" : undefined;
+    }
+    if (type === "integer" || type === "number") {
+        const parsed = Number(current);
+        return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    if (type === "enum") {
+        const text = String(current);
+        return (enumValues || []).map(String).includes(text) ? text : undefined;
+    }
+    return String(current);
+};
+
+const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
+    value,
+    onChange,
+    onValidityChange,
+}) => {
     const [fields, setFields] = useState<TagSchemaField[]>(value);
     const [errors, setErrors] = useState<ValidationError[]>([]);
 
     useEffect(() => {
         setFields(value);
     }, [value]);
+
+    useEffect(() => {
+        onValidityChange?.(errors.length === 0);
+    }, [errors, onValidityChange]);
 
     const validateFields = (fieldsList: TagSchemaField[]): ValidationError[] => {
         const newErrors: ValidationError[] = [];
@@ -35,23 +84,25 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
             // Check for empty tagKey
             if (!field.tagKey || field.tagKey.trim() === "") {
                 newErrors.push({ index, message: "Tag key is required" });
-                return;
-            }
-
-            // Check for reserved keys
-            if (isReservedTagKey(field.tagKey)) {
+            } else if (isReservedTagKey(field.tagKey)) {
                 newErrors.push({
                     index,
                     message: "Tag key is reserved by the system and cannot be used",
                 });
-                return;
-            }
-
-            // Check for duplicates
-            if (tagKeys.has(field.tagKey)) {
+            } else if (tagKeys.has(field.tagKey)) {
+                // Check for duplicates
                 newErrors.push({ index, message: "Duplicate tag key" });
             } else {
                 tagKeys.add(field.tagKey);
+            }
+
+            // An enum tag renders as a picker, so it needs at least one declared value
+            if (field.type === "enum" && !(field.enumValues || []).length) {
+                newErrors.push({
+                    index,
+                    field: "enumValues",
+                    message: "Enum tags require at least one value",
+                });
             }
         });
 
@@ -99,8 +150,11 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
         onChange(updatedFields);
     };
 
-    const getErrorForField = (index: number): string | null => {
-        const error = errors.find((e) => e.index === index);
+    const getErrorForField = (
+        index: number,
+        field: ValidationError["field"] = "tagKey"
+    ): string | null => {
+        const error = errors.find((e) => e.index === index && (e.field || "tagKey") === field);
         return error ? error.message : null;
     };
 
@@ -173,11 +227,18 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                 <select
                                     id={`type-${index}`}
                                     value={field.type}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                        // Re-read the default through the new type.
+                                        const nextType = e.target.value as TagType;
                                         handleFieldChange(index, {
-                                            type: e.target.value as TagType,
-                                        })
-                                    }
+                                            type: nextType,
+                                            default: retypeDefault(
+                                                nextType,
+                                                field.default,
+                                                field.enumValues
+                                            ),
+                                        });
+                                    }}
                                     className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 >
                                     {TAG_TYPES.map((type) => (
@@ -215,16 +276,85 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                 >
                                     Default Value
                                 </label>
-                                <input
-                                    id={`default-${index}`}
-                                    type="text"
-                                    value={field.default !== undefined ? String(field.default) : ""}
-                                    onChange={(e) =>
-                                        handleFieldChange(index, { default: e.target.value })
-                                    }
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                    placeholder="Default value"
-                                />
+                                {field.type === "string-list" ? (
+                                    <StringListInput
+                                        value={
+                                            Array.isArray(field.default)
+                                                ? (field.default as string[])
+                                                : []
+                                        }
+                                        onChange={(next) =>
+                                            handleFieldChange(index, {
+                                                default: next.length > 0 ? next : undefined,
+                                            })
+                                        }
+                                        ariaLabel={`Default value entry for tag ${index + 1}`}
+                                        placeholder="Add a default entry"
+                                    />
+                                ) : field.type === "boolean" ? (
+                                    <select
+                                        id={`default-${index}`}
+                                        value={
+                                            field.default === undefined
+                                                ? ""
+                                                : String(
+                                                      field.default === true ||
+                                                          String(field.default).toLowerCase() ===
+                                                              "true"
+                                                  )
+                                        }
+                                        onChange={(e) =>
+                                            handleFieldChange(index, {
+                                                default: coerceDefault(field.type, e.target.value),
+                                            })
+                                        }
+                                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                    >
+                                        <option value="">No default</option>
+                                        <option value="true">true</option>
+                                        <option value="false">false</option>
+                                    </select>
+                                ) : field.type === "enum" ? (
+                                    <select
+                                        id={`default-${index}`}
+                                        value={
+                                            field.default !== undefined ? String(field.default) : ""
+                                        }
+                                        onChange={(e) =>
+                                            handleFieldChange(index, {
+                                                default: coerceDefault(field.type, e.target.value),
+                                            })
+                                        }
+                                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                    >
+                                        <option value="">No default</option>
+                                        {(field.enumValues || []).map((option) => (
+                                            <option key={String(option)} value={String(option)}>
+                                                {String(option)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <input
+                                        id={`default-${index}`}
+                                        type={
+                                            field.type === "integer" || field.type === "number"
+                                                ? "number"
+                                                : "text"
+                                        }
+                                        step={field.type === "integer" ? 1 : undefined}
+                                        value={
+                                            field.default !== undefined ? String(field.default) : ""
+                                        }
+                                        onChange={(e) =>
+                                            handleFieldChange(index, {
+                                                default: coerceDefault(field.type, e.target.value),
+                                            })
+                                        }
+                                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                        placeholder="Default value"
+                                    />
+                                )}
                             </div>
                         </div>
 
@@ -264,11 +394,23 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({ value, onChange }) 
                                             .split(",")
                                             .map((v) => v.trim())
                                             .filter((v) => v);
-                                        handleFieldChange(index, { enumValues: values });
+                                        // A default must be one of the declared values.
+                                        const keepDefault =
+                                            field.default !== undefined &&
+                                            values.includes(String(field.default));
+                                        handleFieldChange(index, {
+                                            enumValues: values,
+                                            default: keepDefault ? field.default : undefined,
+                                        });
                                     }}
                                     className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                     placeholder="e.g., dev, staging, prod"
                                 />
+                                {getErrorForField(index, "enumValues") && (
+                                    <p className="mt-1 text-sm text-vams-error">
+                                        {getErrorForField(index, "enumValues")}
+                                    </p>
+                                )}
                             </div>
                         )}
 

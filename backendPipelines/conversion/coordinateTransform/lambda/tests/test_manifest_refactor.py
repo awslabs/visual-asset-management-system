@@ -210,6 +210,54 @@ class TestConstructPipelineReadsFromS3:
         assert stage["inputFile"]["objectKey"] == "xidC/scan.e57"
         assert definition["externalSfnTaskToken"] == "tok-123"
 
+    def test_grouped_metadata_envelope_overrides_config(self):
+        """The run metadata file is the grouped-by-asset envelope; the asset-level override for
+        this pipeline's (databaseId, assetId, fileKey) still wins over the config value."""
+        mod = self._load()
+        s3 = self._s3_returning({
+            "pipelines/workflowExecutionInputs/E1/pipeline1/config.json":
+                {"sourceCrs": "EPSG:4326", "targetCrs": "EPSG:27700", "outputFormats": ["laz"]},
+            "pipelines/workflowExecutionInputs/E1/metadata.json": {
+                "schemaVersion": 2,
+                "assets": [{
+                    "databaseId": "dbC", "assetId": "xidC",
+                    "assetData": {"assetName": "Site scan"},
+                    "files": [
+                        {"fileKey": "/", "metadata": {"targetCrs": "EPSG:3857",
+                                                      "outputFormats": "las,ply"}},
+                        {"fileKey": "/scan.e57", "metadata": {}, "attributes": {}},
+                    ],
+                }],
+            },
+        })
+        with patch.object(mod, "s3", s3):
+            result = mod.lambda_handler(self._event(), MagicMock())
+        definition = json.loads(result["definition"][0])
+        params = json.loads(definition["inputParameters"])
+        assert params["sourceCrs"] == "EPSG:4326"
+        assert params["targetCrs"] == "EPSG:3857"
+        assert params["outputFormats"] == ["las", "ply"]
+        # The container consumes the legacy-projected metadata view.
+        assert json.loads(definition["inputMetadata"])["VAMS"]["assetMetadata"]["targetCrs"] == "EPSG:3857"
+
+    def test_grouped_metadata_envelope_for_other_asset_does_not_override(self):
+        mod = self._load()
+        s3 = self._s3_returning({
+            "pipelines/workflowExecutionInputs/E1/pipeline1/config.json":
+                {"sourceCrs": "EPSG:4326", "targetCrs": "EPSG:27700"},
+            "pipelines/workflowExecutionInputs/E1/metadata.json": {
+                "schemaVersion": 2,
+                "assets": [{
+                    "databaseId": "dbOther", "assetId": "xidOther", "assetData": {},
+                    "files": [{"fileKey": "/", "metadata": {"targetCrs": "EPSG:3857"}}],
+                }],
+            },
+        })
+        with patch.object(mod, "s3", s3):
+            result = mod.lambda_handler(self._event(), MagicMock())
+        params = json.loads(json.loads(result["definition"][0])["inputParameters"])
+        assert params["targetCrs"] == "EPSG:27700"
+
     def test_no_config_no_metadata_yields_empty_params(self):
         mod = self._load()
         s3 = MagicMock()

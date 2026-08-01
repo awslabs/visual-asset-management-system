@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
-import type { Pipeline, ExecutionType } from "../types";
+import type { Pipeline, PipelineCreateRequest, ExecutionType } from "../types";
 import { validatePipeline } from "./pipelineValidation";
 import { useCreatePipeline, useUpdatePipeline } from "../api/queries";
 import Dialog from "../components/Dialog";
@@ -17,6 +17,46 @@ import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { appCache } from "../../../services/appCache";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
+
+// Registration options for an optional numeric input: a blank field carries no value, so it is
+// submitted as undefined rather than NaN.
+const optionalNumberField = {
+    setValueAs: (v: string) => (v === "" || v === undefined || v === null ? undefined : Number(v)),
+};
+
+// Validation-error keys that have a dedicated message element next to their field. Any other key is
+// surfaced in the form-level summary so a save is never refused without feedback.
+const MAPPED_ERROR_KEYS = new Set([
+    "_form",
+    "pipelineName",
+    "category",
+    "description",
+    "executionConfig.executionType",
+    "executionConfig.lambda.resourceId",
+    "executionConfig.sqs.queueUrl",
+    "executionConfig.eventBridge.busArn",
+    "executionConfig.eventBridge.source",
+    "executionConfig.eventBridge.detailType",
+    "executionConfig.deadlineCloud.farmId",
+    "executionConfig.deadlineCloud.queueId",
+    "executionConfig.waitForCallback",
+    "executionConfig.taskTimeout",
+    "executionConfig.taskHeartbeatTimeout",
+]);
+
+// Page-wizard steps, in order. Module scope so onSubmit can gate on the final step.
+const PIPELINE_STEPS = [
+    { id: "basic", label: "Basic" },
+    { id: "execution", label: "Execution" },
+    { id: "settings", label: "Settings" },
+];
+const LAST_PIPELINE_STEP = PIPELINE_STEPS[PIPELINE_STEPS.length - 1].id;
+
+// Which wizard step owns each inline error message, so a page-mode save failure lands on the step
+// showing the offending field.
+const errorStep = (key: string) =>
+    key.startsWith("executionConfig.") ? "execution" : key === "_form" ? null : "basic";
 
 interface PipelineFormProps {
     mode: "create" | "edit";
@@ -34,6 +74,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     onDone,
     variant = "dialog",
 }) => {
+    const toast = useToast();
     const [isOpen, setIsOpen] = useState(true);
     const createMutation = useCreatePipeline();
     const updateMutation = useUpdatePipeline();
@@ -45,9 +86,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
 
     const config = appCache.getItem("config");
     const featuresEnabled = config?.featuresEnabled || [];
-    const showDeadlineCloud =
-        featuresEnabled.includes("DEADLINECLOUD_PIPELINES") &&
-        !featuresEnabled.includes("GOVCLOUD");
+    // GovCloud is not re-checked here: getConfig() already refuses to synthesize a stack that enables
+    // Deadline Cloud in GovCloud or any non-'aws' partition, so the feature flag cannot be present in
+    // such a deployment.
+    const showDeadlineCloud = featuresEnabled.includes("DEADLINECLOUD_PIPELINES");
 
     const isDeadlineCloudDisabled =
         mode === "edit" &&
@@ -69,6 +111,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         handleSubmit,
         watch,
         setValue,
+        reset,
         formState: { isSubmitting },
     } = useForm<Partial<Pipeline>>({
         defaultValues: initial || {
@@ -101,10 +144,43 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         }
     }, [executionType, setValue]);
 
+    // Fields are seeded from `initial` at mount. A route change between two edit targets can swap
+    // the prop without remounting the form, so every field is re-seeded when the pipeline identity
+    // changes — otherwise the previous pipeline's values would be saved onto the new one.
+    const seededPipelineId = React.useRef(initial?.pipelineId);
+    React.useEffect(() => {
+        const nextId = initial?.pipelineId;
+        if (nextId === seededPipelineId.current) return;
+        seededPipelineId.current = nextId;
+        reset(initial);
+        setAllowFilters(initial?.systemConfig?.inputFileFilters?.allow || []);
+        setExcludeFilters(initial?.systemConfig?.inputFileFilters?.exclude || []);
+        setValidationErrors({});
+        setSaveWarnings([]);
+    }, [initial, reset]);
+
     const onSubmit = async (data: Partial<Pipeline>) => {
+        // A save that returned warnings leaves the form open on the acknowledge banner; the entity
+        // already exists, so a further submit would create/update a second time.
+        if (saveWarnings.length > 0) return;
+
+        // In the page wizard only the final step saves. Any submit raised from an earlier step is
+        // spurious — an Enter keypress in a text input, or a click that lands as the footer swaps
+        // Next for Save — and would persist a half-configured pipeline, then navigate away before
+        // the remaining steps were ever shown.
+        if (variant === "page" && wizardStep !== LAST_PIPELINE_STEP) {
+            return;
+        }
+
         const validation = validatePipeline(data);
         if (!validation.ok) {
-            setValidationErrors((validation.errors as Record<string, string>) || {});
+            const errors = (validation.errors as Record<string, string>) || {};
+            setValidationErrors(errors);
+            // Page mode saves from the last step, so move to the step holding the first message.
+            const target = Object.keys(errors)
+                .map(errorStep)
+                .find((step) => !!step);
+            if (variant === "page" && target) setWizardStep(target);
             return;
         }
 
@@ -113,9 +189,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
         const allow = allowFilters;
         const exclude = excludeFilters;
 
-        const body: Pipeline = {
+        // pipelineId is sent as null when the user did not supply one, so the backend auto-generates
+        // it. An empty string is rejected (min_length=1), so never send "".
+        const body: PipelineCreateRequest = {
             databaseId,
-            pipelineId: data.pipelineId || "",
+            pipelineId: data.pipelineId || null,
             pipelineName: data.pipelineName || "",
             category: data.category,
             description: data.description,
@@ -134,20 +212,34 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     : await updateMutation.mutateAsync({
                           databaseId,
                           pipelineId: initial?.pipelineId || "",
-                          body,
+                          // The update route takes the id from the path; the body must not carry a
+                          // null id (the update model ignores it, but keep the payload honest).
+                          body: { ...body, pipelineId: initial?.pipelineId },
                       });
             // The save succeeded. If the backend returned non-blocking warnings, show them and let
             // the user acknowledge before closing; otherwise close immediately.
             const warnings = (result as any)?.warnings;
             if (Array.isArray(warnings) && warnings.length > 0) {
                 setSaveWarnings(warnings);
+                toast.warning(mode === "create" ? "Pipeline created" : "Pipeline saved", {
+                    description: warnings[0],
+                });
             } else {
+                // The form closes here, so the toast is the only confirmation the save landed.
+                toast.success(mode === "create" ? "Pipeline created" : "Pipeline saved", {
+                    description: body.pipelineName || undefined,
+                });
                 setIsOpen(false);
                 onDone();
             }
-        } catch (err: any) {
-            console.log("Form submission error:", err);
-            setValidationErrors({ _form: err.message || "Submission failed" });
+        } catch (err) {
+            // Kept as the form-level summary (it sits with the fields) AND raised as a toast, so a
+            // rejection is visible even when the summary is scrolled out of view.
+            const message = toastErrorMessage(err, "Submission failed");
+            setValidationErrors({ _form: message });
+            toast.error(mode === "create" ? "Create failed" : "Save failed", {
+                description: message,
+            });
         }
     };
 
@@ -158,13 +250,13 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
 
     const isPage = variant === "page";
 
+    // Errors on paths without their own inline message element, shown as a form-level summary.
+    const unmappedErrors = Object.entries(validationErrors).filter(
+        ([key]) => !MAPPED_ERROR_KEYS.has(key)
+    );
+
     // Page variant is a stepper wizard (mirrors the workflow builder). Dialog variant shows every
     // section at once. Each section maps to a step; the last step (settings) shows Save.
-    const PIPELINE_STEPS = [
-        { id: "basic", label: "Basic" },
-        { id: "execution", label: "Execution" },
-        { id: "settings", label: "Settings" },
-    ];
     const stepIndex = PIPELINE_STEPS.findIndex((s) => s.id === wizardStep);
     // In dialog mode all sections render; in page mode only the active step's section renders.
     const showSection = (id: string) => !isPage || wizardStep === id;
@@ -208,8 +300,14 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     Back
                 </button>
             )}
+            {/* The Next and submit buttons carry distinct keys so React mounts a NEW DOM node when the
+                step changes instead of reusing one and only swapping its `type`. Advancing onto the
+                last step re-renders this footer during the Next click; a reused element would already
+                be `type="submit"` by the time the browser completed that click, submitting the form
+                and saving a half-configured pipeline before the last step was ever shown. */}
             {isPage && !isLastStep ? (
                 <button
+                    key="wizard-next"
                     type="button"
                     onClick={() => setWizardStep(PIPELINE_STEPS[stepIndex + 1].id)}
                     disabled={!stepValid}
@@ -218,8 +316,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                     Next
                 </button>
             ) : (
-                !isDeadlineCloudDisabled && (
+                !isDeadlineCloudDisabled &&
+                saveWarnings.length === 0 && (
                     <button
+                        key="wizard-save"
                         type="submit"
                         form="pipeline-form"
                         disabled={isSubmitting}
@@ -245,6 +345,18 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             {validationErrors._form && (
                 <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded whitespace-pre-line">
                     {validationErrors._form}
+                </div>
+            )}
+
+            {unmappedErrors.length > 0 && (
+                <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded">
+                    <ul className="list-disc list-inside space-y-1">
+                        {unmappedErrors.map(([key, message]) => (
+                            <li key={key}>
+                                {key}: {message}
+                            </li>
+                        ))}
+                    </ul>
                 </div>
             )}
 
@@ -300,6 +412,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             id="pipelineName"
                             {...register("pipelineName")}
                             disabled={isDeadlineCloudDisabled}
+                            maxLength={256}
                             className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="Pipeline name"
                         />
@@ -318,9 +431,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             id="category"
                             {...register("category")}
                             disabled={isDeadlineCloudDisabled}
+                            maxLength={256}
                             className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="e.g. 3D, GenAI"
                         />
+                        {validationErrors.category && (
+                            <p className="text-vams-error text-sm mt-1">
+                                {validationErrors.category}
+                            </p>
+                        )}
                     </div>
 
                     <div>
@@ -332,9 +451,15 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             {...register("description")}
                             disabled={isDeadlineCloudDisabled}
                             rows={3}
+                            maxLength={1024}
                             className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="Pipeline description"
                         />
+                        {validationErrors.description && (
+                            <p className="text-vams-error text-sm mt-1">
+                                {validationErrors.description}
+                            </p>
+                        )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -396,6 +521,11 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 placeholder="Lambda function ARN or name"
                             />
+                            {validationErrors["executionConfig.lambda.resourceId"] && (
+                                <p className="text-vams-error text-sm mt-1">
+                                    {validationErrors["executionConfig.lambda.resourceId"]}
+                                </p>
+                            )}
                             {!watch("executionConfig.lambda.resourceId") && (
                                 <p className="text-text-secondary text-sm mt-1">
                                     Leave blank to auto-provision a new Lambda
@@ -532,9 +662,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             <div>
                                 <label className="block text-sm font-medium mb-1">Priority</label>
                                 <input
-                                    {...register("executionConfig.deadlineCloud.priority", {
-                                        valueAsNumber: true,
-                                    })}
+                                    {...register(
+                                        "executionConfig.deadlineCloud.priority",
+                                        optionalNumberField
+                                    )}
                                     type="number"
                                     disabled={isDeadlineCloudDisabled}
                                     className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
@@ -547,9 +678,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 <input
                                     {...register(
                                         "executionConfig.deadlineCloud.maxRetriesPerTask",
-                                        {
-                                            valueAsNumber: true,
-                                        }
+                                        optionalNumberField
                                     )}
                                     type="number"
                                     disabled={isDeadlineCloudDisabled}
@@ -563,9 +692,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 <input
                                     {...register(
                                         "executionConfig.deadlineCloud.maxFailedTasksCount",
-                                        {
-                                            valueAsNumber: true,
-                                        }
+                                        optionalNumberField
                                     )}
                                     type="number"
                                     disabled={isDeadlineCloudDisabled}
@@ -805,7 +932,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     // Page variant: full-page with breadcrumb + heading + footer buttons at the bottom.
     if (isPage) {
         return (
-            <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+            <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
                 <div className="space-y-2">
                     <Breadcrumb
                         items={[
@@ -820,7 +947,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             },
                         ]}
                     />
-                    <h1 className="text-2xl font-semibold text-text-primary">
+                    <h1 className="text-text-primary">
                         {mode === "create" ? "Create Pipeline" : "Edit Pipeline"}
                     </h1>
                 </div>

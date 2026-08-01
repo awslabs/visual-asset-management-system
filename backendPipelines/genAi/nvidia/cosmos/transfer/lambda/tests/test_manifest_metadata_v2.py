@@ -11,12 +11,17 @@ per-file metadata key from the resolved manifest.
 The envelope shape mirrors backend ``executionRecords.build_grouped_metadata_envelope`` exactly:
 ``{"schemaVersion": 2, "assets": [ {databaseId, assetId, assetData, files: [ {fileKey, metadata,
 attributes?} ]} ]}`` — asset-level metadata is the fileKey '/' record; per-file metadata/attributes
-are per-file records keyed by the normalized relative file key."""
+are per-file records keyed by the normalized relative file key.
+
+Every pipeline vendors its own copy of ``manifestHelper.py``, so a final check asserts the copies
+are byte-identical to this one — the read path exercised here is then the one they all run."""
 
 import os
 import sys
 import json
+import glob
 import types
+import hashlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -153,3 +158,30 @@ class TestResolvedFileKey:
     def test_no_manifest_defaults_to_asset_level(self):
         assert mh.resolved_file_key({"inputFiles": []}) == "/"
         assert mh.resolved_file_key({}) == "/"
+
+
+def _pipelines_root():
+    path = _LAMBDA_DIR
+    while os.path.basename(path) != "backendPipelines":
+        parent = os.path.dirname(path)
+        if parent == path:
+            pytest.skip("backendPipelines root not found")
+        path = parent
+    return path
+
+
+def _helper_digest(path):
+    with open(path, "r", encoding="utf-8", newline=None) as fh:
+        return hashlib.sha256(fh.read().encode("utf-8")).hexdigest()
+
+
+@pytest.mark.unit
+class TestVendoredHelperCopiesMatch:
+    def test_every_pipeline_helper_is_identical(self):
+        canonical = os.path.join(_LAMBDA_DIR, "manifestHelper.py")
+        copies = sorted(glob.glob(os.path.join(_pipelines_root(), "**", "lambda", "manifestHelper.py"),
+                                  recursive=True))
+        assert len(copies) > 1, "expected the vendored helper in multiple pipelines"
+        expected = _helper_digest(canonical)
+        drifted = [c for c in copies if _helper_digest(c) != expected]
+        assert drifted == [], f"vendored manifestHelper.py copies drifted from {canonical}: {drifted}"

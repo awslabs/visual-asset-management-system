@@ -76,18 +76,37 @@ def fetch_input_configuration(input_configuration_s3_location):
     return _fetch_json_from_s3(input_configuration_s3_location)
 
 
+def relative_subdir_from_manifest_path(relative_path):
+    """The input file's subdirectory within the asset, derived from its asset-relative manifest
+    path ('/parts/housing/model.obj' -> 'parts/housing'). A file at the asset root yields ''."""
+    trimmed = (relative_path or "").strip("/")
+    if "/" not in trimmed:
+        return ""
+    return trimmed.rsplit("/", 1)[0]
+
+
 def resolve_inputs_from_manifest(data):
-    """Resolve the input file path and output-files path from the workflow manifest
-    (inputManifestS3Location), falling back to the legacy top-level body fields for direct/local
-    invocations. Locations are carried as bucket + relative keys, so s3:// URIs are reconstructed
-    here. Returns (input_s3_asset_file_path, output_s3_asset_files_path)."""
+    """Resolve the input file path, output-files path and the input's asset-relative subdirectory
+    from the workflow manifest (inputManifestS3Location), falling back to the legacy top-level body
+    fields for direct/local invocations. Locations are carried as bucket + relative keys, so s3://
+    URIs are reconstructed here. Returns (input_s3_asset_file_path, output_s3_asset_files_path,
+    relative_subdir)."""
     manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
     input_files = (manifest or {}).get("inputFiles") or []
+    # The pipeline is registered with inputFileArity 'one' and converts a single mesh per
+    # execution; more than one resolved input would be silently dropped.
+    if len(input_files) > 1:
+        raise ValueError(
+            f"Trimesh pipeline accepts a single input file but the execution resolved "
+            f"{len(input_files)}"
+        )
     input_path = ""
+    relative_subdir = ""
     if input_files:
         first = input_files[0]
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
+        relative_subdir = relative_subdir_from_manifest_path(first.get("relativePath"))
     input_path = input_path or data.get("inputS3AssetFilePath", "")
     # Output-files path reconstructed from the outputs bucket + bucket-relative files prefix.
     outputs = (manifest or {}).get("outputs", {})
@@ -95,10 +114,10 @@ def resolve_inputs_from_manifest(data):
     if outputs.get("bucket") and outputs.get("files"):
         output_path = f"s3://{outputs['bucket']}/{outputs['files']}"
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
-    return input_path, output_path
+    return input_path, output_path, relative_subdir
 
 
-def convert_input_output(input_path, output_path, output_filetype):
+def convert_input_output(input_path, output_path, output_filetype, relative_subdir=""):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
     logger.info(input_key)
@@ -110,8 +129,11 @@ def convert_input_output(input_path, output_path, output_filetype):
     if (input_key.endswith("/")):
         raise ValueError("Input S3 URI cannot be a folder")
 
-    # Check input and output formats
+    # Check input and output formats. Extensions are compared case-insensitively to match the
+    # registered inputFileFilters, which match a file's extension regardless of case.
     input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(input_key)
+    input_s3_asset_extension = input_s3_asset_extension.lower()
+    output_filetype = (output_filetype or "").lower()
     if (not input_s3_asset_extension or input_s3_asset_extension == '' or input_s3_asset_extension not in supported_formats):
         raise ValueError(f"Input format {input_s3_asset_extension} not supported by Trimesh pipeline")
     if output_filetype not in supported_formats:
@@ -128,10 +150,15 @@ def convert_input_output(input_path, output_path, output_filetype):
     output_file = os.path.join('/tmp', f'output{output_filetype}')
     mesh.export(output_file, file_type=output_filetype)
 
-    # Upload output file to S3
+    # Upload output file to S3. The converted file keeps the input file's subdirectory within the
+    # asset so the write-back step places it beside the input rather than at the asset root.
     outputFileName, _ = os.path.splitext(os.path.basename(input_key)) #get the original file name without extension
     outputFileName = f"{outputFileName}{output_filetype}" #add final output extension
-    output_key = os.path.join(output_key, outputFileName) #get final storage key location for output file
+    if not output_key.endswith("/"):
+        output_key += "/"
+    if relative_subdir:
+        output_key = f"{output_key}{relative_subdir.strip('/')}/"
+    output_key = f"{output_key}{outputFileName}" #get final storage key location for output file
     uploadV2(output_bucket, output_key, output_file) #upload to storage
 
     logger.info("Conversion complete")
@@ -185,11 +212,11 @@ def lambda_handler(event, context):
     else:
         executing_requestContext = ''
 
-    # Resolve the input file + output-files paths from the workflow manifest (legacy body fields
-    # are the fallback for direct/local invocations).
-    input_path, output_path = resolve_inputs_from_manifest(data)
+    # Resolve the input file + output-files paths and the input's asset-relative subdirectory from
+    # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
+    input_path, output_path, relative_subdir = resolve_inputs_from_manifest(data)
 
-    convert_input_output(input_path, output_path, output_filetype)
+    convert_input_output(input_path, output_path, output_filetype, relative_subdir)
 
     return {
         'statusCode': 200, 

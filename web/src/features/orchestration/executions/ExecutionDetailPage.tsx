@@ -32,11 +32,11 @@ const Card: React.FC<{ title?: string; children: React.ReactNode; className?: st
         className={`bg-surface-container border border-border-default rounded-lg shadow-sm ${className}`}
     >
         {title && (
-            <header className="px-4 py-3 border-b border-border-default">
-                <h2 className="text-base font-semibold text-text-primary">{title}</h2>
+            <header className="px-4 py-2 border-b border-border-default">
+                <h2 className="text-base font-bold text-text-primary">{title}</h2>
             </header>
         )}
-        <div className="p-4">{children}</div>
+        <div className="p-3">{children}</div>
     </section>
 );
 
@@ -162,7 +162,20 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     const inputFileColumns: ColumnDef<any, any>[] = [
         { accessorKey: "databaseId", header: "Database" },
         { accessorKey: "assetId", header: "Asset" },
-        { accessorKey: "inputAssetFileKey", header: "File" },
+        {
+            accessorKey: "inputAssetFileKey",
+            header: "File",
+            // The stored key is asset-root-relative and begins with the assetId segment
+            // ("/{assetId}/folder/file.laz"). The row already names the asset in its own column, so
+            // show only the path within the asset.
+            cell: (c) => {
+                const f = c.row.original as any;
+                const key: string = c.getValue() || "";
+                const prefix = `/${f.assetId}`;
+                const shown = f.assetId && key.startsWith(prefix) ? key.slice(prefix.length) : key;
+                return <span className="font-mono text-sm">{shown || "/"}</span>;
+            },
+        },
         // The concrete S3 version the run read (resolved at launch). Blank for folder/whole-asset
         // selections, which have no single version.
         { accessorKey: "versionId", header: "S3 version", cell: (c) => c.getValue() || "—" },
@@ -200,12 +213,8 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     const outputFileColumns: ColumnDef<any, any>[] = [
         { accessorKey: "relativeFilePath", header: "Path" },
         { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
-        {
-            id: "asset",
-            header: "Asset",
-            accessorFn: (r: any) =>
-                r.databaseId ? `${r.databaseId}:${r.assetId}` : r.assetId || "",
-        },
+        // No Asset/Database column: every output row shares the execution's single output target,
+        // which the header states once. The row identifies the FILE (path + version).
         {
             accessorKey: "assetFileVersionId",
             header: "Version",
@@ -259,7 +268,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     )}&workflowDatabaseId=${encodeURIComponent(execution.workflowDatabaseId || "")}`;
 
     return (
-        <div className="orchestration-root min-h-screen bg-surface text-text-primary p-6 space-y-6">
+        <div className="orchestration-root orchestration-page min-h-screen bg-surface text-text-primary space-y-4">
             {/* Breadcrumb: Executions › {workflow's executions} › this execution. Uses the workflow
                 name (falling back to its id). */}
             <Breadcrumb
@@ -280,7 +289,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
             {/* Header card */}
             <Card>
                 <div className="flex items-center gap-3 mb-4 flex-wrap">
-                    <h1 className="text-2xl font-bold">Execution Detail</h1>
+                    <h1 className="text-text-primary">Execution Detail</h1>
                     <StatusBadge status={execution.executionStatus as ExecutionStatus} />
                     <PipelineProgress pipelines={execution.pipelines || []} />
                 </div>
@@ -314,10 +323,19 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             {execution.executionGroupId}
                         </Field>
                     )}
-                    <Field label="Output">
-                        {execution.outputLocationType === "none" ? (
-                            "Results only (no asset output)"
-                        ) : execution.outputAssetId ? (
+                    {/* The output target is broken out into its three parts, matching the executions
+                        list columns, so the destination is readable field-by-field rather than as one
+                        composite string. */}
+                    <Field label="Output Type">
+                        {execution.outputLocationType === "none"
+                            ? "Results only (no asset output)"
+                            : execution.outputLocationType || "N/A"}
+                    </Field>
+                    <Field label="Output Database ID" mono>
+                        {execution.outputDatabaseId || "N/A"}
+                    </Field>
+                    <Field label="Output Asset ID">
+                        {execution.outputAssetId ? (
                             execution.outputDatabaseId ? (
                                 // Link the output asset to its asset view.
                                 <a
@@ -328,7 +346,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     )}
                                     className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
                                 >
-                                    {`${execution.outputDatabaseId}:${execution.outputAssetId}`}
+                                    {execution.outputAssetId}
                                 </a>
                             ) : (
                                 <span className="font-mono">{execution.outputAssetId}</span>
@@ -361,7 +379,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-300 mb-1">
                             Warning:
                         </p>
-                        <p className="text-sm text-yellow-700 dark:text-yellow-400">
+                        <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
                             Some collections were truncated:{" "}
                             {execution.truncatedCollections.join(", ")}
                         </p>
@@ -369,19 +387,23 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 )}
             </Card>
 
-            {/* Tabs */}
-            <div className="border-b border-border-default">
-                <nav className="flex gap-4">
+            {/* Tabs. Styled after Cloudscape's Tabs: the strip sits on the container surface with a
+                bottom divider, the selected tab is lifted onto that surface with an accent underline,
+                and unselected tabs shade on hover — otherwise the buttons read as floating text. */}
+            <div className="orch-outline border-b border-border-default">
+                <nav className="flex gap-1" role="tablist">
                     {tabs
                         .filter((t) => !t.hidden)
                         .map((t) => (
                             <button
                                 key={t.key}
+                                role="tab"
+                                aria-selected={activeTab === t.key}
                                 onClick={() => setActiveTab(t.key)}
-                                className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${
+                                className={`orch-outline px-3 py-2 -mb-px border-b-2 font-bold text-sm rounded-t transition-colors ${
                                     activeTab === t.key
                                         ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
-                                        : "border-transparent text-text-secondary hover:text-gray-900 dark:hover:text-gray-200"
+                                        : "border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-hover"
                                 }`}
                             >
                                 {t.label}
@@ -390,8 +412,10 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 </nav>
             </div>
 
-            {/* Tab Content */}
-            <div>
+            {/* Tab Content. Cloudscape's Tabs puts padding-block:16px between the tab bar and its
+                panel and no inline padding; -mt-4 cancels the parent's space-y-4 so the two gaps are
+                not additive, then pt-4 supplies exactly that 16px. */}
+            <div className="-mt-4 pt-4">
                 {activeTab === "inputs" && (
                     <div className="space-y-4">
                         <Card title={`Input Files (${execution.inputFiles?.length || 0})`}>
@@ -400,6 +424,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     columns={inputFileColumns}
                                     rows={execution.inputFiles}
                                     pageSize={25}
+                                    flush
                                 />
                             ) : (
                                 <p className="text-text-secondary">No input files</p>
@@ -411,6 +436,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     columns={metadataColumns}
                                     rows={inputMetadataRows}
                                     pageSize={25}
+                                    flush
                                 />
                             ) : (
                                 <p className="text-text-secondary">No input metadata</p>
@@ -572,6 +598,25 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
 
                 {activeTab === "outputs" && (
                     <div className="space-y-4">
+                        {/* The output TARGET, before the file list: where this run wrote (or that it
+                            wrote no asset at all), so the destination is stated on the tab that shows
+                            the files rather than only in the page header. */}
+                        <Card title="Output Target">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-2">
+                                <Field label="Output Type">
+                                    {execution.outputLocationType === "none"
+                                        ? "Results only (no asset output)"
+                                        : execution.outputLocationType || "N/A"}
+                                </Field>
+                                <Field label="Output Database ID" mono>
+                                    {execution.outputDatabaseId || "N/A"}
+                                </Field>
+                                <Field label="Output Asset ID" mono>
+                                    {execution.outputAssetId || "N/A"}
+                                </Field>
+                            </div>
+                        </Card>
+
                         {/* Files */}
                         {execution.outputs?.files && execution.outputs.files.length > 0 && (
                             <Card title={`Output Files (${execution.outputs.files.length})`}>
@@ -579,6 +624,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     columns={outputFileColumns}
                                     rows={execution.outputs.files}
                                     pageSize={25}
+                                    flush
                                 />
                             </Card>
                         )}
@@ -590,6 +636,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     columns={outputMetadataColumns}
                                     rows={execution.outputs.metadata}
                                     pageSize={25}
+                                    flush
                                 />
                             </Card>
                         )}

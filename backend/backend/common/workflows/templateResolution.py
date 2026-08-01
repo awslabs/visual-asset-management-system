@@ -11,23 +11,29 @@ launch.
 Two tag layers share the {{tagName}} syntax:
   - USER tags: declared in the template tag schema (or free-form for an override), filled from the
     caller's templateTags. Resolved HERE.
-  - SYSTEM tags: the built-in tags (common/workflows/templateTags.SYSTEM_TAG_NAMES + the metadata_
-    prefix) that the renderer (common/workflows/templateRender) resolves per pipeline task against
-    the manifest + execution context at launch. Left in place HERE.
+  - SYSTEM tags: the built-in tags (common/workflows/templateTags.SYSTEM_TAG_NAMES) that the renderer
+    (common/workflows/templateRender) resolves per pipeline task against the manifest + execution
+    context at launch. Left in place HERE.
 
 So resolution substitutes only the user tags and leaves system tags as {{...}} placeholders; an
 "unmatched" {{tag}} — one that is neither a filled user tag nor a reserved system tag — is an error
-(the Q1 contract: extra provided tags are ignored; an unmatched body tag errors).
+(the Q1 contract: extra provided tags are ignored; an unmatched body tag errors). A {{tag}} using the
+reserved dynamic-metadata prefix (metadata_) is likewise an error: the prefix is reserved against
+user tag keys but no renderer resolves it, so it can never render.
 """
 
 import json
 import re
 
-from common.workflows.templateTags import is_reserved_tag_key
+from common.workflows.templateTags import METADATA_DYNAMIC_TAG_PREFIX, is_reserved_tag_key
+from common.workflows.templateRender import escape_scalar
 from common.workflows import templateTagSchema as tts
 
 # Same tag pattern as templateRender: {{ tagName }} with tolerated inner whitespace.
 _TAG_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+
+# The configFormat a template-less override body resolves under (it carries no declared format).
+CONFIG_FORMAT_RAW = "raw"
 
 
 class TemplateResolutionError(Exception):
@@ -55,20 +61,45 @@ def _filled_from_raw_tags(provided_tags):
     return errors, filled
 
 
-def _substitute_user_tags(text, filled_tags):
+def _value_text(value):
+    """A tag value as the text that would be substituted, for scanning purposes."""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _substitute_user_tags(text, filled_tags, config_format="json"):
     """Replace {{tag}} occurrences of the provided/declared USER tags in text, leaving reserved
     system tags in place. Returns (rendered_text, errors). A {{tag}} that is neither a filled user
     tag nor a reserved system tag is an unmatched-tag error.
 
-    A string tag value is substituted JSON-string-escaped without surrounding quotes (so it sits
-    inside the template's own quotes, matching templateRender's scalar kind); a non-string value
-    (int/float/bool/list) is substituted as a JSON literal (no surrounding quotes)."""
+    A string tag value is substituted escaped for `config_format` without surrounding quotes (so it
+    sits inside the template's own quotes, using the same escaping the launch-time renderer applies to
+    its scalar tags); a non-string value (int/float/bool/list) is substituted as a JSON literal (no
+    surrounding quotes).
+
+    A user value carrying its own {{...}} placeholder is an error: substitution is single-pass, so the
+    placeholder would survive into the stored config and be resolved (or hard-fail as unknown) by the
+    launch-time renderer."""
     if not text:
         return text or "", []
     errors = []
     found = set(_TAG_PATTERN.findall(text))
     for name in sorted(found):
         if name in filled_tags:
+            if _TAG_PATTERN.search(_value_text(filled_tags[name])):
+                errors.append(
+                    f"template tag '{name}' has a value containing a template placeholder, which is "
+                    f"not allowed"
+                )
+            continue
+        if name.startswith(METADATA_DYNAMIC_TAG_PREFIX):
+            # The dynamic metadata family is reserved but not resolved by the launch-time renderer;
+            # rejecting it here names the tag in a 400 instead of failing the launch (or a later
+            # pipeline task) on an unknown tag.
+            errors.append(
+                f"template tag '{{{{{name}}}}}' uses the reserved '{METADATA_DYNAMIC_TAG_PREFIX}' "
+                f"prefix, which is not resolvable; use one of the metadata-content system tags "
+                f"instead"
+            )
             continue
         if is_reserved_tag_key(name):
             continue  # a system tag — resolved later by templateRender
@@ -82,8 +113,8 @@ def _substitute_user_tags(text, filled_tags):
             return match.group(0)  # system tag: leave for the launch-time renderer
         value = filled_tags[name]
         if isinstance(value, str):
-            return json.dumps(value)[1:-1]  # scalar: escaped, quotes stripped
-        return json.dumps(value)            # json literal (list/number/bool)
+            return escape_scalar(value, config_format)  # scalar: escaped, quotes stripped
+        return json.dumps(value)                        # json literal (list/number/bool)
 
     return _TAG_PATTERN.sub(_replace, text), []
 
@@ -134,7 +165,7 @@ def resolve_pipeline_config(pipeline_system_config, template_row, tag_schema_fie
         errors, filled = tts.validate_tags(tag_schema_fields or [], provided_tags)
         if errors:
             return errors, None
-        rendered, render_errors = _substitute_user_tags(body, filled)
+        rendered, render_errors = _substitute_user_tags(body, filled, config_format)
         if render_errors:
             return render_errors, None
         return [], {
@@ -153,12 +184,12 @@ def resolve_pipeline_config(pipeline_system_config, template_row, tag_schema_fie
         errors, filled = _filled_from_raw_tags(provided_tags)
         if errors:
             return errors, None
-        rendered, render_errors = _substitute_user_tags(override, filled)
+        rendered, render_errors = _substitute_user_tags(override, filled, CONFIG_FORMAT_RAW)
         if render_errors:
             return render_errors, None
         return [], {
             "templateId": "", "renderedConfig": rendered, "templateTags": provided_tags,
-            "customTemplateOverrideUsed": True, "configFormat": "raw",
+            "customTemplateOverrideUsed": True, "configFormat": CONFIG_FORMAT_RAW,
         }
 
     # Case 4: no template, no override. Only allowed when the pipeline does not requireTemplate.
@@ -167,5 +198,5 @@ def resolve_pipeline_config(pipeline_system_config, template_row, tag_schema_fie
     # Only system/execution variables apply; no user config body.
     return [], {
         "templateId": "", "renderedConfig": "", "templateTags": [],
-        "customTemplateOverrideUsed": False, "configFormat": "raw",
+        "customTemplateOverrideUsed": False, "configFormat": CONFIG_FORMAT_RAW,
     }

@@ -1319,6 +1319,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
 
                     # Create file info for SQS message. sourceBucketName is where the temp file is
                     # read from (may differ from the destination bucketName for workflow outputs).
+                    # workflowId/workflowExecutionId carry the same change provenance the
+                    # synchronous move path stamps, so the async copy resolves the identical
+                    # change source.
                     file_info = {
                         "relativeKey": file.relativeKey,
                         "uploadIdS3": "external",
@@ -1331,7 +1334,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "assetId": assetId,
                         "uploadId": uploadId,
                         "uploadType": uploadType,
-                        "changeUserId": user_id
+                        "changeUserId": change_user_id or user_id,
+                        "workflowId": workflow_id,
+                        "workflowExecutionId": workflow_execution_id
                     }
                     
                     # Try to queue the file for asynchronous processing with comprehensive error handling

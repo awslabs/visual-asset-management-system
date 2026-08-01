@@ -68,6 +68,34 @@ class TestWorkflowServiceV2:
         assert paginate_kwargs["IndexName"] == "WorkflowsByDateGSI"
         assert paginate_kwargs["ScanIndexForward"] is False
 
+    @patch(f"{MOD}.find_workflow_id_owner")
+    @patch(f"{MOD}.workflowAsl")
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_rejected_when_id_used_by_another_database(
+            self, mock_enforcer, mock_claims, mock_table, mock_get_pipe, mock_asl, mock_owner):
+        """Workflow ids are unique across every database (GLOBAL included), matching pipelines."""
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_get_pipe.return_value = PIPELINE_REC
+        mock_asl.ASL_SCHEMA_VERSION = 1
+        table = MagicMock()
+        table.get_item.return_value = {}          # free within this database
+        mock_table.return_value = table
+        mock_owner.return_value = "db-other"      # taken by another database
+        body = {"databaseId": "db1", "workflowId": "wf1", "workflowName": "My WF",
+                "specifiedPipelines": [{"pipelineId": "pipe1"}]}
+        resp = lambda_handler(
+            _event("POST", "/database/db1/workflows", {"databaseId": "db1"}, body), MagicMock())
+        assert resp["statusCode"] == 400
+        # Assert the specific rejection, not just any 400, so the test cannot pass for another reason.
+        assert "already in use by another database" in resp["body"]
+        table.put_item.assert_not_called()
+        # The owning database is never disclosed to the caller.
+        assert "db-other" not in resp["body"]
+
     @patch(f"{MOD}.workflowAsl")
     @patch(f"{MOD}._get_pipeline_record")
     @patch(f"{MOD}._workflow_table")
@@ -246,6 +274,82 @@ class TestWorkflowServiceV2:
         assert resp["statusCode"] == 200
         assert table.put_item.call_args.kwargs["Item"]["enabled"] is False
 
+    @patch(f"{MOD}._resolve_snapshot_pipeline_records")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_update_reenforces_on_the_mutated_object(self, mock_enforcer, mock_claims, mock_table,
+                                                     mock_snapshot):
+        # category/workflowName are Casbin constraint fields, so the PUT is enforced on the mutated
+        # object too: a role allowed on the stored category but not the requested one is denied and
+        # nothing is written.
+        mock_claims.return_value = {"tokens": ["user1"]}
+        inst = MagicMock()
+        inst.enforceAPI.return_value = True
+        # Allow the stored object (category "sandbox"), deny the mutated one ("production").
+        inst.enforce.side_effect = lambda obj, action: obj.get("category") != "production"
+        mock_enforcer.return_value = inst
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1",
+                                                "category": "sandbox", "systemConfig": {}}}
+        mock_table.return_value = table
+        mock_snapshot.return_value = []
+        resp = lambda_handler(
+            _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
+                   {"category": "production"}), MagicMock())
+        assert resp["statusCode"] == 403
+        table.put_item.assert_not_called()
+
+    @patch(f"{MOD}.ev")
+    @patch(f"{MOD}._resolve_snapshot_pipeline_records")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_update_without_pipelines_downgrades_save_errors(self, mock_enforcer, mock_claims,
+                                                             mock_table, mock_snapshot, mock_ev):
+        # A metadata-only edit (here: disable) is not blocked by a save error against the stored
+        # pipeline snapshot (e.g. a referenced pipeline archived later) — the condition is surfaced as
+        # a warning so the workflow stays editable.
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_ev.validate_workflow_save.return_value = (["pipeline 'pipe1' is archived"], [])
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1",
+                                                "enabled": True, "systemConfig": {}}}
+        mock_table.return_value = table
+        mock_snapshot.return_value = [dict(PIPELINE_REC, archived=True)]
+        resp = lambda_handler(
+            _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
+                   {"enabled": False}), MagicMock())
+        assert resp["statusCode"] == 200
+        assert table.put_item.call_args.kwargs["Item"]["enabled"] is False
+        assert "pipeline 'pipe1' is archived" in json.loads(resp["body"])["message"]["warnings"]
+
+    @patch(f"{MOD}.workflowAsl")
+    @patch(f"{MOD}.ev")
+    @patch(f"{MOD}._get_pipeline_record")
+    @patch(f"{MOD}._workflow_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_update_with_pipelines_still_blocks_on_save_errors(self, mock_enforcer, mock_claims,
+                                                               mock_table, mock_get_pipe, mock_ev,
+                                                               mock_asl):
+        # When the caller supplies specifiedPipelines, a save error remains a hard 400.
+        mock_claims.return_value = {"tokens": ["user1"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_get_pipe.return_value = PIPELINE_REC
+        mock_ev.validate_workflow_save.return_value = (["some hard error"], [])
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {"databaseId": "db1", "workflowId": "wflow1",
+                                                "enabled": True, "systemConfig": {}}}
+        mock_table.return_value = table
+        resp = lambda_handler(
+            _event("PUT", "/database/db1/workflows/wflow1", {"databaseId": "db1", "workflowId": "wflow1"},
+                   {"specifiedPipelines": [{"pipelineId": "pipe1"}]}), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "saveErrors" in json.loads(resp["body"])["message"]
+        table.put_item.assert_not_called()
+
     @patch(f"{MOD}._workflow_table")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
@@ -291,6 +395,18 @@ class TestExecutionCountEnrichment:
         assert len(result.Items) == 1
         assert result.Items[0].workflowId == "wf-a"
         assert result.Items[0].executionCount == 7
+
+    def test_pagination_config_clamps_caller_supplied_sizes(self):
+        # A caller-supplied maxItems cannot make one request accumulate the whole table (each
+        # accumulated row costs a COUNT query); both sizes clamp to MAX_LIST_PAGE_ITEMS.
+        from backend.backend.handlers.workflows import workflowService as ws
+        cfg = ws._pagination_config({"maxItems": "50000", "pageSize": "50000",
+                                     "startingToken": None})
+        assert cfg["MaxItems"] == ws.MAX_LIST_PAGE_ITEMS
+        assert cfg["PageSize"] == ws.MAX_LIST_PAGE_ITEMS
+        # A request under the ceiling is passed through untouched.
+        cfg = ws._pagination_config({"maxItems": "25", "pageSize": "10", "startingToken": "tok"})
+        assert cfg == {"MaxItems": 25, "PageSize": 10, "StartingToken": "tok"}
 
     def test_execution_count_returns_none_on_error(self):
         # Best-effort: a count query failure must not break the listing — returns None.

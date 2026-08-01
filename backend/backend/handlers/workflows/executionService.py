@@ -92,7 +92,8 @@ try:
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
     workflow_database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
-    # Global-list source of truth for output-asset access: 'executions that wrote to this asset'.
+    # Index of 'executions that wrote to this asset', written at launch; removed here alongside the
+    # execution's other rows on permanent delete.
     workflow_execution_outputs_index_table = get_table_name(
         ResourceKeys.WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE)
     # Re-run delegates to the asset-less V2 execute handler (invoked as a lambda cross-call so the
@@ -162,6 +163,40 @@ TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
 # Status written to the main row and to each still-running pipeline row by an abort.
 ABORTED_STATUS = "ABORTED"
 
+# Main-row attributes the listing's lazy reconcile can change (build_execution_items).
+LIST_RECONCILED_MAIN_ROW_ATTRIBUTES = (
+    "executionStatus", "executionStartDate", "executionStopDate", "lastSfnSyncCheckDate",
+    "executionLog", "executionError",
+)
+
+# Main-row attributes the details view's lazy reconcile can change (_reconcile_main_status).
+DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES = (
+    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate",
+)
+
+# Main-row attributes an abort writes.
+ABORT_MAIN_ROW_ATTRIBUTES = (
+    "executionStatus", "executionStopDate", "lastSfnSyncCheckDate",
+)
+
+
+def _persist_reconciled_main_row(table, main_item, attributes):
+    """Write only the named attributes of a main execution row. The reconcile happens on read paths
+    while the end-state lambda may be writing the same row, so a whole-item put would replace its
+    attributes with the pre-completion snapshot the read started from."""
+    reconciled = {attr: main_item[attr] for attr in attributes if attr in main_item}
+    if not reconciled:
+        return
+    names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
+    values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
+    expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
+    table.update_item(
+        Key={"workflowExecutionId": main_item.get("workflowExecutionId", ""),
+             "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId", "")},
+        UpdateExpression=expr,
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values)
+
 
 def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
     """Best-effort fetch of recent CloudWatch log events for ONE workflow execution.
@@ -194,6 +229,17 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
         return ""
+
+
+def _decode_starting_token(starting_token):
+    """Decode a base64 pagination token back into an ExclusiveStartKey, or None when it cannot be
+    decoded (the caller returns a validation error rather than silently restarting at page 1)."""
+    try:
+        decoded = json.loads(base64.b64decode(starting_token).decode('utf-8'))
+    except Exception as e:
+        logger.exception(f"Invalid startingToken: {e}")
+        return None
+    return decoded if isinstance(decoded, dict) and decoded else None
 
 
 def get_asset_details(databaseId, assetId):
@@ -311,8 +357,11 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'workflowExecutionId': execution_id,
             'executionStatus': status,
             # triggerType + executionGroupId are surfaced so the asset-scoped board can apply the
-            # same status/trigger/group filters as the global board.
+            # same status/trigger/group filters as the global board. triggeredByUserId is the sub-line
+            # of that board's Trigger column; it is already on this main row, so surfacing it costs
+            # nothing and stops the column rendering half-empty on the asset tab.
             'triggerType': main_item.get('triggerType', ''),
+            'triggeredByUserId': main_item.get('triggeredByUserId', ''),
             'executionGroupId': main_item.get('executionGroupId', ''),
             'startDate': start_date,
             'stopDate': stop_date,
@@ -374,14 +423,15 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             'ScanIndexForward': False,
         }
 
-        # Resume from a prior page if the caller supplied a continuation token.
+        # Resume from a prior page if the caller supplied a continuation token. A token that cannot
+        # be decoded is a caller error: continuing without it would silently serve page 1 again.
         starting_token = query_params.get('startingToken') if query_params else None
         if starting_token:
-            try:
-                query_kwargs['ExclusiveStartKey'] = json.loads(
-                    base64.b64decode(starting_token).decode('utf-8'))
-            except Exception as e:
-                logger.exception(e)
+            decoded = _decode_starting_token(starting_token)
+            if decoded is None:
+                return validation_error(
+                    body={'message': "startingToken is invalid."}, event=event)
+            query_kwargs['ExclusiveStartKey'] = decoded
 
         # Page the asset's inputs GSI newest-first (sorted by executionStartDate),
         # deduping by workflowExecutionId as we go (first-seen wins = newest input
@@ -431,7 +481,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
 
         def _persist(item):
             # Persist the lazily-reconciled main row (status/dates/sync-time/log/error) to V2.
-            main_table.put_item(Item=item)
+            _persist_reconciled_main_row(
+                main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES)
 
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
             """For a terminal execution, return (error_text, log_text).
@@ -440,7 +491,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             within the shared workflow log group (captured for any terminal status).
             error_text is the specific Step Functions error/cause message (the caller only
             stores it for non-success statuses). Best-effort: returns ('', '') on any
-            failure (diagnostics are non-critical to the listing)."""
+            failure (diagnostics are non-critical to the listing).
+
+            Both land on the same main row, so they share one byte budget."""
             error_text = ""
             try:
                 err = describe_response.get('error', '') if describe_response else ''
@@ -450,6 +503,9 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 logger.info(f"Could not read SFN error fields (non-critical): {e}")
             log_text = _fetch_execution_logs(
                 main_item.get('executionLogGroupArn', ''), execution_id)
+            ((log_text, _log_truncated),
+             (error_text, _error_truncated)) = er.truncate_text_budget(
+                [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
             return error_text, log_text
 
         # Tier-2 Casbin enforce once per deduped execution (workflow object). The
@@ -723,7 +779,7 @@ def abort_execution(event, execution_id):
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
-        main_table.put_item(Item=main_item)
+        _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES)
 
     logger.info(f"Aborted execution {execution_id}")
     # Include a "warnings" list only when a best-effort sub-process abort failed.
@@ -1187,7 +1243,9 @@ def _reconcile_main_status(execution_id, main_item):
         # Still running: keep RUNNING (never regress to NEW) and persist the sync-check stamp.
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
     try:
-        dynamodb.Table(workflow_execution_database_v2).put_item(Item=main_item)
+        _persist_reconciled_main_row(
+            dynamodb.Table(workflow_execution_database_v2), main_item,
+            DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
 
@@ -1599,6 +1657,20 @@ def handle_details_request(event):
     return get_execution_details(event, execution_id)
 
 
+def _numeric_log_param_error(query_params):
+    """Message naming the first of limit/startTime/endTime that is not an integer, or "". The log
+    readers pass these straight to int(), so a non-numeric value must fail as a 400 here."""
+    for name in ('limit', 'startTime', 'endTime'):
+        raw = query_params.get(name)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            int(str(raw).strip())
+        except ValueError:
+            return f"{name} is invalid. Must be an integer."
+    return ""
+
+
 def handle_logs_request(event):
     """Validate the executionId path param, enforce API authorization, return logs."""
     pathParams = event.get('pathParameters', {}) or {}
@@ -1612,6 +1684,11 @@ def handle_logs_request(event):
         'executionId': {'value': execution_id, 'validator': 'ASSET_ID'},
     })
     if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
+    message = _numeric_log_param_error(queryParameters)
+    if message:
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
@@ -1629,6 +1706,20 @@ def _enforce_api(event):
         if casbin_enforcer.enforceAPI(event):
             return True
     return False
+
+
+def _enforce_api_route(event, route_path, method):
+    """Tier-1 API authorization against a route OTHER than the one being served, for an operation
+    that delegates to a second endpoint. Fails closed on empty tokens."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    probe = {
+        "requestContext": {
+            "http": {"method": method, "path": route_path},
+            "authorizer": event.get("requestContext", {}).get("authorizer"),
+        },
+    }
+    return CasbinEnforcer(claims_and_roles).enforceAPI(probe)
 
 
 def handle_delete_request(event):
@@ -1724,13 +1815,21 @@ def handle_get_request(event):
 # Global (asset-less) execution list
 # ---------------------------------------------------------------------------
 
-def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None):
+def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None, config_row=None,
+                                 config_row_loader=None):
     """True when the caller may see an execution under the global access rule: workflow GET AND
     (GET on ANY input-file asset OR GET on the output asset). A caller with data access to what the
     run reads from or writes to may see it; access to neither hides it. Empty tokens -> not visible.
 
     `casbin_enforcer` may be passed in so a batch caller (the global list) builds one enforcer for the
-    whole page instead of one per row."""
+    whole page instead of one per row.
+
+    The configuration row is read LAZILY, and only if the workflow and input-asset checks above have
+    not already decided visibility — a row the caller cannot see, or can see via an input asset, must
+    not pay for a read. `config_row` supplies an already-read item; `config_row_loader` is a
+    zero-argument callable used instead, so a caller that also needs the row for its projection (the
+    global list, which reports the output target) can memoize the same single read rather than issuing
+    a second one."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
     if casbin_enforcer is None:
@@ -1754,8 +1853,10 @@ def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None):
         if casbin_enforcer.enforce(asset, "GET"):
             return True
 
-    # Or the output asset.
-    config_row = get_workflow_execution_configuration_row(execution_id)
+    # Or the output asset. This is the first point that needs the configuration row.
+    if config_row is None:
+        config_row = (config_row_loader() if config_row_loader is not None
+                      else get_workflow_execution_configuration_row(execution_id))
     output_database_id = config_row.get("outputDatabaseId", "")
     output_asset_id = config_row.get("outputAssetId", "")
     if output_database_id and output_asset_id:
@@ -1794,8 +1895,15 @@ def _global_list_matches_filters(main_item, filters):
     return True
 
 
-def _global_list_row(main_item):
-    """Public-facing global-list row (no S3/ARN internals)."""
+def _global_list_row(main_item, config_row=None):
+    """Public-facing global-list row (no S3/ARN internals).
+
+    The output target (`outputLocationType` / `outputAssetId` / `outputDatabaseId`) lives on the
+    execution's CONFIGURATION row, not on this main row. It is threaded in from the caller rather than
+    read here so the projection shares whatever read the visibility check already needed, keeping a
+    listed row at ONE configuration read rather than two. The caller reads it lazily, so a row that is
+    filtered out never pays for one at all."""
+    config_row = config_row or {}
     return {
         "workflowExecutionId": main_item.get("workflowExecutionId", ""),
         "workflowId": main_item.get("workflowId", ""),
@@ -1806,6 +1914,9 @@ def _global_list_row(main_item):
         "triggerType": main_item.get("triggerType", ""),
         "triggeredByUserId": main_item.get("triggeredByUserId", ""),
         "executionGroupId": main_item.get("executionGroupId", ""),
+        "outputLocationType": config_row.get("outputLocationType", ""),
+        "outputAssetId": config_row.get("outputAssetId", ""),
+        "outputDatabaseId": config_row.get("outputDatabaseId", ""),
     }
 
 
@@ -1866,10 +1977,10 @@ def get_global_executions(event, query_params):
         query_kwargs["FilterExpression"] = filter_expr
     starting_token = query_params.get("startingToken") or query_params.get("NextToken")
     if starting_token:
-        try:
-            query_kwargs["ExclusiveStartKey"] = json.loads(base64.b64decode(starting_token).decode("utf-8"))
-        except Exception as e:
-            logger.exception(f"Invalid startingToken: {e}")
+        decoded = _decode_starting_token(starting_token)
+        if decoded is None:
+            return validation_error(body={"message": "startingToken is invalid."}, event=event)
+        query_kwargs["ExclusiveStartKey"] = decoded
 
     # Dedup by workflowExecutionId (one main row per execution; guard defensively).
     items = []
@@ -1887,9 +1998,22 @@ def get_global_executions(event, query_params):
         seen.add(execution_id)
         if not _global_list_matches_filters(main_item, filters):
             continue
-        if not _execution_visible_to_caller(execution_id, main_item, page_enforcer):
+        # AT MOST one configuration read per execution, shared by the visibility check (which
+        # authorizes on the output asset) and the row projection (which reports the output target).
+        # Memoized and lazy: a row the caller cannot see, or one authorized via an input asset, never
+        # reaches the read at all — eagerly reading here would charge a lookup for every candidate the
+        # visibility filter then discards, which for a narrowly-scoped role is most of the page.
+        cached_config_row = {}
+
+        def _config_row(execution_id=execution_id, cache=cached_config_row):
+            if "item" not in cache:
+                cache["item"] = get_workflow_execution_configuration_row(execution_id)
+            return cache["item"]
+
+        if not _execution_visible_to_caller(
+                execution_id, main_item, page_enforcer, config_row_loader=_config_row):
             continue
-        items.append(_global_list_row(main_item))
+        items.append(_global_list_row(main_item, _config_row()))
 
     # Echo the applied recency window so the caller can show the active range (matches the per-asset
     # list's filterStartDate echo). filterEndDate is included only when the caller set one.
@@ -1977,9 +2101,14 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
         "triggerType": "manual",
     }
     # Preserve the original run's output base path extension so a re-run writes to the same layout.
-    ext = config_row.get("outputFileBaseExecutionPathExtension")
-    if ext and ext != "/":
-        body["outputFileBaseExecutionPathExtension"] = ext
+    # ALWAYS send it when the configuration row has one, including "/" (asset root): omitting the field
+    # means "inherit the workflow's default", so a run recorded at the asset root would silently adopt a
+    # default added to the workflow after that run — writing somewhere the original never did. The
+    # stored value is the RESOLVED one, so a re-run reproduces the original folder rather than
+    # re-resolving per-run tags; that is what "same layout" means for a re-run.
+    if "outputFileBaseExecutionPathExtension" in config_row:
+        body["outputFileBaseExecutionPathExtension"] = (
+            config_row.get("outputFileBaseExecutionPathExtension") or "/")
     return body
 
 
@@ -1997,6 +2126,17 @@ def rerun_execution(event, execution_id, request_model):
         logger.info(f"Re-run not authorized for execution {execution_id}")
         return authorization_error()
 
+    workflow_database_id = main_item.get("workflowDatabaseId", "")
+    workflow_id = main_item.get("workflowId", "")
+    execute_path = f"/workflows/{workflow_database_id}/{workflow_id}/execute"
+    # A re-run launches a new execution, so the caller must hold Tier-1 on the execute route too.
+    # The delegated invoke is a lambdaCrossCall, which enforceAPI auto-approves, so the route check
+    # runs here against the caller's own constraints.
+    if not _enforce_api_route(event, execute_path, "POST"):
+        logger.info(f"Re-run denied: caller lacks API access to the execute route for "
+                    f"{workflow_database_id}:{workflow_id}")
+        return authorization_error()
+
     if not execute_workflow_v2_function:
         logger.error("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME not configured; cannot re-run")
         return general_error(body={"message": "Re-run is not available in this deployment."}, event=event)
@@ -2006,15 +2146,12 @@ def rerun_execution(event, execution_id, request_model):
     if request_model.executionGroupId:
         body["executionGroupId"] = request_model.executionGroupId
 
-    workflow_database_id = main_item.get("workflowDatabaseId", "")
-    workflow_id = main_item.get("workflowId", "")
     # Invoke the V2 execute handler as the CALLING user (propagate identity so its two-tier auth runs
     # against the caller, not a system principal). Build the execute handler's event shape.
     username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
     invoke_event = {
         "requestContext": {
-            "http": {"method": "POST",
-                     "path": f"/workflows/{workflow_database_id}/{workflow_id}/execute"},
+            "http": {"method": "POST", "path": execute_path},
             "authorizer": event.get("requestContext", {}).get("authorizer"),
         },
         "pathParameters": {"workflowDatabaseId": workflow_database_id, "workflowId": workflow_id},
@@ -2082,6 +2219,16 @@ def permanent_delete_execution(event, execution_id):
                     return validation_error(body={
                         "message": "Execution is in progress; abort it before permanent delete."},
                         event=event)
+            except botocore.exceptions.ClientError as e:
+                # A Step Functions execution whose history has expired (or was deleted) can no longer
+                # be running, so a stale non-terminal row is still deletable.
+                if e.response.get('Error', {}).get('Code', '') != 'ExecutionDoesNotExist':
+                    logger.info(f"Could not confirm execution terminal state (continuing to guard): {e}")
+                    return validation_error(body={
+                        "message": "Execution is in progress; abort it before permanent delete."},
+                        event=event)
+                logger.info(f"Step Functions execution no longer exists for {execution_id}; "
+                            "treating the row as not in progress")
             except Exception as e:
                 logger.info(f"Could not confirm execution terminal state (continuing to guard): {e}")
                 return validation_error(body={
@@ -2283,6 +2430,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     # v2-style http block the dispatch below reads).
     normalize_event(event)
     claims_and_roles = request_to_claims(event)
+    # Fresh per-request asset cache: a warm container reuses module globals across invocations, and
+    # every authorization path reads asset attributes through this memo, so a carried-over row would
+    # decide the next request's ABAC check on stale attributes.
+    _asset_details_cache.clear()
 
     try:
         method = event['requestContext']['http']['method']

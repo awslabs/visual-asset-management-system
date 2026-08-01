@@ -93,6 +93,56 @@ def _validate_system_config_shapes(system_config):
     model's shared validator so workflow and pipeline systemConfig are validated identically."""
     from models.pipelines import _validate_system_config_shape
     _validate_system_config_shape(system_config, "systemConfig")
+    _validate_allow_workflow_trigger_chaining(system_config)
+    _validate_default_output_path_extension(system_config)
+
+
+def _validate_allow_workflow_trigger_chaining(system_config):
+    """allowWorkflowTriggerChaining must be a real boolean when supplied. The shared pipeline shape
+    validator does not police top-level scalars, so a truthy string like "false" would otherwise be
+    stored and read as True — enabling chained triggering the author meant to disable."""
+    if not isinstance(system_config, dict):
+        return
+    if "allowWorkflowTriggerChaining" not in system_config:
+        return
+    if not isinstance(system_config["allowWorkflowTriggerChaining"], bool):
+        raise ValueError("systemConfig.allowWorkflowTriggerChaining must be a boolean")
+
+
+def _validate_default_output_path_extension(system_config):
+    """Validate systemConfig.defaultOutputFileBaseExecutionPathExtension.
+
+    Stored UNRESOLVED, so `{{tag}}` placeholders are legal here and only the shape rules that survive
+    templating are enforced: it becomes part of an S3 key, so reject '..' traversal and backslashes,
+    the same two rules the execute request applies to the per-run value. The rendered result is
+    re-checked at launch, when the tags have values."""
+    if not isinstance(system_config, dict):
+        return
+    extension = system_config.get("defaultOutputFileBaseExecutionPathExtension")
+    if extension is None or extension == "":
+        return
+    if not isinstance(extension, str):
+        raise ValueError(
+            "systemConfig.defaultOutputFileBaseExecutionPathExtension must be a string")
+    if len(extension) > 1024:
+        raise ValueError(
+            "systemConfig.defaultOutputFileBaseExecutionPathExtension must be at most 1024 "
+            "characters")
+    if ".." in extension:
+        raise ValueError(
+            "systemConfig.defaultOutputFileBaseExecutionPathExtension must not contain '..'")
+    if "\\" in extension:
+        raise ValueError(
+            "systemConfig.defaultOutputFileBaseExecutionPathExtension must not contain backslashes")
+
+
+def _validate_trigger_input_file_filters(filters):
+    """Validate a trigger's inputFileFilters map against the same {allow, exclude} shape the
+    pipeline/workflow systemConfig filters use. No-op when absent."""
+    if not filters:
+        return
+    from models.pipelines import _validate_input_file_filters
+    _validate_input_file_filters(filters, "inputFileFilters")
 
 
 class WorkflowSystemConfigModel(BaseModel, extra='ignore'):
@@ -103,13 +153,25 @@ class WorkflowSystemConfigModel(BaseModel, extra='ignore'):
     inputFileFilters: Optional[Dict[str, List[str]]] = {}
     concurrencyRestriction: str = "none"
     outputTarget: Optional[Dict[str, Any]] = {}
+    # Whether a file written by ANOTHER workflow's execution may fire this workflow's triggers.
+    # A workflow never fires on output it wrote itself, whatever this is set to, so an A->A loop
+    # cannot be enabled; this governs cross-workflow chaining only (e.g. generating a preview from a
+    # conversion pipeline's output). Default off: chained triggering is opt-in per workflow.
+    allowWorkflowTriggerChaining: bool = False
+    # Default output base path extension applied when an execute request supplies none. Stored
+    # UNRESOLVED — {{tag}} placeholders are substituted at launch, so one stored value gives each run
+    # its own folder (e.g. "/{{jobName}}/"). Empty means no default (outputs at the asset root).
+    defaultOutputFileBaseExecutionPathExtension: Optional[str] = ""
 
 
 class SpecifiedPipelineRef(BaseModel, extra='ignore'):
-    """One ordered pipeline reference within a workflow snapshot."""
+    """One ordered pipeline reference within a workflow snapshot (see
+    common.workflows.workflowRecords.build_specified_pipeline_ref; the stored row additionally
+    carries the derived `pipelineDatabaseId:pipelineId` composite key)."""
     pipelineDatabaseId: str
     pipelineId: str
     jobName: Optional[str] = ""
+    defaultTemplateId: Optional[str] = ""
 
 
 class WorkflowRecordV2(BaseModel, extra='ignore'):
@@ -162,7 +224,7 @@ class SpecifiedPipelineInput(BaseModel, extra='ignore'):
     no per-pipeline templateId (used e.g. by the v2.5->v2.6 migration for consolidated built-in refs)."""
     pipelineId: str = Field(..., min_length=1, max_length=64)
     pipelineDatabaseId: Optional[str] = None
-    jobName: Optional[str] = ""
+    jobName: Optional[str] = Field("", max_length=64)
     defaultTemplateId: Optional[str] = Field("", max_length=64)
 
     @root_validator
@@ -173,6 +235,12 @@ class SpecifiedPipelineInput(BaseModel, extra='ignore'):
         pdb = values.get("pipelineDatabaseId")
         if pdb:
             _validate_id(pdb, allow_global=True)
+        # jobName becomes the ASL state name and a segment of the execution's S3 output prefix, and
+        # is interpolated into a single-quoted States.Format() literal, so it carries the same id
+        # character set as every other id in the API.
+        job_name = values.get("jobName")
+        if job_name:
+            _validate_id(job_name)
         return values
 
 
@@ -215,6 +283,8 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
     systemConfig: Optional[Dict[str, Any]] = None
     subDashboardUrl: Optional[str] = Field(None, max_length=2048)
     enabled: Optional[bool] = None
+    # Clearing this is the path re-registration of a built-in takes to restore an archived row.
+    archived: Optional[bool] = None
 
     @root_validator
     def validate_fields(cls, values):
@@ -285,6 +355,13 @@ class SetTriggerRequestModel(BaseModel, extra='ignore'):
     inputFileFilters: Optional[Dict[str, List[str]]] = Field(default_factory=dict)
     defaultTemplateIds: Optional[Dict[str, str]] = Field(default_factory=dict)
     enabled: Optional[bool] = True
+
+    @root_validator
+    def validate_filters(cls, values):
+        # Dispatch treats an absent `allow` list as allow-all, so a key outside {allow, exclude}
+        # would turn a scoped trigger into one that fires on every uploaded file.
+        _validate_trigger_input_file_filters(values.get("inputFileFilters"))
+        return values
 
 
 class TriggerResponseModel(BaseModel, extra='ignore'):

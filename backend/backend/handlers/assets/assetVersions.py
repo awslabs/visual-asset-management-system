@@ -291,9 +291,27 @@ def does_file_version_exist(bucket: str, key: str, version_id: str) -> bool:
         logger.warning(f"Error checking if file version exists for {key} version {version_id}: {e}")
         return False
     
+def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
+    """Auxiliary-bucket base prefix holding the derived data for one asset file.
+
+    Auxiliary objects live under the database-scoped per-file layout
+    ``{databaseId}/{assetFileKey}/``, written by
+    ``common.workflows.executionRecords.aux_preview_file_prefix``.
+
+    Args:
+        database_id: The database ID owning the asset
+        asset_file_key: Full asset-bucket key of the file, or a folder key
+
+    Returns:
+        The auxiliary-bucket prefix, with a trailing slash
+    """
+    key = (asset_file_key or "").strip('/')
+    base = (database_id or "").strip('/')
+    return f"{base}/{key}/" if key else f"{base}/"
+
 def delete_assetAuxiliary_files(prefix):
     """Delete auxiliary files for an asset
-    
+
     Args:
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
@@ -1582,7 +1600,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
                 return None, relative_key
 
             # Delete the aux files since they are most likely wrong with the version revert
-            delete_assetAuxiliary_files(full_key)
+            delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
 
             return {
                 'relativeKey': relative_key,

@@ -63,14 +63,14 @@ class ImportError_(Exception):
 # Cross-call plumbing
 # ---------------------------------------------------------------------------
 
-def _invoke(target, method, path, path_parameters, body=None):
+def _invoke(target, method, path, path_parameters, body=None, query_parameters=None):
     """Invoke a V2 service handler as a SYSTEM_USER lambda cross-call. Returns (status_code, parsed
     body dict). Raises ImportError_ on a transport/parse failure."""
     function_name = _TARGET_FUNCTIONS[target]()
     event = {
         "requestContext": {"http": {"method": method, "path": path}},
         "pathParameters": path_parameters or {},
-        "queryStringParameters": {},
+        "queryStringParameters": dict(query_parameters or {}),
         "lambdaCrossCall": {"userName": "SYSTEM_USER"},
     }
     if body is not None:
@@ -99,9 +99,12 @@ def _invoke(target, method, path, path_parameters, body=None):
 
 
 def _exists(request):
-    """GET the exists-path to decide create-vs-update. 200 -> exists, 404 -> absent, else raise."""
+    """GET the exists-path to decide create-vs-update. 200 -> exists, 404 -> absent, else raise. The
+    probe includes archived rows: a soft-archived built-in still occupies its id, so it must take the
+    update (unarchive) branch rather than a create that the service rejects as a duplicate."""
     status_code, _ = _invoke(
-        request["target"], "GET", request["existsPath"], request.get("existsPathParameters"))
+        request["target"], "GET", request["existsPath"], request.get("existsPathParameters"),
+        query_parameters={"includeArchived": "true"})
     if status_code == 200:
         return True
     if status_code == 404:
@@ -139,11 +142,14 @@ def _apply_request(request):
             raise ImportError_(f"Failed {action} {kind} '{request['id']}': {inner.get('message', status_code)}")
         return f"{kind} '{request['id']}' {action}"
 
-    # pipeline / workflow: probe then create or update (+ re-enable via updateBody).
+    # pipeline / workflow: probe then create or update. The update clears `archived` alongside the
+    # re-enable in updateBody so re-registering a soft-archived built-in restores it.
     if _exists(request):
+        update_body = dict(request["updateBody"])
+        update_body["archived"] = False
         status_code, inner = _invoke(
             request["target"], "PUT", request["updatePath"],
-            request.get("updatePathParameters"), body=request["updateBody"])
+            request.get("updatePathParameters"), body=update_body)
         action = "updated"
     else:
         status_code, inner = _invoke(
@@ -247,74 +253,119 @@ def register_bundle(resource_properties):
     return {"ids": ids, "applied": applied}
 
 
-def archive_bundle(resource_properties):
-    """Archive (soft-delete) the built-in pipeline + workflow a bundle registered. Best-effort: a
-    stack teardown is never blocked by a missing/already-archived resource."""
-    # For archive we only need the ids; assemble the bundle when present, else fall back to id
-    # overrides alone (a Delete may arrive with only the physical-id ids).
+def _archive_ids(resource_properties):
+    """Resolve the ids an archive targets. For archive only the ids are needed; assemble the bundle
+    when present, else fall back to id overrides alone (a Delete may arrive with only the
+    physical-id ids)."""
     id_overrides = _parse_json_prop(resource_properties.get("idOverrides"))
     try:
         bundle = assemble_bundle(resource_properties)
-        ids = vsi.collect_ids(bundle, id_overrides)
+        return vsi.collect_ids(bundle, id_overrides)
     except Exception:
         # Fall back to id overrides only (Delete of a resource created by an older revision).
-        ids = {
+        return {
             "pipelineDatabaseId": id_overrides.get("pipelineDatabaseId", vsi.GLOBAL_DATABASE),
             "pipelineId": id_overrides.get("pipelineId", ""),
             "workflowDatabaseId": id_overrides.get("workflowDatabaseId", vsi.GLOBAL_DATABASE),
             "workflowId": id_overrides.get("workflowId", ""),
         }
 
+
+def archive_bundle(resource_properties):
+    """Archive (soft-delete) the built-in pipeline + workflow a bundle registered. Best-effort: a
+    stack teardown is never blocked by a missing/already-archived resource."""
+    ids = _archive_ids(resource_properties)
+
     warnings = []
-    if ids.get("workflowId"):
-        try:
-            _invoke(vsi.TARGET_WORKFLOW_SERVICE, "DELETE",
-                    f"/database/{ids['workflowDatabaseId']}/workflows/{ids['workflowId']}",
-                    {"databaseId": ids["workflowDatabaseId"], "workflowId": ids["workflowId"]})
-        except Exception as e:
-            warnings.append(f"workflow archive: {e}")
-    if ids.get("pipelineId"):
-        try:
-            _invoke(vsi.TARGET_PIPELINE_SERVICE, "DELETE",
-                    f"/database/{ids['pipelineDatabaseId']}/pipelines/{ids['pipelineId']}",
-                    {"databaseId": ids["pipelineDatabaseId"], "pipelineId": ids["pipelineId"]})
-        except Exception as e:
-            warnings.append(f"pipeline archive: {e}")
+    _archive_workflow(ids, warnings)
+    _archive_pipeline(ids, warnings)
     return {"ids": ids, "warnings": warnings}
+
+
+def _archive_workflow(ids, warnings):
+    """DELETE (archive) one workflow by id, appending a warning instead of raising."""
+    if not ids.get("workflowId"):
+        return
+    try:
+        _invoke(vsi.TARGET_WORKFLOW_SERVICE, "DELETE",
+                f"/database/{ids['workflowDatabaseId']}/workflows/{ids['workflowId']}",
+                {"databaseId": ids["workflowDatabaseId"], "workflowId": ids["workflowId"]})
+    except Exception as e:
+        warnings.append(f"workflow archive: {e}")
+
+
+def _archive_pipeline(ids, warnings):
+    """DELETE (archive) one pipeline by id, appending a warning instead of raising."""
+    if not ids.get("pipelineId"):
+        return
+    try:
+        _invoke(vsi.TARGET_PIPELINE_SERVICE, "DELETE",
+                f"/database/{ids['pipelineDatabaseId']}/pipelines/{ids['pipelineId']}",
+                {"databaseId": ids["pipelineDatabaseId"], "pipelineId": ids["pipelineId"]})
+    except Exception as e:
+        warnings.append(f"pipeline archive: {e}")
+
+
+def archive_superseded_ids(old_resource_properties, new_ids):
+    """Archive the ids a previous revision of the resource registered when an Update changes them.
+
+    CloudFormation delivers the prior properties on an Update as ``OldResourceProperties``, so a
+    pipeline/workflow id change (e.g. an ``idOverrides.pipelineId`` rename) is detectable here: the
+    retired rows stay registered and enabled otherwise. Only an id that actually changed is archived,
+    so a plain re-register never touches the rows the same invocation just wrote. Best-effort —
+    failures are returned as warnings."""
+    if not old_resource_properties:
+        return []
+    try:
+        old_ids = _archive_ids(old_resource_properties)
+    except Exception as e:
+        logger.exception(f"Failed resolving superseded ids: {e}")
+        return [f"superseded id resolution: {e}"]
+
+    warnings = []
+    old_pipeline = (old_ids.get("pipelineDatabaseId"), old_ids.get("pipelineId"))
+    if old_pipeline[1] and old_pipeline != (new_ids.get("pipelineDatabaseId"),
+                                           new_ids.get("pipelineId")):
+        logger.info(f"Archiving superseded pipeline {old_pipeline[0]}:{old_pipeline[1]}")
+        _archive_pipeline(old_ids, warnings)
+    old_workflow = (old_ids.get("workflowDatabaseId"), old_ids.get("workflowId"))
+    if old_workflow[1] and old_workflow != (new_ids.get("workflowDatabaseId"),
+                                            new_ids.get("workflowId")):
+        logger.info(f"Archiving superseded workflow {old_workflow[0]}:{old_workflow[1]}")
+        _archive_workflow(old_ids, warnings)
+    return warnings
 
 
 # ---------------------------------------------------------------------------
 # CloudFormation custom-resource plumbing
 # ---------------------------------------------------------------------------
 
-def send_cfn_response(event, context, status, data=None, physical_resource_id=None, reason=None):
-    import urllib3
-    data = data or {}
-    physical_resource_id = physical_resource_id or context.log_stream_name
-    reason = reason or f"See CloudWatch Log Stream: {context.log_stream_name}"
-    body = json.dumps({
-        "Status": status, "Reason": reason, "PhysicalResourceId": physical_resource_id,
-        "StackId": event["StackId"], "RequestId": event["RequestId"],
-        "LogicalResourceId": event["LogicalResourceId"], "Data": data,
-    })
-    try:
-        http = urllib3.PoolManager()
-        resp = http.request("PUT", event["ResponseURL"], body=body,
-                            headers={"content-type": "", "content-length": str(len(body))})
-        logger.info(f"CloudFormation response status: {resp.status}")
-    except Exception as e:
-        logger.exception(f"Failed to send CloudFormation response: {e}")
-
-
 def _physical_id(resource_properties, ids, fallback):
-    """Stable physical id from the resolved pipeline id so an id change triggers replace (and thus a
-    Delete of the old built-in)."""
+    """Physical id from the resolved pipeline id, so the CloudFormation resource is identifiable by
+    the built-in it registers."""
     return ids.get("pipelineId") or resource_properties.get("logicalName") or fallback
+
+
+def _response_data(result):
+    """Flat string attributes returned to CloudFormation for the registration resource."""
+    ids = result.get("ids") or {}
+    data = {key: str(value) for key, value in ids.items()}
+    applied = result.get("applied")
+    if applied:
+        data["applied"] = "; ".join(applied)
+    warnings = result.get("warnings")
+    if warnings:
+        data["warnings"] = "; ".join(warnings)
+    return data
 
 
 def lambda_handler(event, context: LambdaContext):
     """CloudFormation custom resource + direct-invoke handler. A CloudFormation event carries
-    RequestType; a direct invoke (external self-registration) omits it and is treated as a register."""
+    RequestType; a direct invoke (external self-registration) omits it and is treated as a register.
+
+    As the ``onEventHandler`` of a custom-resource Provider, the CloudFormation response is written by
+    the provider framework: this handler returns the ``{PhysicalResourceId, Data}`` shape on success
+    and raises on failure so the framework signals FAILED and the deployment stops."""
     logger.info(f"Received event: {json.dumps(event, default=str)}")
 
     # Direct (non-CloudFormation) invoke: register + return the result inline.
@@ -324,28 +375,32 @@ def lambda_handler(event, context: LambdaContext):
 
     request_type = event["RequestType"]
     resource_properties = event.get("ResourceProperties", {}) or {}
-    try:
-        if request_type in ("Create", "Update"):
-            result = register_bundle(resource_properties)
-        elif request_type == "Delete":
-            result = archive_bundle(resource_properties)
-        else:
-            raise ImportError_(f"Unsupported RequestType: {request_type}")
 
-        physical_id = event.get("PhysicalResourceId") or _physical_id(
-            resource_properties, result.get("ids", {}), context.log_stream_name)
-        send_cfn_response(event, context, "SUCCESS", result, physical_resource_id=physical_id,
-                          reason=f"{request_type} completed")
-        return {"statusCode": 200, "body": json.dumps(result)}
-    except Exception as e:
-        logger.exception(f"{request_type} failed: {e}")
-        # A Delete must never block teardown: report success-with-warning rather than FAILED.
-        if request_type == "Delete":
-            send_cfn_response(event, context, "SUCCESS", {"warning": str(e)},
-                              physical_resource_id=event.get("PhysicalResourceId", context.log_stream_name),
-                              reason=f"Delete completed with warnings: {e}")
-            return {"statusCode": 200, "body": json.dumps({"warning": str(e)})}
-        send_cfn_response(event, context, "FAILED", {},
-                          physical_resource_id=event.get("PhysicalResourceId", context.log_stream_name),
-                          reason=str(e))
-        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+    if request_type == "Delete":
+        # A Delete must never block teardown: an archive failure is reported as a warning attribute
+        # on an otherwise successful response. The physical id is left to the framework (a Delete may
+        # not change it).
+        try:
+            result = archive_bundle(resource_properties)
+        except Exception as e:
+            logger.exception(f"Delete failed: {e}")
+            result = {"warnings": [str(e)]}
+        return {"Data": _response_data(result)}
+
+    if request_type not in ("Create", "Update"):
+        raise ImportError_(f"Unsupported RequestType: {request_type}")
+
+    result = register_bundle(resource_properties)
+    # An Update that changes the resolved ids (e.g. an idOverrides.pipelineId rename) leaves the
+    # previously registered rows behind: the physical id is unchanged, so CloudFormation issues no
+    # replacement and no Delete for them. Archive them from the Update itself, using the prior
+    # properties CloudFormation supplies as OldResourceProperties.
+    if request_type == "Update":
+        superseded = archive_superseded_ids(
+            event.get("OldResourceProperties") or {}, result.get("ids", {}))
+        if superseded:
+            result["warnings"] = list(result.get("warnings") or []) + superseded
+
+    physical_id = event.get("PhysicalResourceId") or _physical_id(
+        resource_properties, result.get("ids", {}), context.log_stream_name)
+    return {"PhysicalResourceId": physical_id, "Data": _response_data(result)}

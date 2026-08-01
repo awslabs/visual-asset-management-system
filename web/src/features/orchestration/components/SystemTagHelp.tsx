@@ -175,6 +175,16 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
     },
 ];
 
+/**
+ * Shared, plain-text instruction for the config body's `{{tagName}}` placeholders. Single source so
+ * the Config Body tooltip and the SystemTagHelp panel stay in sync — update the wording here only.
+ */
+export const CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS =
+    "The configuration body delivered to the pipeline. Write {{tagName}} placeholders: this " +
+    "template's own tag fields (filled in at launch) and the system tags listed below (resolved " +
+    "automatically per pipeline task when the config body renders). Expand “System template " +
+    "tags” beneath the editor for the full list.";
+
 interface SystemTagHelpProps {
     /** Start expanded (default collapsed). */
     defaultOpen?: boolean;
@@ -197,10 +207,7 @@ const SystemTagHelp: React.FC<SystemTagHelpProps> = ({ defaultOpen = false }) =>
             {open && (
                 <div className="px-3 pb-3 space-y-3">
                     <p className="text-xs text-text-secondary">
-                        These placeholders are resolved automatically per pipeline task when the
-                        config body renders. Write them as <code>{"{{tagName}}"}</code>. They are
-                        separate from this template's own tag fields (which a person fills in at
-                        launch). Fields like{" "}
+                        {CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS} Fields like{" "}
                         <code>{"{{outputFileBaseExecutionPathExtension}}"}</code> expose the run's
                         output base path.
                     </p>

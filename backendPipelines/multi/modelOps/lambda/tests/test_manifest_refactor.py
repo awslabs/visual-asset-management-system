@@ -9,6 +9,7 @@ to build the ECS command (lambda-side config consumer)."""
 import os
 import sys
 import json
+import shlex
 import types
 import importlib
 from unittest.mock import MagicMock, patch
@@ -184,12 +185,31 @@ class TestConstructPipelineReadsConfigFromS3:
         cmd = out["commands"]
         assert cmd[0] == "/bin/bash" and cmd[1] == "-c"
         assert "index.js" in cmd[2]
-        # The asset identity fields were injected into the config state.
-        printed = cmd[2].split("printf '", 1)[1].split("' |", 1)[0]
+        # The asset identity fields were injected into the config state. The config travels as a
+        # shell-quoted literal argument to printf ("printf '%s' '<json>'"), so recover it with the
+        # same quoting rules rather than a bare single-quote split.
+        printed = shlex.split(cmd[2].split("|", 1)[0])[-1]
         state = json.loads(printed)["state"]
         assert state["name"] == "model"
         assert state["bucket"] == "abkt"
         assert state["extension"] == "glb"
+
+    def test_shipped_template_config_without_state_block(self):
+        """The registered per-format templates ship a config body of just {"outputType": ".x"} with
+        no state block. Building the command must succeed (the asset identity is injected into a
+        created state block) rather than raising KeyError on every execution."""
+        mod = self._load()
+        config = {"outputType": ".usdz"}  # verbatim shipped template configBody
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(config).encode("utf-8"))}
+        with patch.object(mod, "s3", s3):
+            out = mod.lambda_handler(self._event(), MagicMock())
+        printed = shlex.split(out["commands"][2].split("|", 1)[0])[-1]
+        sent = json.loads(printed)
+        assert sent["state"]["name"] == "model"
+        assert sent["state"]["extension"] == "glb"
+        # The template's own keys must survive alongside the injected state.
+        assert sent["outputType"] == ".usdz"
 
     def test_no_config_returns_error_string(self):
         mod = self._load()

@@ -105,25 +105,15 @@ def lambda_handler(event, context):
             inline = data.get('inputParameters')
             input_configuration = json.loads(inline) if isinstance(inline, str) else inline
 
-        # Extract COSMOS_PREDICT_PROMPT from file metadata
-        # VAMS metadata format: {"VAMS": {"assetMetadata": {...}, "fileMetadata": {"key": "value", ...}}}
-        cosmos_prompt = ""
-        try:
-            file_metadata = (metadata or {}).get("VAMS", {}).get("fileMetadata", {})
-            cosmos_prompt = file_metadata.get("COSMOS_PREDICT_PROMPT", "")
-            if cosmos_prompt:
-                logger.info(f"Extracted COSMOS_PREDICT_PROMPT from file metadata: {cosmos_prompt}")
-        except Exception as e:
-            logger.warning(f"Failed to extract COSMOS_PREDICT_PROMPT from file metadata: {e}")
-
-        # If not found in metadata, try input configuration as fallback
-        if not cosmos_prompt and input_configuration:
-            try:
-                cosmos_prompt = input_configuration.get("PROMPT") or input_configuration.get("prompt") or ""
-                if cosmos_prompt:
-                    logger.info(f"Using COSMOS_PREDICT_PROMPT from input configuration: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract prompt from input configuration: {e}")
+        # The prompt resolves CONFIG-FIRST with a metadata fallback
+        # (manifestHelper.resolve_input_setting): what the operator supplied on the execute screen as a
+        # template dynamic tag wins over a value saved earlier, and a blank field falls back to it.
+        # Video2World converts ONE file, so per-FILE metadata is honoured before the asset's.
+        cosmos_prompt = manifestHelper.resolve_input_setting(
+            input_configuration, metadata, ("PROMPT", "prompt"), "COSMOS_PREDICT_PROMPT",
+            metadata_scopes=("fileMetadata", "assetMetadata"))
+        if cosmos_prompt:
+            logger.info(f"Resolved COSMOS_PREDICT_PROMPT: {cosmos_prompt}")
 
         # Prompt is OPTIONAL for Video2World - the model can generate from input alone
         if not cosmos_prompt:

@@ -101,6 +101,38 @@ Archive (soft-delete) a pipeline.
 vamscli pipeline delete -d my-db -p my-pipeline
 ```
 
+Archiving marks the pipeline archived **and disables it**, so it is hidden from the default listing and
+cannot run. The pipeline keeps its ID: because pipeline IDs are unique across every database, no other
+pipeline can take that ID while the archived record holds it. Use `pipeline unarchive` to bring it back.
+
+---
+
+## pipeline unarchive
+
+Unarchive an archived pipeline, returning it to the default listing and making it usable again.
+
+```bash
+vamscli pipeline unarchive -d my-db -p my-pipeline
+vamscli pipeline unarchive -d my-db -p my-pipeline --keep-disabled
+```
+
+| Option              | Description                                                  |
+| ------------------- | ------------------------------------------------------------ |
+| `-d, --database-id` | Database containing the pipeline                             |
+| `-p, --pipeline-id` | Archived pipeline ID to unarchive                            |
+| `--keep-disabled`   | Unarchive without re-enabling (leaves the pipeline disabled) |
+| `--json-output`     | Output the raw JSON response                                 |
+
+List archived pipelines with `pipeline list -d my-db --include-archived`, or retrieve one directly with
+`pipeline get -d my-db -p my-pipeline --include-archived`, to find the ID to unarchive.
+
+:::note[Unarchiving re-enables the pipeline]
+Because archiving also disables the pipeline, unarchiving re-enables it — otherwise the pipeline would
+return in a state where it cannot run. Pass `--keep-disabled` to clear only the archived flag and leave
+the pipeline disabled. Every other field is left as stored, so the pipeline returns with its original
+name, category, execution config, system config, and templates intact.
+:::
+
 ---
 
 ## pipeline template
@@ -138,6 +170,13 @@ vamscli pipeline template delete -d my-db -p my-pipeline -t to-obj
 
 :::note[Create vs update flags]
 `create` takes the bare enabling flags `--allow-custom-edit` and `--default`. `update` takes the paired toggle forms `--allow-custom-edit/--no-custom-edit` and `--default/--no-default`, so an update can also clear either setting.
+:::
+
+:::warning[Template delete is permanent]
+`pipeline template delete` is a hard delete: the template row, any offloaded S3 config bodies, and the
+tag schema are all removed, and there is no archived copy to restore. This differs from
+`pipeline delete` and `workflow delete`, which archive. The command prompts for confirmation, and
+`--yes` is required in `--json-output` mode where no prompt is possible.
 :::
 
 ---

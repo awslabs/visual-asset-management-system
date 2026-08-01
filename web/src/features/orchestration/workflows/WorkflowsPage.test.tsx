@@ -230,4 +230,31 @@ describe("WorkflowsPage", () => {
             );
         });
     });
+
+    it("hides 'View Executions' when the execution-list route is not allowed", async () => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+
+        useWorkflows.mockReturnValue(infinite(mockWorkflows));
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync: jest.fn() } });
+        useAllowedRoutes.mockReturnValue({
+            loading: false,
+            can: (_method: string, path: string) => path !== "/workflows/executions",
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await userEvent.click(screen.getByRole("button", { name: "Actions for Workflow Alpha" }));
+
+        await waitFor(() => {
+            expect(screen.getByText("Edit")).toBeInTheDocument();
+        });
+        expect(screen.queryByText("View Executions")).not.toBeInTheDocument();
+    });
 });

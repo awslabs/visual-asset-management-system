@@ -324,7 +324,27 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
-### **Rule 12: Use Dual-Mode Auth Token Utilities**
+### **Rule 13: Toast Notifications (Orchestration Module)**
+
+Every mutation in `features/orchestration/**` reports through `useToast()` (`components/ToastProvider.tsx`) so a failure is always visible and a success is always confirmed. It renders through the **same Cloudscape `Flashbar`** the rest of the app notifies with (`components/search/SearchNotifications/ToastManager.tsx`) — same fixed top-right position, same durations (8s error / 5s otherwise), same shared `ToastNotification` shape from `components/search/types` — so an orchestration notification is indistinguishable from a search one. This is a deliberate exception to the Cloudscape-free rule: that rule governs page content, while the toast layer is a global overlay mounted from `App.tsx`, which already renders Cloudscape. Import from the subpath (`@cloudscape-design/components/flashbar`), never the barrel.
+
+```typescript
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
+
+const toast = useToast();
+try {
+    await archiveMutation.mutateAsync({ databaseId, pipelineId });
+    toast.success("Pipeline archived", { description: pipeline.pipelineName });
+} catch (err) {
+    toast.error("Archive failed", {
+        description: `${pipeline.pipelineName}: ${toastErrorMessage(err)}`,
+    });
+}
+```
+
+Match the app's message convention: a short header naming the outcome (`"Archive failed"` / `"Pipeline archived"`, mirroring `"Search failed"` / `"Search completed"`), with the entity name and backend message in the `description` — never the entity in the header. Never leave a mutation's `catch` as `console.error` only and never use `alert()`. Always confirm success when the surface disappears (a form that closes, a page that navigates away). Keep an inline message as well where it has context; the toast is additive. `toastErrorMessage(err)` normalizes an `Error`, a raw string, or a `{message|error|detail}` object instead of rendering `[object Object]`. The provider adds lifecycle safety over the search hook: timers cleared on unmount, identical repeats collapsed, stack capped at four, and z-index 4000 so a failure raised inside a dialog (z 3001) is not painted underneath it.
+
+### **Rule 14: Use Dual-Mode Auth Token Utilities**
 
 ```typescript
 // CORRECT
@@ -335,11 +355,11 @@ const token = await getDualValidAccessToken();
 const session = await AmplifyAuth.currentSession();
 ```
 
-### **Rule 13: Do NOT Rename Intentional Typos**
+### **Rule 15: Do NOT Rename Intentional Typos**
 
 `AssetContext.ts` and `WorkflowContext.ts` -- the file names are intentional. NEVER rename them.
 
-### **Rule 14: Update Documentation When Making Frontend Changes**
+### **Rule 16: Update Documentation When Making Frontend Changes**
 
 When frontend changes affect user-facing functionality, update the relevant Docusaurus documentation:
 
@@ -352,7 +372,7 @@ When frontend changes affect user-facing functionality, update the relevant Docu
 | Search UI change     | `user-guide/search.md`                                         |
 | Upload flow change   | `user-guide/upload-tutorial.md`                                |
 
-### **Rule 15: Update Steering Files When Standards Change**
+### **Rule 17: Update Steering Files When Standards Change**
 
 When system-wide frontend standards change (new rules, new patterns, new conventions), update all three locations:
 

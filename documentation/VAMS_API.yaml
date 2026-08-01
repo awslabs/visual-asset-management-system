@@ -2769,7 +2769,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: includeArchived
                 in: query
                 description: Whether to include archived files
@@ -2836,7 +2836,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: filePath
                 in: query
                 description: Path to the file relative to the asset root
@@ -2905,7 +2905,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
 
@@ -2961,7 +2961,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3017,7 +3017,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3073,7 +3073,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3129,7 +3129,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
               
@@ -3180,7 +3180,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
               
@@ -3237,7 +3237,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3293,7 +3293,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: versionId
                 in: path
                 description: Version ID to revert to
@@ -3356,7 +3356,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3412,7 +3412,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3468,7 +3468,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: assetVersionId
                 in: path
                 description: Asset version ID to revert to
@@ -3518,7 +3518,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
@@ -3572,7 +3572,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: assetVersionId
                 in: path
                 description: Asset version ID
@@ -3639,7 +3639,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: assetVersionId
                 in: path
                 description: Asset version ID to update
@@ -3700,7 +3700,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: assetVersionId
                 in: path
                 description: Asset version ID to archive
@@ -3761,7 +3761,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: assetVersionId
                 in: path
                 description: Asset version ID to unarchive
@@ -3821,7 +3821,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3875,7 +3875,7 @@ paths:
                 description: Asset ID
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3974,7 +3974,7 @@ paths:
                 description: "Asset ID to unarchive"
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/revert:
@@ -4120,7 +4120,7 @@ paths:
                                             databaseId:
                                                 $ref: "#/components/schemas/id_regex"
                                             assetId:
-                                                $ref: "#/components/schemas/id_regex"
+                                                $ref: "#/components/schemas/asset_id_regex"
                                             relativeFileKey:
                                                 type: string
                                                 description: "Asset-relative file key (leading /); '/' selects the whole asset, '/folder/' a folder."
@@ -4132,7 +4132,7 @@ paths:
                                             - assetId
                                             - relativeFileKey
                                 outputAssetId:
-                                    $ref: "#/components/schemas/id_regex"
+                                    $ref: "#/components/schemas/asset_id_regex"
                                     description: >
                                         Output asset. Honored whenever the input files do not resolve to a single
                                         input asset (regardless of override); for a single input asset only when the
@@ -4149,10 +4149,17 @@ paths:
                                     maxLength: 1024
                                     description: >
                                         Optional base path (under the output asset) that output files are written
-                                        beneath. May contain dynamic tag placeholders (e.g.
-                                        {{firstAssetFileFileNameNoExt}}) resolved at launch. Omitted/empty writes to
-                                        the asset root ('/'). Must not contain '..' or backslashes; normalized to a
-                                        single leading and trailing '/'.
+                                        beneath, inserted immediately before each output file's own name so the
+                                        folders a pipeline creates are preserved (a file at
+                                        '/path1/path2/file.txt' with a prefix of '/YOLO/' lands at
+                                        '/path1/path2/YOLO/file.txt'). A trailing '/' makes the prefix a folder;
+                                        without one it is joined onto the file name ('YOLO' gives
+                                        '/path1/path2/YOLOfile.txt'). May contain dynamic tag placeholders (e.g.
+                                        {{firstAssetFileFileNameNoExt}}, {{jobName}}) resolved at launch. OMIT the
+                                        field to inherit the workflow's
+                                        systemConfig.defaultOutputFileBaseExecutionPathExtension; send an empty
+                                        string or '/' to write at the asset root regardless of that default. Must
+                                        not contain '..' or backslashes.
                                 pipelineExecutionParameters:
                                     type: object
                                     description: "Per-pipeline execution parameters, keyed by pipelineId."
@@ -4241,7 +4248,7 @@ paths:
                 description: Asset ID.
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
     /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}:
         get:
             summary: "List executions for a specific workflow on an asset."
@@ -4275,7 +4282,7 @@ paths:
                 description: Asset ID.
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: '#/components/schemas/asset_id_regex'
               - name: workflowId
                 in: path
                 description: Workflow ID.
@@ -4291,7 +4298,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineV2'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineV2'
                 "404":
                     description: Database OR Pipeline not found.
                     content:
@@ -4305,9 +4315,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -4341,7 +4348,15 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineV2'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineV2'
+                                    warnings:
+                                        type: array
+                                        description: "Non-fatal trigger-consistency warnings, returned alongside message. For example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one."
+                                        items:
+                                            type: string
                 "400":
                     description: Invalid parameters.
                     content:
@@ -4482,7 +4497,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/workflowV2'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/workflowV2'
                 "400":
                     description: Invalid parameters.
                     content:
@@ -4523,7 +4541,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/workflowV2"
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: "#/components/schemas/workflowV2"
                 "404":
                     description: Database OR Workflow not found.
                     content:
@@ -4573,7 +4594,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/workflowV2'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/workflowV2'
                 "400":
                     description: Invalid parameters.
                     content:
@@ -4655,10 +4679,13 @@ paths:
                             schema:
                                 type: object
                                 properties:
-                                  triggers:
-                                    type: array
-                                    items:
-                                        $ref: "#/components/schemas/workflowTrigger"
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/workflowTrigger"
                 "403":
                     description: Not authorized.
                     content:
@@ -4678,9 +4705,6 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -4702,7 +4726,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/workflowTrigger"
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: "#/components/schemas/workflowTrigger"
                 "403":
                     description: Not authorized.
                     content:
@@ -4757,7 +4784,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/workflowTrigger'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/workflowTrigger'
                 "400":
                     description: "Invalid parameters, or a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list). A triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional."
                     content:
@@ -5977,7 +6007,15 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineV2'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineV2'
+                                    warnings:
+                                        type: array
+                                        description: "Non-fatal trigger-consistency warnings, returned alongside message. For example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one."
+                                        items:
+                                            type: string
                 "400":
                     description: Invalid parameters.
                     content:
@@ -6078,7 +6116,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineTemplate'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineTemplate'
                 "400":
                     description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
                     content:
@@ -6125,7 +6166,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineTemplate'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineTemplate'
                 "404":
                     description: Database, Pipeline, OR Template not found.
                     content:
@@ -6171,7 +6215,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineTemplate'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineTemplate'
                 "400":
                     description: "Invalid parameters, or the template is referenced by a workflow trigger as a default and has a required tag with no default value (message contains a triggerTemplateErrors list)."
                     content:
@@ -6272,7 +6319,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineTagSchema'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineTagSchemaResponse'
                 "404":
                     description: Database, Pipeline, OR Template not found.
                     content:
@@ -6318,7 +6368,10 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/pipelineTagSchema'
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/pipelineTagSchemaResponse'
                 "400":
                     description: Invalid parameters, reserved tag key, or reserved metadata_ prefix.
                     content:
@@ -7304,7 +7357,7 @@ paths:
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
-            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on any of its input assets or its output asset. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied)."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on any of its input assets or its output asset. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files."
             parameters:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
@@ -9160,7 +9213,10 @@ components:
                 - executionType
         pipelineAssetScope:
             type: object
-            description: "Controls which asset selections a pipeline accepts as input."
+            description: >-
+                Controls which asset selections a pipeline accepts as input. The four *Allowed /
+                singleAssetOnly keys are the canonical vocabulary; "wholeAsset" is the shorthand the
+                CDK pipeline registration schemas emit and is also accepted.
             properties:
                 crossAssetAllowed:
                     type: boolean
@@ -9170,6 +9226,9 @@ components:
                     type: boolean
                 folderAllowed:
                     type: boolean
+                wholeAsset:
+                    type: boolean
+                    description: "Registration-schema shorthand for wholeAssetAllowed."
         pipelineMetadataInputs:
             type: object
             description: "Controls which metadata sources are supplied to the pipeline as input."
@@ -9277,11 +9336,6 @@ components:
                     description: "Lightweight descriptors of the templates that belong to this pipeline. Present on the details response."
                     items:
                         $ref: "#/components/schemas/pipelineTemplateDescriptor"
-                warnings:
-                    type: array
-                    description: "Non-fatal trigger-consistency warnings surfaced on create and update. For example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one."
-                    items:
-                        type: string
             required:
                 - databaseId
                 - pipelineId
@@ -9289,10 +9343,17 @@ components:
                 - executionConfig
         createPipelineRequest:
             type: object
-            description: "Request body for creating a pipeline. The pipeline is scoped to the databaseId path parameter."
+            description: "Request body for creating a pipeline. The pipeline is scoped to the databaseId path parameter; databaseId is also required in the body and takes the same value."
             properties:
+                databaseId:
+                    allOf:
+                        - $ref: "#/components/schemas/id_regex"
+                    description: "Database the pipeline belongs to. Matches the databaseId path parameter. GLOBAL for a global pipeline."
                 pipelineId:
-                    $ref: "#/components/schemas/id_regex"
+                    allOf:
+                        - $ref: "#/components/schemas/id_regex"
+                    nullable: true
+                    description: "Pipeline identifier, unique across all databases including GLOBAL. Omit the field or send null to have a GUID generated; an empty string is rejected."
                 pipelineName:
                     $ref: "#/components/schemas/object_name_pattern_regex"
                 category:
@@ -9307,6 +9368,7 @@ components:
                     type: boolean
                     default: true
             required:
+                - databaseId
                 - pipelineName
                 - executionConfig
         updatePipelineRequest:
@@ -9393,6 +9455,34 @@ components:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
             required:
                 - fields
+        pipelineTagSchemaResponse:
+            type: object
+            description: "A template's tag schema as returned by the API: the parsed field list plus the owning template's identifiers and timestamps."
+            properties:
+                pipelineDatabaseId:
+                    $ref: "#/components/schemas/id_regex"
+                pipelineId:
+                    $ref: "#/components/schemas/id_regex"
+                templateId:
+                    $ref: "#/components/schemas/id_regex"
+                tagSchemaId:
+                    type: string
+                    description: "Identifier of the stored tag-schema record."
+                fields:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/pipelineTemplateTagField"
+                dateCreated:
+                    type: string
+                    description: "ISO-8601 creation timestamp."
+                dateModified:
+                    type: string
+                    description: "ISO-8601 last-modified timestamp."
+            required:
+                - pipelineDatabaseId
+                - pipelineId
+                - templateId
+                - fields
         pipelineTemplateOverrides:
             type: object
             description: >
@@ -9456,10 +9546,13 @@ components:
                 - templateName
         createPipelineTemplateRequest:
             type: object
-            description: "Request body for creating a pipeline template. Send configBody/webFormJson inline; the service offloads large bodies to Amazon S3."
+            description: "Request body for creating a pipeline template. Send configBody/webFormJson inline; the service offloads large bodies to Amazon S3. The template is scoped to the databaseId and pipelineId path parameters."
             properties:
                 templateId:
-                    $ref: "#/components/schemas/id_regex"
+                    allOf:
+                        - $ref: "#/components/schemas/id_regex"
+                    nullable: true
+                    description: "Template identifier. Omit the field or send null to have a GUID generated; an empty string is rejected."
                 templateName:
                     $ref: "#/components/schemas/object_name_pattern_regex"
                 description:
@@ -9578,6 +9671,14 @@ components:
                         - perInputFile
                 outputTarget:
                     $ref: "#/components/schemas/workflowOutputTarget"
+                allowWorkflowTriggerChaining:
+                    type: boolean
+                    default: false
+                    description: "Whether a file written by ANOTHER workflow's execution may fire this workflow's triggers, for example generating a preview or metadata from a conversion pipeline's output. A workflow never fires on output it wrote itself, whatever this is set to, so a workflow cannot re-trigger itself in a loop. A chained file must still match the trigger's input-file filters. Defaults to false."
+                defaultOutputFileBaseExecutionPathExtension:
+                    type: string
+                    maxLength: 1024
+                    description: "The output base path extension an execution uses when its request supplies none. Stored UNRESOLVED, so {{tag}} placeholders are substituted per run - '/{{jobName}}/' therefore gives every execution its own output folder from one stored value. An execute request that omits outputFileBaseExecutionPathExtension inherits this; one that sends an empty string or '/' deliberately writes at the asset root instead. Same shape rules as the per-run value: no '..' and no backslashes, with the trailing '/' deciding folder-versus-filename placement. Empty means no default."
         workflowV2:
             type: object
             description: "A database-scoped workflow definition, including its ordered pipelines, triggers, and system configuration. GLOBAL workflows reference only GLOBAL pipelines; database workflows reference GLOBAL or same-database pipelines."
@@ -9641,10 +9742,17 @@ components:
                 - specifiedPipelines
         createWorkflowRequest:
             type: object
-            description: "Request body for creating a workflow. The workflow is scoped to the databaseId path parameter."
+            description: "Request body for creating a workflow. The workflow is scoped to the databaseId path parameter; databaseId is also required in the body and takes the same value."
             properties:
+                databaseId:
+                    allOf:
+                        - $ref: "#/components/schemas/id_regex"
+                    description: "Database the workflow belongs to. Matches the databaseId path parameter. GLOBAL for a global workflow."
                 workflowId:
-                    $ref: "#/components/schemas/id_regex"
+                    allOf:
+                        - $ref: "#/components/schemas/id_regex"
+                    nullable: true
+                    description: "Workflow identifier, unique across all databases including GLOBAL. Omit the field or send null to have a GUID generated; an empty string is rejected."
                 workflowName:
                     $ref: "#/components/schemas/object_name_pattern_regex"
                 category:
@@ -9665,6 +9773,7 @@ components:
                     type: boolean
                     default: true
             required:
+                - databaseId
                 - workflowName
                 - specifiedPipelines
         updateWorkflowRequest:

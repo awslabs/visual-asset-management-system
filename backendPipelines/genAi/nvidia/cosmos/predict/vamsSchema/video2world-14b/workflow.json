@@ -14,5 +14,8 @@
             },
             "enabled": false
         }
-    ]
+    ],
+    "systemConfig": {
+        "inputFileArity": "one"
+    }
 }

@@ -9,6 +9,7 @@ Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import hashlib
 import json
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -147,6 +148,28 @@ def create_retry_config(
         "BackoffRate": backoff_rate,
         "MaxAttempts": max_attempts
     }
+
+
+# Errors a `.waitForTaskToken` task state must never retry: the token expired while the pipeline
+# may still be running, so re-sending the invocation starts a second concurrent run of the same
+# step with a fresh task token.
+CALLBACK_NON_RETRYABLE_ERRORS = ["States.Timeout", "States.HeartbeatTimeout"]
+
+
+def create_task_retry_configs(wait_for_callback: bool = False) -> List[Dict[str, Any]]:
+    """Retry list for a pipeline task state.
+
+    Fire-and-forget states retry any error, which can only be an invocation failure. Callback
+    states put the timeout errors first with MaxAttempts 0 — Step Functions uses the FIRST
+    matching retrier, so a callback timeout falls through to the Catch instead of re-invoking
+    the pipeline while the original run may still be in flight.
+    """
+    if wait_for_callback:
+        return [
+            {"ErrorEquals": list(CALLBACK_NON_RETRYABLE_ERRORS), "MaxAttempts": 0},
+            create_retry_config(),
+        ]
+    return [create_retry_config()]
 
 
 def create_catch_config(
@@ -493,7 +516,7 @@ class LambdaTaskBuilder(TaskStateBuilder):
                 "FunctionName": user_resource.get('resourceId', ''),
                 "Payload": payload
             },
-            "Retry": [create_retry_config()],
+            "Retry": create_task_retry_configs(wait_for_callback),
             "Catch": [create_catch_config(
                 error_equals=["States.ALL"],
                 next_state="WorkflowProcessingJobFailed"
@@ -528,7 +551,7 @@ class SqsTaskBuilder(TaskStateBuilder):
                 "QueueUrl": user_resource.get('resourceId', ''),
                 "MessageBody": payload
             },
-            "Retry": [create_retry_config()],
+            "Retry": create_task_retry_configs(wait_for_callback),
             "Catch": [create_catch_config(
                 error_equals=["States.ALL"],
                 next_state="WorkflowProcessingJobFailed"
@@ -578,7 +601,7 @@ class EventBridgeTaskBuilder(TaskStateBuilder):
                     }
                 ]
             },
-            "Retry": [create_retry_config()],
+            "Retry": create_task_retry_configs(wait_for_callback),
             "Catch": [create_catch_config(
                 error_equals=["States.ALL"],
                 next_state="WorkflowProcessingJobFailed"
@@ -630,6 +653,10 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
 
     DEFAULT_PRIORITY = 50
 
+    # Hex digits of the state-name digest in the fallback client token. The Deadline
+    # ClientToken caps at 64 characters and the execution name is a 32-char GUID.
+    STATE_NAME_DIGEST_LENGTH = 16
+
     def build_payload(self, pipeline: Dict[str, Any], path_context: Dict[str, Any]) -> Dict[str, Any]:
         payload = super().build_payload(pipeline, path_context)
         # The job-callback lambda registers the Deadline job against this pipeline's
@@ -664,6 +691,27 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
         except (TypeError, ValueError):
             raise ValueError(f"DeadlineCloud pipeline setting {field_name} must be an integer")
 
+    @classmethod
+    def _client_token_expression(cls, state_name: str, payload: Dict[str, Any]) -> str:
+        """createJob idempotency-token expression for the Parameters map (64-char Deadline cap).
+
+        The token is identical across retries of one step — so a retried createJob cannot
+        submit a duplicate job — and distinct for every other step, because a token shared
+        between two steps makes Deadline return the first step's job, whose stored
+        VamsTaskToken belongs to that first step, leaving the second step's token
+        unresolved until its callback timeout. The step's pipelineExecutionId is a
+        per-step, per-execution GUID and carries both properties; the state name does not
+        (it is an ASL-build uuid1 prefix, which repeats within a build, plus the pipeline
+        name, which repeats when one pipeline appears twice in a workflow). Without a
+        pipelineExecutionId reference the token falls back to the execution name plus a
+        digest of the full state name.
+        """
+        pipeline_execution_ref = payload.get("body", {}).get("pipelineExecutionId.$")
+        if pipeline_execution_ref:
+            return pipeline_execution_ref
+        digest = hashlib.sha256(state_name.encode("utf-8")).hexdigest()[:cls.STATE_NAME_DIGEST_LENGTH]
+        return f"States.Format('{{}}-{digest}', $$.Execution.Name)"
+
     def build_task_state(self, pipeline: Dict[str, Any], state_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         user_resource = self._parse_user_resource(pipeline)
 
@@ -695,10 +743,9 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
                          if priority not in (None, '') else self.DEFAULT_PRIORITY),
             # Identifies the VAMS pipeline step in the Deadline monitor.
             "NameOverride": state_name,
-            # Execution-scoped idempotency token so a retried createJob call cannot
-            # submit a duplicate job (64-char limit: 32-hex execution name + the state
-            # name's unique 5-char prefix).
-            "ClientToken.$": f"States.Format('{{}}-{state_name[:13]}', $$.Execution.Name)",
+            # Step-scoped idempotency token so a retried createJob call cannot submit a
+            # duplicate job and two steps cannot collapse onto one job.
+            "ClientToken.$": self._client_token_expression(state_name, payload),
             "Parameters": self._body_to_job_parameters(payload.get("body", {})),
         }
         if user_resource.get('deadlineStorageProfileId'):
@@ -716,14 +763,15 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
                 "aws-sdk:deadline:createJob.waitForTaskToken", self.partition),
             "ResultPath": f"$.{state_name}.output",
             "Parameters": parameters,
-            # Retry only transient createJob API errors. A broad States.ALL retry would
-            # also re-enter after a job-level failure or callback timeout — the retried
-            # call replays the same ClientToken against an already-created job, whose
-            # stored VamsTaskToken no longer matches the retry attempt's fresh token,
-            # so that attempt could never be completed.
+            # Retry only throttling, which rejects the request before a job exists, so the
+            # replayed ClientToken creates the job for the first time and the surviving
+            # attempt's fresh VamsTaskToken is the one the job carries. Every other error —
+            # including a server error, a job-level failure, or a callback timeout — may
+            # have created the job already: replaying the fixed ClientToken then returns
+            # that job, whose stored VamsTaskToken belongs to the abandoned attempt, so the
+            # retry attempt could never be completed. Those go straight to the Catch.
             "Retry": [create_retry_config(
-                error_equals=["Deadline.ThrottlingException",
-                              "Deadline.InternalServerErrorException"])],
+                error_equals=["Deadline.ThrottlingException"])],
             "Catch": [create_catch_config(
                 error_equals=["States.ALL"],
                 next_state="WorkflowProcessingJobFailed"

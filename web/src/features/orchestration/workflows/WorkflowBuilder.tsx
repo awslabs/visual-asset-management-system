@@ -13,15 +13,17 @@ import TriggersEditor from "./TriggersEditor";
 import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
-import { validateWorkflow } from "./workflowValidation";
+import { validateWorkflow, allPipelineRefsSelected } from "./workflowValidation";
 import type {
     Workflow,
+    WorkflowCreateRequest,
     SpecifiedPipelineRef,
     InputFileArity,
     ConcurrencyRestriction,
     OutputLocationType,
     Template,
 } from "../types";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 
 const DagPreview = React.lazy(() => import("./DagPreview"));
 
@@ -46,6 +48,8 @@ interface WorkflowFormState {
     concurrencyRestriction: ConcurrencyRestriction;
     locationType: OutputLocationType;
     allowOverride: boolean;
+    allowWorkflowTriggerChaining: boolean;
+    defaultOutputPathPrefix: string;
     specifiedPipelines: SpecifiedPipelineRef[];
     templatesByPipeline: Record<string, Template[]>;
     validationErrors: string[];
@@ -62,7 +66,8 @@ type WorkflowFormAction =
     | { type: "SET_VALIDATION"; errors: string[]; warnings: string[] }
     | { type: "SET_SAVING"; saving: boolean }
     | { type: "SET_SAVE_ERROR"; error: string | null }
-    | { type: "SET_BACKEND_WARNINGS"; warnings: string[] };
+    | { type: "SET_BACKEND_WARNINGS"; warnings: string[] }
+    | { type: "RESET" };
 
 const initialState: WorkflowFormState = {
     workflowIdValue: "",
@@ -79,6 +84,8 @@ const initialState: WorkflowFormState = {
     concurrencyRestriction: "none",
     locationType: "asset",
     allowOverride: false,
+    allowWorkflowTriggerChaining: false,
+    defaultOutputPathPrefix: "",
     specifiedPipelines: [],
     templatesByPipeline: {},
     validationErrors: [],
@@ -115,6 +122,8 @@ function workflowFormReducer(
                 concurrencyRestriction: sc.concurrencyRestriction || "none",
                 locationType: sc.outputTarget?.locationType || "asset",
                 allowOverride: sc.outputTarget?.allowOverride ?? false,
+                allowWorkflowTriggerChaining: sc.allowWorkflowTriggerChaining ?? false,
+                defaultOutputPathPrefix: sc.defaultOutputFileBaseExecutionPathExtension || "",
             };
         }
         case "SET_TEMPLATES":
@@ -137,6 +146,8 @@ function workflowFormReducer(
             return { ...state, saveError: action.error };
         case "SET_BACKEND_WARNINGS":
             return { ...state, backendWarnings: action.warnings };
+        case "RESET":
+            return initialState;
         default:
             return state;
     }
@@ -161,13 +172,16 @@ const TemplatesFetcher: React.FC<{
 
 const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, workflowId }) => {
     const navigate = useNavigate();
+    const toast = useToast();
     // Pipeline picker scope (mirrors the backend rule enforced in workflowService):
     //   - GLOBAL workflow  -> only GLOBAL pipelines
     //   - database workflow -> GLOBAL + that database's pipelines (the DB list endpoint returns only
     //     the database's own pipelines, so GLOBAL is fetched separately and merged).
+    // Archived pipelines are included so an existing workflow's reference to one still resolves: the
+    // card shows which pipeline it is (tagged and non-selectable) and validation reports the block.
     const isGlobalWorkflow = databaseId === "GLOBAL";
-    const { data: dbPipelines = [] } = useAllPipelines(databaseId);
-    const { data: globalPipelines = [] } = useAllPipelines("GLOBAL", undefined, !isGlobalWorkflow);
+    const { data: dbPipelines = [] } = useAllPipelines(databaseId, true);
+    const { data: globalPipelines = [] } = useAllPipelines("GLOBAL", true, !isGlobalWorkflow);
     const pipelines = React.useMemo(() => {
         if (isGlobalWorkflow) return dbPipelines;
         const seen = new Set<string>();
@@ -183,10 +197,20 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
     const [state, dispatch] = useReducer(workflowFormReducer, initialState);
     const [wizardStep, setWizardStep] = useState<string>("basic");
+    // Set once the save succeeded but the backend returned non-fatal warnings. The builder stays
+    // mounted so the warning list is readable, and navigation waits for an explicit acknowledgement.
+    const [savedWithWarnings, setSavedWithWarnings] = useState(false);
 
     const handleTemplatesLoaded = useCallback((key: string, templates: Template[]) => {
         dispatch({ type: "SET_TEMPLATES", key, templates });
     }, []);
+
+    // The route reuses one element for every /databases/:databaseId/workflows/:workflowId, so an
+    // edit-to-edit navigation changes the props without remounting: clear the previous workflow's
+    // values instead of showing them until the new query resolves.
+    useEffect(() => {
+        dispatch({ type: "RESET" });
+    }, [databaseId, workflowId]);
 
     useEffect(() => {
         if (mode === "edit" && workflow) {
@@ -208,10 +232,12 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         }
     }, [state.locationType, state.inputFileArity, state.allowOverride]);
 
-    const assembleWorkflow = useCallback((): Workflow => {
+    const assembleWorkflow = useCallback((): WorkflowCreateRequest => {
         return {
             databaseId,
-            workflowId: state.workflowIdValue,
+            // Sent as null when the user did not supply one so the backend auto-generates it. An
+            // empty string is rejected (min_length=1), so never send "".
+            workflowId: state.workflowIdValue || null,
             workflowName: state.workflowName,
             category: state.category,
             description: state.description,
@@ -231,6 +257,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     locationType: state.locationType,
                     allowOverride: state.allowOverride,
                 },
+                allowWorkflowTriggerChaining: state.allowWorkflowTriggerChaining,
+                defaultOutputFileBaseExecutionPathExtension: state.defaultOutputPathPrefix,
             },
         };
     }, [
@@ -250,6 +278,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         state.concurrencyRestriction,
         state.locationType,
         state.allowOverride,
+        state.allowWorkflowTriggerChaining,
+        state.defaultOutputPathPrefix,
     ]);
 
     useEffect(() => {
@@ -273,34 +303,43 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         try {
             const body = assembleWorkflow();
 
-            if (mode === "create") {
-                const result = await createWorkflow.mutateAsync(body);
-                if (result?.warnings) {
-                    dispatch({ type: "SET_BACKEND_WARNINGS", warnings: result.warnings });
-                }
-                navigate(`/databases/${databaseId}/workflows`);
-            } else {
-                const result = await updateWorkflow.mutateAsync({
-                    databaseId,
-                    workflowId: state.workflowIdValue,
-                    body,
+            const result =
+                mode === "create"
+                    ? await createWorkflow.mutateAsync(body)
+                    : await updateWorkflow.mutateAsync({
+                          databaseId,
+                          // The route param is authoritative; reducer state lags a workflowId change.
+                          workflowId: workflowId || state.workflowIdValue,
+                          body: { ...body, workflowId: workflowId || state.workflowIdValue },
+                      });
+
+            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            dispatch({ type: "SET_BACKEND_WARNINGS", warnings });
+            if (warnings.length > 0) {
+                // Keep the author on the form so the warnings are read before leaving.
+                setSavedWithWarnings(true);
+                toast.warning(mode === "create" ? "Workflow created" : "Workflow saved", {
+                    description: warnings[0],
                 });
-                if (result?.warnings) {
-                    dispatch({ type: "SET_BACKEND_WARNINGS", warnings: result.warnings });
-                }
+            } else {
+                // Navigating away removes the form, so the toast carries the confirmation.
+                toast.success(mode === "create" ? "Workflow created" : "Workflow saved", {
+                    description: state.workflowName || undefined,
+                });
                 navigate(`/databases/${databaseId}/workflows`);
             }
-        } catch (err: any) {
-            console.error("Save failed:", err);
-            dispatch({ type: "SET_SAVE_ERROR", error: err?.message || "Failed to save workflow" });
+        } catch (err) {
+            // Kept in the validation panel (with the other blocking messages) AND raised as a toast.
+            const message = toastErrorMessage(err, "Failed to save workflow");
+            dispatch({ type: "SET_SAVE_ERROR", error: message });
+            toast.error(mode === "create" ? "Create failed" : "Save failed", {
+                description: message,
+            });
         } finally {
             dispatch({ type: "SET_SAVING", saving: false });
         }
     };
 
-    // Input file count is no longer locked by the output location — results-only workflows may take
-    // input files, so the arity selector is always editable.
-    const isArityDisabled = false;
     const isSaveDisabled = state.validationErrors.length > 0 || state.saving;
 
     // Wizard steps. Each section is one step; Review is last. The optional Triggers step is only
@@ -314,11 +353,16 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         { id: "review", label: "Review" },
     ];
     const stepIndex = WIZARD_STEPS.findIndex((s) => s.id === wizardStep);
-    // Per-step validity gate: Basic needs a name; Pipelines needs at least one pipeline. Other steps
-    // impose no blocking requirement (full cross-field validation still gates Save on Review).
+    // Per-step validity gate: Basic needs a name; Pipelines needs at least one pipeline and every
+    // card to name one. Other steps impose no blocking requirement (full cross-field validation
+    // still gates Save on Review).
     const stepValid = (() => {
         if (wizardStep === "basic") return !!state.workflowName.trim();
-        if (wizardStep === "pipelines") return state.specifiedPipelines.length > 0;
+        if (wizardStep === "pipelines")
+            return (
+                state.specifiedPipelines.length > 0 &&
+                allPipelineRefsSelected(state.specifiedPipelines)
+            );
         return true;
     })();
     const goNext = () =>
@@ -326,7 +370,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const goBack = () => setWizardStep(WIZARD_STEPS[Math.max(stepIndex - 1, 0)].id);
 
     return (
-        <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+        <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
             <div className="space-y-2">
                 <Breadcrumb
                     items={[
@@ -341,7 +385,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         },
                     ]}
                 />
-                <h1 className="text-2xl font-semibold text-text-primary">
+                <h1 className="text-text-primary">
                     {mode === "create" ? "Create Workflow" : "Edit Workflow"}
                 </h1>
             </div>
@@ -485,7 +529,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     concurrencyRestriction={state.concurrencyRestriction}
                     locationType={state.locationType}
                     allowOverride={state.allowOverride}
-                    isArityDisabled={isArityDisabled}
+                    allowWorkflowTriggerChaining={state.allowWorkflowTriggerChaining}
+                    defaultOutputPathPrefix={state.defaultOutputPathPrefix}
                     onInputFileArityChange={(value) =>
                         dispatch({ type: "SET_FIELD", field: "inputFileArity", value })
                     }
@@ -509,6 +554,16 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     }
                     onAllowOverrideChange={(value) =>
                         dispatch({ type: "SET_FIELD", field: "allowOverride", value })
+                    }
+                    onAllowWorkflowTriggerChainingChange={(value) =>
+                        dispatch({
+                            type: "SET_FIELD",
+                            field: "allowWorkflowTriggerChaining",
+                            value,
+                        })
+                    }
+                    onDefaultOutputPathPrefixChange={(value) =>
+                        dispatch({ type: "SET_FIELD", field: "defaultOutputPathPrefix", value })
                     }
                 />
             )}
@@ -587,6 +642,15 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                 </div>
             )}
 
+            {savedWithWarnings && (
+                <div
+                    role="status"
+                    className="p-3 rounded bg-amber-100 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300"
+                >
+                    The workflow was saved with warnings. Review them below, then choose Continue.
+                </div>
+            )}
+
             {/* Live validation is relevant on every step. */}
             <WorkflowValidationPanel
                 validationErrors={state.validationErrors}
@@ -612,13 +676,29 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                         </button>
                     )}
                     {stepIndex === WIZARD_STEPS.length - 1 && (
-                        <button
-                            onClick={handleSave}
-                            disabled={isSaveDisabled}
-                            className={btnPrimary}
-                        >
-                            {state.saving ? "Saving..." : "Save"}
-                        </button>
+                        <>
+                            {/* After a warned save, Save stays available when editing (a PUT is
+                                idempotent) so further edits remain saveable, but is withdrawn on
+                                the create path where a second submit would create a second
+                                workflow. Continue only leaves the form. */}
+                            {(!savedWithWarnings || mode === "edit") && (
+                                <button
+                                    onClick={handleSave}
+                                    disabled={isSaveDisabled}
+                                    className={btnPrimary}
+                                >
+                                    {state.saving ? "Saving..." : "Save"}
+                                </button>
+                            )}
+                            {savedWithWarnings && (
+                                <button
+                                    onClick={() => navigate(`/databases/${databaseId}/workflows`)}
+                                    className={mode === "edit" ? btnSecondary : btnPrimary}
+                                >
+                                    Continue
+                                </button>
+                            )}
+                        </>
                     )}
                 </div>
             </div>

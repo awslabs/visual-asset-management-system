@@ -192,8 +192,9 @@ def main():
         definition = load_pipeline_definition()
         logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
 
-        # Extract required fields
-        model_size = definition.get("modelSize", "2B")
+        # Extract required fields. The model size is fixed per registered pipeline and supplied by
+        # the job definition's MODEL_SIZE environment variable; a definition value overrides it.
+        model_size = definition.get("modelSize") or os.environ.get("MODEL_SIZE", "2B")
         cosmos_prompt = definition.get("cosmosPrompt")
         input_parameters_prompt = definition.get("inputParametersPrompt")
         input_s3_asset_file_path = definition.get("inputS3AssetFilePath")

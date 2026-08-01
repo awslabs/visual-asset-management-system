@@ -7,7 +7,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm, { formDataToTags } from "../components/DynamicTagForm";
 import SystemTagHelp from "../components/SystemTagHelp";
-import { useTemplates } from "../api/queries";
+import { useTemplates, useTemplate } from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
 import type { Workflow, Pipeline, SpecifiedPipelineRef, Template } from "../types";
 import type { PipelineStageData } from "./ExecuteWizard";
@@ -49,10 +49,23 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         data?.customTemplateOverride || data?.customEditedBody || ""
     );
 
+    // The templates LIST omits tagSchema and blanks S3-offloaded bodies, so the selected template
+    // is fetched individually to obtain the tag schema (which drives the tag form) and the full
+    // config body. The list row is used until the detail arrives so the picker stays responsive.
+    const { data: selectedTemplateDetail } = useTemplate(
+        pipeline.databaseId,
+        pipeline.pipelineId,
+        selectedTemplateId || ""
+    );
+
     const selectedTemplate = useMemo(() => {
-        if (!templates || !selectedTemplateId) return undefined;
+        if (!selectedTemplateId) return undefined;
+        if (selectedTemplateDetail?.templateId === selectedTemplateId) {
+            return selectedTemplateDetail;
+        }
+        if (!templates) return undefined;
         return templates.find((t) => t.templateId === selectedTemplateId);
-    }, [templates, selectedTemplateId]);
+    }, [templates, selectedTemplateId, selectedTemplateDetail]);
 
     // Once templates load, adopt the pipeline's default template if nothing is selected yet.
     useEffect(() => {
@@ -114,10 +127,6 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     // is sent as customTemplateOverride (the backend accepts it under either the pipeline's override
     // grant or the template's allowCustomEdit grant).
     const validationResult = useMemo(() => {
-        if (!selectedTemplate && !selectedTemplateId) {
-            return { errors: [], params: {}, mode: 4 as const };
-        }
-
         const tags = formDataToTags(tagFormData);
         return resolvePipelineParams({
             pipeline,
@@ -136,6 +145,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
             templateId: selectedTemplateId,
             tags,
             customTemplateOverride: customize ? customBody : undefined,
+            templateOverrides: selectedTemplate?.overrides,
             errors: validationResult.errors,
             params: validationResult.params,
             mode: validationResult.mode,
@@ -148,6 +158,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         customize,
         customBody,
         pipeline.pipelineId,
+        selectedTemplate,
         validationResult,
         // Intentionally omit onChange to avoid infinite loop
     ]);
@@ -238,6 +249,9 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                         }}
                         height="300px"
                     />
+                    <p className="text-xs text-text-secondary mt-1">
+                        System tag placeholders shown here are resolved per pipeline task at launch.
+                    </p>
                     {customize && (
                         <div className="mt-2">
                             <SystemTagHelp />

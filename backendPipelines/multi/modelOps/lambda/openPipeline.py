@@ -100,7 +100,9 @@ def lambda_handler(event, context):
     output_s3_asset_preview_uri = event['outputS3AssetPreviewPath']
     output_s3_asset_metadata_uri = event['outputS3AssetMetadataPath']
     inputOutput_s3_assetAuxiliary_files_uri = event['inputOutputS3AssetAuxiliaryFilesPath']
-    output_file_type = event['outputFileType']
+    # Optional: the target format is selected per execution via the template configBody
+    # (outputType), which constructPipeline reads. Absent here for template-driven runs.
+    output_file_type = event.get('outputFileType', '')
 
     #Folder check
     if (input_s3_asset_files_uri.endswith("/")):

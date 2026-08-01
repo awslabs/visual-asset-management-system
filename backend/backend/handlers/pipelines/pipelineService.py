@@ -23,7 +23,7 @@ import random
 import string
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.validators import validate
@@ -90,6 +90,12 @@ except Exception:
 
 OBJECT_TYPE = "pipeline"
 
+# Pipelines in this database are shared across every database in the deployment.
+GLOBAL_DATABASE = "GLOBAL"
+
+# Page cap for the cross-database id-uniqueness lookup (bounds the work one create may do).
+MAX_ID_LOOKUP_PAGES = 50
+
 
 #######################
 # Utilities
@@ -126,6 +132,48 @@ def _pipeline_save_warnings(item):
     return pipeline_trigger_template_warnings(
         _workflow_table(), _get_fileupload_trigger_row,
         item.get("databaseId", ""), item.get("pipelineId", ""), require_template)
+
+
+def _referencing_workflow_labels(database_id, pipeline_id):
+    """`databaseId:workflowId` labels of the workflows whose specifiedPipelines snapshot lists this
+    pipeline. Bounded save-path scan of the low-cardinality workflow table; best-effort — returns []
+    on any read error."""
+    composite = pr.pipeline_composite_key(database_id, pipeline_id)
+    labels = []
+    try:
+        table = _workflow_table()
+        kwargs = {}
+        while True:
+            resp = table.scan(**kwargs)
+            for workflow in resp.get("Items", []):
+                for ref in workflow.get("specifiedPipelines", []) or []:
+                    if (ref or {}).get("pipelineDatabaseId:pipelineId") == composite:
+                        labels.append(
+                            f"{workflow.get('databaseId', '')}:{workflow.get('workflowId', '')}")
+                        break
+            lek = resp.get("LastEvaluatedKey")
+            if not lek:
+                break
+            kwargs["ExclusiveStartKey"] = lek
+    except Exception as e:
+        logger.warning(f"Referencing-workflow lookup failed for {composite}: {e}")
+        return []
+    return labels
+
+
+def _stale_deployment_warnings(database_id, pipeline_id):
+    """Warnings (non-blocking) for an executionConfig change: the pipeline's execution target and
+    callback/timeout values are baked into each referencing workflow's deployed Step Functions
+    definition at workflow-save time, so those state machines keep invoking the previous target until
+    the workflow is saved again."""
+    labels = _referencing_workflow_labels(database_id, pipeline_id)
+    if not labels:
+        return []
+    return [
+        f"the execution configuration changed while workflow(s) [{', '.join(labels)}] reference this "
+        f"pipeline. Their deployed state machines still invoke the previous execution target — save "
+        f"each workflow again to redeploy it against the new configuration."
+    ]
 
 
 def _casbin_object(item):
@@ -192,6 +240,28 @@ def _enforce(claims_and_roles, item, action):
     return False
 
 
+def _enforce_missing(claims_and_roles, database_id, pipeline_id, action):
+    """Tier-2 check for a pipeline row that does not exist, run against a provisional record carrying
+    only the path-scoped ids. Callers run this before returning 404 so an unauthorized caller cannot
+    use the 404 as an existence oracle for pipelines it may not see."""
+    return _enforce(
+        claims_and_roles, {"databaseId": database_id, "pipelineId": pipeline_id}, action)
+
+
+def _global_scope_denied(claims_and_roles, item):
+    """True when a configuration-changing request targets a GLOBAL pipeline and the caller lacks
+    pipeline management (PUT) permission on it.
+
+    A GLOBAL pipeline is visible to and runnable from every database, so creating one — or adding a
+    template to one — changes behavior for every tenant. The pipeline object action POST is shared by
+    "run this pipeline" and "create this pipeline", so run-only roles carry POST on GLOBAL pipelines;
+    requiring the unambiguous management action (PUT) as well keeps them from reconfiguring the
+    GLOBAL scope."""
+    if item.get("databaseId") != GLOBAL_DATABASE:
+        return False
+    return not _enforce(claims_and_roles, item, "PUT")
+
+
 #######################
 # Lambda-pipeline provisioning
 #######################
@@ -219,6 +289,29 @@ def _build_lambda_name(pipeline_id):
     if len(name) > 64:
         name = name[-63:]
     return name
+
+
+def _carry_over_provisioned_lambda(execution_config, prior_execution_config):
+    """Keep the Lambda a prior row already had when a request supplies no `lambda.resourceId` for the
+    same execution type, so restoring an archived Lambda-type pipeline reuses its function instead of
+    provisioning a second one."""
+    config = dict(execution_config or {})
+    prior = prior_execution_config or {}
+    if config.get("executionType", "Lambda") != "Lambda":
+        return config
+    if prior.get("executionType", "Lambda") != "Lambda":
+        return config
+    lam = dict(config.get("lambda") or {})
+    if lam.get("resourceId"):
+        return config
+    prior_lambda = prior.get("lambda") or {}
+    if not prior_lambda.get("resourceId"):
+        return config
+    lam["resourceId"] = prior_lambda["resourceId"]
+    if "isProvided" in prior_lambda:
+        lam["isProvided"] = prior_lambda["isProvided"]
+    config["lambda"] = lam
+    return config
 
 
 def _provision_lambda_for_pipeline(execution_config, pipeline_id):
@@ -333,6 +426,33 @@ def get_pipeline_item(database_id, pipeline_id):
     return response.get("Item")
 
 
+def find_pipeline_id_owner(pipeline_id, excluding_database_id=None):
+    """The databaseId of an existing pipeline carrying this pipelineId, or None. Ids are unique
+    across all databases (GLOBAL included); archived rows still hold their id. Queries the
+    constant-partition by-date GSI rather than scanning."""
+    table = _pipeline_table()
+    query_kwargs = {
+        "IndexName": "PipelinesByDateGSI",
+        "KeyConditionExpression": Key("allListPartition").eq(pr.ALL_PIPELINES_LIST_PARTITION),
+        "FilterExpression": Attr("pipelineId").eq(pipeline_id),
+    }
+    for _ in range(MAX_ID_LOOKUP_PAGES):
+        response = table.query(**query_kwargs) or {}
+        for item in response.get("Items") or []:
+            owner = (item or {}).get("databaseId")
+            if not owner or owner == excluding_database_id:
+                continue
+            return owner
+        last_key = response.get("LastEvaluatedKey")
+        if not isinstance(last_key, dict) or not last_key:
+            return None
+        query_kwargs["ExclusiveStartKey"] = last_key
+    logger.warning(
+        f"Pipeline id uniqueness lookup stopped after {MAX_ID_LOOKUP_PAGES} pages; "
+        "treating the id as free.")
+    return None
+
+
 def get_pipeline_templates(database_id, pipeline_id):
     """List a pipeline's template rows (bodies as stored — details view rehydrates via the template
     service; here we return lightweight descriptors)."""
@@ -377,13 +497,36 @@ def create_pipeline(database_id, request, username, claims_and_roles):
     if not _enforce(claims_and_roles, record, "POST"):
         return authorization_error()
 
+    # A GLOBAL pipeline is created for every database in the deployment, so it additionally requires
+    # pipeline management permission on the GLOBAL scope.
+    if _global_scope_denied(claims_and_roles, record):
+        logger.info(f"Create of GLOBAL pipeline {pipeline_id} denied: no GLOBAL pipeline management")
+        return authorization_error()
+
     if _deadline_cloud_blocked(record.get("executionConfig")):
         return validation_error(body={
             "message": "The DeadlineCloud execution type is not enabled for this deployment."})
 
-    if get_pipeline_item(database_id, pipeline_id):
+    existing = get_pipeline_item(database_id, pipeline_id)
+    if existing and not existing.get("archived"):
         logger.info(f"Pipeline {database_id}:{pipeline_id} already exists")
         return validation_error(body={"message": "A pipeline with this ID already exists."})
+
+    # Ids are unique across databases; restoring this database's own archived row keeps its id.
+    if not existing:
+        other_owner = find_pipeline_id_owner(pipeline_id, excluding_database_id=database_id)
+        if other_owner:
+            logger.info(f"pipelineId {pipeline_id} is already in use by database {other_owner}")
+            return validation_error(body={
+                "message": "Pipeline ID is already in use by another database. Choose a different ID."})
+    if existing:
+        # The id belongs to an archived (soft-deleted) row: the create restores it in place, which is
+        # the path a re-registration of an archived built-in takes. Create provenance is preserved.
+        logger.info(f"Restoring archived pipeline {database_id}:{pipeline_id}")
+        record["dateCreated"] = existing.get("dateCreated") or record["dateCreated"]
+        record["createdBy"] = existing.get("createdBy") or record["createdBy"]
+        record["executionConfig"] = _carry_over_provisioned_lambda(
+            record.get("executionConfig"), existing.get("executionConfig"))
 
     # Provision a Lambda for a Lambda-type pipeline that does not reference an existing function
     # (after auth + duplicate check so a rejected request never creates a function). Built-ins arrive
@@ -404,6 +547,9 @@ def create_pipeline(database_id, request, username, claims_and_roles):
 def update_pipeline(database_id, pipeline_id, request, username, claims_and_roles):
     item = get_pipeline_item(database_id, pipeline_id)
     if not item:
+        # Authorize against a provisional record first so the 404 is not an existence oracle.
+        if not _enforce_missing(claims_and_roles, database_id, pipeline_id, "PUT"):
+            return authorization_error()
         return validation_error(status_code=404, body={"message": "Pipeline not found"})
     if not _enforce(claims_and_roles, item, "PUT"):
         return authorization_error()
@@ -412,6 +558,9 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
     if request.executionConfig is not None and _deadline_cloud_blocked(request.executionConfig):
         return validation_error(body={
             "message": "The DeadlineCloud execution type is not enabled for this deployment."})
+
+    execution_config_changed = (request.executionConfig is not None
+                                and request.executionConfig != item.get("executionConfig"))
 
     if request.pipelineName is not None:
         item["pipelineName"] = request.pipelineName
@@ -426,12 +575,16 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
         item["systemConfig"] = request.systemConfig
     if request.enabled is not None:
         item["enabled"] = request.enabled
+    if request.archived is not None:
+        item["archived"] = request.archived
     item["dateModified"] = pr.iso_now()
     item["modifiedBy"] = username
 
     _pipeline_table().put_item(Item=item)
     body = {"message": _item_to_response(item).dict()}
     warnings = _pipeline_save_warnings(item)
+    if execution_config_changed:
+        warnings = warnings + _stale_deployment_warnings(database_id, pipeline_id)
     if warnings:
         body["warnings"] = warnings
     return success(body=body)
@@ -440,6 +593,9 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
 def archive_pipeline(database_id, pipeline_id, username, claims_and_roles):
     item = get_pipeline_item(database_id, pipeline_id)
     if not item:
+        # Authorize against a provisional record first so the 404 is not an existence oracle.
+        if not _enforce_missing(claims_and_roles, database_id, pipeline_id, "DELETE"):
+            return authorization_error()
         return validation_error(status_code=404, body={"message": "Pipeline not found"})
     if not _enforce(claims_and_roles, item, "DELETE"):
         return authorization_error()
@@ -455,6 +611,15 @@ def archive_pipeline(database_id, pipeline_id, username, claims_and_roles):
 #######################
 # Route handlers
 #######################
+
+def _request_body(event):
+    """Parsed JSON request body as a mapping. A valid-JSON-but-non-object body (list/string/null)
+    is a client error, not an internal one."""
+    body = json.loads(event.get("body") or "{}")
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    return body
+
 
 def _validate_path_ids(path_parameters):
     ids = {"databaseId": True}
@@ -478,9 +643,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         include_archived = str(query_parameters.get("includeArchived", "")).lower() in (
             "true", "1", "yes"
         )
-        # Bound the default page (100) so an unparameterized list returns a small page + NextToken
-        # rather than accumulating up to the 10000 default into one response (Rule 15 / 6MB cap).
-        validate_pagination_info(query_parameters, 100)
+        # Bound the page (100) so a list returns a small page + NextToken rather than accumulating
+        # up to the utility's 10000/3000 defaults into one response (Rule 15 / 6MB cap). Both the
+        # max-items and the page-size default are overridden so an unparseable pageSize falls back
+        # to the same bound.
+        validate_pagination_info(query_parameters, 100, 100)
 
         method = event["requestContext"]["http"]["method"]
 
@@ -505,6 +672,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if pipeline_id:
                 item = get_pipeline_item(database_id, pipeline_id)
                 if not item or (item.get("archived") and not include_archived):
+                    # Authorize (against the row when it exists, else a provisional record) before
+                    # the 404 so it is not an existence oracle for pipelines the caller cannot see.
+                    if not _enforce(claims_and_roles, item or {
+                            "databaseId": database_id, "pipelineId": pipeline_id}, "GET"):
+                        return authorization_error()
                     return validation_error(status_code=404, body={"message": "Pipeline not found"}, event=event)
                 if not _enforce(claims_and_roles, item, "GET"):
                     return authorization_error()
@@ -523,13 +695,21 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if method == "POST":
             if not database_id:
                 return validation_error(body={"message": "databaseId required to create a pipeline"}, event=event)
-            request = CreatePipelineRequestModel(**json.loads(event.get("body") or "{}"))
+            request = CreatePipelineRequestModel(**_request_body(event))
+            # The pipeline is created under the path-scoped database; a body databaseId naming a
+            # different one is rejected rather than silently ignored.
+            if request.databaseId != database_id:
+                logger.info(f"Create body databaseId {request.databaseId} does not match the path "
+                            f"database {database_id}")
+                return validation_error(body={
+                    "message": "databaseId in the request body must match the request path."},
+                    event=event)
             return create_pipeline(database_id, request, username, claims_and_roles)
 
         if method == "PUT":
             if not pipeline_id:
                 return validation_error(body={"message": "pipelineId required to update a pipeline"}, event=event)
-            request = UpdatePipelineRequestModel(**json.loads(event.get("body") or "{}"))
+            request = UpdatePipelineRequestModel(**_request_body(event))
             return update_pipeline(database_id, pipeline_id, request, username, claims_and_roles)
 
         if method == "DELETE":
@@ -537,7 +717,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={"message": "pipelineId required to archive a pipeline"}, event=event)
             return archive_pipeline(database_id, pipeline_id, username, claims_and_roles)
 
-        return authorization_error(body={"message": "Method not allowed"})
+        return validation_error(body={"message": "Method not allowed"}, event=event)
 
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")

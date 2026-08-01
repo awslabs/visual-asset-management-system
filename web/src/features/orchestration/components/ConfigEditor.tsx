@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 
 // Lazy-load the editor together with the local-Monaco setup (loader.config + workers) so the
 // runtime is bundled from `monaco-editor` (same-origin, CSP-safe) rather than fetched from a CDN.
@@ -28,6 +28,16 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({
     onChange,
     height = "400px",
 }) => {
+    // Follow the app's theme, which toggles `awsui-dark-mode` on <body>.
+    const [isDark, setIsDark] = useState(() => document.body.classList.contains("awsui-dark-mode"));
+    useEffect(() => {
+        const observer = new MutationObserver(() =>
+            setIsDark(document.body.classList.contains("awsui-dark-mode"))
+        );
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
+
     // Map language
     let monacoLanguage = language;
     if (language === "openjd") {
@@ -52,7 +62,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({
                 language={monacoLanguage}
                 value={value}
                 onChange={onChange}
-                theme="vs-dark"
+                theme={isDark ? "vs-dark" : "vs"}
                 options={{
                     readOnly,
                     minimap: { enabled: false },

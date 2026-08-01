@@ -105,19 +105,19 @@ The matchers component evaluates whether the requesting user belongs to the poli
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
 
-| Object Type      | Constraint Fields                                                                       | Description                                                                      |
-| ---------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `api`            | `route__path`                                                                           | Backend API route paths.                                                         |
-| `web`            | `route__path`                                                                           | Frontend UI page routes.                                                         |
-| `database`       | `databaseId`                                                                            | Database entity operations.                                                      |
-| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                                          | Asset entity operations (includes file operations).                              |
-| `pipeline`       | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
-| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                                          | Workflow management, triggers, and execution.                                    |
-| `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`                          | Metadata schema management.                                                      |
-| `tag`            | `tagName`                                                                               | Tag CRUD operations.                                                             |
-| `tagType`        | `tagTypeName`                                                                           | Tag type CRUD operations.                                                        |
-| `role`           | `roleName`                                                                              | Role management.                                                                 |
-| `userRole`       | `roleName`, `userId`                                                                    | User-to-role assignment management.                                              |
+| Object Type      | Constraint Fields                                                       | Description                                                                      |
+| ---------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `api`            | `route__path`                                                           | Backend API route paths.                                                         |
+| `web`            | `route__path`                                                           | Frontend UI page routes.                                                         |
+| `database`       | `databaseId`                                                            | Database entity operations.                                                      |
+| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                              |
+| `pipeline`       | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
+| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                    |
+| `metadataSchema` | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                      |
+| `tag`            | `tagName`                                                               | Tag CRUD operations.                                                             |
+| `tagType`        | `tagTypeName`                                                           | Tag type CRUD operations.                                                        |
+| `role`           | `roleName`                                                              | Role management.                                                                 |
+| `userRole`       | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
 
@@ -359,15 +359,15 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 
 | Route                                                                                                                 | Methods                | Tier 2 Object Type              | Tier 2 Fields                                                                                                                 |
 | --------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `/pipelines`                                                                                                          | GET, PUT               | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name`                                       |
-| `/database/\{databaseId\}/pipelines`                                                                                  | GET, POST              | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name`                                       |
-| `/database/\{databaseId\}/pipelines/\{pipelineId\}`                                                                   | GET, PUT, DELETE       | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `category`, `name`                                       |
+| `/pipelines`                                                                                                          | GET, PUT               | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                       |
+| `/database/\{databaseId\}/pipelines`                                                                                  | GET, POST              | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                       |
+| `/database/\{databaseId\}/pipelines/\{pipelineId\}`                                                                   | GET, PUT, DELETE       | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                       |
 | `/database/\{databaseId\}/pipelines/\{pipelineId\}/templates` and `.../templates/\{templateId\}` (incl. `/tagSchema`) | GET, POST, PUT, DELETE | `pipeline`                      | Enforced against the **owning pipeline** (templates + tag schemas have no separate object type).                              |
 | `/workflows`                                                                                                          | GET, PUT               | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                |
 | `/database/\{databaseId\}/workflows`                                                                                  | GET, POST              | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                |
 | `/database/\{databaseId\}/workflows/\{workflowId\}`                                                                   | GET, PUT, DELETE       | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                |
 | `/database/\{databaseId\}/workflows/\{workflowId\}/triggers` and `.../triggers/\{triggerType\}`                       | GET, PUT, DELETE       | `workflow`                      | Enforced against the **owning workflow**.                                                                                     |
-| `/workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`                                                            | POST                   | `workflow`, `pipeline`, `asset` | Workflow POST + each referenced pipeline GET + each input asset GET + the output asset POST.                                  |
+| `/workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`                                                            | POST                   | `workflow`, `pipeline`, `asset` | Workflow GET + each referenced pipeline GET + each input asset GET + the output asset POST.                                   |
 | `/workflows/executions`                                                                                               | GET                    | `workflow`, `asset`             | Global list; each execution is visible only when the caller can GET its workflow and at least one of its input/output assets. |
 | `/workflows/executions/\{executionId\}/details`                                                                       | GET                    | `workflow`, `asset`             | Same per-execution visibility check as the global list.                                                                       |
 | `/workflows/executions/\{executionId\}/logs`                                                                          | GET                    | `workflow`, `asset`             | Detailed execution logs — scope to administrative / operator roles.                                                           |
@@ -377,6 +377,12 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 
 :::warning[Scope detailed logs and permanent delete to administrators]
 The execution **logs** route (`/workflows/executions/\{executionId\}/logs`) exposes full CloudWatch execution logs, and the **permanent delete** route (`/workflows/executions/\{executionId\}/permanent`) removes execution records irreversibly. Grant these two routes only to administrative or operator roles. The shipped non-admin templates authorize the everyday execution routes (execute, list, details, abort, re-run) but withhold `.../logs` and `.../permanent`; only the Database Admin template grants them.
+:::
+
+:::info[Executing is authorized by the route, not by a workflow POST]
+Permission to run a workflow comes from Tier 1 on the execute route (`POST /workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`). Tier 2 then confirms the caller can **read** what the run touches: `GET` on the workflow, `GET` on each referenced pipeline, and `GET` on each input asset. The output asset is the one object the run writes, so it is authorized with `POST`.
+
+On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **modify** — neither is required to execute. A role therefore runs workflows with read-only object access, and granting `POST` on a workflow grants the ability to create workflows. The other execution routes (list, details, abort, re-run) follow the same shape: the Tier‑1 route grants the operation, and Tier‑2 `GET` on the workflow and its assets scopes which executions are reachable.
 :::
 
 ### Metadata schema routes

@@ -6,7 +6,10 @@
 import React from "react";
 import InfoTooltip from "../components/InfoTooltip";
 import StringListInput from "../components/StringListInput";
-import AssetSpanControl from "../components/AssetSpanControl";
+import AssetSpanControl, {
+    assetSpanFromScope,
+    scopeWithSpan,
+} from "../components/AssetSpanControl";
 import type { InputFileArity } from "../types";
 
 /**
@@ -19,6 +22,8 @@ import type { InputFileArity } from "../types";
 interface TemplateOverridesEditorProps {
     value: Record<string, any>;
     onChange: (overrides: Record<string, any>) => void;
+    /** The pipeline's assetScope, used as the starting point when the override is toggled on. */
+    inheritedAssetScope?: Record<string, any>;
 }
 
 const selectClass =
@@ -37,6 +42,17 @@ const OverrideToggle: React.FC<{
     </label>
 );
 
+/** The pipeline's scope as the four canonical booleans, so toggling the override on starts from the
+ *  inherited rules rather than narrowing them. Accepts the registration `wholeAsset` shorthand. */
+const seedAssetScope = (inherited?: Record<string, any>) => {
+    const source = inherited || {};
+    const scope = {
+        wholeAssetAllowed: !!(source.wholeAssetAllowed ?? source.wholeAsset),
+        folderAllowed: !!source.folderAllowed,
+    };
+    return scopeWithSpan(scope, assetSpanFromScope(source));
+};
+
 const MetaRow: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string }> = ({
     checked,
     onChange,
@@ -48,7 +64,11 @@ const MetaRow: React.FC<{ checked: boolean; onChange: (v: boolean) => void; labe
     </label>
 );
 
-const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({ value, onChange }) => {
+const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
+    value,
+    onChange,
+    inheritedAssetScope,
+}) => {
     // A key is "overridden" when present in the object. Toggling off removes it (inherit).
     const has = (key: string) => value[key] !== undefined && value[key] !== null;
     const setKey = (key: string, v: any) => onChange({ ...value, [key]: v });
@@ -98,22 +118,63 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({ value
                     checked={has("assetScope")}
                     onChange={(on) =>
                         on
-                            ? setKey("assetScope", {
-                                  crossAssetAllowed: false,
-                                  singleAssetOnly: true,
-                                  wholeAssetAllowed: false,
-                                  folderAllowed: false,
-                              })
+                            ? setKey("assetScope", seedAssetScope(inheritedAssetScope))
                             : removeKey("assetScope")
                     }
                     label="asset selection rules"
                     info="Override the pipeline's asset-span / whole-asset / folder rules for this template."
                 />
                 {has("assetScope") && (
-                    <AssetSpanControl
-                        scope={value.assetScope}
-                        onChange={(s) => setKey("assetScope", s)}
-                    />
+                    <>
+                        <p className="text-xs text-text-secondary">
+                            Starts from the pipeline's current rules.
+                        </p>
+                        <AssetSpanControl
+                            scope={value.assetScope}
+                            onChange={(s) => setKey("assetScope", s)}
+                        />
+                    </>
+                )}
+            </div>
+
+            {/* inputFileFilters — sits directly beneath the asset selection rules (both constrain
+                the input selection), matching the pipeline form's ordering. */}
+            <div className="space-y-1">
+                <OverrideToggle
+                    checked={has("inputFileFilters")}
+                    onChange={(on) =>
+                        on
+                            ? setKey("inputFileFilters", { allow: [], exclude: [] })
+                            : removeKey("inputFileFilters")
+                    }
+                    label="input file filters"
+                    info="Override the pipeline's allow/exclude input-file filters for this template."
+                />
+                {has("inputFileFilters") && (
+                    <div className="space-y-2 pl-1">
+                        <div>
+                            <span className="block text-xs text-text-secondary mb-1">Allow</span>
+                            <StringListInput
+                                ariaLabel="Override allow filter"
+                                value={filters.allow || []}
+                                onChange={(allow) =>
+                                    setKey("inputFileFilters", { ...filters, allow })
+                                }
+                                placeholder="e.g. *.glb"
+                            />
+                        </div>
+                        <div>
+                            <span className="block text-xs text-text-secondary mb-1">Exclude</span>
+                            <StringListInput
+                                ariaLabel="Override exclude filter"
+                                value={filters.exclude || []}
+                                onChange={(exclude) =>
+                                    setKey("inputFileFilters", { ...filters, exclude })
+                                }
+                                placeholder="e.g. *.tmp"
+                            />
+                        </div>
+                    </div>
                 )}
             </div>
 
@@ -156,46 +217,6 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({ value
                             }
                             label="File attributes"
                         />
-                    </div>
-                )}
-            </div>
-
-            {/* inputFileFilters */}
-            <div className="space-y-1">
-                <OverrideToggle
-                    checked={has("inputFileFilters")}
-                    onChange={(on) =>
-                        on
-                            ? setKey("inputFileFilters", { allow: [], exclude: [] })
-                            : removeKey("inputFileFilters")
-                    }
-                    label="input file filters"
-                    info="Override the pipeline's allow/exclude input-file filters for this template."
-                />
-                {has("inputFileFilters") && (
-                    <div className="space-y-2 pl-1">
-                        <div>
-                            <span className="block text-xs text-text-secondary mb-1">Allow</span>
-                            <StringListInput
-                                ariaLabel="Override allow filter"
-                                value={filters.allow || []}
-                                onChange={(allow) =>
-                                    setKey("inputFileFilters", { ...filters, allow })
-                                }
-                                placeholder="e.g. *.glb"
-                            />
-                        </div>
-                        <div>
-                            <span className="block text-xs text-text-secondary mb-1">Exclude</span>
-                            <StringListInput
-                                ariaLabel="Override exclude filter"
-                                value={filters.exclude || []}
-                                onChange={(exclude) =>
-                                    setKey("inputFileFilters", { ...filters, exclude })
-                                }
-                                placeholder="e.g. *.tmp"
-                            />
-                        </div>
                     </div>
                 )}
             </div>

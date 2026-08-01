@@ -239,10 +239,15 @@ class TestAbortExecutionHandler:
         assert any(i["pipelineExecutionId"] == "P1" and i["executionStatus"] == "ABORTED"
                    for i in written)
         assert all(i["pipelineExecutionId"] != "P2" for i in written)
-        # Main row written ABORTED with a stop date.
-        main_written = [c.kwargs["Item"] for c in main_table.put_item.call_args_list]
-        assert main_written and main_written[-1]["executionStatus"] == "ABORTED"
-        assert main_written[-1]["executionStopDate"]
+        # Main row written ABORTED with a stop date, via a targeted update so a concurrent
+        # end-state write is not replaced by this read's pre-abort snapshot.
+        main_table.put_item.assert_not_called()
+        assert main_table.update_item.call_args_list
+        updated = main_table.update_item.call_args_list[-1].kwargs
+        values = {name: updated["ExpressionAttributeValues"][f":v{i}"]
+                  for i, name in enumerate(updated["ExpressionAttributeNames"].values())}
+        assert values["executionStatus"] == "ABORTED"
+        assert values["executionStopDate"]
 
 
 # ===================== executionService (details) =====================

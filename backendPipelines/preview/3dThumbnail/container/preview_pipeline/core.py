@@ -195,14 +195,13 @@ def _run_preview_pipeline(
     # Check if a preview file already exists for this input file
     input_basename = os.path.basename(stage_input.objectKey) if stage_input.objectKey else ""
     if input_basename:
-        existing_preview = _check_existing_preview(
-            stage_output, input_basename, localTest, relative_subdir
-        )
+        existing_preview = _check_existing_preview(stage_input, input_basename, localTest)
         if existing_preview and not overwrite_existing:
-            return _error_response(
+            return _success_response(
                 stage,
                 f"A preview file already exists for '{input_basename}': {existing_preview}. "
-                f"Set inputParameters.overwriteExistingPreviewFiles to true to overwrite.",
+                f"Skipping generation. Set inputParameters.overwriteExistingPreviewFiles to true "
+                f"to regenerate.",
             )
         elif existing_preview and overwrite_existing:
             logger.info(
@@ -519,34 +518,36 @@ def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: st
         s3.download(bucket_name, s3_key, local_path)
 
 
-def _check_existing_preview(stage_output: StageOutput, input_basename: str, localTest: bool, relative_subdir: str = "") -> str:
+def _check_existing_preview(stage_input: StageInput, input_basename: str, localTest: bool) -> str:
     """
     Check if a preview file already exists for the given input file.
     Returns the path/key of the existing preview file, or None if not found.
 
     Preview files follow the naming pattern: <input_basename>.previewFile.<ext>
     where ext is gif, jpg, or png.
+
+    A generated preview is written back beside its input file, so the check looks at the input
+    file's own directory. The stage output directory is a per-execution prefix that never holds a
+    prior run's previews.
     """
     preview_prefix = f"{input_basename}.previewFile."
 
     if localTest:
-        # Check local output directory (with relative subdir if present)
-        output_dir = os.path.join(stage_output.objectDir, relative_subdir) if relative_subdir else stage_output.objectDir
-        if os.path.isdir(output_dir):
-            for entry in os.listdir(output_dir):
+        # Check the input file's local directory
+        input_dir = os.path.dirname(stage_input.objectKey) or "."
+        if os.path.isdir(input_dir):
+            for entry in os.listdir(input_dir):
                 if entry.startswith(preview_prefix):
-                    existing_path = os.path.join(output_dir, entry)
+                    existing_path = os.path.join(input_dir, entry)
                     logger.info(f"Found existing local preview: {existing_path}")
                     return existing_path
     else:
-        # Check S3 output directory (with relative subdir if present)
-        if stage_output.bucketName and stage_output.objectDir:
-            if relative_subdir:
-                s3_prefix = stage_output.objectDir + relative_subdir + "/" + preview_prefix
-            else:
-                s3_prefix = stage_output.objectDir + preview_prefix
+        # Check the input file's directory in the asset bucket
+        if stage_input.bucketName and stage_input.objectKey:
+            input_dir = stage_input.objectKey.rsplit("/", 1)[0] + "/" if "/" in stage_input.objectKey else ""
+            s3_prefix = input_dir + preview_prefix
             existing_keys = s3.list_objects_with_prefix(
-                stage_output.bucketName, s3_prefix
+                stage_input.bucketName, s3_prefix
             )
             if existing_keys:
                 logger.info(f"Found existing S3 preview: {existing_keys[0]}")

@@ -49,6 +49,14 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         message = lambda_response.get("body", {}).get("message", "")
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
 
+    # A handled invocation still returns StatusCode 200 when the invoked function raised: the
+    # failure is reported via FunctionError. Without this check an unhandled error in
+    # openPipeline reads as success here, so no task-token failure is ever sent and the
+    # workflow's callback task blocks until taskTimeout.
+    if lambda_response.get('FunctionError'):
+        raise Exception(
+            "Invoke Open Pipeline Lambda Failed: " + str(lambda_response.get('FunctionError')))
+
 
 def lambda_handler(event, context):
     logger.info(event)

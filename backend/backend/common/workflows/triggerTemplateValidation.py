@@ -22,9 +22,12 @@ resources and the tag-schema loader so this module stays free of module-level re
 
 from boto3.dynamodb.conditions import Key
 
+from customLogging.logger import safeLogger
 from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows.templateTagSchema import required_tags_without_default
+
+logger = safeLogger(service_name="TriggerTemplateValidation")
 
 
 def _trigger_default_template_ids(trigger_row):
@@ -61,27 +64,35 @@ def validate_trigger_default_templates(default_template_ids, load_tag_schema_fie
 def triggers_referencing_template(triggers_table, workflows_table, pipeline_database_id,
                                   pipeline_id, template_id):
     """Return the list of (workflowDatabaseId, workflowId, triggerType) tuples whose trigger picks
-    this template as a default for this pipeline. Scans the triggers table (bounded: one paginated
-    scan) — triggers are low-cardinality. Best-effort: returns [] on any read error."""
+    this template as a default for this pipeline. Queries TriggersByTypeGSI once per trigger type
+    (paginated to exhaustion) rather than scanning the table. Best-effort: returns [] on a read
+    error."""
     composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
     hits = []
     try:
-        kwargs = {}
-        while True:
-            resp = triggers_table.scan(**kwargs)
-            for row in resp.get("Items", []):
-                default_ids = _trigger_default_template_ids(row)
-                if default_ids.get(composite) == template_id:
-                    hits.append((
-                        row.get("workflowDatabaseId", ""),
-                        row.get("workflowId", ""),
-                        row.get("triggerType", ""),
-                    ))
-            lek = resp.get("LastEvaluatedKey")
-            if not lek:
-                break
-            kwargs["ExclusiveStartKey"] = lek
-    except Exception:
+        for trigger_type in wr.TRIGGER_TYPES:
+            kwargs = {
+                "IndexName": "TriggersByTypeGSI",
+                "KeyConditionExpression": Key("triggerType").eq(trigger_type),
+            }
+            while True:
+                resp = triggers_table.query(**kwargs)
+                for row in resp.get("Items", []):
+                    default_ids = _trigger_default_template_ids(row)
+                    if default_ids.get(composite) == template_id:
+                        hits.append((
+                            row.get("workflowDatabaseId", ""),
+                            row.get("workflowId", ""),
+                            row.get("triggerType", ""),
+                        ))
+                lek = resp.get("LastEvaluatedKey")
+                if not lek:
+                    break
+                kwargs["ExclusiveStartKey"] = lek
+    except Exception as e:
+        logger.exception(
+            f"Error reading triggers referencing template {pipeline_database_id}:{pipeline_id}:"
+            f"{template_id}: {e}")
         return []
     return hits
 
@@ -98,12 +109,14 @@ def validate_template_not_breaking_triggers(triggers_table, workflows_table, pip
         triggers_table, workflows_table, pipeline_database_id, pipeline_id, template_id)
     if not refs:
         return []
-    workflow_labels = ", ".join(f"{db}:{wf}" for (db, wf, _t) in refs)
+    logger.info(
+        f"Template {pipeline_database_id}:{pipeline_id}:{template_id} is a trigger default for "
+        f"workflow(s) {', '.join(f'{db}:{wf}' for (db, wf, _t) in refs)}")
     return [
-        f"this template is a trigger default for workflow(s) [{workflow_labels}] and has required "
-        f"tag(s) with no default value: {', '.join(missing)}. A triggered (headless) execution "
-        f"cannot supply these — give each a default value, make it optional, or remove the template "
-        f"from the trigger first."
+        f"this template is a trigger default for one or more auto-triggered workflows and has "
+        f"required tag(s) with no default value: {', '.join(missing)}. A triggered (headless) "
+        f"execution cannot supply these — give each a default value, make it optional, or remove "
+        f"the template from the trigger first."
     ]
 
 
@@ -155,6 +168,8 @@ def pipeline_trigger_template_warnings(workflows_table, get_trigger_row, pipelin
             if not lek:
                 break
             kwargs["ExclusiveStartKey"] = lek
-    except Exception:
+    except Exception as e:
+        logger.exception(
+            f"Error reading workflows referencing pipeline {pipeline_database_id}:{pipeline_id}: {e}")
         return []
     return warnings

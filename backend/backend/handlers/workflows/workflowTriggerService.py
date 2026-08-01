@@ -65,6 +65,22 @@ except Exception as e:
 
 OBJECT_TYPE_WORKFLOW = "workflow"
 
+TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
+
+
+def _build_file_upload_config(request):
+    return wr.build_file_upload_trigger_config(
+        input_file_filters=request.inputFileFilters or {"allow": [], "exclude": []},
+        default_template_ids=request.defaultTemplateIds or {},
+    )
+
+
+# triggerConfig builder per trigger type. A supported type with no builder here has no persistable
+# config shape, so the save fails rather than storing a config of the wrong shape.
+_TRIGGER_CONFIG_BUILDERS = {
+    TRIGGER_TYPE_FILE_UPLOAD: _build_file_upload_config,
+}
+
 
 def _workflow_table():
     return dynamodb.Table(workflow_table_name)
@@ -162,10 +178,12 @@ def set_trigger(database_id, workflow_id, trigger_type, request):
     if template_errors:
         return validation_error(body={"message": {"triggerTemplateErrors": template_errors}})
 
-    config = wr.build_file_upload_trigger_config(
-        input_file_filters=request.inputFileFilters or {"allow": [], "exclude": []},
-        default_template_ids=request.defaultTemplateIds or {},
-    )
+    builder = _TRIGGER_CONFIG_BUILDERS.get(trigger_type)
+    if builder is None:
+        logger.error(f"No triggerConfig builder for trigger type: {trigger_type}")
+        return validation_error(body={
+            "message": "This trigger type cannot be configured in this deployment."})
+    config = builder(request)
     # Preserve the original creation timestamp when replacing an existing trigger (PUT is both the
     # create and the edit path), so a re-set updates only dateModified — matching update_workflow.
     existing = get_trigger(database_id, workflow_id, trigger_type)

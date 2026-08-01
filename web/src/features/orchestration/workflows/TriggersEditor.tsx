@@ -11,6 +11,7 @@ import Dialog from "../components/Dialog";
 import StringListInput from "../components/StringListInput";
 import InfoTooltip from "../components/InfoTooltip";
 import type { SpecifiedPipelineRef, WorkflowTrigger } from "../types";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 
 /**
  * Per-pipeline default-template dropdown for the trigger form. Queries that pipeline's templates so
@@ -52,11 +53,13 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     workflowId,
     pipelineRefs,
 }) => {
+    const toast = useToast();
     const queryClient = useQueryClient();
     const { data: triggers = [] } = useTriggers(databaseId, workflowId);
 
     const [editing, setEditing] = useState(false);
-    const [enabled, setEnabled] = useState(false);
+    // Matches the backend trigger default, so a trigger created without touching the box fires.
+    const [enabled, setEnabled] = useState(true);
     const [allowFilters, setAllowFilters] = useState<string[]>([]);
     const [excludeFilters, setExcludeFilters] = useState<string[]>([]);
     const [defaultTemplateIds, setDefaultTemplateIds] = useState<Record<string, string>>({});
@@ -66,35 +69,56 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     const [saveError, setSaveError] = useState<string | null>(null);
 
     const setTriggerMutation = useMutation({
-        mutationFn: (body: WorkflowTrigger) => {
-            return new Promise<any>(async (resolve, reject) => {
-                const [ok, data] = await setTrigger(databaseId, workflowId, "fileUpload", body);
-                if (!ok)
-                    reject(new Error(typeof data === "string" ? data : "Failed to set trigger"));
-                else resolve(data);
-            });
+        // The service returns a [ok, data] tuple; throwing on a falsy `ok` is what routes the
+        // failure into onError. An async function is used directly rather than wrapping it in a
+        // `new Promise(async ...)` executor, where a throw before the reject would be swallowed.
+        mutationFn: async (body: WorkflowTrigger) => {
+            const [ok, data] = await setTrigger(databaseId, workflowId, "fileUpload", body);
+            if (!ok) throw new Error(typeof data === "string" ? data : "Failed to set trigger");
+            return data;
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["triggers", databaseId, workflowId] });
             setSaveError(null);
             setEditing(false);
+            // The form closes on success, so the toast is the only confirmation the trigger saved.
+            toast.success("Trigger saved", {
+                description: "File upload trigger",
+            });
         },
-        onError: (err: any) => {
-            setSaveError(err?.message || "Failed to set trigger");
+        onError: (err) => {
+            // Kept inline as well: a triggerTemplateErrors rejection names the offending template,
+            // which belongs next to the fields that produced it.
+            const message = toastErrorMessage(err, "Failed to set trigger");
+            setSaveError(message);
+            toast.error("Save failed", { description: message });
         },
     });
 
     const deleteTriggerMutation = useMutation({
-        mutationFn: () => {
-            return new Promise<any>(async (resolve, reject) => {
-                const [ok, data] = await deleteTrigger(databaseId, workflowId, "fileUpload");
-                if (!ok)
-                    reject(new Error(typeof data === "string" ? data : "Failed to delete trigger"));
-                else resolve(data);
-            });
+        mutationFn: async () => {
+            const [ok, data] = await deleteTrigger(databaseId, workflowId, "fileUpload");
+            if (!ok) throw new Error(typeof data === "string" ? data : "Failed to delete trigger");
+            return data;
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["triggers", databaseId, workflowId] });
+            // The hydration effect only assigns while a trigger row exists, so clear the form here
+            // rather than leaving the deleted values pre-filled for the next create.
+            setEnabled(true);
+            setAllowFilters([]);
+            setExcludeFilters([]);
+            setDefaultTemplateIds({});
+            toast.success("Trigger deleted", {
+                description: "File upload trigger",
+            });
+        },
+        onError: (err) => {
+            // The confirm dialog has already closed by this point, so a toast is the only place the
+            // failure can be reported — without it a rejected delete looked like a success.
+            toast.error("Delete failed", {
+                description: toastErrorMessage(err, "Failed to delete trigger"),
+            });
         },
     });
 
@@ -104,7 +128,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
             (t: WorkflowTrigger) => t.triggerType === "fileUpload"
         );
         if (fileUploadTrigger) {
-            setEnabled(fileUploadTrigger.enabled ?? false);
+            setEnabled(fileUploadTrigger.enabled ?? true);
             setAllowFilters(fileUploadTrigger.inputFileFilters?.allow || []);
             setExcludeFilters(fileUploadTrigger.inputFileFilters?.exclude || []);
             setDefaultTemplateIds(fileUploadTrigger.defaultTemplateIds || {});
@@ -113,6 +137,11 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
 
     const handleSave = () => {
         setSaveError(null);
+        // Only pipelines still in the workflow are submitted — a stored entry for a since-removed
+        // pipeline is invisible in the form but the backend validates every entry it receives.
+        const currentKeys = new Set(
+            pipelineRefs.map((item) => `${item.pipelineDatabaseId}:${item.pipelineId}`)
+        );
         const body: WorkflowTrigger = {
             triggerType: "fileUpload",
             enabled,
@@ -120,7 +149,9 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                 allow: allowFilters,
                 exclude: excludeFilters,
             },
-            defaultTemplateIds,
+            defaultTemplateIds: Object.fromEntries(
+                Object.entries(defaultTemplateIds).filter(([key]) => currentKeys.has(key))
+            ),
         };
         setTriggerMutation.mutate(body);
     };

@@ -108,6 +108,24 @@ describe("resolveTemplate", () => {
             ]);
         });
 
+        it("flags a required string-list left as an empty array (backend treats [] as absent)", () => {
+            const schema: TagSchemaField[] = [
+                { tagKey: "regions", type: "string-list", required: true },
+            ];
+            expect(missingRequiredTags(schema, [{ key: "regions", value: [] }])).toEqual([
+                "regions",
+            ]);
+        });
+
+        it("does not flag a required string-list with at least one entry", () => {
+            const schema: TagSchemaField[] = [
+                { tagKey: "regions", type: "string-list", required: true },
+            ];
+            expect(missingRequiredTags(schema, [{ key: "regions", value: ["us-east-1"] }])).toEqual(
+                []
+            );
+        });
+
         it("does not flag optional tags", () => {
             const schema: TagSchemaField[] = [
                 { tagKey: "optional1", type: "string", required: false },

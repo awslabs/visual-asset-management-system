@@ -14,6 +14,7 @@ import ArchiveConfirmDialog from "../components/ArchiveConfirmDialog";
 import DatabasePickerDialog from "../components/DatabasePickerDialog";
 import ExecuteWizard from "../wizard/ExecuteWizard";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import type { Workflow } from "../types";
 
 interface WorkflowsPageProps {
@@ -22,6 +23,7 @@ interface WorkflowsPageProps {
 
 const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     const navigate = useNavigate();
+    const toast = useToast();
     const [includeArchived, setIncludeArchived] = useState(false);
     const [filters, setFilters] = useState<FilterValue>({
         searchText: "",
@@ -106,8 +108,18 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                 workflowId: workflow.workflowId,
             });
             setArchiveConfirmWorkflow(null);
+            toast.success("Workflow archived", {
+                description: workflow.workflowName || workflow.workflowId,
+            });
         } catch (err) {
-            console.error("Failed to archive workflow:", err);
+            // Close the confirm — it has no error slot, so leaving it open would repeat the same
+            // prompt with no indication of the outcome — and report the failure as a toast.
+            setArchiveConfirmWorkflow(null);
+            toast.error("Archive failed", {
+                description: `${workflow.workflowName || workflow.workflowId}: ${toastErrorMessage(
+                    err
+                )}`,
+            });
         }
     };
 
@@ -138,6 +150,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                     navigate(
                         `/executions?workflowId=${workflow.workflowId}&workflowDatabaseId=${workflow.databaseId}`
                     ),
+                hidden: !can("GET", "/workflows/executions"),
             },
             {
                 label: "Archive",
@@ -148,7 +161,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
         ];
 
         return (
-            <div className="flex items-center justify-between p-3 bg-surface-container border border-border-default rounded hover:bg-surface-hover">
+            <div className="orch-outline flex items-center justify-between px-3 py-1.5 bg-surface-container border border-border-default rounded hover:bg-surface-hover">
                 <div className="flex-1">
                     <div className="flex items-center gap-2">
                         <span className="font-semibold text-text-primary">
@@ -167,7 +180,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                     </div>
                     <div className="text-sm text-text-secondary mt-1">{workflow.workflowId}</div>
                     <div className="text-sm text-text-secondary mt-1">
-                        <span className="mr-3">Database: {workflow.databaseId}</span>
+                        <span className="mr-3">Workflow Database: {workflow.databaseId}</span>
                         {workflow.category && (
                             <span className="mr-3">Category: {workflow.category}</span>
                         )}
@@ -206,9 +219,9 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
     const canCreateWorkflow = can("POST", "/database/{databaseId}/workflows");
 
     return (
-        <div className="orchestration-root px-6 pb-6 pt-4 space-y-4 bg-surface min-h-full">
+        <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold text-text-primary">Workflows</h1>
+                <h1 className="text-text-primary">Workflows</h1>
                 {canCreateWorkflow && (
                     <button
                         onClick={() => {
@@ -252,7 +265,7 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                                 ? [
                                       {
                                           key: "databaseId",
-                                          label: "Database",
+                                          label: "Workflow Database",
                                           options: databaseOptions,
                                       },
                                   ]

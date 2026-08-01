@@ -29,7 +29,10 @@ def _get_json(s3_location):
             return None
     try:
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            tmp_path = tmp.name
+            # The handle is used only for its path: nothing is written to it, and delete=False
+            # keeps the file in place for the download below, which the AWS CLI overwrites.
+            # There is no buffered content to flush.
+            tmp_path = tmp.name  # nosemgrep: tempfile-without-flush
         result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
             ["aws", "s3", "cp", s3_location, tmp_path],
             capture_output=True, text=True

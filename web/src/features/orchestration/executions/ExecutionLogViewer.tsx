@@ -23,6 +23,13 @@ type LogSource = "full" | "truncated";
 // pipelineExecutionId scoping the search to that single pipeline step.
 const WHOLE_EXECUTION = "__execution__";
 
+// logsSource values the endpoint reports for the text it returned.
+const LOGS_SOURCE_LABELS: Record<string, string> = {
+    stored: "Stored",
+    live: "Live (CloudWatch)",
+    sfnHistory: "Execution history (Step Functions)",
+};
+
 const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pipelines }) => {
     const [scope, setScope] = useState<string>(WHOLE_EXECUTION);
     const [source, setSource] = useState<LogSource>("full");
@@ -30,6 +37,9 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
     const [logText, setLogText] = useState<string>("");
     const [emptyReason, setEmptyReason] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    // Where the returned text actually came from ("stored" | "live" | "sfnHistory"); Stored mode
+    // falls back to live CloudWatch and the Step Functions history server-side.
+    const [logsSource, setLogsSource] = useState<string | null>(null);
 
     // Steps that carry a pipelineExecutionId can be scoped individually.
     const scopedPipelines = (pipelines || []).filter((p) => p && p.pipelineExecutionId);
@@ -38,6 +48,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
         setLoading(true);
         setErrorMsg(null);
         setEmptyReason(null);
+        setLogsSource(null);
         try {
             const params: Record<string, string> = { mode: source };
             if (scope !== WHOLE_EXECUTION) params.pipelineExecutionId = scope;
@@ -47,12 +58,14 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 setLogText("");
                 return;
             }
-            setLogText(extractLogText(data));
-            if (!extractLogText(data)) {
+            const text = extractLogText(data);
+            setLogText(text);
+            setLogsSource(typeof data.logsSource === "string" ? data.logsSource : null);
+            if (!text) {
                 setEmptyReason(
                     source === "full"
                         ? "No log events found for this scope yet. Logs can take a short time to appear in CloudWatch after a run completes."
-                        : "No stored logs for this scope."
+                        : "No stored logs for this scope. Switch Source to Live (CloudWatch) — it also reads the sub-process logs this step registered and the Step Functions history."
                 );
             }
         } catch (err: any) {
@@ -110,6 +123,12 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 >
                     {loading ? "Loading…" : "Refresh"}
                 </button>
+
+                {logsSource && !loading && (
+                    <span className="text-sm text-text-secondary">
+                        Source: {LOGS_SOURCE_LABELS[logsSource] || logsSource}
+                    </span>
+                )}
             </div>
 
             {loading ? (

@@ -19,10 +19,10 @@
             "fileMetadata": false,
             "fileAttributes": false
         },
-        "requireTemplate": false,
+        "requireTemplate": true,
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
-            "allow": ["*.pt"],
+            "allow": ["*.json"],
             "exclude": []
         }
     }

@@ -5,17 +5,18 @@
 
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useTemplates, useTemplateMutations, usePipeline } from "../api/queries";
+import { useTemplate, useTemplateMutations, usePipeline } from "../api/queries";
 import type { Template, ConfigFormat, TagSchemaField } from "../types";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm from "../components/DynamicTagForm";
-import SystemTagHelp from "../components/SystemTagHelp";
+import SystemTagHelp, { CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS } from "../components/SystemTagHelp";
 import TagSchemaBuilder from "./TagSchemaBuilder";
 import TemplateOverridesEditor from "./TemplateOverridesEditor";
 import Stepper from "../components/Stepper";
 import InfoTooltip from "../components/InfoTooltip";
 import Breadcrumb from "../components/Breadcrumb";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 
 interface TemplateFormProps {
     mode: "create" | "edit";
@@ -26,6 +27,10 @@ interface TemplateFormProps {
 }
 
 const CONFIG_FORMATS: ConfigFormat[] = ["json", "yaml", "openjd", "xml", "raw"];
+
+// Mirrors templateBodyStorage.ABSOLUTE_CAP_BYTES — the server rejects a larger combined body.
+const TEMPLATE_BODY_CAP_MB = 5;
+const TEMPLATE_BODY_CAP_BYTES = TEMPLATE_BODY_CAP_MB * 1024 * 1024;
 
 const STEPS = [
     { id: "basic", label: "Basic" },
@@ -39,6 +44,7 @@ const STEPS = [
  * the pipeline's Templates list. Steps: Basic → Configuration → Tags → Review.
  */
 const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineId, initial }) => {
+    const toast = useToast();
     const navigate = useNavigate();
     const { createTemplate, updateTemplate } = useTemplateMutations();
     const { data: pipeline } = usePipeline(databaseId, pipelineId);
@@ -54,6 +60,12 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     // Structured overrides object (subset of pipeline systemConfig keys); empty = inherit pipeline.
     const [overrides, setOverrides] = useState<Record<string, any>>(initial?.overrides || {});
     const [tagSchema, setTagSchema] = useState<TagSchemaField[]>(initial?.tagSchema || []);
+    // webFormJson is an independently authorable form definition (CLI/API), so it is rewritten from
+    // the tag schema only once the tag schema is edited here.
+    const [tagSchemaEdited, setTagSchemaEdited] = useState(false);
+    // The tag builder withholds a row it considers invalid, so the parent schema would silently
+    // lag the display. Advancing and saving are blocked while a row is invalid.
+    const [tagSchemaValid, setTagSchemaValid] = useState(true);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [wizardStep, setWizardStep] = useState<string>("basic");
 
@@ -61,18 +73,36 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     const isLastStep = stepIndex === STEPS.length - 1;
 
     // Per-step validation: the Basic step requires a template name before advancing (and it is
-    // required to save at all). Other steps have no blocking requirements.
+    // required to save at all); the Tags step requires every tag row to be valid.
     const basicError = !templateName.trim() ? "Template name is required" : null;
-    const canAdvance = wizardStep === "basic" ? !basicError : true;
+    const tagsError = !tagSchemaValid ? "Fix the highlighted tag definitions to continue" : null;
+    const canAdvance =
+        wizardStep === "basic" ? !basicError : wizardStep === "tags" ? !tagsError : true;
 
     const done = () => navigate(`/databases/${databaseId}/pipelines/${pipelineId}/templates`);
+
+    const dirty =
+        templateName !== (initial?.templateName || "") ||
+        description !== (initial?.description || "") ||
+        configFormat !== (initial?.configFormat || "json") ||
+        configBody !== (initial?.configBody || "") ||
+        inputInstructions !== (initial?.inputInstructions || "") ||
+        allowCustomEdit !== (initial?.allowCustomEdit || false) ||
+        isDefault !== (initial?.isDefault || false) ||
+        JSON.stringify(overrides) !== JSON.stringify(initial?.overrides || {}) ||
+        JSON.stringify(tagSchema) !== JSON.stringify(initial?.tagSchema || []);
+
+    const cancel = () => {
+        if (dirty && !confirm("Discard the unsaved changes to this template?")) return;
+        done();
+    };
 
     const handleSave = async () => {
         const configBodySize = new Blob([configBody]).size;
         const webFormJsonSize = new Blob([JSON.stringify(tagSchema)]).size;
-        if (configBodySize + webFormJsonSize > 6 * 1024 * 1024) {
+        if (configBodySize + webFormJsonSize > TEMPLATE_BODY_CAP_BYTES) {
             setSaveError(
-                `Combined size exceeds the 6MB limit (current: ${(
+                `Combined size exceeds the ${TEMPLATE_BODY_CAP_MB}MB limit (current: ${(
                     (configBodySize + webFormJsonSize) /
                     1024 /
                     1024
@@ -90,9 +120,17 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
             allowCustomEdit,
             isDefault,
             overrides,
-            tagSchema,
-            webFormJson: JSON.stringify(tagSchema),
         };
+
+        // Only write the tag schema back when it was actually loaded for editing. The backend
+        // preserves the stored schema when the field is omitted, so an edit form that never
+        // received it (e.g. hydrated from a list response) cannot erase it.
+        if (mode === "create" || initial?.tagSchema !== undefined) {
+            templateData.tagSchema = tagSchema;
+        }
+        if (tagSchemaEdited) {
+            templateData.webFormJson = JSON.stringify(tagSchema);
+        }
 
         try {
             if (mode === "edit" && initial) {
@@ -103,21 +141,37 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                     body: templateData,
                 });
             } else {
-                // templateId is generated by the backend when omitted; the web does not set it.
+                // templateId is sent as null so the backend auto-generates it (an empty string is
+                // rejected, min_length=1).
                 await createTemplate.mutateAsync({
                     databaseId,
                     pipelineId,
-                    body: { databaseId, pipelineId, ...templateData } as Template,
+                    body: {
+                        databaseId,
+                        pipelineId,
+                        templateId: null,
+                        ...templateData,
+                    } as unknown as Template,
                 });
             }
+            // The page navigates away on success, so the toast is the only confirmation.
+            toast.success(mode === "edit" ? "Template saved" : "Template created", {
+                description: templateName || undefined,
+            });
             done();
-        } catch (err: any) {
-            setSaveError(err?.message || "Failed to save template");
+        } catch (err) {
+            // Kept inline next to the Save button AND raised as a toast for a long form where the
+            // inline message can sit off-screen.
+            const message = toastErrorMessage(err, "Failed to save template");
+            setSaveError(message);
+            toast.error(mode === "edit" ? "Save failed" : "Create failed", {
+                description: message,
+            });
         }
     };
 
     return (
-        <div className="orchestration-root px-6 pb-6 pt-4 space-y-6 bg-surface min-h-full">
+        <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
             <div className="space-y-2">
                 <Breadcrumb
                     items={[
@@ -138,7 +192,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         },
                     ]}
                 />
-                <h1 className="text-2xl font-semibold text-text-primary">
+                <h1 className="text-text-primary">
                     {mode === "create" ? "Create Template" : "Edit Template"}
                 </h1>
             </div>
@@ -198,6 +252,12 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 </span>
                                 <InfoTooltip text="The default template is pre-selected first on the execute form, and is auto-selected by the backend when a require-template pipeline runs without a template chosen. Only one template per pipeline can be the default — setting this clears any prior default." />
                             </label>
+                            {isDefault && (
+                                <p className="text-xs text-vams-warning mt-1">
+                                    A pipeline can have only one default template. Saving this will
+                                    unset the default on any other template of this pipeline.
+                                </p>
+                            )}
                         </div>
                     </>
                 )}
@@ -223,7 +283,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         <div>
                             <div className="flex items-center gap-1.5 text-sm font-medium mb-1">
                                 Config Body
-                                <InfoTooltip text="The configuration body delivered to the pipeline. Use {{tagName}} placeholders that the tag schema fills at launch." />
+                                <InfoTooltip text={CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS} />
                             </div>
                             <ConfigEditor
                                 value={configBody}
@@ -254,7 +314,11 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 Pipeline setting overrides
                                 <InfoTooltip text="Optional. Overrides the pipeline's input-handling settings for executions that use this template (input file count, asset selection rules, metadata inputs, input-file filters). This does NOT edit the config body. Anything left un-toggled inherits the pipeline's value." />
                             </div>
-                            <TemplateOverridesEditor value={overrides} onChange={setOverrides} />
+                            <TemplateOverridesEditor
+                                value={overrides}
+                                onChange={setOverrides}
+                                inheritedAssetScope={pipeline?.systemConfig?.assetScope}
+                            />
                         </div>
                     </>
                 )}
@@ -271,7 +335,14 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 input field per tag. They fill the <code>{"{{tagName}}"}</code>{" "}
                                 placeholders in the config body.
                             </p>
-                            <TagSchemaBuilder value={tagSchema} onChange={setTagSchema} />
+                            <TagSchemaBuilder
+                                value={tagSchema}
+                                onChange={(next) => {
+                                    setTagSchema(next);
+                                    setTagSchemaEdited(true);
+                                }}
+                                onValidityChange={setTagSchemaValid}
+                            />
                         </div>
                         {tagSchema.length > 0 && (
                             <div>
@@ -309,7 +380,19 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         <div>
                             <span className="text-text-secondary">Tags:</span> {tagSchema.length}
                         </div>
+                        {isDefault && (
+                            <p className="text-xs text-vams-warning pt-1">
+                                Saving will make this the default template for this pipeline and
+                                unset the default on any other template of this pipeline.
+                            </p>
+                        )}
                     </div>
+                )}
+
+                {tagsError && (
+                    <p className="text-vams-error text-sm">
+                        {tagsError} — the tag list shown may differ from what would be saved.
+                    </p>
                 )}
 
                 {saveError && (
@@ -322,7 +405,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
             </div>
 
             <div className="flex justify-between gap-2">
-                <button onClick={done} className={btnSecondary}>
+                <button onClick={cancel} className={btnSecondary}>
                     Cancel
                 </button>
                 <div className="flex gap-2">
@@ -346,7 +429,10 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         <button
                             onClick={handleSave}
                             disabled={
-                                !!basicError || createTemplate.isPending || updateTemplate.isPending
+                                !!basicError ||
+                                !!tagsError ||
+                                createTemplate.isPending ||
+                                updateTemplate.isPending
                             }
                             className={btnPrimary}
                         >
@@ -363,13 +449,17 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
 
 export default TemplateForm;
 
-/** Edit-mode wrapper that resolves the template from the pipeline's template list by id. */
+/**
+ * Edit-mode wrapper that loads the single template by id. This must use the single-template GET
+ * (not the templates list): the list response omits tagSchema and blanks S3-offloaded bodies, and
+ * the form writes every field back on save.
+ */
 export const TemplateFormEditLoader: React.FC<{
     databaseId: string;
     pipelineId: string;
     templateId: string;
 }> = ({ databaseId, pipelineId, templateId }) => {
-    const { data: templates = [], isLoading } = useTemplates(databaseId, pipelineId);
+    const { data: template, isLoading } = useTemplate(databaseId, pipelineId, templateId);
     if (isLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
@@ -380,7 +470,6 @@ export const TemplateFormEditLoader: React.FC<{
             </div>
         );
     }
-    const template = templates.find((t) => t.templateId === templateId);
     if (!template) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">

@@ -24,4 +24,14 @@ describe("StatusBadge", () => {
         render(<StatusBadge status="RUNNING" />);
         expect(screen.getByText(/running/i)).toBeInTheDocument();
     });
+
+    it("renders an unmapped Step Functions status without throwing", () => {
+        render(<StatusBadge status={"PENDING_REDRIVE" as any} />);
+        expect(screen.getByText("PENDING_REDRIVE")).toBeInTheDocument();
+    });
+
+    it("renders an empty status as Unknown", () => {
+        render(<StatusBadge status={"" as any} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
 });

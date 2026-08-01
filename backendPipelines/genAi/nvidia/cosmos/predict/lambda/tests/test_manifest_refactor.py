@@ -86,9 +86,12 @@ class TestVamsExecute:
             "outputS3AssetMetadataPath": "s3://abkt/legacy/metadata/",
             "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/legacy/genAi/cosmos/predict",
             "inputConfigurationS3Location": "s3://abkt/pipelines/workflowExecutionInputs/E1/pipeline1/config.json",
-            # Inline content that MUST NOT cross the vamsExecute boundary.
+            # Inline content: the handler reads the S3 metadata/configuration objects first and only
+            # falls back to these fields when the object is absent (transition support). The prompt
+            # resolves CONFIG-FIRST, so an inline configuration prompt is a real source — tests that
+            # measure the metadata SOURCE rather than precedence drop it explicitly.
             "inputMetadata": {"VAMS": {"assetMetadata": {"X": "y"}}},
-            "inputParameters": '{"PROMPT": "ignored-legacy"}',
+            "inputParameters": '{"PROMPT": "from-inline-config"}',
             "executingUserName": "user@x",
             "assetId": "legacyAsset",
             "databaseId": "legacyDb",
@@ -186,11 +189,15 @@ class TestVamsExecute:
 
         s3.get_object.side_effect = get_object
         invoke = MagicMock(return_value={"StatusCode": 200})
+        # No configuration prompt: this test measures that the prompt is read from the S3 METADATA at
+        # the boundary. The prompt resolves config-first, so a configuration value would win and the
+        # test would no longer be measuring what it claims.
+        body = self._body(variant)
+        body.pop("inputParameters")
         with patch.object(mod, "s3_client", s3), patch.object(mod.lambda_client, "invoke", invoke):
-            resp = mod.lambda_handler({"body": json.dumps(self._body(variant))}, MagicMock())
+            resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
         assert resp["statusCode"] == 200
         payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
-        # The boundary extraction produces the value read from S3 (not the inline legacy field).
         assert payload["cosmosPrompt"] == "a calm robot"
 
     def test_prompt_same_value_whether_metadata_from_s3_or_inline(self, variant):
@@ -216,8 +223,13 @@ class TestVamsExecute:
 
         s3a.get_object.side_effect = get_object_a
         invoke_a = MagicMock(return_value={"StatusCode": 200})
+        # No configuration prompt in either arm: this compares the metadata SOURCE (S3 envelope vs
+        # inline legacy field). The prompt resolves config-first, so a configuration value would win in
+        # both arms and the comparison would prove nothing.
+        body_a = self._body(variant)
+        body_a.pop("inputParameters")
         with patch.object(mod, "s3_client", s3a), patch.object(mod.lambda_client, "invoke", invoke_a):
-            mod.lambda_handler({"body": json.dumps(self._body(variant))}, MagicMock())
+            mod.lambda_handler({"body": json.dumps(body_a)}, MagicMock())
         prompt_from_s3 = json.loads(invoke_a.call_args.kwargs["Payload"].decode("utf-8"))["cosmosPrompt"]
 
         # (b) Legacy inline fallback: no manifest, no metadata file; inline metadata carries prompt.
@@ -228,6 +240,7 @@ class TestVamsExecute:
         body = self._body(variant)
         body.pop("inputManifestS3Location")
         body.pop("inputConfigurationS3Location")
+        body.pop("inputParameters")
         body["inputMetadata"] = {"VAMS": {cfg["metadataSection"]: {"COSMOS_PREDICT_PROMPT": prompt}}}
         with patch.object(mod, "s3_client", s3b), patch.object(mod.lambda_client, "invoke", invoke_b):
             mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
@@ -291,6 +304,8 @@ class TestVamsExecute:
         invoke = MagicMock(return_value={"StatusCode": 200})
         body = self._body(variant)
         body.pop("inputManifestS3Location")
+        # No configuration prompt: this asserts the LEGACY metadata path supplies the prompt.
+        body.pop("inputParameters")
         body["inputMetadata"] = {"VAMS": {cfg["metadataSection"]: {"COSMOS_PREDICT_PROMPT": "legacy prompt"}}}
         with patch.object(mod, "s3_client", s3), patch.object(mod.lambda_client, "invoke", invoke):
             resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())

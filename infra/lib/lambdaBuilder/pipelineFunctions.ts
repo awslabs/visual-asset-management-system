@@ -30,6 +30,10 @@ import {
 } from "../helper/security";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 
+// Auto-provisioned pipeline Lambdas are named at runtime by pipelineService with a fixed lowercase
+// 'vams-' prefix that does not embed config.name, so both patterns are granted.
+const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
+
 function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey) {
     const newPipelineLambdaRole = new iam.Role(scope, "lambdaPipelineRole", {
         assumedBy: Service("LAMBDA").Principal,
@@ -181,7 +185,10 @@ export function buildPipelineServiceV2Function(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
-            resources: [IAMArn("*" + config.name + "*").lambda],
+            resources: [
+                IAMArn("*" + config.name + "*").lambda,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).lambda,
+            ],
         })
     );
     fun.addToRolePolicy(

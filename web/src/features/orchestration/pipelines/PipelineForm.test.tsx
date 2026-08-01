@@ -33,9 +33,11 @@ const createWrapper = () => {
             mutations: { retry: false },
         },
     });
-    return ({ children }: { children: React.ReactNode }) => (
+    const Wrapper = ({ children }: { children: React.ReactNode }) => (
         <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
+    Wrapper.displayName = "TestQueryClientWrapper";
+    return Wrapper;
 };
 
 describe("PipelineForm", () => {
@@ -84,10 +86,13 @@ describe("PipelineForm", () => {
         expect(options).not.toContain("DeadlineCloud");
     });
 
-    it("hides DeadlineCloud option when GOVCLOUD flag is present", () => {
+    it("gates DeadlineCloud on its own feature flag alone, not on GOVCLOUD", () => {
+        // The web layer deliberately does NOT re-check GOVCLOUD: getConfig() refuses to synthesize a
+        // stack that enables Deadline Cloud in GovCloud or any non-'aws' partition, so the two flags
+        // cannot legitimately co-exist. The flag's presence is therefore sufficient on its own.
         const { appCache } = require("../../../services/appCache");
         appCache.getItem.mockReturnValue({
-            featuresEnabled: ["DEADLINECLOUD_PIPELINES", "GOVCLOUD"],
+            featuresEnabled: ["DEADLINECLOUD_PIPELINES"],
         });
 
         render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
@@ -96,7 +101,7 @@ describe("PipelineForm", () => {
 
         const select = screen.getByLabelText(/Execution Type/);
         const options = Array.from((select as HTMLSelectElement).options).map((opt) => opt.value);
-        expect(options).not.toContain("DeadlineCloud");
+        expect(options).toContain("DeadlineCloud");
     });
 
     it("shows DeadlineCloud fields when selected and locks waitForCallback to Enabled", async () => {
@@ -270,8 +275,8 @@ describe("PipelineForm", () => {
         });
 
         await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
-        // The optional timeout fields reject an empty string, so give them valid values. Both share
-        // the "1-604800" placeholder (Task Timeout, Task Heartbeat Timeout).
+        // Both timeout inputs share the "1-604800" placeholder (Task Timeout, Task Heartbeat
+        // Timeout).
         const timeouts = screen.getAllByPlaceholderText(/1-604800/);
         await user.type(timeouts[0], "3600");
         await user.type(timeouts[1], "60");
@@ -289,6 +294,152 @@ describe("PipelineForm", () => {
         // Acknowledging closes the form.
         await user.click(screen.getByRole("button", { name: /Acknowledge/ }));
         expect(onDone).toHaveBeenCalled();
+    });
+
+    it("sends pipelineId as null in the create body when the user supplied none", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = jest.fn().mockResolvedValue({ pipeline: { pipelineId: "gen" } });
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        const timeouts = screen.getAllByPlaceholderText(/1-604800/);
+        await user.type(timeouts[0], "3600");
+        await user.type(timeouts[1], "60");
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+        const body = mutateAsync.mock.calls[0][0];
+        // The backend auto-generates an id for null, but rejects an empty string (min_length=1) —
+        // sending "" makes every create fail with a 400.
+        expect(body.pipelineId).toBeNull();
+        expect(body.databaseId).toBe("db1");
+        expect(body.pipelineName).toBe("New Pipe");
+    });
+
+    it("submits with both timeout fields left blank", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = jest.fn().mockResolvedValue({ pipeline: { pipelineId: "p1" } });
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+        expect(screen.queryByText(/Must be an integer between/)).not.toBeInTheDocument();
+    });
+
+    it("submits a DeadlineCloud pipeline with the optional numeric fields left blank", async () => {
+        const user = userEvent.setup();
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({ featuresEnabled: ["DEADLINECLOUD_PIPELINES"] });
+        const mutateAsync = jest.fn().mockResolvedValue({ pipeline: { pipelineId: "p1" } });
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        await user.selectOptions(screen.getByLabelText(/Execution Type/), "DeadlineCloud");
+        await user.type(screen.getByLabelText(/Farm ID/), "farm-1");
+        await user.type(screen.getByLabelText(/Queue ID/), "queue-1");
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+        const dc = mutateAsync.mock.calls[0][0].executionConfig.deadlineCloud;
+        expect(dc.priority).toBeUndefined();
+        expect(dc.maxRetriesPerTask).toBeUndefined();
+        expect(dc.maxFailedTasksCount).toBeUndefined();
+    });
+
+    it("does not submit again after a save that returned warnings", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = jest
+            .fn()
+            .mockResolvedValue({ pipeline: { pipelineId: "p1" }, warnings: ["heads up"] });
+        const { useCreatePipeline } = require("../api/queries");
+        (useCreatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        render(<PipelineForm mode="create" databaseId="db1" onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.type(screen.getByLabelText(/Pipeline Name/), "New Pipe");
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Pipeline saved with warnings/)).toBeInTheDocument();
+        });
+        // The entity already exists — the footer submit is withdrawn and a further submit is a no-op.
+        expect(screen.queryByRole("button", { name: /^Create$/ })).not.toBeInTheDocument();
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    });
+
+    it("re-seeds every field when the edited pipeline changes without a remount", async () => {
+        const mutateAsync = jest.fn().mockResolvedValue({ pipeline: { pipelineId: "b" } });
+        const { useUpdatePipeline } = require("../api/queries");
+        (useUpdatePipeline as jest.Mock).mockReturnValue({ mutateAsync });
+
+        const pipelineA = {
+            pipelineId: "aaa",
+            pipelineName: "Alpha",
+            databaseId: "db1",
+            category: "catA",
+            executionConfig: {
+                executionType: "Lambda" as const,
+                waitForCallback: "Disabled" as const,
+            },
+            systemConfig: { inputFileFilters: { allow: [".a"], exclude: [] } },
+        };
+        const pipelineB = {
+            pipelineId: "bbb",
+            pipelineName: "Beta",
+            databaseId: "db1",
+            category: "catB",
+            executionConfig: {
+                executionType: "Lambda" as const,
+                waitForCallback: "Disabled" as const,
+            },
+            systemConfig: { inputFileFilters: { allow: [".b"], exclude: [] } },
+        };
+
+        const Wrapper = createWrapper();
+        const { rerender } = render(
+            <Wrapper>
+                <PipelineForm mode="edit" databaseId="db1" initial={pipelineA} onDone={jest.fn()} />
+            </Wrapper>
+        );
+        expect(screen.getByLabelText(/Pipeline Name/)).toHaveValue("Alpha");
+
+        rerender(
+            <Wrapper>
+                <PipelineForm mode="edit" databaseId="db1" initial={pipelineB} onDone={jest.fn()} />
+            </Wrapper>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/Pipeline Name/)).toHaveValue("Beta");
+        });
+        fireEvent.submit(document.getElementById("pipeline-form")!);
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+        const call = mutateAsync.mock.calls[0][0];
+        expect(call.pipelineId).toBe("bbb");
+        expect(call.body.pipelineName).toBe("Beta");
+        expect(call.body.category).toBe("catB");
+        expect(call.body.systemConfig.inputFileFilters.allow).toEqual([".b"]);
     });
 
     it("closes immediately (no warning banner) when a save returns no warnings", async () => {

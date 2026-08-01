@@ -3547,7 +3547,9 @@ class APIClient:
             return self._pwe_body(response)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                if database_id:
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                raise APIError("Failed to list pipelines: the /pipelines route returned 404")
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list pipelines: {self._pwe_error_message(e)}")
@@ -3626,11 +3628,27 @@ class APIClient:
     # ---- Pipeline templates -------------------------------------------
 
     def list_pipeline_templates(self, database_id: str, pipeline_id: str) -> Dict[str, Any]:
-        """List a pipeline's templates. GET .../pipelines/{pipelineId}/templates."""
+        """List a pipeline's templates. GET .../pipelines/{pipelineId}/templates.
+
+        The handler returns one page plus a NextToken, so the pages are drained here and returned as
+        a single Items list."""
         try:
             endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
-            response = self.get(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            body = self._pwe_body(self.get(endpoint, include_auth=True))
+            message = body.get('message') if isinstance(body, dict) else None
+            if not isinstance(message, dict):
+                return body
+            items = list(message.get('Items') or [])
+            next_token = message.get('NextToken')
+            while next_token:
+                page = self._pwe_body(self.get(endpoint, include_auth=True,
+                                               params={'startingToken': next_token}))
+                page_message = page.get('message') if isinstance(page, dict) else None
+                if not isinstance(page_message, dict):
+                    break
+                items.extend(page_message.get('Items') or [])
+                next_token = page_message.get('NextToken')
+            return {'message': {'Items': items}}
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")

@@ -345,3 +345,479 @@ class TestUpdateConfigBodyJsonValidation:
         params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
         resp = lambda_handler(_event("PUT", path, params, {"configBody": '{"a": 1}'}), MagicMock())
         assert resp["statusCode"] == 200
+
+
+@pytest.mark.unit
+class TestShrinkToInlineCleanupOrdering:
+    """A shrink-to-inline update deletes the prior offloaded S3 objects only AFTER the row is
+    rewritten, so a failed write leaves a stored row whose S3 keys still resolve."""
+
+    S3_ROW = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1",
+              "configFormat": "json", "bodyStorage": "s3",
+              "configBodyS3Key": "pipelines/db1/pipe1/tmpl1/configBody",
+              "webFormS3Key": "pipelines/db1/pipe1/tmpl1/webForm"}
+    PATH = BASE_PATH + "/tmpl1"
+    PARAMS = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
+
+    def _patches(self):
+        return (patch(f"{MOD}._get_template_row", return_value=dict(self.S3_ROW)),
+                patch(f"{MOD}._default_bucket_name", return_value="b"),
+                patch(f"{MOD}._rehydrate_template",
+                      return_value={"configBody": '{"big": 1}', "webFormJson": ""}))
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_objects_deleted_after_successful_write(self, mock_enforcer, mock_claims, mock_parent,
+                                                    mock_table, mock_s3):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        mock_table.return_value = table
+        row_patch, bucket_patch, rehydrate_patch = self._patches()
+        with row_patch, bucket_patch, rehydrate_patch:
+            resp = lambda_handler(
+                _event("PUT", self.PATH, self.PARAMS, {"configBody": '{"a": 1}'}), MagicMock())
+        assert resp["statusCode"] == 200
+        table.put_item.assert_called_once()
+        deleted = {c.kwargs["Key"] for c in mock_s3.delete_object.call_args_list}
+        assert deleted == {self.S3_ROW["configBodyS3Key"], self.S3_ROW["webFormS3Key"]}
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_objects_preserved_when_write_fails(self, mock_enforcer, mock_claims, mock_parent,
+                                                mock_table, mock_s3):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        table.put_item.side_effect = RuntimeError("throttled")
+        mock_table.return_value = table
+        row_patch, bucket_patch, rehydrate_patch = self._patches()
+        with row_patch, bucket_patch, rehydrate_patch:
+            resp = lambda_handler(
+                _event("PUT", self.PATH, self.PARAMS, {"configBody": '{"a": 1}'}), MagicMock())
+        assert resp["statusCode"] == 500
+        # The stored row still points at these keys, so they must survive the failed write.
+        mock_s3.delete_object.assert_not_called()
+
+
+@pytest.mark.unit
+class TestListTemplatesPagination:
+    """The templates list returns one bounded page plus a NextToken rather than accumulating every
+    template (an inline body can be up to 320KB, so an unbounded list can exceed the 6MB limit)."""
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_single_page_with_next_token(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        table.query.return_value = {
+            "Items": [{"templateId": "t1", "pipelineDatabaseId": "db1", "pipelineId": "pipe1"}],
+            "LastEvaluatedKey": {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "t1"},
+        }
+        mock_table.return_value = table
+        resp = lambda_handler(_event("GET", BASE_PATH, BASE_PARAMS), MagicMock())
+        assert resp["statusCode"] == 200
+        # One DynamoDB query only: the handler does NOT drain every page into one response.
+        table.query.assert_called_once()
+        assert table.query.call_args.kwargs["Limit"] == 10
+        data = json.loads(resp["body"])["message"]
+        assert [i["templateId"] for i in data["Items"]] == ["t1"]
+        assert data["NextToken"]
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_starting_token_resumes_the_query(self, mock_enforcer, mock_claims, mock_parent,
+                                              mock_table):
+        import base64
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        mock_table.return_value = table
+        last_key = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "t1"}
+        token = base64.b64encode(json.dumps(last_key).encode("utf-8")).decode("utf-8")
+        event = _event("GET", BASE_PATH, BASE_PARAMS)
+        event["queryStringParameters"] = {"startingToken": token, "pageSize": "5"}
+        resp = lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        kwargs = table.query.call_args.kwargs
+        assert kwargs["ExclusiveStartKey"] == last_key
+        assert kwargs["Limit"] == 5
+        # The final page carries no NextToken, so a draining client stops.
+        assert json.loads(resp["body"])["message"]["NextToken"] is None
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_page_size_clamped_to_maximum(self, mock_enforcer, mock_claims, mock_parent, mock_table):
+        # A caller cannot widen the page past the ceiling that keeps a worst-case page under 6MB.
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        mock_table.return_value = table
+        event = _event("GET", BASE_PATH, BASE_PARAMS)
+        event["queryStringParameters"] = {"pageSize": "5000"}
+        resp = lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        assert table.query.call_args.kwargs["Limit"] == 10
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_non_numeric_page_size_falls_back_to_default(self, mock_enforcer, mock_claims,
+                                                         mock_parent, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        mock_table.return_value = table
+        event = _event("GET", BASE_PATH, BASE_PARAMS)
+        event["queryStringParameters"] = {"pageSize": "abc"}
+        resp = lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 200
+        assert table.query.call_args.kwargs["Limit"] == 10
+
+
+def _action_enforcer(allowed_actions):
+    """Enforcer whose Tier-2 verdict depends on the action, so a role holding the shared execute/create
+    POST action but no management PUT can be expressed."""
+    inst = MagicMock()
+    inst.enforceAPI.return_value = True
+    inst.enforce.side_effect = lambda obj, action: action in allowed_actions
+    return inst
+
+
+@pytest.mark.unit
+class TestParentPipelineConstraintFields:
+    """The parent-pipeline Tier-2 object carries the flat pipelineExecutionType ABAC field (derived
+    from executionConfig) so execution-type constraints apply to template operations too."""
+
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_execution_type_surfaced_to_enforce(self, mock_enforcer, mock_claims, mock_table):
+        from backend.backend.handlers.pipelines import pipelineTemplateService as pts
+        claims = {"tokens": ["u"]}
+        mock_claims.return_value = claims
+        enforcer = _enforcer()
+        mock_enforcer.return_value = enforcer
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {
+            "databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P",
+            "executionConfig": {"executionType": "DeadlineCloud"},
+        }}
+        mock_table.return_value = table
+        pts._enforce_parent_pipeline("db1", "pipe1", "GET", claims)
+        obj = enforcer.enforce.call_args.args[0]
+        assert obj["object__type"] == "pipeline"
+        assert obj["name"] == "P"
+        assert obj["pipelineExecutionType"] == "DeadlineCloud"
+
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_execution_type_deny_blocks_template_read(self, mock_enforcer, mock_claims, mock_table):
+        # A deny keyed on pipelineExecutionType must fire for the template routes, not just the
+        # pipeline routes.
+        mock_claims.return_value = {"tokens": ["u"]}
+        inst = MagicMock()
+        inst.enforceAPI.return_value = True
+        inst.enforce.side_effect = lambda obj, action: obj.get(
+            "pipelineExecutionType") != "DeadlineCloud"
+        mock_enforcer.return_value = inst
+        table = MagicMock()
+        table.get_item.return_value = {"Item": {
+            "databaseId": "db1", "pipelineId": "pipe1", "pipelineName": "P",
+            "executionConfig": {"executionType": "DeadlineCloud"},
+        }}
+        mock_table.return_value = table
+        resp = lambda_handler(_event("GET", BASE_PATH, BASE_PARAMS), MagicMock())
+        assert resp["statusCode"] == 403
+
+
+@pytest.mark.unit
+class TestGlobalScopeManagement:
+    """A GLOBAL pipeline's templates drive its behavior in every database, so reconfiguring them
+    requires pipeline management (PUT) permission on the GLOBAL scope."""
+
+    GLOBAL_PATH = "/database/GLOBAL/pipelines/pipe1/templates"
+    GLOBAL_PARAMS = {"databaseId": "GLOBAL", "pipelineId": "pipe1"}
+    GLOBAL_PIPELINE = {"databaseId": "GLOBAL", "pipelineId": "pipe1", "pipelineName": "P"}
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_global_template_denied_without_management(
+            self, mock_enforcer, mock_claims, mock_pipeline_table, mock_bucket, mock_get_row,
+            mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _action_enforcer({"GET", "POST"})  # run-only role
+        mock_pipeline_table.return_value = MagicMock(
+            get_item=MagicMock(return_value={"Item": self.GLOBAL_PIPELINE}))
+        mock_bucket.return_value = "b"
+        mock_get_row.return_value = None
+        table = MagicMock()
+        mock_table.return_value = table
+        body = {"templateName": "t", "configFormat": "json", "configBody": "{}", "isDefault": True}
+        resp = lambda_handler(_event("POST", self.GLOBAL_PATH, self.GLOBAL_PARAMS, body), MagicMock())
+        assert resp["statusCode"] == 403
+        table.put_item.assert_not_called()
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_create_global_template_allowed_with_management(
+            self, mock_enforcer, mock_claims, mock_pipeline_table, mock_bucket, mock_get_row,
+            mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _action_enforcer({"GET", "POST", "PUT", "DELETE"})
+        mock_pipeline_table.return_value = MagicMock(
+            get_item=MagicMock(return_value={"Item": self.GLOBAL_PIPELINE}))
+        mock_bucket.return_value = "b"
+        mock_get_row.return_value = None
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        mock_table.return_value = table
+        body = {"templateName": "t", "configFormat": "json", "configBody": "{}"}
+        resp = lambda_handler(_event("POST", self.GLOBAL_PATH, self.GLOBAL_PARAMS, body), MagicMock())
+        assert resp["statusCode"] == 200
+        table.put_item.assert_called_once()
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_read_global_template_allowed_without_management(
+            self, mock_enforcer, mock_claims, mock_pipeline_table, mock_table):
+        # Reading a GLOBAL pipeline's templates stays available to a run-only role.
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _action_enforcer({"GET", "POST"})
+        mock_pipeline_table.return_value = MagicMock(
+            get_item=MagicMock(return_value={"Item": self.GLOBAL_PIPELINE}))
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        mock_table.return_value = table
+        resp = lambda_handler(_event("GET", self.GLOBAL_PATH, self.GLOBAL_PARAMS), MagicMock())
+        assert resp["statusCode"] == 200
+
+
+@pytest.mark.unit
+class TestExistenceOracle:
+    """A missing parent pipeline is authorized before the 404 is returned, so an unauthorized caller
+    cannot use the 404-vs-403 difference as an existence oracle."""
+
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_missing_parent_denied_returns_403(self, mock_enforcer, mock_claims, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer(api=True, obj=False)  # Tier-2 deny
+        mock_table.return_value = MagicMock(get_item=MagicMock(return_value={}))
+        resp = lambda_handler(_event("GET", BASE_PATH, BASE_PARAMS), MagicMock())
+        assert resp["statusCode"] == 403
+
+    @patch(f"{MOD}._pipeline_table")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_missing_parent_authorized_returns_404(self, mock_enforcer, mock_claims, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_table.return_value = MagicMock(get_item=MagicMock(return_value={}))
+        resp = lambda_handler(_event("GET", BASE_PATH, BASE_PARAMS), MagicMock())
+        assert resp["statusCode"] == 404
+
+
+@pytest.mark.unit
+class TestTagSchemaRouteMatching:
+    """The tag-schema sub-route is dispatched via the master ApiRoute constant, so a template whose
+    templateId is literally 'tagSchema' reaches the template routes."""
+
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._tag_schema_table")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_template_named_tag_schema_is_a_template(self, mock_enforcer, mock_claims, mock_parent,
+                                                     mock_tag_table, mock_bucket, mock_get_row):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_bucket.return_value = "b"
+        mock_tag_table.return_value = MagicMock(query=MagicMock(return_value={"Items": []}))
+        mock_get_row.return_value = {"pipelineDatabaseId:pipelineId": "db1:pipe1",
+                                     "templateId": "tagSchema", "configFormat": "json",
+                                     "bodyStorage": "inline", "configBody": "{}"}
+        path = BASE_PATH + "/tagSchema"
+        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tagSchema"}
+        resp = lambda_handler(_event("GET", path, params), MagicMock())
+        assert resp["statusCode"] == 200
+        assert json.loads(resp["body"])["message"]["templateId"] == "tagSchema"
+
+
+@pytest.mark.unit
+class TestTagSchemaShrinkToInlineCleanup:
+    """A tag schema that shrinks back below the inline threshold deletes its now-unreferenced S3
+    object, and only after the row is rewritten."""
+
+    @patch(f"{MOD}.s3_client")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._tag_schema_table")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_prior_offloaded_object_deleted(self, mock_enforcer, mock_claims, mock_parent,
+                                            mock_bucket, mock_tag_table, mock_get_row, mock_s3):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_bucket.return_value = "b"
+        mock_get_row.return_value = {"templateId": "tmpl1"}
+        owner = "db1:pipe1:tmpl1"
+        prior_key = "pipelines/templates/db1/pipe1/tmpl1/tagSchema.json"
+        tag_table = MagicMock()
+        tag_table.query.return_value = {"Items": [{
+            "tagSchemaId": "existing-id", "pipelineDatabaseId:pipelineId:templateId": owner,
+            "bodyStorage": "s3", "fieldsS3Key": prior_key,
+        }]}
+        mock_tag_table.return_value = tag_table
+        path = BASE_PATH + "/tmpl1/tagSchema"
+        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
+        body = {"fields": [{"tagKey": "prompt", "type": "string"}]}
+        resp = lambda_handler(_event("PUT", path, params, body), MagicMock())
+        assert resp["statusCode"] == 200
+        saved = tag_table.put_item.call_args.kwargs["Item"]
+        assert saved["bodyStorage"] == "inline" and saved["fieldsS3Key"] == ""
+        mock_s3.delete_object.assert_called_once_with(Bucket="b", Key=prior_key)
+
+
+@pytest.mark.unit
+class TestFormatOnlyUpdateRevalidation:
+    """Changing only configFormat revalidates the stored body against the new format, so a
+    non-JSON body cannot end up declared as a json-format template."""
+
+    ROW = {"pipelineDatabaseId:pipelineId": "db1:pipe1", "templateId": "tmpl1",
+           "configFormat": "yaml", "bodyStorage": "inline", "configBody": "x: 1"}
+    PATH = BASE_PATH + "/tmpl1"
+    PARAMS = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_format_switch_rejects_non_json_stored_body(self, mock_enforcer, mock_claims, mock_parent,
+                                                        mock_bucket, mock_get_row, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_bucket.return_value = "b"
+        mock_get_row.return_value = dict(self.ROW)
+        table = MagicMock()
+        mock_table.return_value = table
+        resp = lambda_handler(_event("PUT", self.PATH, self.PARAMS, {"configFormat": "json"}),
+                              MagicMock())
+        assert resp["statusCode"] == 400
+        assert "JSON" in json.loads(resp["body"])["message"]
+        table.put_item.assert_not_called()
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_format_switch_accepts_json_stored_body(self, mock_enforcer, mock_claims, mock_parent,
+                                                    mock_bucket, mock_get_row, mock_table):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_bucket.return_value = "b"
+        row = dict(self.ROW)
+        row["configBody"] = '{"a": 1}'
+        mock_get_row.return_value = row
+        mock_table.return_value = MagicMock()
+        resp = lambda_handler(_event("PUT", self.PATH, self.PARAMS, {"configFormat": "json"}),
+                              MagicMock())
+        assert resp["statusCode"] == 200
+
+    @patch(f"{MOD}._templates_table")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._default_bucket_name")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_unchanged_format_does_not_revalidate(self, mock_enforcer, mock_claims, mock_parent,
+                                                  mock_bucket, mock_get_row, mock_table):
+        # Restating the stored (non-json) format alongside an unrelated field change is not a format
+        # change, so the stored body is left alone.
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_bucket.return_value = "b"
+        mock_get_row.return_value = dict(self.ROW)
+        mock_table.return_value = MagicMock()
+        resp = lambda_handler(
+            _event("PUT", self.PATH, self.PARAMS, {"configFormat": "yaml", "description": "d"}),
+            MagicMock())
+        assert resp["statusCode"] == 200
+
+
+@pytest.mark.unit
+class TestTemplateMethodNotAllowed:
+    """An unsupported verb is a request problem, not a permissions failure."""
+
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_unsupported_verb_is_400(self, mock_enforcer, mock_claims, mock_parent):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        resp = lambda_handler(_event("PATCH", BASE_PATH, BASE_PARAMS), MagicMock())
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"])["message"] == "Method not allowed"
+
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_unsupported_verb_on_tag_schema_is_400(self, mock_enforcer, mock_claims, mock_parent,
+                                                   mock_get_row):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_get_row.return_value = {"templateId": "tmpl1"}
+        path = BASE_PATH + "/tmpl1/tagSchema"
+        params = {"databaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl1"}
+        resp = lambda_handler(_event("DELETE", path, params), MagicMock())
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"])["message"] == "Method not allowed"

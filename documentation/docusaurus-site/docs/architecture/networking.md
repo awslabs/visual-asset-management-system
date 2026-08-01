@@ -165,7 +165,7 @@ The web distribution determines whether a second Web ACL is also created:
 -   **ALB deployment (without CloudFront)**: A single regional Web ACL protects both the REST API stage and the ALB.
 -   **No CloudFront or ALB**: The regional Web ACL protects the API Gateway stage.
 
-Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint. Within that policy, the AWS Common Rule Set runs its `SizeRestrictions_BODY` rule in count (non-blocking) mode through a per-rule `ruleActionOverrides` entry, so request bodies up to the API Gateway REST maximum of 10 MB — such as multi-part upload requests — are not rejected, while the rest of the managed rules continue to block.
+Both Web ACLs (when two exist) are built from the same `config/policy/wafPolicyConfig.json` rule policy. This ensures every request is filtered by WAF at the entry point, whether it arrives through CloudFront, through the ALB, or directly against the API Gateway endpoint. Within that policy, the AWS Common Rule Set runs two rules in count (non-blocking) mode through per-rule `ruleActionOverrides` entries. `SizeRestrictions_BODY` is counted so request bodies up to the API Gateway REST maximum of 10 MB — such as multi-part upload requests — are not rejected. `SizeRestrictions_QUERYSTRING` is counted so requests carrying a long query string are not rejected either; the SuperSplat viewer passes a presigned Amazon S3 URL in a `?load=` parameter, which exceeds the rule's 2048-byte threshold. The rest of the managed rules continue to block.
 
 ## VPC Configuration Options
 

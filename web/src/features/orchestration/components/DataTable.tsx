@@ -26,9 +26,17 @@ interface DataTableProps<T> {
     pageSize?: number;
     sorting?: boolean;
     filtering?: boolean;
+    // Stable per-row identity. Supply it whenever the row set can be re-ordered or refreshed while
+    // mounted (a polling list): without it react-table keys rows by position, so React reuses a row's
+    // subtree — and any state it owns, such as an open row menu — for whichever row lands there next.
+    getRowId?: (row: T, index: number) => string;
     // Client-side pagination. Disable when the caller drives paging externally (e.g. a
     // server-side "Load more") so the table doesn't show a second, conflicting pager.
     paginate?: boolean;
+    // Drop the table's own outline + surface, for a table that already sits inside a bordered
+    // container (a Card). Without this the table paints a second white box inside the Card's white
+    // padding, which against the grey page reads as two different background tones.
+    flush?: boolean;
 }
 
 function DataTable<T>({
@@ -41,6 +49,8 @@ function DataTable<T>({
     sorting = true,
     filtering = true,
     paginate = true,
+    flush = false,
+    getRowId,
 }: DataTableProps<T>) {
     const [sortingState, setSortingState] = useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -61,6 +71,7 @@ function DataTable<T>({
         getSortedRowModel: sorting ? getSortedRowModel() : undefined,
         getFilteredRowModel: filtering ? getFilteredRowModel() : undefined,
         getPaginationRowModel: paginate ? getPaginationRowModel() : undefined,
+        getRowId,
         initialState: {
             pagination: {
                 pageSize,
@@ -82,33 +93,71 @@ function DataTable<T>({
             {/* Header/row styling mirrors Cloudscape's table: a light header row with a bottom
                 divider and per-row bottom borders (no full grid), muted small-caps header text.
                 The sort affordance (arrows) is kept. */}
-            <div className="overflow-x-auto border border-border-default rounded-lg">
+            <div
+                className={
+                    flush
+                        ? "overflow-x-auto"
+                        : "orch-outline overflow-x-auto border border-border-default rounded-lg bg-surface-container"
+                }
+            >
                 <table className="min-w-full border-collapse">
                     <thead>
                         {table.getHeaderGroups().map((headerGroup) => (
-                            <tr key={headerGroup.id} className="border-b border-border-default">
-                                {headerGroup.headers.map((header) => (
-                                    <th
-                                        key={header.id}
-                                        className="px-4 py-2.5 text-left text-sm font-bold uppercase tracking-wide text-text-secondary cursor-pointer select-none"
-                                        onClick={header.column.getToggleSortingHandler()}
-                                    >
-                                        <div className="flex items-center gap-1.5">
-                                            {flexRender(
-                                                header.column.columnDef.header,
-                                                header.getContext()
+                            <tr
+                                key={headerGroup.id}
+                                className="orch-outline border-b border-border-default"
+                            >
+                                {headerGroup.headers.map((header) => {
+                                    const sortDirection = header.column.getIsSorted() as
+                                        | "asc"
+                                        | "desc"
+                                        | false;
+                                    const toggleSort = sorting
+                                        ? header.column.getToggleSortingHandler()
+                                        : undefined;
+                                    return (
+                                        <th
+                                            key={header.id}
+                                            aria-sort={
+                                                !toggleSort
+                                                    ? undefined
+                                                    : sortDirection === "asc"
+                                                    ? "ascending"
+                                                    : sortDirection === "desc"
+                                                    ? "descending"
+                                                    : "none"
+                                            }
+                                            className="px-4 py-2.5 text-left text-sm font-bold uppercase tracking-wide text-text-secondary select-none"
+                                        >
+                                            {toggleSort ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={toggleSort}
+                                                    className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-text-secondary"
+                                                >
+                                                    {flexRender(
+                                                        header.column.columnDef.header,
+                                                        header.getContext()
+                                                    )}
+                                                    <span aria-hidden="true">
+                                                        {sortDirection === "asc"
+                                                            ? "↑"
+                                                            : sortDirection === "desc"
+                                                            ? "↓"
+                                                            : ""}
+                                                    </span>
+                                                </button>
+                                            ) : (
+                                                <div className="flex items-center gap-1.5">
+                                                    {flexRender(
+                                                        header.column.columnDef.header,
+                                                        header.getContext()
+                                                    )}
+                                                </div>
                                             )}
-                                            {sorting && (
-                                                <span className="text-text-secondary">
-                                                    {{
-                                                        asc: "↑",
-                                                        desc: "↓",
-                                                    }[header.column.getIsSorted() as string] ?? ""}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </th>
-                                ))}
+                                        </th>
+                                    );
+                                })}
                             </tr>
                         ))}
                     </thead>
@@ -116,10 +165,24 @@ function DataTable<T>({
                         {table.getRowModel().rows.map((row) => (
                             <tr
                                 key={row.id}
-                                className={`border-b border-border-default last:border-0 hover:bg-surface-hover${
+                                className={`orch-outline border-b border-border-default last:border-0 hover:bg-surface-hover${
                                     onRowClick ? " cursor-pointer" : ""
                                 }`}
+                                tabIndex={onRowClick ? 0 : undefined}
                                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                                onKeyDown={
+                                    onRowClick
+                                        ? (e) => {
+                                              // Only the row itself activates; a keypress on a
+                                              // control inside a cell belongs to that control.
+                                              if (e.target !== e.currentTarget) return;
+                                              if (e.key === "Enter" || e.key === " ") {
+                                                  e.preventDefault();
+                                                  onRowClick(row.original);
+                                              }
+                                          }
+                                        : undefined
+                                }
                                 onContextMenu={(e) => {
                                     if (onRowContextMenu) {
                                         e.preventDefault();

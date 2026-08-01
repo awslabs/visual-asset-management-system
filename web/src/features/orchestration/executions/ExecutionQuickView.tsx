@@ -26,6 +26,19 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
 );
 
 /** Label/value row. */
+/**
+ * An input file's path WITHIN its asset. The stored `inputAssetFileKey` is asset-root-relative and
+ * begins with the assetId segment ("/{assetId}/folder/file.ext"), so it is stripped here — the panel
+ * already identifies the execution, and repeating the id on every row (once from the key, once from a
+ * prepended prefix) just crowded the path out of view.
+ */
+const inputPath = (f: any): string => {
+    const key: string = f?.inputAssetFileKey || f?.relativeFilePath || "";
+    if (!key) return "—";
+    const prefix = `/${f?.assetId}`;
+    return f?.assetId && key.startsWith(prefix) ? key.slice(prefix.length) || "/" : key;
+};
+
 const Row: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
     <div className="flex justify-between gap-3 py-0.5">
         <span className="text-text-secondary">{label}</span>
@@ -145,8 +158,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                             key={idx}
                                             className="font-mono text-sm break-all text-text-primary"
                                         >
-                                            {f.assetId ? `${f.assetId}:` : ""}
-                                            {f.inputAssetFileKey || f.relativeFilePath || "—"}
+                                            {inputPath(f)}
                                         </li>
                                     ))}
                             </ul>
@@ -155,6 +167,22 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                             )}
                         </Section>
                     )}
+
+                    {/* Output target — stated before the file list so the panel says WHERE the run
+                        wrote, not just what it wrote. Shown even with no output files (a results-only
+                        run has a target of "none"). */}
+                    <Section title="Output Target">
+                        <Row
+                            label="Output Type"
+                            value={
+                                details.outputLocationType === "none"
+                                    ? "Results only (no asset output)"
+                                    : details.outputLocationType || "—"
+                            }
+                        />
+                        <Row label="Output Database ID" value={details.outputDatabaseId || "—"} />
+                        <Row label="Output Asset ID" value={details.outputAssetId || "—"} />
+                    </Section>
 
                     {/* Outputs */}
                     {(outputFiles.length > 0 || outputResults.length > 0) && (

@@ -18,7 +18,8 @@ interface WorkflowSystemConfigFieldsProps {
     concurrencyRestriction: ConcurrencyRestriction;
     locationType: OutputLocationType;
     allowOverride: boolean;
-    isArityDisabled: boolean;
+    allowWorkflowTriggerChaining: boolean;
+    defaultOutputPathPrefix: string;
     onInputFileArityChange: (value: InputFileArity) => void;
     onAssetScopeChange: (scope: Record<string, boolean>) => void;
     onMetadataInputsChange: (inputs: Record<string, boolean>) => void;
@@ -27,6 +28,8 @@ interface WorkflowSystemConfigFieldsProps {
     onConcurrencyRestrictionChange: (value: ConcurrencyRestriction) => void;
     onLocationTypeChange: (value: OutputLocationType) => void;
     onAllowOverrideChange: (value: boolean) => void;
+    onAllowWorkflowTriggerChainingChange: (value: boolean) => void;
+    onDefaultOutputPathPrefixChange: (value: string) => void;
 }
 
 // A labeled toggle row (checkbox + label + info). Keys below match the backend systemConfig shape
@@ -75,7 +78,8 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
     concurrencyRestriction,
     locationType,
     allowOverride,
-    isArityDisabled,
+    allowWorkflowTriggerChaining,
+    defaultOutputPathPrefix,
     onInputFileArityChange,
     onAssetScopeChange,
     onMetadataInputsChange,
@@ -84,6 +88,8 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
     onConcurrencyRestrictionChange,
     onLocationTypeChange,
     onAllowOverrideChange,
+    onAllowWorkflowTriggerChainingChange,
+    onDefaultOutputPathPrefixChange,
 }) => {
     const setMeta = (key: string, checked: boolean) =>
         onMetadataInputsChange({ ...metadataInputs, [key]: checked });
@@ -108,17 +114,10 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                     text="Input file count"
                     info="How many input files an execution takes: 'none' (results-only, no input), 'one' (a single input file), or 'multi' (multiple input files, possibly across assets)."
                 />
-                {isArityDisabled && (
-                    <p className="text-sm text-text-secondary mb-1">
-                        Locked to “none” because the output location is “none” (results-only
-                        workflows take no input files).
-                    </p>
-                )}
                 <select
                     id="inputFileArity"
                     value={inputFileArity}
                     onChange={(e) => handleArityChange(e.target.value as InputFileArity)}
-                    disabled={isArityDisabled}
                     className={selectClass}
                 >
                     <option value="none">None</option>
@@ -200,8 +199,55 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                         </span>
                         <InfoTooltip text="When on, the person running the workflow may redirect output to a different asset (and set an output path prefix). When off, output is locked to the input asset." />
                     </label>
+
+                    <div className="mt-3">
+                        <FieldLabel
+                            htmlFor="defaultOutputPathPrefix"
+                            text="Default output path prefix"
+                            info="The output path prefix an execution uses when it names none - the value the execute form is pre-filled with. Stored unresolved, so system and dynamic template tags are resolved per execution: '/{{executionId}}/' gives every run its own folder. Inserted immediately before each output file's name, so the folders a pipeline creates are preserved. A trailing '/' makes it a folder; without one it is joined onto the file name. Leave blank to add no prefix to the final output paths."
+                        />
+                        <input
+                            id="defaultOutputPathPrefix"
+                            type="text"
+                            value={defaultOutputPathPrefix}
+                            onChange={(e) => onDefaultOutputPathPrefixChange(e.target.value)}
+                            placeholder="No prefix"
+                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                        />
+                        <span className="block text-xs text-text-secondary mt-1">
+                            Inserted immediately before each output file's name, so a pipeline's own
+                            output folders are kept. Supports system and dynamic tags resolved per
+                            execution, e.g. <code>{"{{executionId}}"}</code>. Leave blank to add no
+                            prefix.
+                        </span>
+                    </div>
                 </div>
             )}
+
+            <div>
+                <label className="flex items-center gap-2">
+                    <input
+                        type="checkbox"
+                        checked={allowWorkflowTriggerChaining}
+                        onChange={(e) => onAllowWorkflowTriggerChainingChange(e.target.checked)}
+                    />
+                    <span className="text-sm font-medium text-text-primary">
+                        Allow workflow trigger chaining
+                    </span>
+                    <InfoTooltip text="When on, a file written by ANOTHER workflow's execution may fire this workflow's triggers - for example generating a preview or metadata from a conversion pipeline's output. This workflow never fires on output it wrote itself, whatever this setting is, so it cannot re-trigger in a loop on its own files. Off by default; a chained file must still match the trigger's input-file filters." />
+                </label>
+                {allowWorkflowTriggerChaining && (
+                    <div
+                        role="alert"
+                        className="mt-2 p-3 rounded bg-yellow-100 dark:bg-yellow-900/20 text-yellow-900 dark:text-yellow-200 text-sm"
+                    >
+                        <strong>Chained triggering is enabled.</strong> This workflow will run on
+                        files produced by other workflows. Two or more workflows that each write a
+                        file the other accepts can trigger each other indefinitely - check the
+                        input-file filters of every workflow in the chain before enabling this.
+                    </div>
+                )}
+            </div>
 
             <div>
                 <div className="flex items-center gap-1.5 text-sm font-medium mb-2 text-text-primary">

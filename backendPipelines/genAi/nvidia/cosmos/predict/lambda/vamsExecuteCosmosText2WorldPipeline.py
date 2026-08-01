@@ -105,28 +105,20 @@ def lambda_handler(event, context):
             inline = data.get('inputParameters')
             input_configuration = json.loads(inline) if isinstance(inline, str) else inline
 
-        # Extract COSMOS_PREDICT_PROMPT from asset metadata
-        # VAMS metadata format: {"VAMS": {"assetMetadata": {"key": "value", ...}, "fileMetadata": {...}}}
-        cosmos_prompt = ""
-        try:
-            asset_metadata = (metadata or {}).get("VAMS", {}).get("assetMetadata", {})
-            cosmos_prompt = asset_metadata.get("COSMOS_PREDICT_PROMPT", "")
-            if cosmos_prompt:
-                logger.info(f"Extracted COSMOS_PREDICT_PROMPT from asset metadata: {cosmos_prompt}")
-        except Exception as e:
-            logger.warning(f"Failed to extract COSMOS_PREDICT_PROMPT from asset metadata: {e}")
-
-        # If not found in metadata, try input configuration as fallback
-        if not cosmos_prompt and input_configuration:
-            try:
-                cosmos_prompt = input_configuration.get("PROMPT") or input_configuration.get("prompt") or ""
-                if cosmos_prompt:
-                    logger.info(f"Using COSMOS_PREDICT_PROMPT from input configuration: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract prompt from input configuration: {e}")
-
+        # The prompt resolves CONFIG-FIRST with an ASSET-METADATA fallback
+        # (manifestHelper.resolve_input_setting). Text2World takes NO input file, so the prompt IS the
+        # input: it is supplied on the execute screen as a template dynamic tag and must win over a
+        # value saved on the asset earlier. A blank field falls back to the asset's standing value.
+        # Only assetMetadata is consulted — with no input file there is no file metadata to read.
+        cosmos_prompt = manifestHelper.resolve_input_setting(
+            input_configuration, metadata, ("PROMPT", "prompt"), "COSMOS_PREDICT_PROMPT",
+            metadata_scopes=("assetMetadata",))
         if not cosmos_prompt:
-            raise Exception("COSMOS_PREDICT_PROMPT not found in asset metadata or input configuration")
+            raise Exception(
+                "No prompt supplied. Provide it as the pipeline's PROMPT input configuration value "
+                "(the execute screen's dynamic tag), or set COSMOS_PREDICT_PROMPT on the asset's "
+                "metadata.")
+        logger.info(f"Resolved COSMOS_PREDICT_PROMPT: {cosmos_prompt}")
 
         # Get Executing username
         executing_userName = data.get('executingUserName', '')

@@ -144,6 +144,14 @@ def _normalize_log(log):
     return entry
 
 
+def _not_already_registered(new_entries, existing_entries):
+    """Drop entries the row already carries. EventBridge delivery is at-least-once, so a
+    redelivered registration event reports locators that are already stored; appending them again
+    would duplicate CloudWatch reads and abort calls for the same resource."""
+    existing = [e for e in (existing_entries or []) if isinstance(e, dict)]
+    return [e for e in new_entries if e not in existing]
+
+
 def register(detail):
     """Append the reported sub-execution / log ARNs onto the PipelineExecutions row for
     detail.pipelineExecutionId. No-op when the row is unknown or no valid ARNs were reported."""
@@ -175,6 +183,15 @@ def register(detail):
         logger.warning(f"No PipelineExecutions row for {pipeline_execution_id}; ignoring registration")
         return
     row = rows[0]
+
+    # Skip locators the row already carries so an at-least-once redelivery of the same event does
+    # not store the same sub-process/log twice.
+    new_subs = _not_already_registered(new_subs, row.get("registeredSubExecutions"))
+    new_logs = _not_already_registered(new_logs, row.get("registeredLogs"))
+    if not new_subs and not new_logs:
+        logger.info(f"Registration event for {pipeline_execution_id} reported only already-registered "
+                    f"locators; nothing to record")
+        return
 
     # Atomic list_append (if_not_exists seeds an empty list) so concurrent registration events
     # accumulate without clobbering each other.

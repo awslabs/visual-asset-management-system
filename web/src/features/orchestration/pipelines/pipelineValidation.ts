@@ -8,35 +8,98 @@ import type { Pipeline, ExecutionType } from "../types";
 
 const executionTypeEnum = z.enum(["Lambda", "SQS", "EventBridge", "DeadlineCloud"]);
 
-const timeoutSchema = z.string().refine(
-    (val) => {
-        const num = parseInt(val, 10);
-        return !isNaN(num) && num.toString() === val && num >= 1 && num <= 604800;
-    },
-    { message: "Must be an integer between 1 and 604800" }
+// Task timeouts are optional. An omitted value and an empty string both mean "no timeout" (the
+// backend skips the field for either), so both pass; any supplied value must be a whole number of
+// seconds within one week.
+const timeoutSchema = z
+    .string()
+    .optional()
+    .refine(
+        (val) => {
+            if (val === undefined || val === "") return true;
+            const num = parseInt(val, 10);
+            return !isNaN(num) && num.toString() === val && num >= 1 && num <= 604800;
+        },
+        { message: "Must be an integer between 1 and 604800" }
+    );
+
+// Optional numeric settings. A blank number input carries no value, so an empty string or NaN
+// resolves to "unset" (the backend treats an absent numeric field as unset).
+const optionalNumberSchema = z.preprocess(
+    (val) =>
+        val === "" || val === null || (typeof val === "number" && Number.isNaN(val))
+            ? undefined
+            : val,
+    z.number().optional()
 );
 
+// Mirrors of the backend resource patterns (common/validators.py), so a malformed value is reported
+// inline beside its field instead of coming back as a save-time 400. Partition-aware.
+const AWS_PARTITION = "aws(?:-us-gov|-cn|-iso(?:-[a-z])?)?";
+const SQS_QUEUE_URL = new RegExp(
+    `^https://(vpce-[a-z0-9\\-]+\\.)?sqs[\\-a-z]*\\.[a-z0-9\\-]+\\.(vpce\\.)?amazonaws\\.com(\\.cn)?/[0-9]{12}/[a-zA-Z0-9_\\-\\.]+$`
+);
+const EVENTBRIDGE_BUS_ARN = new RegExp(
+    `^arn:(${AWS_PARTITION}):events:[a-z0-9\\-]+:[0-9]{12}:event-bus/[a-zA-Z0-9_\\-\\./]+$`
+);
+const EVENTBRIDGE_SOURCE = /^(?!aws\.)[a-zA-Z0-9\-._]{1,256}$/;
+const EVENTBRIDGE_DETAIL_TYPE = /^[\s\S]{1,256}$/;
+const AWS_ARN = new RegExp(
+    `^arn:(${AWS_PARTITION}):[a-z0-9\\-]{1,63}:[a-z0-9\\-]*:[0-9]{0,12}:[a-zA-Z0-9\\-\\._:/]{1,1700}$`
+);
+const LAMBDA_FUNCTION_NAME = /^[a-zA-Z0-9\-_]{1,140}(:[a-zA-Z0-9\-_$]{1,128})?$/;
+
 const lambdaConfigSchema = z.object({
-    resourceId: z.string().optional(),
+    // Blank means "auto-provision a Lambda"; a supplied target is either an ARN or a function name.
+    resourceId: z
+        .string()
+        .optional()
+        .refine(
+            (val) =>
+                !val ||
+                (val.startsWith("arn:") ? AWS_ARN.test(val) : LAMBDA_FUNCTION_NAME.test(val)),
+            { message: "Must be a Lambda function ARN or a valid function name" }
+        ),
 });
 
 const sqsConfigSchema = z.object({
-    queueUrl: z.string().min(1, "SQS queueUrl is required"),
+    queueUrl: z
+        .string()
+        .min(1, "SQS queueUrl is required")
+        .regex(
+            SQS_QUEUE_URL,
+            "Must be a valid SQS queue URL (e.g. https://sqs.us-east-1.amazonaws.com/123456789012/my-queue)"
+        ),
 });
 
 const eventBridgeConfigSchema = z.object({
-    busArn: z.string().min(1, "EventBridge busArn is required"),
-    source: z.string().min(1, "EventBridge source is required"),
-    detailType: z.string().min(1, "EventBridge detailType is required"),
+    busArn: z
+        .string()
+        .min(1, "EventBridge busArn is required")
+        .regex(
+            EVENTBRIDGE_BUS_ARN,
+            "Must be a valid event-bus ARN (e.g. arn:aws:events:us-east-1:123456789012:event-bus/my-bus)"
+        ),
+    source: z
+        .string()
+        .min(1, "EventBridge source is required")
+        .regex(
+            EVENTBRIDGE_SOURCE,
+            "Must be 1-256 characters of letters, digits, dots, hyphens or underscores, and cannot start with 'aws.'"
+        ),
+    detailType: z
+        .string()
+        .min(1, "EventBridge detailType is required")
+        .regex(EVENTBRIDGE_DETAIL_TYPE, "Must be 1-256 characters"),
 });
 
 const deadlineCloudConfigSchema = z.object({
     farmId: z.string().min(1, "DeadlineCloud farmId is required"),
     queueId: z.string().min(1, "DeadlineCloud queueId is required"),
     storageProfileId: z.string().optional(),
-    priority: z.number().optional(),
-    maxRetriesPerTask: z.number().optional(),
-    maxFailedTasksCount: z.number().optional(),
+    priority: optionalNumberSchema,
+    maxRetriesPerTask: optionalNumberSchema,
+    maxFailedTasksCount: optionalNumberSchema,
     templateType: z.string().optional(),
 });
 
@@ -44,8 +107,8 @@ const executionConfigSchema = z
     .object({
         executionType: executionTypeEnum,
         waitForCallback: z.enum(["Enabled", "Disabled"]).optional(),
-        taskTimeout: timeoutSchema.optional(),
-        taskHeartbeatTimeout: timeoutSchema.optional(),
+        taskTimeout: timeoutSchema,
+        taskHeartbeatTimeout: timeoutSchema,
         lambda: lambdaConfigSchema.optional(),
         sqs: sqsConfigSchema.optional(),
         eventBridge: eventBridgeConfigSchema.optional(),
@@ -117,7 +180,12 @@ const pipelineSchema = z.object({
         .string()
         .regex(/^[-_a-zA-Z0-9]{3,63}$/, "pipelineId must match pattern ^[-_a-zA-Z0-9]{3,63}$")
         .optional(),
-    pipelineName: z.string().min(1, "pipelineName is required"),
+    pipelineName: z
+        .string()
+        .min(1, "pipelineName is required")
+        .max(256, "pipelineName cannot exceed 256 characters"),
+    category: z.string().max(256, "category cannot exceed 256 characters").nullish(),
+    description: z.string().max(1024, "description cannot exceed 1024 characters").nullish(),
     executionConfig: executionConfigSchema,
 });
 

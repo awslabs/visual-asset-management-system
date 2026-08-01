@@ -106,43 +106,26 @@ def lambda_handler(event, context):
         if not input_parameters:
             input_parameters = data.get('inputParameters', '')
 
-        # Extract transfer-specific metadata from file metadata
-        # VAMS metadata format: {"VAMS": {"assetMetadata": {...}, "fileMetadata": {"key": "value", ...}}}
-        cosmos_prompt = ""
-        control_type = "edge"
-        control_path = ""
+        # Transfer settings resolve CONFIG-FIRST with a metadata fallback
+        # (manifestHelper.resolve_input_setting): what the operator supplied on the execute screen as a
+        # template dynamic tag wins, and a blank field falls back to a standing value saved on the
+        # asset/file. This pipeline converts ONE file per run, so per-FILE metadata is honoured before
+        # the asset's.
+        _scopes = ("fileMetadata", "assetMetadata")
 
-        if input_metadata:
-            try:
-                metadata_obj = json.loads(input_metadata) if isinstance(input_metadata, str) else input_metadata
-                vams_metadata = metadata_obj.get("VAMS", {})
-                file_metadata = vams_metadata.get("fileMetadata", {})
+        def _setting(config_keys, metadata_key, default=""):
+            value = manifestHelper.resolve_input_setting(
+                input_parameters, input_metadata, config_keys, metadata_key,
+                metadata_scopes=_scopes)
+            return value if value != "" else default
 
-                # fileMetadata is a flat dict of {key: value} pairs
-                cosmos_prompt = file_metadata.get("COSMOS_TRANSFER_PROMPT", "")
-                if cosmos_prompt:
-                    logger.info(f"Extracted COSMOS_TRANSFER_PROMPT from file metadata: {cosmos_prompt}")
-
-                control_type_meta = file_metadata.get("COSMOS_TRANSFER_CONTROL_TYPE", "")
-                if control_type_meta:
-                    control_type = control_type_meta
-                    logger.info(f"Extracted COSMOS_TRANSFER_CONTROL_TYPE from file metadata: {control_type}")
-
-                control_path = file_metadata.get("COSMOS_TRANSFER_CONTROL_PATH", "")
-                if control_path:
-                    logger.info(f"Extracted COSMOS_TRANSFER_CONTROL_PATH from file metadata: {control_path}")
-            except Exception as e:
-                logger.warning(f"Failed to extract transfer metadata from file metadata: {e}")
-
-        # If not found in metadata, try inputParameters as fallback for prompt
-        if not cosmos_prompt and input_parameters:
-            try:
-                params_obj = json.loads(input_parameters) if isinstance(input_parameters, str) else input_parameters
-                cosmos_prompt = params_obj.get("PROMPT") or params_obj.get("prompt") or ""
-                if cosmos_prompt:
-                    logger.info(f"Using COSMOS_TRANSFER_PROMPT from input parameters: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract prompt from input parameters: {e}")
+        cosmos_prompt = _setting(("PROMPT", "prompt"), "COSMOS_TRANSFER_PROMPT")
+        control_type = _setting(
+            ("CONTROL_TYPE", "controlType"), "COSMOS_TRANSFER_CONTROL_TYPE", default="edge")
+        control_path = _setting(("CONTROL_PATH", "controlPath"), "COSMOS_TRANSFER_CONTROL_PATH")
+        logger.info(
+            f"Resolved transfer settings: controlType={control_type} "
+            f"promptSupplied={bool(cosmos_prompt)} controlPathSupplied={bool(control_path)}")
 
         # Prompt is optional for Transfer - default to generic prompt
         if not cosmos_prompt:

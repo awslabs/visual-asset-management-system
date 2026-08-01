@@ -10,10 +10,14 @@ interface StatusBadgeProps {
     status: ExecutionStatus;
 }
 
-const statusConfig: Record<
-    ExecutionStatus,
-    { label: string; bgColor: string; textColor: string; icon?: string }
-> = {
+interface StatusStyle {
+    label: string;
+    bgColor: string;
+    textColor: string;
+    icon?: string;
+}
+
+const statusConfig: Record<ExecutionStatus, StatusStyle> = {
     SUCCEEDED: {
         label: "Succeeded",
         bgColor: "bg-green-100 dark:bg-green-900/30",
@@ -56,8 +60,16 @@ const statusConfig: Record<
     },
 };
 
+// Statuses are passed through from Step Functions, so a value outside the mapped set is possible.
+// An unmapped status renders as a neutral badge carrying the raw value instead of failing the row.
+const unknownStatusStyle = (status: string): StatusStyle => ({
+    label: status || "Unknown",
+    bgColor: "bg-surface-secondary",
+    textColor: "text-text-secondary",
+});
+
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
-    const config = statusConfig[status];
+    const config = statusConfig[status] || unknownStatusStyle(status as string);
     // Non-terminal states get a moving indicator: RUNNING a spinner, NEW (queued) a pulsing dot.
     const isRunning = status === "RUNNING";
     const isQueued = status === "NEW";
@@ -69,7 +81,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
             {isRunning ? (
                 <span
                     aria-hidden="true"
-                    className="inline-block h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin"
+                    className="orch-outline inline-block h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin"
                 />
             ) : isQueued ? (
                 <span

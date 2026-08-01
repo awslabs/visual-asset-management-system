@@ -27,7 +27,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.validators import validate
@@ -78,9 +78,18 @@ WORKFLOW_EXECUTIONS_BY_WORKFLOW_GSI = "WorkflowExecutionsByWorkflowGSI"
 # started within this many days. Keeps the count meaningful over time and bounds the COUNT query.
 EXECUTION_COUNT_LOOKBACK_DAYS = 90
 
+# Ceiling on the number of workflows one list page accumulates, regardless of the caller's
+# maxItems/pageSize. Each returned workflow costs one COUNT query for its executionCount, so this
+# bounds both the response size (6MB Lambda limit) and the per-request query fan-out; callers read
+# the rest of the set through NextToken.
+MAX_LIST_PAGE_ITEMS = 500
+
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 GLOBAL_DATABASE = "GLOBAL"
+
+# Page cap for the cross-database id-uniqueness lookup (see pipelineService.MAX_ID_LOOKUP_PAGES).
+MAX_ID_LOOKUP_PAGES = 50
 
 
 def _workflow_table():
@@ -234,6 +243,33 @@ def get_workflow_item(database_id, workflow_id):
     ).get("Item")
 
 
+def find_workflow_id_owner(workflow_id, excluding_database_id=None):
+    """The databaseId of an existing workflow carrying this workflowId, or None. Ids are unique
+    across all databases (GLOBAL included); archived rows still hold their id. Queries the
+    constant-partition by-date GSI rather than scanning."""
+    table = _workflow_table()
+    query_kwargs = {
+        "IndexName": "WorkflowsByDateGSI",
+        "KeyConditionExpression": Key("allListPartition").eq(wr.ALL_WORKFLOWS_LIST_PARTITION),
+        "FilterExpression": Attr("workflowId").eq(workflow_id),
+    }
+    for _ in range(MAX_ID_LOOKUP_PAGES):
+        response = table.query(**query_kwargs) or {}
+        for item in response.get("Items") or []:
+            owner = (item or {}).get("databaseId")
+            if not owner or owner == excluding_database_id:
+                continue
+            return owner
+        last_key = response.get("LastEvaluatedKey")
+        if not isinstance(last_key, dict) or not last_key:
+            return None
+        query_kwargs["ExclusiveStartKey"] = last_key
+    logger.warning(
+        f"Workflow id uniqueness lookup stopped after {MAX_ID_LOOKUP_PAGES} pages; "
+        "treating the id as free.")
+    return None
+
+
 def get_workflow_triggers(database_id, workflow_id):
     composite = wr.workflow_composite_key(database_id, workflow_id)
     triggers = []
@@ -250,9 +286,15 @@ def get_workflow_triggers(database_id, workflow_id):
 
 
 def _pagination_config(query_params):
+    """Boto3 paginator config from the validated query params (validate_pagination_info fills
+    maxItems/pageSize/startingToken). Both sizes are clamped to MAX_LIST_PAGE_ITEMS so a caller
+    cannot ask one request to accumulate the whole table (and one COUNT query per accumulated row);
+    the remainder is reachable through NextToken."""
+    max_items = min(int(query_params["maxItems"]), MAX_LIST_PAGE_ITEMS)
+    page_size = min(int(query_params["pageSize"]), max_items)
     return {
-        "MaxItems": int(query_params["maxItems"]),
-        "PageSize": int(query_params["pageSize"]),
+        "MaxItems": max_items,
+        "PageSize": page_size,
         "StartingToken": query_params["startingToken"],
     }
 
@@ -264,7 +306,7 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles):
             continue
         if _enforce_workflow(claims_and_roles, item, "GET"):
             # Execution count is a bounded COUNT query per authorized workflow on this page
-            # (page size caps the fan-out, so no unbounded N+1). Best-effort — None on failure.
+            # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
             count = _execution_count(item.get("databaseId", ""), item.get("workflowId", ""))
             items.append(_item_to_response(item, execution_count=count))
     result = GetWorkflowsResponseModel(Items=items)
@@ -332,7 +374,15 @@ def create_workflow(database_id, request, username, claims_and_roles):
     if not _enforce_workflow(claims_and_roles, provisional, "POST"):
         return authorization_error()
     if get_workflow_item(database_id, workflow_id):
-        return validation_error(body={"message": f"Workflow {workflow_id} already exists"})
+        logger.info(f"Workflow {database_id}:{workflow_id} already exists")
+        return validation_error(body={"message": "A workflow with this ID already exists."})
+
+    # Ids are unique across databases; the owning database is logged, never returned.
+    other_owner = find_workflow_id_owner(workflow_id, excluding_database_id=database_id)
+    if other_owner:
+        logger.info(f"workflowId {workflow_id} is already in use by database {other_owner}")
+        return validation_error(body={
+            "message": "Workflow ID is already in use by another database. Choose a different ID."})
 
     # Now resolve + authorize referenced pipelines (also database-scope check).
     err, ref_records = _resolve_referenced_pipelines(
@@ -399,18 +449,32 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
         item["subDashboardUrl"] = request.subDashboardUrl
     if request.enabled is not None:
         item["enabled"] = request.enabled
+    if request.archived is not None:
+        item["archived"] = request.archived
     item["dateModified"] = pr.iso_now()
     item["modifiedBy"] = username
 
+    # Re-enforce Tier-2 PUT on the MUTATED object: workflowName (-> the `name` constraint field) and
+    # category are policy-evaluated attributes, so a caller must be authorized for the workflow it is
+    # writing as well as the one it read — otherwise a scoped role could move a workflow into a
+    # category/name scope its own constraints deny.
+    if not _enforce_workflow(claims_and_roles, item, "PUT"):
+        return authorization_error()
+
     # Save-consistency validation against the (possibly updated) pipeline set, BEFORE persisting or
-    # (re)deploying — block on hard errors (e.g. a stored pipeline archived after it was added).
+    # (re)deploying. A hard error blocks only when the caller is supplying the pipeline set; for an
+    # edit that leaves the stored set untouched (rename, description, enable/disable) the same
+    # conditions — e.g. a referenced pipeline archived after it was added — are reported as warnings so
+    # the workflow stays editable without a full pipeline-list replacement.
     if ref_records is not None:
         pipeline_records = [rec for _ref, rec in ref_records]
     else:
         pipeline_records = _resolve_snapshot_pipeline_records(item)
     errors, warnings = _save_validation(item.get("systemConfig", {}), pipeline_records)
     if errors:
-        return validation_error(body={"message": {"saveErrors": errors}})
+        if ref_records is not None:
+            return validation_error(body={"message": {"saveErrors": errors}})
+        warnings = list(warnings) + errors
 
     # Regenerate the state machine when the pipeline set changed. Persist the refreshed jobNames on
     # the record so the execute handler's output-path reconstruction stays in parity (the per-ref

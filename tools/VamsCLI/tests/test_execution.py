@@ -10,6 +10,33 @@ from vamscli.utils.exceptions import (
 
 
 class TestExecutionList:
+    def test_list_shows_output_target(self, cli_runner, generic_command_mocks):
+        """The list projects the run's output target (from the execution's configuration row), so the
+        CLI reports where the outputs landed without a second call."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1', 'workflowId': 'wf1',
+                                       'workflowDatabaseId': 'db1', 'executionStatus': 'SUCCEEDED',
+                                       'outputLocationType': 'asset',
+                                       'outputAssetId': 'aOut', 'outputDatabaseId': 'dbOut'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Output Type: asset' in result.output
+            assert 'dbOut:aOut' in result.output
+
+    def test_list_omits_output_target_for_results_only(self, cli_runner, generic_command_mocks):
+        """A results-only run writes no files and has no destination asset, so the output lines are
+        omitted rather than printed as N/A."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1', 'workflowId': 'wf1',
+                                       'workflowDatabaseId': 'db1',
+                                       'executionStatus': 'SUCCEEDED'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'list'])
+            assert result.exit_code == 0
+            assert 'Output Type:' not in result.output
+            assert 'Output Asset:' not in result.output
+
     def test_list_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].list_executions.return_value = {
@@ -38,6 +65,15 @@ class TestExecutionList:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data['Items'][0]['workflowExecutionId'] == 'e1'
+
+    def test_list_empty_page_surfaces_next_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [], 'NextToken': 'tok-abc'}}
+            result = cli_runner.invoke(cli, ['execution', 'list', '--status', 'FAILED'])
+            assert result.exit_code == 0
+            assert 'tok-abc' in result.output
+            assert 'more pages available' in result.output
 
     def test_list_auto_paginate(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
@@ -115,9 +151,24 @@ class TestExecutionAbort:
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].abort_execution.return_value = {
                 'message': {'groupId': 'grp1', 'results': [{'executionId': 'e1', 'status': 'aborted'}]}}
-            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1'])
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1', '--yes'])
             assert result.exit_code == 0
             assert mocks['api_client'].abort_execution.call_args.kwargs['group_id'] == 'grp1'
+
+    def test_abort_group_requires_confirmation(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--group-id', 'grp1'],
+                                       input='n\n')
+            assert result.exit_code != 0
+            mocks['api_client'].abort_execution.assert_not_called()
+
+    def test_abort_carries_warnings(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': 'Execution aborted', 'warnings': ['Sub-process abort failed']}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['warnings'] == ['Sub-process abort failed']
 
     def test_abort_requires_target(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution'):
@@ -167,11 +218,11 @@ class TestExecutionPermanentDelete:
             result = cli_runner.invoke(cli, ['execution', 'permanent-delete', 'e1', '--yes'])
             assert result.exit_code != 0
 
-    def test_permanent_delete_json_skips_prompt(self, cli_runner, generic_command_mocks):
-        # In JSON mode the interactive confirm is skipped (no stdin needed).
+    def test_permanent_delete_json_with_yes(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].permanent_delete_execution.return_value = {'message': 'deleted'}
-            result = cli_runner.invoke(cli, ['execution', 'permanent-delete', 'e1', '--json-output'])
+            result = cli_runner.invoke(cli, [
+                'execution', 'permanent-delete', 'e1', '--yes', '--json-output'])
             assert result.exit_code == 0
             mocks['api_client'].permanent_delete_execution.assert_called_once()
 

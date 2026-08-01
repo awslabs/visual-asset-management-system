@@ -83,6 +83,16 @@ def _merge_metadata_into_params(
     return json.dumps(params)
 
 
+def _asset_relative_file_key(input_key, asset_id):
+    """The asset-relative file key ('/folder/file.ext') of an input S3 key, sliced at the
+    threaded assetId path segment. Returns the asset-level key ('/') when the asset id is not a
+    segment of the key."""
+    parts = input_key.split("/")
+    if asset_id and asset_id in parts:
+        return "/" + "/".join(parts[parts.index(asset_id) + 1:])
+    return "/"
+
+
 def lambda_handler(event, context):
     """
     ConstructPipeline - Coordinate Transform
@@ -105,8 +115,16 @@ def lambda_handler(event, context):
     # pipeline parameters (metadata wins).
     input_configuration = manifestHelper.fetch_input_configuration(
         s3, event.get('inputConfigurationS3Location', '')) or {}
-    input_metadata = manifestHelper.fetch_metadata(
+    metadata_body = manifestHelper.fetch_metadata(
         s3, event.get('inputMetadataS3Location', '')) or {}
+    # The metadata file is the grouped-by-asset envelope; project it onto the legacy
+    # {"VAMS": {...}} view for this pipeline's (databaseId, assetId, fileKey).
+    input_metadata = manifestHelper.to_legacy_vams_view(
+        metadata_body,
+        event.get('databaseId', ''),
+        event.get('assetId', ''),
+        _asset_relative_file_key(input_key, event.get('assetId', '')),
+    ) if metadata_body else {}
     input_parameters = _merge_metadata_into_params(
         json.dumps(input_configuration) if input_configuration else '',
         json.dumps(input_metadata) if input_metadata else '',

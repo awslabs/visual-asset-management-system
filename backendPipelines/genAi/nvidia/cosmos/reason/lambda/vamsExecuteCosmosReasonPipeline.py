@@ -105,28 +105,15 @@ def lambda_handler(event, context):
         # Extract COSMOS_REASON_PROMPT from file metadata
         # VAMS metadata format: {"VAMS": {"assetMetadata": {...}, "fileMetadata": {"key": "value", ...}}}
         cosmos_prompt = ""
-        if input_metadata:
-            try:
-                metadata_obj = json.loads(input_metadata) if isinstance(input_metadata, str) else input_metadata
-                vams_metadata = metadata_obj.get("VAMS", {})
-                file_metadata = vams_metadata.get("fileMetadata", {})
-
-                # fileMetadata is a flat dict of {key: value} pairs
-                cosmos_prompt = file_metadata.get("COSMOS_REASON_PROMPT", "")
-                if cosmos_prompt:
-                    logger.info(f"Extracted COSMOS_REASON_PROMPT from file metadata: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract COSMOS_REASON_PROMPT from file metadata: {e}")
-
-        # If not found in metadata, try inputParameters as fallback
-        if not cosmos_prompt and input_parameters:
-            try:
-                params_obj = json.loads(input_parameters) if isinstance(input_parameters, str) else input_parameters
-                cosmos_prompt = params_obj.get("PROMPT") or params_obj.get("prompt") or ""
-                if cosmos_prompt:
-                    logger.info(f"Using COSMOS_REASON_PROMPT from input parameters: {cosmos_prompt}")
-            except Exception as e:
-                logger.warning(f"Failed to extract prompt from input parameters: {e}")
+        # CONFIG-FIRST with a metadata fallback (manifestHelper.resolve_input_setting): the prompt
+        # supplied on the execute screen as a template dynamic tag wins; a blank field falls back to a
+        # standing value saved on the asset. This pipeline reads one file per run, so per-FILE metadata
+        # is honoured first, then the asset's.
+        cosmos_prompt = manifestHelper.resolve_input_setting(
+            input_parameters, input_metadata, ("PROMPT", "prompt"), "COSMOS_REASON_PROMPT",
+            metadata_scopes=("fileMetadata", "assetMetadata"))
+        if cosmos_prompt:
+            logger.info(f"Resolved COSMOS_REASON_PROMPT: {cosmos_prompt}")
 
         # Prompt is OPTIONAL for Reason - use a sensible default if not provided
         if not cosmos_prompt:

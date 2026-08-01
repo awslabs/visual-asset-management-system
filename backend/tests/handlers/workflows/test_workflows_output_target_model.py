@@ -153,6 +153,47 @@ class TestSpecifiedPipelineIdValidation:
         with pytest.raises(ValidationError):
             self._create({"pipelineId": "pipe1", "pipelineDatabaseId": "!!"})
 
+    def test_valid_job_name_accepted(self):
+        m = self._create({"pipelineId": "pipe1", "jobName": "convertStep"})
+        assert m.specifiedPipelines[0].jobName == "convertStep"
+
+    def test_omitted_job_name_ok(self):
+        m = self._create({"pipelineId": "pipe1"})
+        assert m.specifiedPipelines[0].jobName == ""
+
+    @pytest.mark.parametrize("job_name", [
+        "it's {x}",          # apostrophe terminates the States.Format() literal, {x} adds a slot
+        "nested/prefix",     # '/' would nest the S3 output prefix deeper than expected
+        "has space",
+        "x" * 65,            # beyond the id length bound
+    ])
+    def test_hostile_job_names_rejected(self, job_name):
+        # jobName becomes the ASL state name and an S3 output-prefix segment, interpolated into a
+        # single-quoted States.Format() literal, so it must satisfy the id character set.
+        with pytest.raises(ValidationError):
+            self._create({"pipelineId": "pipe1", "jobName": job_name})
+
+
+@pytest.mark.unit
+class TestSetTriggerInputFileFilters:
+    """A trigger's inputFileFilters keys are restricted to allow/exclude — dispatch treats an absent
+    `allow` list as allow-all, so a typo would make the trigger fire on every uploaded file."""
+
+    def test_allow_exclude_accepted(self):
+        from backend.backend.models.workflows import SetTriggerRequestModel
+        m = SetTriggerRequestModel(inputFileFilters={"allow": ["*.glb"], "exclude": []})
+        assert m.inputFileFilters["allow"] == ["*.glb"]
+
+    def test_empty_filters_accepted(self):
+        from backend.backend.models.workflows import SetTriggerRequestModel
+        m = SetTriggerRequestModel()
+        assert m.inputFileFilters == {}
+
+    def test_unknown_filter_key_rejected(self):
+        from backend.backend.models.workflows import SetTriggerRequestModel
+        with pytest.raises(ValidationError):
+            SetTriggerRequestModel(inputFileFilters={"allowed": ["*.glb"]})
+
 
 @pytest.mark.unit
 class TestWorkflowSystemConfigShapeValidation:

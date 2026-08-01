@@ -43,6 +43,9 @@ TEMPLATE_OVERRIDE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inp
 _ASSET_SCOPE_KEYS = (
     "crossAssetAllowed", "singleAssetOnly", "wholeAssetAllowed", "folderAllowed", "wholeAsset")
 _METADATA_INPUT_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes")
+# The only keys an inputFileFilters map may carry. An absent `allow` list means allow-all, so a
+# mistyped key would silently widen the filter instead of narrowing it.
+_INPUT_FILE_FILTER_KEYS = ("allow", "exclude")
 
 
 def _validate_system_config_shape(cfg, context):
@@ -81,13 +84,23 @@ def _validate_system_config_shape(cfg, context):
 
     filters = cfg.get("inputFileFilters")
     if filters is not None:
-        if not isinstance(filters, dict):
-            raise ValueError(f"{context}.inputFileFilters must be an object")
-        for list_key in ("allow", "exclude"):
-            if list_key in filters:
-                lst = filters[list_key]
-                if not isinstance(lst, list) or not all(isinstance(x, str) for x in lst):
-                    raise ValueError(f"{context}.inputFileFilters.{list_key} must be a list of strings")
+        _validate_input_file_filters(filters, f"{context}.inputFileFilters")
+
+
+def _validate_input_file_filters(filters, context):
+    """Validate an {allow, exclude} input-file-filter map: only those two keys, each a list of
+    strings. Raises ValueError on failure."""
+    if not isinstance(filters, dict):
+        raise ValueError(f"{context} must be an object")
+    for key in filters:
+        if key not in _INPUT_FILE_FILTER_KEYS:
+            raise ValueError(
+                f"{context} has unknown key '{key}'; allowed: {_INPUT_FILE_FILTER_KEYS}")
+    for list_key in _INPUT_FILE_FILTER_KEYS:
+        if list_key in filters:
+            lst = filters[list_key]
+            if not isinstance(lst, list) or not all(isinstance(x, str) for x in lst):
+                raise ValueError(f"{context}.{list_key} must be a list of strings")
 
 
 def _validate_template_overrides(overrides):
@@ -292,10 +305,15 @@ def _validate_execution_config(execution_config):
                 raise ValueError(
                     "lambda.resourceId must be a Lambda function ARN or a valid function name")
     elif exec_type == "SQS":
+        # The queue URL becomes the sendMessage task's QueueUrl. An absent value would emit a state
+        # machine with an empty target, so it is required here rather than at workflow-save time.
         queue_url = (config.get("sqs") or {}).get("queueUrl")
-        if queue_url:
-            checks["sqs.queueUrl"] = {"value": queue_url, "validator": "SQS_QUEUE_URL"}
+        if not queue_url:
+            raise ValueError("sqs.queueUrl is required for the SQS execution type")
+        checks["sqs.queueUrl"] = {"value": queue_url, "validator": "SQS_QUEUE_URL"}
     elif exec_type == "EventBridge":
+        # busArn is optional (an absent bus resolves to the account's default event bus); source and
+        # detailType have task-state defaults as well.
         eb = config.get("eventBridge") or {}
         if eb.get("busArn"):
             checks["eventBridge.busArn"] = {"value": eb["busArn"], "validator": "EVENTBRIDGE_BUS_ARN"}
@@ -304,6 +322,29 @@ def _validate_execution_config(execution_config):
         if eb.get("detailType"):
             checks["eventBridge.detailType"] = {
                 "value": eb["detailType"], "validator": "EVENTBRIDGE_DETAIL_TYPE"}
+    elif exec_type == "DeadlineCloud":
+        # createJob only queues the job; completion arrives through the task-token callback, so the
+        # callback is mandatory and the farm/queue the job is submitted to must be named.
+        dc = config.get("deadlineCloud") or {}
+        if config.get("waitForCallback") != "Enabled":
+            raise ValueError(
+                "waitForCallback must be Enabled for the DeadlineCloud execution type: createJob "
+                "only queues the job and completion is reported via the task-token callback")
+        for field in ("farmId", "queueId"):
+            if not dc.get(field):
+                raise ValueError(
+                    f"deadlineCloud.{field} is required for the DeadlineCloud execution type")
+        # The createJob task state casts these to int.
+        for field in ("priority", "maxRetriesPerTask", "maxFailedTasksCount"):
+            raw = dc.get(field)
+            if raw in (None, ""):
+                continue
+            try:
+                value = int(raw)
+            except (ValueError, TypeError):
+                raise ValueError(f"deadlineCloud.{field} must be an integer")
+            if value < 0:
+                raise ValueError(f"deadlineCloud.{field} cannot be negative")
     if checks:
         (valid, message) = validate(checks)
         if not valid:
@@ -360,6 +401,9 @@ class UpdatePipelineRequestModel(BaseModel, extra='ignore'):
     executionConfig: Optional[Dict[str, Any]] = None
     systemConfig: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
+    # Soft-delete flag. DELETE sets it; an update setting it to False unarchives the pipeline (the
+    # path re-registration of a built-in takes to restore an archived row).
+    archived: Optional[bool] = None
 
     @root_validator
     def validate_fields(cls, values):

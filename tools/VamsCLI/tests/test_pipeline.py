@@ -114,7 +114,7 @@ class TestPipelineCreate:
             assert result.exit_code == 0
             assert 'requires a template' in result.output
 
-    def test_create_warnings_suppressed_in_json(self, cli_runner, generic_command_mocks):
+    def test_create_warnings_carried_into_json(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('pipeline') as mocks:
             mocks['api_client'].create_pipeline.return_value = {
                 'message': {'pipelineId': 'gen'},
@@ -122,9 +122,10 @@ class TestPipelineCreate:
             result = cli_runner.invoke(cli, [
                 'pipeline', 'create', '-d', 'my-db', '-n', 'New Pipe', '--json-output'])
             assert result.exit_code == 0
-            # JSON mode emits only the unwrapped message envelope; the warning banner is suppressed.
+            # JSON mode emits the unwrapped message envelope with the warnings array carried along.
             data = json.loads(result.output)
             assert data['pipelineId'] == 'gen'
+            assert data['warnings'] == ['some warning']
 
 
 class TestPipelineUpdate:
@@ -170,6 +171,50 @@ class TestPipelineDelete:
         with generic_command_mocks('pipeline') as mocks:
             mocks['api_client'].delete_pipeline.side_effect = PipelineNotFoundError("nope")
             result = cli_runner.invoke(cli, ['pipeline', 'delete', '-d', 'my-db', '-p', 'p1'])
+            assert result.exit_code != 0
+
+
+class TestPipelineUnarchive:
+    def test_unarchive_clears_archived_and_reenables(self, cli_runner, generic_command_mocks):
+        """Archiving sets enabled=False too, so unarchive must re-enable or the pipeline comes back
+        unusable. Only these two flags are sent — any other field would overwrite stored values."""
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].update_pipeline.return_value = {
+                'message': {'pipelineId': 'p1', 'pipelineName': 'Pipe One', 'archived': False}}
+            result = cli_runner.invoke(cli, ['pipeline', 'unarchive', '-d', 'my-db', '-p', 'p1'])
+            assert result.exit_code == 0
+            mocks['api_client'].update_pipeline.assert_called_once_with(
+                'my-db', 'p1', {'archived': False, 'enabled': True})
+
+    def test_unarchive_keep_disabled(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].update_pipeline.return_value = {
+                'message': {'pipelineId': 'p1', 'archived': False}}
+            result = cli_runner.invoke(
+                cli, ['pipeline', 'unarchive', '-d', 'my-db', '-p', 'p1', '--keep-disabled'])
+            assert result.exit_code == 0
+            mocks['api_client'].update_pipeline.assert_called_once_with(
+                'my-db', 'p1', {'archived': False})
+
+    def test_unarchive_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].update_pipeline.return_value = {
+                'message': {'pipelineId': 'p1', 'archived': False}}
+            result = cli_runner.invoke(
+                cli, ['pipeline', 'unarchive', '-d', 'my-db', '-p', 'p1', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['archived'] is False
+
+    def test_unarchive_not_found(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].update_pipeline.side_effect = PipelineNotFoundError("nope")
+            result = cli_runner.invoke(cli, ['pipeline', 'unarchive', '-d', 'my-db', '-p', 'p1'])
+            assert result.exit_code != 0
+
+    def test_unarchive_invalid_data(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].update_pipeline.side_effect = InvalidPipelineDataError("bad")
+            result = cli_runner.invoke(cli, ['pipeline', 'unarchive', '-d', 'my-db', '-p', 'p1'])
             assert result.exit_code != 0
 
 
@@ -239,8 +284,34 @@ class TestPipelineTemplate:
         with generic_command_mocks('pipeline') as mocks:
             mocks['api_client'].delete_pipeline_template.return_value = {'message': 'Template deleted'}
             result = cli_runner.invoke(cli, [
-                'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1'])
+                'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1', '--yes'])
             assert result.exit_code == 0
+
+    def test_template_delete_requires_confirmation(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'delete', '-d', 'my-db', '-p', 'p1', '-t', 't1'], input='n\n')
+            assert result.exit_code != 0
+            mocks['api_client'].delete_pipeline_template.assert_not_called()
+
+    def test_template_create_sends_description(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].create_pipeline_template.return_value = {'message': {'templateId': 't1'}}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'create', '-d', 'my-db', '-p', 'p1', '-n', 'T1',
+                '--description', 'OBJ output'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].create_pipeline_template.call_args[0][2]
+            assert body['description'] == 'OBJ output'
+
+    def test_template_list_drains_pages(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].list_pipeline_templates.return_value = {
+                'message': {'Items': [{'templateId': 't1'}, {'templateId': 't2'}]}}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'template', 'list', '-d', 'my-db', '-p', 'p1'])
+            assert result.exit_code == 0
+            assert 't2' in result.output
 
     def test_template_get_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('pipeline') as mocks:
@@ -270,6 +341,15 @@ class TestPipelineTagSchema:
             fields = mocks['api_client'].set_pipeline_template_tag_schema.call_args.args[3]
             assert fields == [{'tagKey': 'q', 'type': 'string'}]
 
+    def test_tag_schema_set_explicit_empty_list_clears(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('pipeline') as mocks:
+            mocks['api_client'].set_pipeline_template_tag_schema.return_value = {'message': {'fields': []}}
+            result = cli_runner.invoke(cli, [
+                'pipeline', 'tag-schema', 'set', '-d', 'my-db', '-p', 'p1', '-t', 't1',
+                '--fields', '[]'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].set_pipeline_template_tag_schema.call_args.args[3] == []
+
     def test_tag_schema_set_rejects_non_list(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('pipeline'):
             result = cli_runner.invoke(cli, [
@@ -285,3 +365,37 @@ class TestPipelineTagSchema:
                 'pipeline', 'tag-schema', 'set', '-d', 'my-db', '-p', 'p1', '-t', 't1',
                 '--fields', '[{"tagKey": "q"}]'])
             assert result.exit_code != 0
+
+
+class TestPipelineTemplateListPagination:
+    """The templates list handler returns one page plus a NextToken; the client drains it."""
+
+    def _client(self):
+        from unittest.mock import MagicMock
+        from vamscli.utils.api_client import APIClient
+        profile_manager = MagicMock()
+        profile_manager.is_override_token.return_value = False
+        profile_manager.load_auth_profile.return_value = {}
+        return APIClient("https://example.com/api", profile_manager=profile_manager)
+
+    def _response(self, body):
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b"{}"
+        resp.headers = {}
+        resp.json.return_value = body
+        return resp
+
+    def test_all_pages_are_drained(self):
+        from unittest.mock import patch
+        client = self._client()
+        pages = [
+            self._response({'message': {'Items': [{'templateId': 't1'}], 'NextToken': 'tok'}}),
+            self._response({'message': {'Items': [{'templateId': 't2'}]}}),
+        ]
+        with patch.object(client, 'get', side_effect=pages) as mock_get:
+            result = client.list_pipeline_templates('db1', 'p1')
+
+        assert [t['templateId'] for t in result['message']['Items']] == ['t1', 't2']
+        assert mock_get.call_args_list[1].kwargs['params'] == {'startingToken': 'tok'}

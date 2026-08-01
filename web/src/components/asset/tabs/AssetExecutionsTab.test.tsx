@@ -16,6 +16,10 @@ jest.mock("../../../features/orchestration/api/queries", () => ({
     useExecutions: jest.fn(),
     useAllWorkflows: jest.fn(),
     useExecutionActions: jest.fn(),
+    // The board calls this for its Workflow Database filter. The filter itself is hidden in asset
+    // scope (the scope pins the database), but the hook still runs.
+    useDatabases: jest.fn(() => ({ data: [] })),
+    useWorkflow: jest.fn(() => ({ data: undefined })),
 }));
 
 jest.mock("../../../features/orchestration/permissions/useAllowedRoutes", () => ({

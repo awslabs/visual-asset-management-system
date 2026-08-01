@@ -5,6 +5,7 @@
 pipeline records' executionConfig into the V1-shaped pipeline dict the shared ASL generator reads."""
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -82,6 +83,28 @@ class TestWorkflowAslAdapter:
         dicts = wa.to_asl_pipeline_dicts(ref_records)
         assert [d["name"] for d in dicts] == ["job-a", "job-b"]
         assert dicts[1]["pipelineExecutionType"] == "SQS"
+
+    def test_state_machine_name_prefixed_and_bounded(self):
+        assert wa._generate_state_machine_name("wflow1").startswith("vams-wflow1")
+        long_name = wa._generate_state_machine_name("w" * 200)
+        assert long_name.startswith("vams-") and len(long_name) == 80
+
+    def test_state_machine_exists_propagates_non_missing_error(self):
+        class DoesNotExist(Exception):
+            pass
+        sf_client = MagicMock()
+        sf_client.exceptions.StateMachineDoesNotExist = DoesNotExist
+        sf_client.describe_state_machine.side_effect = RuntimeError("ThrottlingException")
+        with pytest.raises(RuntimeError):
+            wa._state_machine_exists(sf_client, "arn:existing")
+
+    def test_state_machine_exists_false_when_missing(self):
+        class DoesNotExist(Exception):
+            pass
+        sf_client = MagicMock()
+        sf_client.exceptions.StateMachineDoesNotExist = DoesNotExist
+        sf_client.describe_state_machine.side_effect = DoesNotExist()
+        assert wa._state_machine_exists(sf_client, "arn:gone") is False
 
     def test_deploy_state_machine_empty_refrecords_short_circuits(self):
         # No pipelines to deploy: keep any existing arn and return no job names (no env/boto3 read).

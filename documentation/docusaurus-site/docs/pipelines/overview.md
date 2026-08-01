@@ -10,16 +10,21 @@ A pipeline is a registered processing unit that accepts input files from Amazon 
 
 ### Pipeline Execution Types
 
-VAMS supports three pipeline execution types, each suited for different processing patterns:
+VAMS supports four pipeline execution types, each suited for different processing patterns:
 
-| Execution Type  | Invocation                                                       | Callback                      | Best For                                |
-| :-------------- | :--------------------------------------------------------------- | :---------------------------- | :-------------------------------------- |
-| **Lambda**      | Synchronous or asynchronous invocation of an AWS Lambda function | Immediate response            | Lightweight operations under 15 minutes |
-| **SQS**         | Asynchronous message to an Amazon SQS queue                      | AWS Step Functions Task Token | Decoupled, long-running workloads       |
-| **EventBridge** | Asynchronous event to an Amazon EventBridge bus                  | AWS Step Functions Task Token | Event-driven architectures and fan-out  |
+| Execution Type    | Invocation                                                       | Callback                      | Best For                                |
+| :---------------- | :--------------------------------------------------------------- | :---------------------------- | :-------------------------------------- |
+| **Lambda**        | Synchronous or asynchronous invocation of an AWS Lambda function | Immediate response            | Lightweight operations under 15 minutes |
+| **SQS**           | Asynchronous message to an Amazon SQS queue                      | AWS Step Functions Task Token | Decoupled, long-running workloads       |
+| **EventBridge**   | Asynchronous event to an Amazon EventBridge bus                  | AWS Step Functions Task Token | Event-driven architectures and fan-out  |
+| **DeadlineCloud** | Asynchronous job submission to an AWS Deadline Cloud queue       | AWS Step Functions Task Token | Render-farm and batch job submission    |
 
 :::info[Task Token Callbacks]
-SQS and EventBridge pipelines are always asynchronous. They use AWS Step Functions Task Tokens to signal completion back to the orchestrating workflow. The workflow pauses until the pipeline sends a success or failure callback.
+SQS, EventBridge, and Deadline Cloud pipelines are always asynchronous. They use AWS Step Functions Task Tokens to signal completion back to the orchestrating workflow. The workflow pauses until the pipeline sends a success or failure callback. Deadline Cloud always requires the callback.
+:::
+
+:::note[Deadline Cloud availability]
+The Deadline Cloud execution type is available only when the deployment sets `app.pipelines.deadlineCloudExecutionTypeEnabled`. It is unavailable in the AWS GovCloud and European Sovereign Cloud partitions.
 :::
 
 ### Pipeline Lifecycle
@@ -179,6 +184,6 @@ The workflow orchestrator generates specific S3 paths for each pipeline step. Un
 
 ## Custom Pipelines
 
-In addition to the built-in pipelines, you can register custom pipelines through the VAMS API or web interface. Custom pipelines can use any of the three execution types (Lambda, SQS, EventBridge) and can target any compute resource accessible from your AWS account.
+In addition to the built-in pipelines, you can register custom pipelines through the VAMS API or web interface. Custom pipelines can use any of the four execution types (Lambda, SQS, EventBridge, Deadline Cloud) and can target any compute resource accessible from your AWS account.
 
 For detailed guidance on creating custom pipelines, see [Custom Pipelines](custom-pipelines.md).

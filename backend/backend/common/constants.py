@@ -56,7 +56,6 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "userId": "",
 
             "pipelineId": "",
-            "pipelineType": "",
             "pipelineExecutionType": "",
 
             "workflowId": "",
@@ -118,7 +117,6 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "pipeline": {"label": "Pipeline", "fields": [
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Pipeline ID", "value": "pipelineId"},
-        {"label": "Pipeline Type", "value": "pipelineType"},
         {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"},
         {"label": "Category", "value": "category"},
         {"label": "Name", "value": "name"}]},
@@ -237,7 +235,6 @@ PERMISSION_CONSTRAINT_FIELDS = {
             "userId": "",
 
             "pipelineId": "",
-            "pipelineType": "",
             "pipelineExecutionType": "",
 
             "workflowId": "",
@@ -299,7 +296,6 @@ CONSTRAINT_OBJECT_TYPE_FIELDS = {
     "pipeline": {"label": "Pipeline", "fields": [
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Pipeline ID", "value": "pipelineId"},
-        {"label": "Pipeline Type", "value": "pipelineType"},
         {"label": "Pipeline Execution Type", "value": "pipelineExecutionType"},
         {"label": "Category", "value": "category"},
         {"label": "Name", "value": "name"}]},

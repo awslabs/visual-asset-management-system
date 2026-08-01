@@ -6,6 +6,8 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 VAMS deploys Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
+All tables use a `RETAIN` removal policy, so they and their data survive `cdk destroy` and require manual deletion. Because every table is auto-named by AWS CloudFormation (no explicit `tableName`), a retained orphan never collides with the freshly named table a redeploy creates. See [Uninstall the solution — Step 3: Delete DynamoDB tables](../deployment/uninstall.md#step-3-delete-dynamodb-tables) for cleanup steps.
+
 ### Core Data Tables
 
 | Table                          | Partition Key (PK)   | Sort Key (SK)              | Streams   | GSIs                                                                                                                                                                           | Purpose                                                        |
@@ -127,24 +129,24 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 
 ### API Handler Functions
 
-| Builder File                 | Functions                                                                                                                                      | Domain                            |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset, assetHistory | Asset CRUD, file upload/download  |
-| `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                            | Asset relationship management     |
-| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                              | Authentication and authorization  |
-| `commentFunctions.ts`        | addComment, editComment                                                                                                                        | Asset comments                    |
-| `configFunctions.ts`         | configService                                                                                                                                  | System configuration              |
-| `databaseFunctions.ts`       | createDatabase                                                                                                                                 | Database CRUD                     |
-| `metadataFunctions.ts`       | metadataService                                                                                                                                | Metadata CRUD                     |
-| `metadataSchemaFunctions.ts` | metadataSchemaService                                                                                                                          | Metadata schema management        |
-| `pipelineFunctions.ts`       | createPipeline, enablePipeline                                                                                                                 | Pipeline management               |
-| `roleFunctions.ts`           | createRole                                                                                                                                     | Role CRUD                         |
-| `sendEmailFunctions.ts`      | sendEmail                                                                                                                                      | Email notifications               |
-| `subscriptionFunctions.ts`   | subscriptionService, checkSubscription, unSubscribe                                                                                            | Event subscriptions               |
-| `tagFunctions.ts`            | createTag                                                                                                                                      | Tag CRUD                          |
-| `tagTypeFunctions.ts`        | createTagType                                                                                                                                  | Tag type CRUD                     |
-| `userRoleFunctions.ts`       | userRolesService                                                                                                                               | User-role assignment              |
-| `workflowFunctions.ts`       | listWorkflowExecutions, createWorkflow, executeWorkflow, sqsAutoExecuteWorkflow, processWorkflowExecutionOutput, importGlobalPipelineWorkflow  | Workflow management and execution |
+| Builder File                 | Functions                                                                                                                                                                                                                                                             | Domain                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `assetFunctions.ts`          | createAsset, uploadFile, streamAuxiliaryPreviewAsset, downloadAsset, assetVersions, streamAsset, sqsUploadFileLarge, ingestAsset, assetHistory                                                                                                                        | Asset CRUD, file upload/download  |
+| `assetsLinkFunctions.ts`     | createAssetLink, assetLinksMetadata                                                                                                                                                                                                                                   | Asset relationship management     |
+| `authFunctions.ts`           | authConstraints, authConstraintsTemplate, apiKeyService, apiGatewayAuthorizerRest                                                                                                                                                                                     | Authentication and authorization  |
+| `commentFunctions.ts`        | addComment, editComment                                                                                                                                                                                                                                               | Asset comments                    |
+| `configFunctions.ts`         | configService                                                                                                                                                                                                                                                         | System configuration              |
+| `databaseFunctions.ts`       | createDatabase                                                                                                                                                                                                                                                        | Database CRUD                     |
+| `metadataFunctions.ts`       | metadataService                                                                                                                                                                                                                                                       | Metadata CRUD                     |
+| `metadataSchemaFunctions.ts` | metadataSchemaService                                                                                                                                                                                                                                                 | Metadata schema management        |
+| `pipelineFunctions.ts`       | pipelineService, pipelineTemplateService                                                                                                                                                                                                                              | Pipeline and template management  |
+| `roleFunctions.ts`           | createRole                                                                                                                                                                                                                                                            | Role CRUD                         |
+| `sendEmailFunctions.ts`      | sendEmail                                                                                                                                                                                                                                                             | Email notifications               |
+| `subscriptionFunctions.ts`   | subscriptionService, checkSubscription, unSubscribe                                                                                                                                                                                                                   | Event subscriptions               |
+| `tagFunctions.ts`            | createTag                                                                                                                                                                                                                                                             | Tag CRUD                          |
+| `tagTypeFunctions.ts`        | createTagType                                                                                                                                                                                                                                                         | Tag type CRUD                     |
+| `userRoleFunctions.ts`       | userRolesService                                                                                                                                                                                                                                                      | User-role assignment              |
+| `workflowFunctions.ts`       | workflowService, workflowTriggerService, executionService, executeWorkflow, workflowTriggerDispatch, processWorkflowExecutionOutput, interimPipelineTracking, handleExecutionError, registerPipelineExecution, deadlineCloudJobCallback, importGlobalPipelineWorkflow | Workflow management and execution |
 
 ### Search and Indexing Functions
 
@@ -222,12 +224,14 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 
 ## Amazon SQS Queues
 
-| Queue                                  | Purpose                                                       |
-| -------------------------------------- | ------------------------------------------------------------- |
-| **WorkflowAutoExecuteQueue**           | Triggers automatic workflow execution on file upload          |
-| **BucketSyncCreated** (per bucket)     | Processes S3 ObjectCreated events for bucket synchronization  |
-| **BucketSyncDeleted** (per bucket)     | Processes S3 ObjectRemoved events for bucket synchronization  |
-| **File/Asset/Database Indexer Queues** | Buffer indexing events between Amazon SNS and indexer Lambdas |
+| Queue                                  | Purpose                                                                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WorkflowTriggerDispatchQueue**       | Buffers file-upload trigger events fanned out to workflow executions                                                                                            |
+| **WorkflowTriggerDispatchDLQ**         | Dead-letter queue for trigger events that fail three delivery attempts                                                                                          |
+| **DeadlineCloudJobCallbackDLQ**        | Dead-letter queue for Deadline Cloud job-status events the callback Lambda could not process (conditional on `app.pipelines.deadlineCloudExecutionTypeEnabled`) |
+| **BucketSyncCreated** (per bucket)     | Processes S3 ObjectCreated events for bucket synchronization                                                                                                    |
+| **BucketSyncDeleted** (per bucket)     | Processes S3 ObjectRemoved events for bucket synchronization                                                                                                    |
+| **File/Asset/Database Indexer Queues** | Buffer indexing events between Amazon SNS and indexer Lambdas                                                                                                   |
 
 All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
 

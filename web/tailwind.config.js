@@ -1,7 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
     darkMode: ["selector", ".awsui-dark-mode"],
-    content: ["./src/features/orchestration/**/*.{ts,tsx}"],
+    // The orchestration module plus the thin wrapper pages in src/pages that host it — those
+    // wrappers carry their own Tailwind classes for their loading/error panels.
+    content: ["./src/features/orchestration/**/*.{ts,tsx}", "./src/pages/**/*.tsx"],
     corePlugins: { preflight: false },
     theme: {
         extend: {

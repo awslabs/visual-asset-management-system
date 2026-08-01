@@ -54,4 +54,91 @@ describe("DataTable", () => {
         expect(onRowClick).toHaveBeenCalledTimes(1);
         expect(onRowClick).toHaveBeenCalledWith({ id: 2, name: "Beta" });
     });
+
+    it("sorts from a focusable header button and reports the direction via aria-sort", async () => {
+        const rows = [
+            { id: 2, name: "Beta" },
+            { id: 1, name: "Alpha" },
+        ];
+        const columns = [{ header: "Name", accessorKey: "name" }];
+
+        render(<DataTable columns={columns} rows={rows} filtering={false} />);
+
+        const header = screen.getByRole("columnheader", { name: /Name/ });
+        expect(header).toHaveAttribute("aria-sort", "none");
+
+        await userEvent.click(screen.getByRole("button", { name: /Name/ }));
+        expect(header).toHaveAttribute("aria-sort", "ascending");
+        await userEvent.click(screen.getByRole("button", { name: /Name/ }));
+        expect(header).toHaveAttribute("aria-sort", "descending");
+    });
+
+    it("activates a clickable row from the keyboard", async () => {
+        const rows = [{ id: 1, name: "Alpha" }];
+        const columns = [{ header: "Name", accessorKey: "name" }];
+        const onRowClick = jest.fn();
+
+        render(
+            <DataTable
+                columns={columns}
+                rows={rows}
+                onRowClick={onRowClick}
+                filtering={false}
+                sorting={false}
+            />
+        );
+
+        const row = screen.getByRole("row", { name: /Alpha/ });
+        row.focus();
+        await userEvent.keyboard("{Enter}");
+        expect(onRowClick).toHaveBeenCalledWith({ id: 1, name: "Alpha" });
+    });
+
+    // A cell owning local state (like the row kebab menu's open flag): it must follow its row
+    // across a reorder rather than staying with the position.
+    const MarkCell: React.FC<{ name: string }> = ({ name }) => {
+        const [marked, setMarked] = React.useState(false);
+        return (
+            <button onClick={() => setMarked(true)}>
+                {marked ? `marked ${name}` : `mark ${name}`}
+            </button>
+        );
+    };
+
+    it("keeps per-row state bound to the same row when getRowId is supplied and rows reorder", async () => {
+        const columns = [
+            { header: "Name", accessorKey: "name" },
+            {
+                header: "State",
+                id: "state",
+                cell: ({ row }: any) => <MarkCell name={row.original.name} />,
+            },
+        ];
+
+        const first = [
+            { id: 1, name: "Alpha" },
+            { id: 2, name: "Beta" },
+        ];
+        const getRowId = (row: any) => String(row.id);
+
+        const { rerender } = render(
+            <DataTable columns={columns} rows={first} getRowId={getRowId} filtering={false} />
+        );
+
+        await userEvent.click(screen.getByRole("button", { name: "mark Alpha" }));
+        expect(screen.getByRole("button", { name: "marked Alpha" })).toBeInTheDocument();
+
+        // Reorder: Alpha moves to the second position.
+        rerender(
+            <DataTable
+                columns={columns}
+                rows={[first[1], first[0]]}
+                getRowId={getRowId}
+                filtering={false}
+            />
+        );
+
+        expect(screen.getByRole("button", { name: "marked Alpha" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "mark Beta" })).toBeInTheDocument();
+    });
 });

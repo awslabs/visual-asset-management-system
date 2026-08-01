@@ -11,7 +11,9 @@ import json
 import os
 import sys
 import types
+from types import SimpleNamespace
 
+import botocore
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -191,6 +193,32 @@ class TestExecuteOrchestration:
         m_sfn.start_execution.assert_called_once()
         # Run I/O written to the default run bucket.
         assert any(c.kwargs.get("Bucket") == "run-bucket" for c in m_s3.put_object.call_args_list)
+
+    def test_workflow_and_pipeline_authorized_with_get_not_post(self):
+        """Execution is authorized by Tier-1 on the execute route plus Tier-2 GET on the workflow and
+        its pipelines. A POST on the workflow object means create/modify, so requiring it here would
+        make 'may execute' imply 'may create workflows'."""
+        p = self._patches()
+        enforcer = _allow_enforcer()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["claims"], \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200
+        actions_by_type = {}
+        for call in enforcer.enforce.call_args_list:
+            obj = call.args[0]
+            actions_by_type.setdefault(obj.get("object__type"), set()).add(call.args[1])
+        assert actions_by_type.get("workflow") == {"GET"}
+        assert actions_by_type.get("pipeline") == {"GET"}
+        # The output asset is genuinely written, so it keeps POST.
+        assert "POST" in actions_by_type.get("asset", set())
 
     def test_disabled_workflow_blocks(self):
         wf = dict(_WORKFLOW); wf["enabled"] = False
@@ -458,23 +486,339 @@ class TestExecuteOrchestration:
 
 
 @pytest.mark.unit
-class TestNormalizeOutputPathExtension:
-    """_normalize_output_path_extension: single leading+trailing slash; '/' default; tags preserved."""
+class TestPerPipelineFilteredManifest:
+    """Pipeline 1's manifest carries only the inputs that pipeline accepts (its own inputFileFilters
+    applied, none for arity 'none'), not the workflow's full selection."""
 
-    def test_empty_and_none_default_to_root(self):
-        assert ewv2._normalize_output_path_extension(None) == "/"
-        assert ewv2._normalize_output_path_extension("") == "/"
-        assert ewv2._normalize_output_path_extension("   ") == "/"
-        assert ewv2._normalize_output_path_extension("/") == "/"
+    def _multi_input_workflow(self, pipeline_filters=None, pipeline_arity="multi"):
+        wf = dict(_WORKFLOW)
+        wf["systemConfig"] = dict(_WORKFLOW["systemConfig"])
+        wf["systemConfig"]["inputFileArity"] = "multi"
+        pipe = dict(_PIPELINE)
+        pipe["systemConfig"] = dict(_PIPELINE["systemConfig"])
+        pipe["systemConfig"]["inputFileArity"] = pipeline_arity
+        if pipeline_filters is not None:
+            pipe["systemConfig"]["inputFileFilters"] = pipeline_filters
+        return wf, pipe
 
-    def test_wraps_with_single_slashes(self):
-        assert ewv2._normalize_output_path_extension("runs/2026") == "/runs/2026/"
-        assert ewv2._normalize_output_path_extension("/runs/2026/") == "/runs/2026/"
-        assert ewv2._normalize_output_path_extension("///runs///") == "/runs/"
+    def _launch_and_read_manifest(self, wf, pipe, body):
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        manifest_puts = [c for c in m_s3.put_object.call_args_list
+                         if c.kwargs.get("Key", "").endswith("pipeline1/manifest.json")]
+        assert manifest_puts, "pipeline 1 manifest was not written"
+        return json.loads(manifest_puts[0].kwargs["Body"].decode("utf-8"))
 
-    def test_preserves_dynamic_tag_placeholders(self):
-        out = ewv2._normalize_output_path_extension("out/{{firstAssetFileFileNameNoExt}}")
-        assert out == "/out/{{firstAssetFileFileNameNoExt}}/"
+    def test_manifest_excludes_files_the_pipeline_filters_reject(self):
+        # Workflow allows multiple files with no filters; the pipeline allows only *.glb. The manifest
+        # must carry the .glb only — the pipeline never sees the .txt the workflow selected.
+        wf, pipe = self._multi_input_workflow(pipeline_filters={"allow": ["*.glb"], "exclude": []})
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/notes.txt"}]}
+        manifest = self._launch_and_read_manifest(wf, pipe, body)
+        paths = [f["relativePath"] for f in manifest["inputFiles"]]
+        assert paths == ["/f.glb"]
+
+    def test_manifest_respects_pipeline_exclude_filters(self):
+        wf, pipe = self._multi_input_workflow(
+            pipeline_filters={"allow": [], "exclude": ["*.previewFile.*"]})
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.previewFile.png"}]}
+        manifest = self._launch_and_read_manifest(wf, pipe, body)
+        paths = [f["relativePath"] for f in manifest["inputFiles"]]
+        assert paths == ["/f.glb"]
+
+    def test_arity_none_pipeline_receives_no_input_files(self):
+        # A pipeline that consumes no files gets an empty manifest input list even when the workflow
+        # selected files (the validator sized it against zero inputs).
+        wf, pipe = self._multi_input_workflow(pipeline_arity="none")
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        manifest = self._launch_and_read_manifest(wf, pipe, body)
+        assert manifest["inputFiles"] == []
+
+    def test_filtered_map_is_keyed_by_composite_pipeline_key(self):
+        # Two same-id pipelines from different databases with different filters must not share a key.
+        records = [
+            {"databaseId": "GLOBAL", "pipelineId": "convert",
+             "systemConfig": {"inputFileArity": "multi",
+                              "inputFileFilters": {"allow": ["*.glb"], "exclude": []}}},
+            {"databaseId": "db1", "pipelineId": "convert",
+             "systemConfig": {"inputFileArity": "multi",
+                              "inputFileFilters": {"allow": ["*.txt"], "exclude": []}}},
+        ]
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+                    {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/n.txt"}]
+        errors, filtered = ewv2._run_cross_validation(
+            {"systemConfig": {"inputFileArity": "multi",
+                              "assetScope": {"singleAssetOnly": True},
+                              "inputFileFilters": {"allow": [], "exclude": []}}},
+            records, {}, selected, {})
+        assert errors == []
+        assert set(filtered.keys()) == {"GLOBAL:convert", "db1:convert"}
+        assert [i["relativeFileKey"] for i in filtered["GLOBAL:convert"]] == ["/f.glb"]
+        assert [i["relativeFileKey"] for i in filtered["db1:convert"]] == ["/n.txt"]
+
+
+@pytest.mark.unit
+class TestStoredJobNamesGate:
+    """A workflow whose record cannot supply the ASL's uuid-prefixed job names cannot execute: its
+    outputs would land in a folder the end-state lambda never lists."""
+
+    def test_missing_job_names_blocks_launch(self):
+        wf = dict(_WORKFLOW)
+        wf["jobNames"] = []
+        p = TestExecuteOrchestration()._patches(workflow=wf)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}.sfn_client") as m_sfn:
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "state machine" in json.loads(resp["body"])["message"].lower()
+        m_sfn.start_execution.assert_not_called()
+
+    def test_short_job_names_blocks_launch(self):
+        wf = dict(_WORKFLOW)
+        wf["specifiedPipelines"] = [
+            {"pipelineDatabaseId": "db1", "pipelineId": "p1", "jobName": "p1"},
+            {"pipelineDatabaseId": "db1", "pipelineId": "p1", "jobName": "p1b"}]
+        wf["jobNames"] = ["uuid5-p1"]
+        p = TestExecuteOrchestration()._patches(workflow=wf)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}.sfn_client") as m_sfn:
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 400
+        m_sfn.start_execution.assert_not_called()
+
+    def test_stored_job_names_error_accepts_matching_record(self):
+        assert ewv2._stored_job_names_error({"jobNames": ["uuid5-p1"]}, [{"pipelineId": "p1"}]) == ""
+
+
+@pytest.mark.unit
+class TestResolveRequestedOutputExtension:
+    """The execution's output extension: the request's value, else the workflow's stored default.
+
+    Normalization itself is covered by tests/common/test_outputPathExtension.py; this class covers the
+    fallback decision, which is what makes a workflow-level default reachable.
+    """
+
+    def _workflow(self, default):
+        return {"systemConfig": {"defaultOutputFileBaseExecutionPathExtension": default}}
+
+    def test_a_request_value_wins_over_the_workflow_default(self):
+        request = SimpleNamespace(outputFileBaseExecutionPathExtension="/from-request/")
+        assert (ewv2._resolve_requested_output_extension(request, self._workflow("/wf-default/"))
+                == "/from-request/")
+
+    def test_an_omitted_request_value_falls_back_to_the_workflow_default(self):
+        request = SimpleNamespace(outputFileBaseExecutionPathExtension=None)
+        assert (ewv2._resolve_requested_output_extension(request, self._workflow("/wf-default/"))
+                == "/wf-default/")
+
+    def test_an_explicit_root_is_a_deliberate_choice_and_is_not_overridden(self):
+        """"" and "/" say 'write at the asset root'. Treating them as 'unset' would make a workflow
+        default impossible to opt out of at execute time."""
+        for explicit in ("", "/"):
+            request = SimpleNamespace(outputFileBaseExecutionPathExtension=explicit)
+            assert (ewv2._resolve_requested_output_extension(
+                request, self._workflow("/wf-default/")) == "/")
+
+    def test_no_request_value_and_no_default_means_the_asset_root(self):
+        request = SimpleNamespace(outputFileBaseExecutionPathExtension=None)
+        assert ewv2._resolve_requested_output_extension(request, self._workflow("")) == "/"
+        assert ewv2._resolve_requested_output_extension(request, {}) == "/"
+
+    def test_the_workflow_default_is_returned_with_its_tags_unresolved(self):
+        """The stored default is templated; substitution happens later, once the launch has a
+        manifest — so this step must not consume or mangle the placeholders."""
+        request = SimpleNamespace(outputFileBaseExecutionPathExtension=None)
+        assert (ewv2._resolve_requested_output_extension(request, self._workflow("{{jobName}}"))
+                == "/{{jobName}}")
+
+
+@pytest.mark.unit
+class TestRenderOutputPathExtension:
+    """The output base path extension's {{dynamicTag}} placeholders are substituted at launch, so the
+    value reaching the manifest, the SFN input, and the configuration row is a concrete path."""
+
+    def _launch(self, body, workflow=None):
+        p = (TestExecuteOrchestration()._patches(workflow=workflow) if workflow
+             else TestExecuteOrchestration()._patches())
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        return resp, m_s3, m_sfn
+
+    def test_placeholder_resolved_in_manifest_and_sfn_input(self):
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "outputFileBaseExecutionPathExtension": "/out/{{firstAssetFileFileNameNoExt}}/"}
+        resp, m_s3, m_sfn = self._launch(body)
+        assert resp["statusCode"] == 200, resp["body"]
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputFileBaseExecutionPathExtension"] == "/out/f/"
+        manifest_puts = [c for c in m_s3.put_object.call_args_list
+                         if c.kwargs.get("Key", "").endswith("pipeline1/manifest.json")]
+        manifest = json.loads(manifest_puts[0].kwargs["Body"].decode("utf-8"))
+        assert manifest["outputTarget"]["fileBaseExecutionPathExtension"] == "/out/f/"
+
+    def test_extension_without_placeholders_keeps_its_authored_trailing_slash(self):
+        """The trailing slash decides folder-vs-glue placement, so it is carried through verbatim
+        rather than forced on."""
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "outputFileBaseExecutionPathExtension": "runs/2026"}
+        resp, _m_s3, m_sfn = self._launch(body)
+        assert resp["statusCode"] == 200, resp["body"]
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputFileBaseExecutionPathExtension"] == "/runs/2026"
+
+        body["outputFileBaseExecutionPathExtension"] = "runs/2026/"
+        resp, _m_s3, m_sfn = self._launch(body)
+        assert resp["statusCode"] == 200, resp["body"]
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputFileBaseExecutionPathExtension"] == "/runs/2026/"
+
+    def test_the_workflow_default_reaches_the_sfn_input_resolved(self):
+        """End to end for the new default: the workflow stores "/{{jobName}}/" unresolved, a request
+        that names no prefix inherits it, and the launch resolves it to the run's job name."""
+        workflow = dict(_WORKFLOW)
+        workflow["systemConfig"] = dict(workflow.get("systemConfig") or {})
+        workflow["systemConfig"]["defaultOutputFileBaseExecutionPathExtension"] = (
+            "/{{firstAssetFileFileNameNoExt}}/")
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        resp, _m_s3, m_sfn = self._launch(body, workflow=workflow)
+        assert resp["statusCode"] == 200, resp["body"]
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputFileBaseExecutionPathExtension"] == "/f/"
+
+    def test_undefined_placeholder_is_a_caller_error(self):
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "outputFileBaseExecutionPathExtension": "/{{notARealTag}}/"}
+        resp, _m_s3, m_sfn = self._launch(body)
+        assert resp["statusCode"] == 400
+        assert "template tag" in json.loads(resp["body"])["message"].lower()
+
+    def test_a_rendered_value_over_the_length_cap_is_rejected(self):
+        """Rendering can grow the value without bound (a JSON-kind tag on a large selection renders to
+        kilobytes). Unchecked, it passes here and then fails every object write on S3's 1024-byte key
+        limit — a late, per-object failure after the pipelines have already run."""
+        long_name = "n" * 1100
+        manifest = {"inputFiles": [{"relativePath": f"/{long_name}.glb",
+                                    "key": f"a1/{long_name}.glb", "bucket": "b"}],
+                    "outputs": {}, "outputTarget": {}, "auxBucket": "", "auxTempPrefix": ""}
+        with pytest.raises(ewv2.VAMSGeneralErrorResponse, match="too long"):
+            ewv2._render_output_path_extension("/{{firstAssetFileFileName}}/", manifest, {})
+
+    def test_a_rendered_json_or_uri_value_is_rejected_rather_than_silently_mangled(self):
+        """The field advertises system tags, but a JSON-kind tag renders braces/brackets and a URI tag
+        renders '//' that normalization collapses ('s3://b/k' -> 's3:/b/k'). Both would become literal
+        garbage inside every output key, so they are refused."""
+        manifest = {"inputFiles": [{"relativePath": "/a.glb", "key": "a1/a.glb", "bucket": "b"}],
+                    "outputs": {}, "outputTarget": {}, "auxBucket": "", "auxTempPrefix": ""}
+        for tag in ("{{assetFileRelativePathArray}}", "{{firstAssetFileS3Uri}}"):
+            with pytest.raises(ewv2.VAMSGeneralErrorResponse):
+                ewv2._render_output_path_extension(f"/{tag}/", manifest, {})
+
+    def test_rendered_traversal_is_rejected(self):
+        # A tag whose value renders to a traversal segment must not become part of an output key.
+        manifest = {"inputFiles": [{"relativePath": "/..", "key": "a1/..", "bucket": "b"}],
+                    "outputs": {}, "outputTarget": {}, "auxBucket": "", "auxTempPrefix": ""}
+        with pytest.raises(ewv2.VAMSGeneralErrorResponse):
+            ewv2._render_output_path_extension(
+                "/{{firstAssetFileFileName}}/", manifest, {})
+
+
+@pytest.mark.unit
+class TestPersistFailureStopsExecution:
+    """A record-write failure after start_execution must not leave an orphan running state machine
+    that no read/abort path can see."""
+
+    def test_persist_failure_stops_the_started_execution(self):
+        p = TestExecuteOrchestration()._patches()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}._persist_execution_records", side_effect=RuntimeError("throttled")):
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 500
+        m_sfn.stop_execution.assert_called_once()
+        assert m_sfn.stop_execution.call_args.kwargs["executionArn"] == "arn:exec"
+
+    def test_stop_failure_does_not_mask_the_persist_error(self):
+        with patch(f"{MOD}.sfn_client") as m_sfn:
+            m_sfn.stop_execution.side_effect = RuntimeError("access denied")
+            ewv2._stop_started_execution("arn:exec")  # must not raise
+        assert m_sfn.stop_execution.called
+
+
+@pytest.mark.unit
+class TestBoundedInputFanOut:
+    """The per-input S3 + metadata-service reads run through a bounded worker pool, so a large
+    selection does not serialize into a request-timeout."""
+
+    def test_verify_inputs_runs_checks_in_parallel(self):
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": f"/f{i}.glb"}
+                    for i in range(25)]
+        asset_records = {("db1", "a1"): {"bucketId": "b", "assetLocation": {"Key": "a1/"}}}
+        with patch(f"{MOD}._asset_bucket_details", return_value={"bucketName": "asset-bucket"}), \
+             patch(f"{MOD}._input_exists_in_s3", return_value=(True, "v1")), \
+             patch(f"{MOD}.ThreadPoolExecutor", wraps=ewv2.ThreadPoolExecutor) as m_pool:
+            missing = ewv2._verify_inputs_exist(selected, asset_records)
+        assert missing == []
+        assert all(i["resolvedVersionId"] == "v1" for i in selected)
+        m_pool.assert_called_once_with(max_workers=ewv2.MAX_PARALLEL_INPUT_WORKERS)
+
+    def test_grouped_metadata_runs_fetches_in_parallel(self):
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": f"/f{i}.glb"}
+                    for i in range(25)]
+        assets = {("db1", "a1"): {"assetName": "A1"}}
+        gate = {"assetMetadata": True, "fileMetadata": True, "fileAttributes": True}
+        with patch(f"{MOD}._fetch_metadata", return_value=[{"metadataKey": "k", "metadataValue": "v"}]), \
+             patch(f"{MOD}._fetch_file_metadata",
+                   return_value=[{"metadataKey": "fk", "metadataValue": "fv"}]), \
+             patch(f"{MOD}.ThreadPoolExecutor", wraps=ewv2.ThreadPoolExecutor) as m_pool:
+            env = ewv2._build_grouped_metadata(selected, assets, gate, {"requestContext": {}})
+        m_pool.assert_called_once_with(max_workers=ewv2.MAX_PARALLEL_INPUT_WORKERS)
+        files = env["assets"][0]["files"]
+        # '/' asset record + one record per selected file, each carrying its own fetched values.
+        assert len(files) == len(selected) + 1
+        for record in files:
+            if record["fileKey"] == "/":
+                assert record["metadata"] == {"k": "v"}
+            else:
+                assert record["metadata"] == {"fk": "fv"}
+                assert record["attributes"] == {"fk": "fv"}
+
+    def test_grouped_metadata_gate_off_issues_no_fetches(self):
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]
+        assets = {("db1", "a1"): {"assetName": "A1"}}
+        gate = {"assetMetadata": False, "fileMetadata": False, "fileAttributes": False}
+        with patch(f"{MOD}._fetch_metadata") as m_asset, \
+             patch(f"{MOD}._fetch_file_metadata") as m_file, \
+             patch(f"{MOD}.ThreadPoolExecutor") as m_pool:
+            ewv2._build_grouped_metadata(selected, assets, gate, {"requestContext": {}})
+        m_asset.assert_not_called()
+        m_file.assert_not_called()
+        m_pool.assert_not_called()
 
 
 @pytest.mark.unit
@@ -499,3 +843,113 @@ class TestResolvedInputVersion:
             missing = ewv2._verify_inputs_exist(selected, asset_records)
         assert len(missing) == 1
         assert "resolvedVersionId" not in selected[0]
+
+    def test_manifest_entry_carries_the_resolved_version(self):
+        # The persisted input row records resolvedVersionId, so the manifest must name the same
+        # version rather than the (possibly empty) value the caller sent.
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb",
+                     "versionId": "", "resolvedVersionId": "s3-ver-abc"}]
+        asset_records = {("db1", "a1"): dict(_ASSET)}
+        with patch(f"{MOD}._asset_bucket_details", return_value={"bucketName": "asset-bucket"}):
+            entries = ewv2._build_input_manifest_entries(selected, asset_records)
+        assert entries[0]["versionId"] == "s3-ver-abc"
+
+    def test_manifest_entry_falls_back_to_the_requested_version(self):
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb",
+                     "versionId": "caller-ver"}]
+        asset_records = {("db1", "a1"): dict(_ASSET)}
+        with patch(f"{MOD}._asset_bucket_details", return_value={"bucketName": "asset-bucket"}):
+            entries = ewv2._build_input_manifest_entries(selected, asset_records)
+        assert entries[0]["versionId"] == "caller-ver"
+
+
+@pytest.mark.unit
+class TestDeleteMarkerInput:
+    """HeadObject against a delete-marker version answers 405 MethodNotAllowed. That version is not
+    readable, so it is a missing input (404 to the caller), not an unexpected failure (500)."""
+
+    def _client_error(self, code):
+        return botocore.exceptions.ClientError(
+            {"Error": {"Code": code, "Message": "x"}}, "HeadObject")
+
+    @pytest.mark.parametrize("code", ["405", "MethodNotAllowed", "404", "NoSuchKey", "NotFound"])
+    def test_unreadable_version_is_missing(self, code):
+        with patch(f"{MOD}.s3c") as m_s3:
+            m_s3.head_object.side_effect = self._client_error(code)
+            assert ewv2._input_exists_in_s3("b", "a1/f.glb", "delete-marker-ver") == (False, "")
+
+    def test_access_denied_still_raises(self):
+        with patch(f"{MOD}.s3c") as m_s3:
+            m_s3.head_object.side_effect = self._client_error("AccessDenied")
+            with pytest.raises(botocore.exceptions.ClientError):
+                ewv2._input_exists_in_s3("b", "a1/f.glb")
+
+
+@pytest.mark.unit
+class TestDuplicateInputFiles:
+    """A repeated selection names one file, so it is collapsed before arity, the manifest, and the
+    persisted input rows are derived from it (they would otherwise disagree)."""
+
+    def test_duplicate_selection_runs_as_one_input_on_arity_one(self):
+        p = TestExecuteOrchestration()._patches()
+        entry = {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}
+        body = {"inputFiles": [dict(entry), dict(entry)]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        manifest_puts = [c for c in m_s3.put_object.call_args_list
+                         if c.kwargs.get("Key", "").endswith("pipeline1/manifest.json")]
+        manifest = json.loads(manifest_puts[0].kwargs["Body"].decode("utf-8"))
+        assert len(manifest["inputFiles"]) == 1
+
+    def test_distinct_versions_of_one_key_are_kept(self):
+        model = ewv2.ExecuteWorkflowRequestV2Model(inputFiles=[
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v1"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": "v2"},
+        ])
+        assert len(model.inputFiles) == 2
+
+
+@pytest.mark.unit
+class TestUnescapeRenderedPath:
+    """render_config JSON-escapes scalar tag values for substitution inside a template's own quotes.
+    A bare path is not that context, so the escaping is reversed before the path is used."""
+
+    def test_non_ascii_stem_renders_as_real_characters(self):
+        manifest = {"inputFiles": [{"relativePath": "/café.glb", "key": "a1/café.glb",
+                                    "bucket": "b"}],
+                    "outputs": {}, "outputTarget": {}, "auxBucket": "", "auxTempPrefix": ""}
+        rendered = ewv2._render_output_path_extension(
+            "/{{firstAssetFileFileNameNoExt}}/", manifest, {})
+        assert rendered == "/café/"
+
+    def test_plain_text_is_unchanged(self):
+        assert ewv2._unescape_rendered_path("/runs/2026/") == "/runs/2026/"
+
+
+@pytest.mark.unit
+class TestMissingTemplateTagIsCallerError:
+    """render_config raises MissingTemplateTagError when a stored config body uses an undefined tag.
+    That is a caller/authoring error, so it answers 400 rather than a generic 500."""
+
+    def test_unknown_tag_in_pipeline_config_returns_400(self):
+        p = TestExecuteOrchestration()._patches()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.tr.render_config",
+                   side_effect=ewv2.tr.MissingTemplateTagError(["metadata_location"])):
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 400
+        m_sfn.start_execution.assert_not_called()

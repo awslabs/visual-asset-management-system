@@ -29,7 +29,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 
 ```
 web/
-  package.json              # npm, React 17, Vite scripts
+  package.json              # npm, React 18, Vite scripts
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
@@ -45,6 +45,7 @@ web/
       api/                  # Services + TanStack Query hooks + qk key factory
       permissions/          # useAllowedRoutes.ts (Tier-1 gating)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu, ...)
+                            #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/ workflows/ executions/ wizard/
       types.ts reservedTagKeys.ts
 
@@ -452,6 +453,57 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 
 ---
 
+### 6.5 Toast Notifications (Orchestration Module)
+
+Every mutation in `features/orchestration/**` reports through `useToast()`
+(`components/ToastProvider.tsx`) — a failure is always visible and a success is always confirmed.
+
+**It renders through the same Cloudscape `Flashbar` the rest of the app notifies with**
+(`components/search/SearchNotifications/ToastManager.tsx`), in the same fixed top-right position, with
+the same durations (8s error / 5s otherwise) and the same shared `ToastNotification` shape from
+`components/search/types`. A pipeline notification is indistinguishable from a search one. This is a
+deliberate exception to the module's Cloudscape-free rule (Rule 2): that rule governs _page content_,
+whereas the toast layer is a global overlay mounted from `App.tsx`, which already renders Cloudscape
+(`TopNavigation`). Tailwind's preflight is disabled, so there is no style bleed either way.
+
+```typescript
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
+
+const toast = useToast();
+try {
+    await archiveMutation.mutateAsync({ databaseId, pipelineId });
+    toast.success("Pipeline archived", { description: pipeline.pipelineName });
+} catch (err) {
+    toast.error("Archive failed", {
+        description: `${pipeline.pipelineName}: ${toastErrorMessage(err)}`,
+    });
+}
+```
+
+Rules:
+
+-   **Match the app's message convention**: a short header naming the outcome (`"Archive failed"`,
+    `"Pipeline archived"` — mirroring `"Search failed"` / `"Search completed"`), with the entity name
+    and the backend's message in the `description`. Do not put the entity name in the header.
+-   **Never leave a mutation's `catch` as `console.error` only, and never use `alert()`.** A silent
+    failure is indistinguishable from success; a native `alert()` is a blocking modal.
+-   **Always confirm success when the surface disappears.** A form that closes or a page that navigates
+    away on save gives no other feedback.
+-   **Keep an inline message too where it has context** — a dialog-scoped failure, or a validation
+    summary next to the offending fields. The toast is additive.
+-   **`toastErrorMessage(err)`** normalizes an `Error`, a raw string, or a `{message|error|detail}`
+    object into displayable text instead of `[object Object]`.
+-   Import Cloudscape from its **subpath** (`@cloudscape-design/components/flashbar`), never the barrel.
+
+What the provider adds over the search hook is lifecycle safety and mutation ergonomics: timers are
+cleared on unmount, identical repeats collapse instead of stacking, and the stack is capped at four (a
+group abort over many executions would otherwise fill the viewport). Its z-index is 4000 rather than
+the search manager's 1000, because the module's dialogs sit at 3001 — a failure raised from inside a
+modal would otherwise paint underneath it. `useToast()` outside a provider degrades to a logging no-op
+rather than throwing.
+
+---
+
 ## 7. Component Patterns
 
 ### 7.1 Component Organization
@@ -792,6 +844,20 @@ describe("MyComponent", () => {
 -   Cloudscape components need custom transformers (configured in `jest.config.js`)
 -   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
 -   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
+
+### 11.5 End-to-End Tests (Playwright)
+
+`web/e2e/` holds Playwright specs that drive the **deployed** application — the only layer that proves
+a frontend change reached users. Jest proves a component behaves; Playwright proves the published
+bundle behaves, so a fix living only in `src/` will still fail until the front end is rebuilt
+(`npm run build`) and deployed.
+
+Core specs (tracked) must pass against **any** sandbox — empty, freshly seeded, or long-lived — so
+they derive their subject from whatever exists and skip when a precondition is absent. Per-change
+specs stay untracked. Shared selector knowledge lives in `e2e/support/fixtures.ts`; `e2e/auth.setup.ts`
+performs the one-time Cognito login and saves `storageState` for the rest of the suite.
+
+See `web/e2e/CLAUDE.md` for the full rules, the tracked-vs-ad-hoc boundary, and the selector reference.
 
 ---
 

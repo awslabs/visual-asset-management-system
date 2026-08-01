@@ -31,12 +31,18 @@ def build_workflow_system_config(
     input_file_filters=None,
     concurrency_restriction="none",
     output_target=None,
+    allow_workflow_trigger_chaining=False,
+    default_output_file_base_execution_path_extension="",
 ):
     """Workflow system-config block. Defaults match the create-when-unspecified defaults.
 
     - input_file_arity: none | one | multi
     - concurrency_restriction: none | perAsset | perInputFile
     - output_target: {locationType: asset, allowOverride: bool}
+    - allow_workflow_trigger_chaining: whether ANOTHER workflow's output may fire this workflow's
+      triggers. Self-triggering is always blocked regardless, so an A->A loop cannot be enabled.
+    - default_output_file_base_execution_path_extension: output path prefix used when an execute
+      request supplies none. Stored UNRESOLVED so its {{tag}} placeholders resolve per run.
     """
     return {
         "inputFileArity": input_file_arity or "one",
@@ -54,6 +60,9 @@ def build_workflow_system_config(
         "inputFileFilters": input_file_filters or {"allow": [], "exclude": []},
         "concurrencyRestriction": concurrency_restriction or "none",
         "outputTarget": output_target or {"locationType": "asset", "allowOverride": False},
+        "allowWorkflowTriggerChaining": bool(allow_workflow_trigger_chaining),
+        "defaultOutputFileBaseExecutionPathExtension":
+            default_output_file_base_execution_path_extension or "",
     }
 
 

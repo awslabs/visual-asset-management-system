@@ -149,6 +149,10 @@ API_WORKFLOW_EXECUTION_PERMANENT = "/workflows/executions/{executionId}/permanen
 
 # Workflow execution list page-size cap (Step Functions throttling on the asset-scoped list).
 MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
+# Global execution list page-size cap (the handler clamps larger values to this).
+MAX_GLOBAL_EXECUTION_PAGE_SIZE = 100
+# Page ceiling for --auto-paginate on the execution list (rows are filtered after the page limit).
+MAX_EXECUTION_AUTO_PAGINATE_PAGES = 200
 
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB

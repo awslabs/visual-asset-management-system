@@ -219,7 +219,6 @@ The following fields can be used in ABAC policy rules:
 | `roleName`                 | Role name                                          |
 | `userId`                   | User identifier                                    |
 | `pipelineId`               | Pipeline identifier                                |
-| `pipelineType`             | Pipeline type                                      |
 | `pipelineExecutionType`    | Pipeline execution type (Lambda, SQS, EventBridge) |
 | `workflowId`               | Workflow identifier                                |
 | `metadataSchemaName`       | Metadata schema name                               |

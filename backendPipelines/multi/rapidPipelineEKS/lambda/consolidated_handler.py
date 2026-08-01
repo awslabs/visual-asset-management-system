@@ -10,6 +10,7 @@ to route requests to the appropriate handler logic.
 import os
 import boto3
 import json
+import shlex
 import uuid
 import time
 import sys
@@ -466,14 +467,27 @@ def handle_construct_pipeline(event):
             else:
                 output_path = output_s3_asset_files_key
 
+        # Every value interpolated into the shell command below originates from asset filenames /
+        # S3 keys / caller-supplied parameters, so each is shell-quoted with shlex.quote(). The
+        # command runs under /bin/sh (it chains steps with &&), so untrusted values must be inert
+        # single-quoted literals to prevent command injection (e.g. a filename containing $(...),
+        # backticks, or ';').
+        q_input_object = shlex.quote(f"s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key}")
+        q_input_file = shlex.quote(f"{input_s3_asset_file_filename}{input_s3_asset_extension}")
+
         # Format standard RapidPipeline command string
         if is_all_formats:
-            # Generate all formats and upload using shell globbing
-            standard_command_with_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx --read_config rp_config.json -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c && for file in {input_s3_asset_file_filename}*; do aws s3 cp \"$file\" s3://{output_s3_asset_files_bucket}/{output_path_base}/\"$file\"; done"
-            standard_command_no_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c && for file in {input_s3_asset_file_filename}*; do aws s3 cp \"$file\" s3://{output_s3_asset_files_bucket}/{output_path_base}/\"$file\"; done"
+            # Generate all formats and upload using shell globbing. The filename stem is quoted and
+            # the '*' left outside the quotes so it still expands as a glob.
+            q_output_stem = shlex.quote(input_s3_asset_file_filename)
+            q_output_prefix = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path_base}/")
+            standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
+            standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c && for file in {q_output_stem}*; do aws s3 cp \"$file\" {q_output_prefix}\"$file\"; done"
         else:
-            standard_command_with_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx --read_config rp_config.json -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c -e {output_s3_asset_file_filename} && aws s3 cp {output_s3_asset_file_filename} s3://{output_s3_asset_files_bucket}/{output_path}"
-            standard_command_no_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/{input_s3_asset_file_key} . && /rpdx/rpdx -i {input_s3_asset_file_filename}{input_s3_asset_extension} -c -e {output_s3_asset_file_filename} && aws s3 cp {output_s3_asset_file_filename} s3://{output_s3_asset_files_bucket}/{output_path}"
+            q_output_file = shlex.quote(output_s3_asset_file_filename)
+            q_output_object = shlex.quote(f"s3://{output_s3_asset_files_bucket}/{output_path}")
+            standard_command_with_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx --read_config rp_config.json -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
+            standard_command_no_config = f"aws s3 cp {q_input_object} . && /rpdx/rpdx -i {q_input_file} -c -e {q_output_file} && aws s3 cp {q_output_file} {q_output_object}"
 
         # Handle custom configurations using config.json file (outputType already removed above).
         processing_command = standard_command_no_config
@@ -485,7 +499,9 @@ def handle_construct_pipeline(event):
                 Key=f"{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json"
             )
             # Download config file from S3, read config file, then execute standard command
-            processing_command = f"aws s3 cp s3://{inputOutput_s3_assetAuxiliary_files_bucket}/{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json rp_config.json && {standard_command_with_config}"
+            q_config_object = shlex.quote(
+                f"s3://{inputOutput_s3_assetAuxiliary_files_bucket}/{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json")
+            processing_command = f"aws s3 cp {q_config_object} rp_config.json && {standard_command_with_config}"
 
         # Generate unique job ID
         job_id = str(uuid.uuid4())[:8]

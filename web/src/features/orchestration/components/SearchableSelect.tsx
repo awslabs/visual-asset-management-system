@@ -42,15 +42,19 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const containerRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
 
     const allOptions = useMemo(
         () => (leadingOption ? [leadingOption, ...options] : options),
         [leadingOption, options]
     );
 
+    // A value with no matching option (archived asset, truncated list) falls back to its raw value so
+    // a committed selection is never displayed as the placeholder.
     const selectedLabel = useMemo(() => {
         const found = allOptions.find((o) => o.value === value);
-        return found?.label ?? "";
+        if (found) return found.label;
+        return value || "";
     }, [allOptions, value]);
 
     const filtered = useMemo(() => {
@@ -63,6 +67,23 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 o.value.toLowerCase().includes(q)
         );
     }, [allOptions, query]);
+
+    const close = () => {
+        setOpen(false);
+        setQuery("");
+    };
+
+    // Arrow keys walk the rendered option buttons; focus stays where it lands so Enter/Space
+    // activates through the button itself.
+    const moveFocus = (delta: 1 | -1) => {
+        const optionEls = Array.from(
+            containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || []
+        );
+        if (optionEls.length === 0) return;
+        const current = optionEls.indexOf(document.activeElement as HTMLButtonElement);
+        const next = current === -1 ? (delta === 1 ? 0 : optionEls.length - 1) : current + delta;
+        optionEls[Math.max(0, Math.min(optionEls.length - 1, next))].focus();
+    };
 
     // Close on outside click.
     React.useEffect(() => {
@@ -78,10 +99,27 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     }, [open]);
 
     return (
-        <div ref={containerRef} className="relative">
+        <div
+            ref={containerRef}
+            className="relative"
+            onKeyDown={(e) => {
+                if (!open) return;
+                if (e.key === "Escape") {
+                    e.stopPropagation();
+                    close();
+                    triggerRef.current?.focus();
+                } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    moveFocus(e.key === "ArrowDown" ? 1 : -1);
+                }
+            }}
+        >
             <button
+                ref={triggerRef}
                 type="button"
                 aria-label={ariaLabel}
+                aria-haspopup="listbox"
+                aria-expanded={open}
                 disabled={disabled}
                 onClick={() => setOpen((o) => !o)}
                 className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary text-left disabled:opacity-50"
@@ -103,38 +141,38 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                         placeholder="Type to search…"
                         className="w-full px-3 py-2 border-b border-border-default bg-surface-input text-text-primary focus:outline-none"
                     />
-                    <ul className="max-h-60 overflow-auto py-1" role="listbox">
+                    {/* role="option" elements are direct children of the listbox: an intervening
+                        <li> would break the owned-element relationship. */}
+                    <div className="max-h-60 overflow-auto py-1" role="listbox">
                         {filtered.length === 0 ? (
-                            <li className="px-3 py-2 text-sm text-text-secondary">No matches</li>
+                            <div className="px-3 py-2 text-sm text-text-secondary">No matches</div>
                         ) : (
                             filtered.map((o) => (
-                                <li key={o.value}>
-                                    <button
-                                        type="button"
-                                        role="option"
-                                        aria-selected={o.value === value}
-                                        onClick={() => {
-                                            onChange(o.value);
-                                            setOpen(false);
-                                            setQuery("");
-                                        }}
-                                        className={`w-full text-left px-3 py-2 hover:bg-surface-hover ${
-                                            o.value === value ? "bg-surface-secondary" : ""
-                                        }`}
-                                    >
-                                        <span className="block text-sm text-text-primary">
-                                            {o.label}
+                                <button
+                                    key={o.value}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={o.value === value}
+                                    onClick={() => {
+                                        onChange(o.value);
+                                        close();
+                                    }}
+                                    className={`block w-full text-left px-3 py-2 hover:bg-surface-hover ${
+                                        o.value === value ? "bg-surface-secondary" : ""
+                                    }`}
+                                >
+                                    <span className="block text-sm text-text-primary">
+                                        {o.label}
+                                    </span>
+                                    {o.detail && (
+                                        <span className="block text-xs text-text-secondary">
+                                            {o.detail}
                                         </span>
-                                        {o.detail && (
-                                            <span className="block text-xs text-text-secondary">
-                                                {o.detail}
-                                            </span>
-                                        )}
-                                    </button>
-                                </li>
+                                    )}
+                                </button>
                             ))
                         )}
-                    </ul>
+                    </div>
                 </div>
             )}
         </div>

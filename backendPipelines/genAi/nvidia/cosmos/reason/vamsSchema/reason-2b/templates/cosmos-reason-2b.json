@@ -5,5 +5,6 @@
     "configFormat": "json",
     "configBody": "{\"MODEL_TYPE\":\"reason\",\"MODEL_SIZE\":\"2B\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Provide the analysis/caption prompt via the COSMOS_REASON_PROMPT file metadata key (or PROMPT in the config); a sensible default caption prompt is used when none is set."
+    "inputInstructions": "Provide the analysis/caption prompt via the COSMOS_REASON_PROMPT file metadata key (or PROMPT in the config); a sensible default caption prompt is used when none is set.",
+    "isDefault": true
 }

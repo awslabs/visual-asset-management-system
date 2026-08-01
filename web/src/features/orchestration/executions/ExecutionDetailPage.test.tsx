@@ -44,6 +44,47 @@ describe("ExecutionDetailPage", () => {
         jest.clearAllMocks();
     });
 
+    it("exposes the tab strip with tablist/tab semantics and marks the active tab", async () => {
+        // Styled after Cloudscape's Tabs (a bordered strip with the selected tab lifted onto the
+        // container surface). The ARIA roles are what make it a tab strip rather than loose buttons,
+        // so they are asserted here alongside the selected state.
+        const { useExecutionDetails } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-tabs",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                pipelines: [{ pipelineId: "p1", executionStatus: "SUCCEEDED" }],
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-tabs" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await waitFor(() => expect(screen.getByRole("tablist")).toBeInTheDocument());
+        expect(screen.getByRole("tab", { name: /Inputs/i })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        const pipelines = screen.getByRole("tab", { name: /Pipelines/i });
+        expect(pipelines).toHaveAttribute("aria-selected", "false");
+        await userEvent.click(pipelines);
+        expect(screen.getByRole("tab", { name: /Pipelines/i })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+    });
+
     it("renders execution detail with pipeline config body and template snapshot", async () => {
         const { useExecutionDetails } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
@@ -111,7 +152,8 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getAllByText(/e1/).length).toBeGreaterThan(0);
 
         // Navigate to Pipelines tab
-        const pipelinesTab = screen.getByRole("button", { name: /Pipelines/i });
+        // The tab strip is role="tablist"/role="tab" (Cloudscape-style), not plain buttons.
+        const pipelinesTab = screen.getByRole("tab", { name: /Pipelines/i });
         await userEvent.click(pipelinesTab);
 
         // Check pipeline section renders
@@ -181,7 +223,8 @@ describe("ExecutionDetailPage", () => {
         );
 
         // Navigate to Pipelines tab
-        const pipelinesTab = screen.getByRole("button", { name: /Pipelines/i });
+        // The tab strip is role="tablist"/role="tab" (Cloudscape-style), not plain buttons.
+        const pipelinesTab = screen.getByRole("tab", { name: /Pipelines/i });
         await userEvent.click(pipelinesTab);
 
         await waitFor(() => {

@@ -84,12 +84,81 @@ backendPipelines/
 
 **Copy the lambda files from a recent, similar pipeline** (e.g., `backendPipelines/conversion/coordinateTransform/` for Batch Fargate, `backendPipelines/3dRecon/splatToolbox/` for Batch GPU) and adapt them, rather than writing from scratch. When adapting, verify:
 
--   `vamsExecute` captures `assetId`, `databaseId`, and ALL output paths (`outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, `inputOutputS3AssetAuxiliaryFilesPath`) from the workflow event body and includes them in the message payload — no hardcoded empty strings.
--   `constructPipeline` reads `assetId` from the event and includes it in the pipeline definition dict, and selects the correct output path for the container's output target.
+-   `vamsExecute` resolves its inputs **from the manifest, not from the event body**. The Step Functions body carries only the workflow-execution identity, the I/O bucket, the executing-user context, `inputManifestS3Location`, `inputConfigurationS3Location`, and `TaskToken` (callback only). Input files, output paths, and asset identity come from `manifestHelper.resolve_pipeline_inputs(data, s3_client)`. Indexing the body for `inputS3AssetFilePath` or the output paths raises `KeyError` on the first invocation.
+-   `vamsExecute` then forwards ALL resolved output paths (`outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, `inputOutputS3AssetAuxiliaryFilesPath`) plus `assetId` / `databaseId` to `constructPipeline` — no hardcoded empty strings.
+-   `constructPipeline` reads those forwarded keys from its own event, includes `assetId` in the pipeline definition dict, and selects the correct output path for the container's output target.
 -   The container reads `assetId` from the PipelineDefinition and preserves relative subdirectories in output S3 keys.
--   Standard container utilities (S3 download/upload, Step Functions task token helpers, logging) are copied from the reference pipeline's `container/utils/`.
+-   Standard container utilities (S3 download/upload, Step Functions task token helpers, logging) are copied from a reference pipeline's container support package. **Do not name that package `utils`** if the container also vendors upstream third-party source — a top-level `utils` collides with an upstream `utils.py` on the same import name and one side's imports break. Use a distinct name (the Splat Toolbox container uses `vams_utils`).
+-   `manifestHelper.py` is vendored per pipeline and must be byte-identical across pipelines; copy it, do not re-implement it.
 
-### Step 4: Create CDK Infrastructure
+Full field-by-field reference: [The pipeline input contract](../../documentation/docusaurus-site/docs/pipelines/custom-pipelines.md#the-pipeline-input-contract).
+
+### Step 4: Author the vamsSchema Registration Bundle
+
+**Without this the pipeline's AWS resources deploy but nothing appears in VAMS.** Registration is what
+creates the pipeline, its templates, and a runnable workflow in the V2 tables. Create:
+
+```
+backendPipelines/{category}/{pipelineName}/vamsSchema/
+    pipeline.json                  # required
+    workflow.json                  # optional — one built-in workflow for the pipeline
+    templates/{templateId}.json    # optional — one file per configuration template
+```
+
+`pipeline.json` carries **no ARNs or account ids** — the execution target is injected at deploy time
+from `resourceOverrides` per `executionConfig.executionType`. Author the block for the type with its
+resource fields empty (`"lambda": {}`, `"sqs": {}`, …). Copy the shape from
+`backendPipelines/conversion/3dBasic/vamsSchema/pipeline.json`.
+
+Verify these six things, each of which silently produces an unusable pipeline when wrong:
+
+1.  **`systemConfig.inputFileFilters.allow` matches the file types the container actually handles.**
+    These globs are what the execute API and the file-upload trigger match against; a missing
+    extension makes the pipeline unselectable for that type with no error.
+2.  **A `requireTemplate: true` pipeline has a default template.** Execute auto-selects the default; with
+    none, every caller must name a `templateId`. A bundle with exactly one template has it promoted
+    automatically — with two or more, mark one `"isDefault": true`.
+3.  **`inputFileArity: "none"`** means there are no input files, so `assetId` / `databaseId` resolve from
+    the execution's output target (`outputAssetId` / `outputDatabaseId`), not from an input file.
+4.  **`assetScope` accepts two vocabularies** — the shorthand `{"wholeAsset": true|false}` and the
+    canonical four `*Allowed` keys. A malformed value can fail the import while the deploy still exits
+    0, so always confirm the row landed.
+5.  **Declare only the `systemConfig` fields that differ from the defaults.** The stored record
+    replaces `systemConfig` wholesale rather than merging, so registration fills every field a bundle
+    omits with its documented default before writing — including inside nested maps, so naming one
+    `assetScope` rule does not drop its siblings. A partial block is therefore safe, and a future
+    `systemConfig` field cannot change what an existing bundle means.
+    **An `inputFileArity: "none"` workflow needs an explicit `outputTarget`:** with no input file there
+    is no asset to lock output to, so it must be either results-only (`locationType: "none"`) or
+    `{"locationType": "asset", "allowOverride": true}` so a destination can be chosen per run.
+    Registration runs the same model validation as the API and FAILS the deploy on a bundle that
+    cannot execute, rather than storing an unusable row.
+6.  **A container must not create its own per-job output folder.** The workflow's
+    `defaultOutputFileBaseExecutionPathExtension` (e.g. `/{{jobName}}/`) is what separates runs, and it
+    is inserted just above each output file's own name so the container's folders are preserved. A
+    container-side job folder shows up as a stray level inside every asset. Set
+    `allowWorkflowTriggerChaining: true` only if this workflow should run on ANOTHER workflow's output
+    (a preview or metadata built-in acting on a conversion's result); a workflow never fires on its own
+    output regardless.
+
+Register the bundle from the pipeline's nested stack with the `VamsSchemaRegistration` construct,
+passing the deploy-time resolved resource values:
+
+```typescript
+new VamsSchemaRegistration(this, "MyPipelineSchema", {
+    schemaPath: path.join(
+        __dirname,
+        "../../../../../backendPipelines/{category}/{pipelineName}/vamsSchema"
+    ),
+    resourceOverrides: { lambdaName: myPipelineFunction.functionName },
+    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+});
+```
+
+Registration is idempotent: a redeploy overwrites the definition and clears the archived flag, so it
+never duplicates a pipeline or leaves one hidden.
+
+### Step 5: Create CDK Infrastructure
 
 Follow the pipeline nested stack pattern:
 
@@ -161,7 +230,7 @@ export class {PipelineName}NestedStack extends NestedStack {
 }
 ```
 
-### Step 5: Register Pipeline in Pipeline Builder
+### Step 6: Register Pipeline in Pipeline Builder
 
 Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 
@@ -170,7 +239,7 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 3. Instantiate the nested stack with standard props
 4. Add the `pipelineVamsLambdaFunctionName` to the `pipelineVamsLambdaFunctionNames` array
 
-### Step 6: Update the VPC Builder (Batch/ECS/Fargate pipelines)
+### Step 7: Update the VPC Builder (Batch/ECS/Fargate pipelines)
 
 **CRITICAL:** Pipelines that use AWS Batch, ECS, or Fargate MUST be added to **all three** condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Search for `useSplatToolbox` in the file to find all locations. Missing any one causes deployment failures:
 
@@ -178,7 +247,7 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 2. **VPC endpoint condition** (~line 610): the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints. Without this, Batch jobs cannot pull container images.
 3. **ECS endpoint condition** (`needsEcsPrivate`, ~line 694): controls whether the ECS VPC endpoint includes private subnets. Without this, the ECS agent on Batch instances cannot register with the ECS service.
 
-### Step 7: Add Config Flag
+### Step 8: Add Config Flag
 
 1. Add the pipeline block to the `ConfigPublic` interface in `infra/config/config.ts` under `pipelines`. Standard fields: `enabled`, `autoRegisterWithVAMS`, and where applicable `autoRegisterAutoTriggerOnFileUpload`, `useCodeBuild`.
 2. Add a backward-compatibility `undefined` check with defaults in `getConfig()`.
@@ -186,20 +255,25 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 4. Update **ALL** config template files: `config.template.commercial.json`, `config.template.govcloud.json`, AND `config.template.eusovereign.json` — a missed template silently drops operator-set values.
 5. Update `config.json` for the active deployment.
 
-### Step 8: Update Documentation and Steering
+### Step 9: Update Documentation and Steering
 
 1. **`documentation/docusaurus-site/docs/deployment/configuration-reference.md`**: add a section for the pipeline documenting every config option, following the existing pipeline-section format.
 2. **`documentation/docusaurus-site/docs/pipelines/`**: create a new pipeline page, add it to `documentation/docusaurus-site/sidebars.ts`, and add the pipeline to the `pipelines/overview.md` table and `overview/features.md`.
 3. **Root `CLAUDE.md`**: add the pipeline to the pipeline list (Rule 11).
 4. If the pipeline added a VPC subnet/endpoint requirement, update the "VPC Resource Usage by Feature" tables in the configuration reference.
 
-### Step 9: Validate
+### Step 10: Validate
 
 After creating all files, verify:
 
 -   [ ] `lambda/` directory contains `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`
--   [ ] `vamsExecute` passes through all output paths (no hardcoded empty strings) and threads `assetId`
+-   [ ] `vamsExecute` resolves inputs via `manifestHelper.resolve_pipeline_inputs()` — it does NOT index the event body for `inputS3AssetFilePath` or the output paths
+-   [ ] `vamsExecute` forwards all resolved output paths (no hardcoded empty strings) and threads `assetId` / `databaseId`
 -   [ ] Container preserves relative subdirectories in output keys using the threaded `assetId`
+-   [ ] The container's support package is NOT named `utils` when the container also vendors upstream source (import-name collision)
+-   [ ] `vamsSchema/pipeline.json` exists, carries no ARNs, and its `inputFileFilters.allow` matches the file types the container handles
+-   [ ] A `requireTemplate: true` pipeline has a default template (auto-promoted only when the bundle ships exactly one)
+-   [ ] `VamsSchemaRegistration` is wired in the nested stack with the correct `resourceOverrides`
 -   [ ] Lambda handler paths in CDK match actual file locations in `backendPipelines/`
 -   [ ] Step Functions state machine references correct Lambda ARNs
 -   [ ] Container Dockerfile builds successfully
@@ -211,16 +285,25 @@ After creating all files, verify:
 -   [ ] `suppressCdkNagLambda` and CDK Nag suppressions with justified reasons on all resources
 -   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table, features.md, sidebars.ts, root CLAUDE.md
 
+**After deploying**, confirm registration actually landed — a malformed bundle can fail to import while
+the deployment still reports success:
+
+```bash
+vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
+vamscli pipeline template list -d GLOBAL -p {pipelineId}
+```
+
 ## Workflow
 
 1. Gather requirements from the user (or parse from $ARGUMENTS)
 2. Determine pipeline category and processing type; pick a reference pipeline to copy from
 3. Create all backend pipeline files (lambda + container)
-4. Create CDK infrastructure (construct, nested stack, lambda builder)
-5. Register in pipelineBuilder-nestedStack.ts and update the VPC builder
-6. Add config flag (interface, getConfig defaults/validation, ALL templates, config.json)
-7. Update documentation and steering docs
-8. Summarize created files and next steps
+4. Author the `vamsSchema/` registration bundle (pipeline.json, optional workflow.json + templates)
+5. Create CDK infrastructure (construct, nested stack, lambda builder) and wire `VamsSchemaRegistration`
+6. Register in pipelineBuilder-nestedStack.ts and update the VPC builder
+7. Add config flag (interface, getConfig defaults/validation, ALL templates, config.json)
+8. Update documentation and steering docs
+9. Summarize created files and next steps
 
 ## User Request
 

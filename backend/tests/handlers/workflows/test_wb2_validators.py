@@ -36,6 +36,13 @@ class TestValidateTagSchema:
         errs = ts.validate_tag_schema([{"tagKey": "x"}, {"tagKey": "x"}])
         assert any("duplicate" in e.lower() for e in errs)
 
+    def test_unsubstitutable_tag_key_rejected(self):
+        # A key outside the {{tag}} name charset could never be substituted.
+        for bad in ("my-tag", "my tag", "my.tag", " padded "):
+            errs = ts.validate_tag_schema([{"tagKey": bad, "type": "string"}])
+            assert any("letters, digits and underscores" in e for e in errs), bad
+        assert ts.validate_tag_schema([{"tagKey": "my_tag2", "type": "string"}]) == []
+
     def test_unknown_type(self):
         errs = ts.validate_tag_schema([{"tagKey": "x", "type": "matrix4x4"}])
         assert any("unknown type" in e for e in errs)
@@ -95,6 +102,21 @@ class TestValidateTags:
         errs, filled = ts.validate_tags(self.SCHEMA, {"prompt": "p", "count": "10"})
         assert errs == [] and filled["count"] == 10
         errs2, _ = ts.validate_tags(self.SCHEMA, {"prompt": "p", "count": "3.5"})
+        assert any("count" in e for e in errs2)
+
+    def test_integral_float_accepted_fractional_rejected(self):
+        errs, filled = ts.validate_tags(self.SCHEMA, {"prompt": "p", "count": 3.0})
+        assert errs == [] and filled["count"] == 3
+        errs2, _ = ts.validate_tags(self.SCHEMA, {"prompt": "p", "count": 3.5})
+        assert any("count" in e for e in errs2)
+
+    def test_integral_decimal_accepted_fractional_rejected(self):
+        """DynamoDB returns numbers as Decimal, so a stored default must coerce like a float."""
+        from decimal import Decimal
+        for value in (Decimal("3"), Decimal("3.0")):
+            errs, filled = ts.validate_tags(self.SCHEMA, {"prompt": "p", "count": value})
+            assert errs == [] and filled["count"] == 3
+        errs2, _ = ts.validate_tags(self.SCHEMA, {"prompt": "p", "count": Decimal("3.5")})
         assert any("count" in e for e in errs2)
 
     def test_number_coercion(self):
@@ -317,6 +339,73 @@ class TestValidateExecution:
             self._wf(), [self._pipe()], [{"assetId": "a", "relativeFileKey": "/folder/"}])
         assert any("folder" in e for e in errs)
 
+    def test_pipeline_scope_blocks_whole_asset_the_workflow_allows(self):
+        # The pipeline's own assetScope is enforced against the inputs it receives, so a pipeline
+        # that declares no whole-asset support rejects a '/' selection the workflow gate permits.
+        wf = self._wf(assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
+                                  "wholeAssetAllowed": True, "folderAllowed": True})
+        errs, _ = ev.validate_execution(
+            wf, [self._pipe(assetScope={"wholeAssetAllowed": False})],
+            [{"assetId": "a", "relativeFileKey": "/"}])
+        assert any("db:p1" in e and "whole-asset" in e for e in errs)
+
+    def test_pipeline_scope_wholeasset_shorthand_normalized(self):
+        # The registration shorthand `wholeAsset` is read identically to `wholeAssetAllowed`.
+        wf = self._wf(assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
+                                  "wholeAssetAllowed": True, "folderAllowed": False})
+        inputs = [{"assetId": "a", "relativeFileKey": "/"}]
+        errs, _ = ev.validate_execution(wf, [self._pipe(assetScope={"wholeAsset": False})], inputs)
+        assert any("whole-asset" in e for e in errs)
+        errs, _ = ev.validate_execution(wf, [self._pipe(assetScope={"wholeAsset": True})], inputs)
+        assert errs == []
+
+    def test_pipeline_scope_undeclared_keys_defer_to_workflow(self):
+        # A pipeline assetScope declaring only wholeAssetAllowed does not additionally deny a folder
+        # selection the workflow permits.
+        wf = self._wf(assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
+                                  "wholeAssetAllowed": False, "folderAllowed": True})
+        errs, _ = ev.validate_execution(
+            wf, [self._pipe(assetScope={"wholeAssetAllowed": True})],
+            [{"assetId": "a", "relativeFileKey": "/folder/"}])
+        assert errs == []
+
+    def test_extension_allow_list_does_not_exclude_container_selections(self):
+        # An extension allow list cannot describe a whole-asset or folder selection, so those pass
+        # the filter and their admissibility is left to the assetScope gates.
+        wf = self._wf(assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
+                                  "wholeAssetAllowed": True, "folderAllowed": True},
+                      inputFileFilters={"allow": ["*.glb"], "exclude": []})
+        pipe = self._pipe(assetScope={"wholeAssetAllowed": True, "folderAllowed": True},
+                          inputFileFilters={"allow": ["*.glb"], "exclude": []})
+        for file_key in ("/", "/models/"):
+            errs, filt = ev.validate_execution(
+                wf, [pipe], [{"assetId": "a", "relativeFileKey": file_key}])
+            assert errs == [], (file_key, errs)
+            assert filt["p1"] == [{"assetId": "a", "relativeFileKey": file_key}]
+
+    def test_null_arity_is_treated_as_one(self):
+        # An explicitly-null inputFileArity must not disable arity enforcement.
+        errs, _ = ev.validate_execution(self._wf(inputFileArity=None), [self._pipe()], [])
+        assert any("exactly one input file" in e for e in errs)
+        errs2, _ = ev.validate_execution(
+            self._wf(inputFileArity="multi",
+                     assetScope={"crossAssetAllowed": True, "singleAssetOnly": False,
+                                 "wholeAssetAllowed": False, "folderAllowed": False}),
+            [self._pipe(arity=None)],
+            [{"assetId": "a", "relativeFileKey": "/x.glb"},
+             {"assetId": "a", "relativeFileKey": "/y.glb"}])
+        assert any("single input file" in e for e in errs2)
+
+    def test_path_glob_still_filters_container_selections(self):
+        # A non-extension pattern (path glob) still applies to a folder selection.
+        inputs = [{"relativeFileKey": "/models/"}, {"relativeFileKey": "/textures/"}]
+        assert ev.apply_input_file_filters(inputs, {"allow": ["/models/*"], "exclude": []}) == [
+            {"relativeFileKey": "/models/"}]
+        assert ev.apply_input_file_filters(inputs, {"allow": ["/models/"], "exclude": []}) == [
+            {"relativeFileKey": "/models/"}]
+        assert ev.apply_input_file_filters(inputs, {"allow": [], "exclude": ["*models*"]}) == [
+            {"relativeFileKey": "/textures/"}]
+
 
 # ============================ executionValidation: workflow-save checks ============================
 
@@ -344,6 +433,37 @@ class TestValidateWorkflowSave:
         errs, _ = ev.validate_workflow_save(wf, pipes)
         assert any("archived" in e for e in errs)
 
+    def test_save_error_label_includes_database(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {}, "inputFileFilters": {}}
+        pipes = [{"pipelineId": "convert", "pipelineDatabaseId": "GLOBAL", "enabled": True,
+                  "archived": True, "systemConfig": {}}]
+        errs, _ = ev.validate_workflow_save(wf, pipes)
+        assert any("GLOBAL:convert" in e for e in errs)
+
+    def test_equivalent_extension_forms_do_not_warn(self):
+        # '.glb' and '*.glb' are the same filter to the matcher, so they are not shadowing.
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"allow": [".glb"]}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"inputFileFilters": {"allow": ["*.glb"]}}}]
+        _, warns = ev.validate_workflow_save(wf, pipes)
+        assert not any("may exclude everything" in w for w in warns)
+
+    def test_disjoint_extensions_still_warn(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"allow": ["*.glb"]}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"inputFileFilters": {"allow": ["*.obj"]}}}]
+        _, warns = ev.validate_workflow_save(wf, pipes)
+        assert any("may exclude everything" in w for w in warns)
+
+    def test_wildcard_allow_does_not_warn(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {}, "inputFileFilters": {"allow": ["*"]}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"inputFileFilters": {"allow": ["*.glb"]}}}]
+        _, warns = ev.validate_workflow_save(wf, pipes)
+        assert not any("may exclude everything" in w for w in warns)
+
     def test_trigger_default_undefaulted_warns(self):
         wf = {"inputFileArity": "one", "metadataInputs": {}, "inputFileFilters": {}}
         errs, warns = ev.validate_workflow_save(
@@ -352,6 +472,49 @@ class TestValidateWorkflowSave:
 
 
 # ============================ metadata-format v2 ============================
+
+@pytest.mark.unit
+class TestDefaultOutputPathExtensionValidator:
+    """systemConfig.defaultOutputFileBaseExecutionPathExtension shape rules.
+
+    It is stored UNRESOLVED, so `{{tag}}` text is legal and only the rules that survive templating are
+    enforced here; the RENDERED value is re-checked at launch.
+    """
+
+    def _validate(self, value):
+        from backend.backend.models.workflows import _validate_default_output_path_extension
+        _validate_default_output_path_extension(
+            {"defaultOutputFileBaseExecutionPathExtension": value})
+
+    def test_template_tags_are_accepted(self):
+        for value in ("/{{executionId}}/", "{{jobName}}", "/runs/{{executionId}}/out/"):
+            self._validate(value)
+
+    def test_plain_paths_and_absent_values_are_accepted(self):
+        for value in ("/YOLO/", "YOLO", "/", "", None):
+            self._validate(value)
+        from backend.backend.models.workflows import _validate_default_output_path_extension
+        _validate_default_output_path_extension({})          # key absent
+        _validate_default_output_path_extension(None)        # no systemConfig at all
+
+    def test_traversal_is_rejected(self):
+        with pytest.raises(ValueError, match="must not contain '\.\.'"):
+            self._validate("/../escape/")
+
+    def test_backslashes_are_rejected(self):
+        with pytest.raises(ValueError, match="backslashes"):
+            self._validate("\windows\path")
+
+    def test_a_non_string_is_rejected(self):
+        for value in (123, True, ["/a/"], {"a": 1}):
+            with pytest.raises(ValueError, match="must be a string"):
+                self._validate(value)
+
+    def test_an_oversized_value_is_rejected(self):
+        self._validate("/" + "a" * 1022 + "/")               # exactly 1024
+        with pytest.raises(ValueError, match="1024 characters"):
+            self._validate("/" + "a" * 1024 + "/")
+
 
 @pytest.mark.unit
 class TestMetadataV2:

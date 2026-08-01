@@ -15,7 +15,7 @@ unit-tested in isolation. It centralizes:
 import uuid
 from datetime import datetime, timezone
 
-# Max bytes for a single free-form text field stored in DynamoDB (keeps each
+# Byte budget shared by the free-form text fields of one DynamoDB item (keeps each
 # item comfortably under the 400 KB DynamoDB item limit).
 MAX_TEXT_FIELD_BYTES = 380 * 1024
 MAX_LOG_FIELD_BYTES = 390 * 1024
@@ -361,6 +361,35 @@ def truncate_text(text: str, limit: int = MAX_TEXT_FIELD_BYTES):
     return encoded[:limit].decode("utf-8", errors="ignore"), True
 
 
+def truncate_text_budget(texts, total_limit: int = MAX_TEXT_FIELD_BYTES):
+    """Trim a group of free-form text fields that share ONE DynamoDB item so their combined UTF-8
+    size stays within total_limit. A field smaller than its equal share of the budget is kept whole
+    and its unused bytes are redistributed to the oversized fields. Returns a list of
+    (text, was_truncated) in input order."""
+    values = [t or "" for t in texts]
+    sizes = [len(v.encode("utf-8")) for v in values]
+    if sum(sizes) <= total_limit:
+        return [(v, False) for v in values]
+
+    limits = [0] * len(values)
+    remaining = total_limit
+    pending = list(range(len(values)))
+    while pending:
+        share = remaining // len(pending)
+        under = [i for i in pending if sizes[i] <= share]
+        if not under:
+            for i in pending:
+                limits[i] = share
+            # Integer-division leftover goes to the first oversized field.
+            limits[pending[0]] += remaining - share * len(pending)
+            break
+        for i in under:
+            limits[i] = sizes[i]
+            remaining -= sizes[i]
+            pending.remove(i)
+    return [truncate_text(values[i], limit=limits[i]) for i in range(len(values))]
+
+
 def build_workflow_execution_record(
     execution_id, workflow_database_id, workflow_id, workflow_arn,
     workflow_execution_arn, execution_start_date, execution_status,
@@ -549,8 +578,10 @@ def build_input_configuration_record(
         supplied, so a re-run can faithfully reconstruct a template-less override execution (there is
         no templateId to re-resolve). Truncated inline; empty when no override was used.
     """
-    content, truncated = truncate_text(input_configuration or "")
-    override_content, override_truncated = truncate_text(custom_template_override or "")
+    # Both text fields land in the same item and share one byte budget.
+    ((content, truncated),
+     (override_content, override_truncated)) = truncate_text_budget(
+        [input_configuration or "", custom_template_override or ""])
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "recordType": "configuration",  # SK
@@ -622,8 +653,9 @@ def build_log_record(
     pipeline_execution_id, log_type, result_log, error_log, log_group_arn, log_stream_name,
 ):
     """PipelineExecutionLogsStorageTable row (log_type='summary')."""
-    result_content, result_truncated = truncate_text(result_log or "", limit=MAX_LOG_FIELD_BYTES)
-    error_content, error_truncated = truncate_text(error_log or "", limit=MAX_LOG_FIELD_BYTES)
+    ((result_content, result_truncated),
+     (error_content, error_truncated)) = truncate_text_budget(
+        [result_log or "", error_log or ""], total_limit=MAX_LOG_FIELD_BYTES)
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "logType": log_type,  # SK
@@ -644,8 +676,9 @@ def build_workflow_configuration_record(
     input_metadata_file_s3_key="",
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration')."""
-    config_content, config_truncated = truncate_text(workflow_configuration or "")
-    metadata_content, metadata_truncated = truncate_text(input_metadata or "")
+    ((config_content, config_truncated),
+     (metadata_content, metadata_truncated)) = truncate_text_budget(
+        [workflow_configuration or "", input_metadata or ""])
     return {
         "workflowExecutionId": workflow_execution_id,  # PK
         "recordType": "configuration",  # SK

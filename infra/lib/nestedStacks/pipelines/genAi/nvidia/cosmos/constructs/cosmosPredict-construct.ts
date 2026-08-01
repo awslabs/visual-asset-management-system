@@ -382,7 +382,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 instanceTypes: instanceTypes,
                 ec2Configuration: [
                     {
-                        imageType: "ECS_AL2",
+                        imageType: "ECS_AL2023_NVIDIA",
                     },
                 ],
                 subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
@@ -494,7 +494,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         instanceTypes: instanceTypes14B,
                         ec2Configuration: [
                             {
-                                imageType: "ECS_AL2",
+                                imageType: "ECS_AL2023_NVIDIA",
                             },
                         ],
                         subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
@@ -644,6 +644,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 },
                 environment: [
                     { name: "MODEL_TYPE", value: modelType },
+                    { name: "MODEL_SIZE", value: modelSize },
                     { name: "MODEL_VERSION", value: modelVersion },
                     { name: "AWS_REGION", value: region },
                     { name: "S3_MODEL_BUCKET", value: modelCacheBucket.bucketName },
@@ -796,7 +797,10 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 `CosmosPredict-${modelKey}-StateMachine`,
                 {
                     definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-                    timeout: Duration.hours(5),
+                    // Envelopes the Batch attempt (attemptDurationSeconds 28800) so a long-running
+                    // job reaches its own failure path — and the task-token callback — rather than
+                    // being cut short by the state machine.
+                    timeout: Duration.hours(9),
                     logs: {
                         destination: stateMachineLogGroup,
                         includeExecutionData: true,

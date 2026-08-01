@@ -83,25 +83,34 @@ class TestDispatcher:
     def test_iter_uploaded_objects_eventbridge_detail_in_sqs(self):
         event = {"Records": [{"body": json.dumps({
             "detail": {"bucket": {"name": "b1"}, "object": {"key": "a1/x.glb"}}})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b1", "a1/x.glb")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b1", "a1/x.glb", "")]
 
     def test_iter_uploaded_objects_s3_records_in_sqs(self):
         event = {"Records": [{"body": json.dumps({
             "Records": [{"s3": {"bucket": {"name": "b2"}, "object": {"key": "a2/y.e57"}}}]})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b2", "a2/y.e57")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b2", "a2/y.e57", "")]
 
     def test_iter_uploaded_objects_clean_detail_records(self):
         # The producer publishes a clean EventBridge detail carrying flat S3 Records.
         event = {"Records": [{"body": json.dumps({
             "detail": {"Records": [{"s3": {"bucket": {"name": "b3"}, "object": {"key": "a3/z.glb"}}}],
                        "ASSET_BUCKET_NAME": "b3"}})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b3", "a3/z.glb")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b3", "a3/z.glb", "")]
 
     def test_iter_uploaded_objects_sns_notification_envelope(self):
         # Defensive: an SNS Notification envelope wrapping the S3 records is also unwrapped.
         inner = json.dumps({"Records": [{"s3": {"bucket": {"name": "b4"}, "object": {"key": "a4/w.obj"}}}]})
         event = {"Records": [{"body": json.dumps({"Type": "Notification", "Message": inner})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b4", "a4/w.obj")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b4", "a4/w.obj", "")]
+
+    def test_iter_uploaded_objects_carries_object_version_id(self):
+        # S3 notification records carry the uploaded object's versionId; it pins the run to the
+        # version that was uploaded rather than whatever is latest when the trigger fires.
+        event = {"Records": [{"body": json.dumps({"detail": {"Records": [
+            {"s3": {"bucket": {"name": "b"}, "object": {"key": "a/1.glb", "versionId": "v1"}}},
+            {"s3": {"bucket": {"name": "b"}, "object": {"key": "a/2.glb", "versionId": "null"}}}]}})}]}
+        assert list(wd._iter_uploaded_objects(event)) == [
+            ("b", "a/1.glb", "v1"), ("b", "a/2.glb", "")]
 
     def test_should_skip_key(self):
         assert wd._should_skip_key("folder/") is True
@@ -111,7 +120,7 @@ class TestDispatcher:
         trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
                    "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".glb"]},
                                                       "defaultTemplateIds": {}}}
-        with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/model.glb")), \
+        with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/model.glb", "", "")), \
              patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke:
             launched = wd._dispatch_uploaded_file("b1", "a1/model.glb", [trigger])
         assert launched == 1
@@ -143,3 +152,102 @@ class TestDispatcher:
             resp = wd.lambda_handler(event, MagicMock())
         assert resp["statusCode"] == 200
         assert json.loads(resp["body"])["workflowsLaunched"] == 1  # second file still processed
+
+    def test_trigger_enumeration_failure_raises_for_sqs_retry(self):
+        # A total dispatch failure must raise so the SQS event source retries the batch and it
+        # eventually reaches the DLQ, rather than returning 500 (which deletes the batch).
+        with patch(f"{DMOD}._list_fileupload_triggers", side_effect=RuntimeError("throttled")):
+            with pytest.raises(RuntimeError):
+                wd.lambda_handler({"Records": []}, MagicMock())
+
+    def test_batch_level_failure_outside_the_per_file_loop_raises(self):
+        # A non-dict SQS record breaks enumeration itself; raising keeps the batch redeliverable
+        # instead of letting SQS delete it.
+        with patch(f"{DMOD}._list_fileupload_triggers", return_value=[{"triggerType": "fileUpload"}]), \
+             patch(f"{DMOD}._iter_uploaded_objects", side_effect=AttributeError("not a dict")):
+            with pytest.raises(AttributeError):
+                wd.lambda_handler({"Records": [1]}, MagicMock())
+
+    def test_unrecognized_envelope_warns(self):
+        # A producer-side envelope change would otherwise silently stop every trigger.
+        with patch(f"{DMOD}._list_fileupload_triggers", return_value=[{"triggerType": "fileUpload"}]), \
+             patch.object(wd.logger, "warning") as m_warn:
+            resp = wd.lambda_handler({"somethingElse": {}}, MagicMock())
+        assert json.loads(resp["body"])["filesProcessed"] == 0
+        m_warn.assert_called_once()
+
+    def test_dispatch_threads_version_id(self):
+        trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
+                   "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".glb"]},
+                                                      "defaultTemplateIds": {}}}
+        with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/model.glb", "", "")), \
+             patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke:
+            wd._dispatch_uploaded_file("b1", "a1/model.glb", [trigger], "ver-7")
+        _wfdb, _wfid, body = m_invoke.call_args.args
+        assert body["inputFiles"][0]["versionId"] == "ver-7"
+
+
+@pytest.mark.unit
+class TestResolveAssetRelativeKey:
+    def _head(self, database_id="db1", asset_id="a1"):
+        return {"Metadata": {"databaseid": database_id, "assetid": asset_id}}
+
+    def test_relative_key_within_asset_location(self):
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1/"}}}):
+            assert wd._resolve_asset_relative_key("b1", "prefix/a1/sub/model.glb")[:3] == (
+                "db1", "a1", "/sub/model.glb")
+
+    def test_object_in_a_different_bucket_than_the_asset_rejected(self):
+        # Same-prefix assets can live in different buckets, so the bucket must match too.
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"bucketId": "bk1",
+                                                 "assetLocation": {"Key": "prefix/a1/"}}}), \
+             patch.object(wd, "_asset_bucket_name", return_value="other-bucket"):
+            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb") is None
+
+    def test_matching_bucket_resolves(self):
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"bucketId": "bk1",
+                                                 "assetLocation": {"Key": "prefix/a1/"}}}), \
+             patch.object(wd, "_asset_bucket_name", return_value="b1"):
+            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb")[:3] == (
+                "db1", "a1", "/model.glb")
+
+    def test_unresolvable_bucket_row_leaves_the_key_check_as_the_gate(self):
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"bucketId": "bk1",
+                                                 "assetLocation": {"Key": "prefix/a1/"}}}), \
+             patch.object(wd.s3_asset_buckets_table, "query", side_effect=RuntimeError("throttled")):
+            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb")[:3] == (
+                "db1", "a1", "/model.glb")
+
+    def test_key_outside_asset_location_rejected(self):
+        # The metadata naming the asset is client-settable on a direct asset-bucket write, so an
+        # object outside the named asset's own location must not bind to it.
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1/"}}}):
+            assert wd._resolve_asset_relative_key("b1", "prefix/other/model.glb") is None
+
+    def test_shared_name_prefix_is_not_containment(self):
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1"}}}):
+            assert wd._resolve_asset_relative_key("b1", "prefix/a10/model.glb") is None
+
+    def test_missing_asset_location_rejected(self):
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(wd.asset_storage_table, "get_item", return_value={"Item": {}}):
+            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb") is None
+
+    def test_version_id_passed_to_head_object(self):
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()) as m_head, \
+             patch.object(wd.asset_storage_table, "get_item",
+                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1/"}}}):
+            wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb", "ver-3")
+        assert m_head.call_args.kwargs["VersionId"] == "ver-3"

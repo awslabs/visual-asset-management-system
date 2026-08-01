@@ -125,7 +125,8 @@ def _sf_client():
 
 
 def _state_machine_exists(sf_client, workflow_arn):
-    """True if the state machine ARN still resolves."""
+    """True if the state machine ARN still resolves. Any other describe failure propagates: treating
+    it as absent would create a second state machine and orphan the recorded one."""
     try:
         sf_client.describe_state_machine(stateMachineArn=workflow_arn)
         return True
@@ -134,18 +135,14 @@ def _state_machine_exists(sf_client, workflow_arn):
         return False
     except Exception as e:
         logger.exception(f"Error verifying state machine existence for {workflow_arn}: {e}")
-        return False
+        raise
 
 
 def _generate_state_machine_name(workflow_id):
-    """Build a unique, <=80-char, 'vams'-prefixed state machine name."""
-    name = workflow_id
-    if len(name) > 66:
-        name = name[-66:]
-    name = "vams-" + name + uuid.uuid1().hex[:8]
-    if len(name) > 80:
-        name = name[-79:]
-    return name
+    """Build a unique, <=80-char, 'vams-'-prefixed state machine name."""
+    suffix = uuid.uuid1().hex[:8]
+    name = workflow_id[:80 - len("vams-") - len(suffix)]
+    return "vams-" + name + suffix
 
 
 def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn=""):

@@ -81,8 +81,8 @@ class TestDeadlineCloudTaskBuilder:
         assert "specificationVersion" in params["Template"]
         assert params["Priority"] == DeadlineCloudTaskBuilder.DEFAULT_PRIORITY
         assert params["NameOverride"] == "abc12-renderPipeline"
-        # Retry of the state must not double-submit: execution-scoped client token.
-        assert "$$.Execution.Name" in params["ClientToken.$"]
+        # Retry of the state must not double-submit: step-scoped client token.
+        assert params["ClientToken.$"]
 
     def test_body_envelope_flattened_to_vams_job_parameters(self):
         state = _build_state()
@@ -150,12 +150,19 @@ class TestDeadlineCloudTaskBuilder:
 
     def test_catch_and_retry_present(self):
         state = _build_state()
-        # Retry only transient createJob API errors — a broad States.ALL retry would
-        # replay the fixed ClientToken against an already-created job whose stored
-        # VamsTaskToken no longer matches the retry attempt's fresh token.
-        assert state["Retry"][0]["ErrorEquals"] == [
-            "Deadline.ThrottlingException", "Deadline.InternalServerErrorException"]
+        # Retry only throttling (rejected before the job exists). Any error that may follow
+        # job creation must not be retried: the replayed fixed ClientToken returns the
+        # existing job, whose stored VamsTaskToken belongs to the abandoned attempt.
+        assert state["Retry"][0]["ErrorEquals"] == ["Deadline.ThrottlingException"]
         assert state["Catch"][0]["Next"] == "WorkflowProcessingJobFailed"
+
+    def test_post_creation_errors_are_not_retried(self):
+        # A server error (or a lost response) can arrive after createJob already created the
+        # job, so it must fall through to the Catch rather than orphan the retry's token.
+        retried = [e for r in _build_state()["Retry"] for e in r["ErrorEquals"]]
+        assert "Deadline.InternalServerErrorException" not in retried
+        assert "States.ALL" not in retried
+        assert "States.Timeout" not in retried
 
     def test_priority_zero_preserved(self):
         pipeline = _deadline_pipeline(userProvidedResource=json.dumps({
@@ -183,6 +190,64 @@ class TestDeadlineCloudTaskBuilder:
         # Legacy path contexts without the ref still build (no VamsPipelineExecutionId param).
         state = _build_state(path_context={})
         assert "VamsPipelineExecutionId" not in state["Parameters"]["Parameters"]
+
+
+@pytest.mark.unit
+class TestDeadlineCloudClientToken:
+    """The createJob idempotency token must be stable per step (so a retry of one step cannot
+    submit a second job) and distinct between steps (so two steps cannot collapse onto one
+    job, which would leave the second step's task token unresolved until its timeout)."""
+
+    def test_token_is_the_step_pipeline_execution_id(self):
+        state = _build_state()
+        assert state["Parameters"]["ClientToken.$"] == "$.pipelineExecutionIds[0]"
+
+    def test_token_stable_across_rebuilds_of_the_same_step(self):
+        first = _build_state()
+        second = _build_state()
+        assert first["Parameters"]["ClientToken.$"] == second["Parameters"]["ClientToken.$"]
+
+    def test_tokens_differ_between_steps_of_one_workflow(self):
+        tokens = []
+        for index in range(2):
+            state = _build_state(path_context={
+                "inputManifestS3Location": "States.Format('s3://{}/m.json', $.b, $$.Execution.Name)",
+                "pipelineExecutionIdRef": f"$.pipelineExecutionIds[{index}]",
+            })
+            tokens.append(state["Parameters"]["ClientToken.$"])
+        assert tokens[0] != tokens[1]
+
+    def test_same_prefix_state_names_produce_different_fallback_tokens(self):
+        # Without a pipelineExecutionId ref the token derives from the full state name, so
+        # state names sharing a long common prefix (e.g. the same uuid1 prefix plus pipeline
+        # names differing only after the 7th character) must not collide.
+        builder = get_task_builder("DeadlineCloud")
+        tokens = []
+        for state_name in ("abc12-deadline-render-preview", "abc12-deadline-render-final"):
+            pipeline = _deadline_pipeline()
+            payload = builder.apply_callback(builder.build_payload(pipeline, {}), pipeline)
+            tokens.append(
+                builder.build_task_state(pipeline, state_name, payload)["Parameters"]["ClientToken.$"])
+        assert tokens[0] != tokens[1]
+        assert all("$$.Execution.Name" in token for token in tokens)
+
+    def test_identical_state_names_produce_identical_fallback_tokens(self):
+        builder = get_task_builder("DeadlineCloud")
+        pipeline = _deadline_pipeline()
+        payload = builder.apply_callback(builder.build_payload(pipeline, {}), pipeline)
+        first = builder.build_task_state(pipeline, "abc12-render", payload)
+        second = builder.build_task_state(pipeline, "abc12-render", payload)
+        assert first["Parameters"]["ClientToken.$"] == second["Parameters"]["ClientToken.$"]
+
+    def test_fallback_token_within_deadline_client_token_length_cap(self):
+        # Deadline caps ClientToken at 64 characters; the resolved value is a 32-char
+        # execution-name GUID plus "-" plus the state-name digest.
+        builder = get_task_builder("DeadlineCloud")
+        pipeline = _deadline_pipeline()
+        payload = builder.apply_callback(builder.build_payload(pipeline, {}), pipeline)
+        state = builder.build_task_state(pipeline, "a" * 80, payload)
+        digest = state["Parameters"]["ClientToken.$"].split("'")[1].replace("{}", "")
+        assert len(32 * "e" + digest) <= 64
 
 
 # ============================ deadlineCloudJobCallback lambda ============================

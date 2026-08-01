@@ -24,8 +24,14 @@ Two entry points:
 """
 
 import math
+from decimal import Decimal, InvalidOperation
+import re
 
 from common.workflows.templateTags import is_reserved_tag_key
+
+# A tag key must be substitutable: the resolver and renderer only capture {{ tagName }} names made of
+# these characters, so a key outside the set can be declared but never rendered.
+_TAG_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 
 # The primitive tag types (mirror models.pipelines.TemplateTagType values).
 TAG_TYPE_STRING = "string"
@@ -58,9 +64,10 @@ def _normalize_type(raw) -> str:
 
 def validate_tag_schema(fields):
     """Validate a DECLARED tag schema (a list of tag-definition dicts). Returns an errors list
-    (empty = valid). Checks: each has a non-empty tagKey; keys unique; type is a known primitive;
-    no key collides with a reserved system tag name / dynamic-metadata prefix; enum declares a
-    non-empty enumValues; a declared default is itself valid for the type."""
+    (empty = valid). Checks: each has a non-empty tagKey; the key is substitutable ([A-Za-z0-9_]+,
+    the {{tag}} name charset); keys unique; type is a known primitive; no key collides with a
+    reserved system tag name / dynamic-metadata prefix; enum declares a non-empty enumValues; a
+    declared default is itself valid for the type."""
     errors = []
     if fields is None:
         return errors
@@ -79,6 +86,13 @@ def validate_tag_schema(fields):
             errors.append(f"{where}: tagKey is required")
             continue
         where = f"tag '{key}'"
+
+        if not _TAG_KEY_PATTERN.match(str(key)):
+            errors.append(
+                f"{where}: tagKey must contain only letters, digits and underscores so a "
+                "{{tagKey}} placeholder can be substituted"
+            )
+            continue
 
         if key in seen_keys:
             errors.append(f"{where}: duplicate tagKey")
@@ -124,6 +138,15 @@ def _coerce_and_check(tag_type, value, enum_values):
             return None, "expected an integer"
         if isinstance(value, int):
             return value, None
+        if isinstance(value, (float, Decimal)):
+            # A JSON number without a fractional part decodes to float, and DynamoDB returns
+            # Decimal; accept either when integral.
+            try:
+                if math.isfinite(float(value)) and float(value).is_integer():
+                    return int(value), None
+            except (ValueError, TypeError, InvalidOperation):
+                pass
+            return None, "expected an integer"
         try:
             return int(str(value).strip()), None
         except (ValueError, TypeError):
@@ -184,6 +207,16 @@ def _is_absent(value):
     return value is None or value == "" or value == []
 
 
+# The empty value each type materializes to for a blank OPTIONAL tag with no declared default, so a
+# {{tag}} referencing it renders empty rather than failing resolution as unmatched. integer, number
+# and boolean have no representable empty value and are therefore absent from this map.
+_TYPE_EMPTY_VALUES = {
+    TAG_TYPE_STRING: "",
+    TAG_TYPE_ENUM: "",
+    TAG_TYPE_STRING_LIST: [],
+}
+
+
 def _provided_map(provided_tags):
     """Accept provided tags as either a {key: value} dict or a [{key, value}] list; return a dict."""
     if provided_tags is None:
@@ -210,6 +243,10 @@ def validate_tags(tag_schema, provided_tags):
         caller may not supply them).
       - Every required tag must be present (or have a default); missing required is an error.
       - Each provided value must match its declared type (coerced where unambiguous).
+      - An OPTIONAL tag left blank (absent or empty) with no declared default still materializes as
+        its type's empty value — "" for string/enum, [] for string-list — so a {{tag}} referencing it
+        renders empty instead of failing resolution as an unmatched tag. integer / number / boolean
+        have no representable empty value and stay absent.
       - EXTRA provided tags (no matching schema entry) are IGNORED, not an error. The only
         render-time tag error is an unmatched {{tag}} in the body, enforced by the renderer.
     """
@@ -249,6 +286,11 @@ def validate_tags(tag_schema, provided_tags):
             filled[key] = coerced if not error else field.get("default")
         elif required:
             errors.append(f"tag '{key}' is required")
+        elif tag_type in _TYPE_EMPTY_VALUES:
+            # Blank optional tag, no default: materialize the type's empty value so a body
+            # referencing it renders empty instead of erroring as an unmatched tag.
+            empty = _TYPE_EMPTY_VALUES[tag_type]
+            filled[key] = list(empty) if isinstance(empty, list) else empty
 
     # EXTRA provided tags (not in schema, not reserved) are ignored — no error.
     return errors, filled

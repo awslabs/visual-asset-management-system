@@ -46,10 +46,13 @@ function CategoryGroupedList<T>({
     return (
         <div className="space-y-2">
             {categories.map((category) => (
-                <div key={category} className="border border-border-default rounded">
+                <div
+                    key={category}
+                    className="orch-outline border border-border-default rounded-lg bg-surface-container overflow-hidden"
+                >
                     <button
                         onClick={() => toggleCategory(category)}
-                        className="w-full px-4 py-2 flex items-center justify-between bg-surface-secondary hover:bg-surface-hover text-text-primary font-semibold"
+                        className="orch-outline w-full px-4 py-2 flex items-center justify-between border-b border-border-default bg-surface-secondary hover:bg-surface-hover text-text-primary font-bold"
                     >
                         <span>{category}</span>
                         <span className="text-text-secondary">

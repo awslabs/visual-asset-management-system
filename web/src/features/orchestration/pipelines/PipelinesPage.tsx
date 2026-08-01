@@ -15,12 +15,14 @@ import DatabasePickerDialog from "../components/DatabasePickerDialog";
 import { btnPrimary, btnSecondary, control } from "../components/controlStyles";
 import type { Pipeline, ExecutionType } from "../types";
 import { appCache } from "../../../services/appCache";
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
 
 interface PipelinesPageProps {
     databaseId?: string;
 }
 
 const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
+    const toast = useToast();
     const navigate = useNavigate();
     const [includeArchived, setIncludeArchived] = useState(false);
     const [filters, setFilters] = useState<FilterValue>({
@@ -33,6 +35,13 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     // page picks a target database first (pipelines are database-scoped).
     const [dbPickerOpen, setDbPickerOpen] = useState(false);
     const [archiveConfirmPipeline, setArchiveConfirmPipeline] = useState<Pipeline | null>(null);
+    // Message shown when an archive request is rejected (e.g. no Tier-2 access, transient 5xx).
+    const [archiveError, setArchiveError] = useState<string | null>(null);
+
+    // The server list omits archived pipelines unless asked for them, so selecting the Archived
+    // status facet implies including them regardless of the checkbox.
+    const archivedFacetSelected = filters.facets.enabledArchived === "archived";
+    const fetchArchived = includeArchived || archivedFacetSelected;
 
     const {
         data,
@@ -43,7 +52,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
         isFetchingNextPage,
         refetch,
         isFetching,
-    } = usePipelines(databaseId, includeArchived);
+    } = usePipelines(databaseId, fetchArchived);
     const pipelines = React.useMemo(
         () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
         [data]
@@ -76,9 +85,10 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
 
     const config = appCache.getItem("config");
     const featuresEnabled = config?.featuresEnabled || [];
-    const showDeadlineCloud =
-        featuresEnabled.includes("DEADLINECLOUD_PIPELINES") &&
-        !featuresEnabled.includes("GOVCLOUD");
+    // GovCloud is not re-checked here: getConfig() already refuses to synthesize a stack that enables
+    // Deadline Cloud in GovCloud or any non-'aws' partition, so the feature flag cannot be present in
+    // such a deployment.
+    const showDeadlineCloud = featuresEnabled.includes("DEADLINECLOUD_PIPELINES");
 
     // Filter pipelines
     const filteredPipelines = pipelines.filter((p) => {
@@ -116,14 +126,32 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     });
 
     const handleArchive = async (pipeline: Pipeline) => {
+        if (archiveMutation.isPending) return;
+        setArchiveError(null);
         try {
             await archiveMutation.mutateAsync({
                 databaseId: pipeline.databaseId,
                 pipelineId: pipeline.pipelineId,
             });
             setArchiveConfirmPipeline(null);
-        } catch (err) {
-            console.error("Failed to archive pipeline:", err);
+            toast.success("Pipeline archived", {
+                description: pipeline.pipelineName || pipeline.pipelineId,
+            });
+        } catch (err: any) {
+            // Close the confirmation and report the failure both as a page banner (it persists while
+            // the user decides what to do) and as a toast (it is visible immediately, wherever they
+            // are scrolled) — the dialog itself has no error slot.
+            setArchiveConfirmPipeline(null);
+            toast.error("Archive failed", {
+                description: `${pipeline.pipelineName || pipeline.pipelineId}: ${toastErrorMessage(
+                    err
+                )}`,
+            });
+            setArchiveError(
+                `Failed to archive ${pipeline.pipelineName}: ${
+                    err?.message || "the request was rejected."
+                }`
+            );
         }
     };
 
@@ -171,7 +199,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
         ];
 
         return (
-            <div className="flex items-center justify-between p-3 bg-surface-container border border-border-default rounded hover:bg-surface-hover">
+            <div className="orch-outline flex items-center justify-between px-3 py-1.5 bg-surface-container border border-border-default rounded hover:bg-surface-hover">
                 <div className="flex-1">
                     <div className="flex items-center gap-2">
                         <span className="font-semibold text-text-primary">
@@ -195,8 +223,8 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                     <div className="text-sm text-text-secondary mt-1">
                         <span className="mr-3">
                             {pipeline.databaseId === "GLOBAL"
-                                ? "Database: GLOBAL"
-                                : `Database: ${pipeline.databaseId}`}
+                                ? "Pipeline Database: GLOBAL"
+                                : `Pipeline Database: ${pipeline.databaseId}`}
                         </span>
                         {pipeline.category && (
                             <span className="mr-3">Category: {pipeline.category}</span>
@@ -225,9 +253,9 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
     const canCreatePipeline = can("POST", "/database/{databaseId}/pipelines");
 
     return (
-        <div className="orchestration-root px-6 pb-6 pt-4 space-y-4 bg-surface min-h-full">
+        <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold text-text-primary">Pipelines</h1>
+                <h1 className="text-text-primary">Pipelines</h1>
                 {canCreatePipeline && (
                     <button
                         onClick={() => {
@@ -286,7 +314,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                                 ? [
                                       {
                                           key: "databaseId",
-                                          label: "Database",
+                                          label: "Pipeline Database",
                                           options: databaseOptions,
                                       },
                                   ]
@@ -316,6 +344,19 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
                     </label>
                 </div>
             </div>
+
+            {archiveError && (
+                <div className="p-3 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded flex items-start justify-between gap-3">
+                    <span>{archiveError}</span>
+                    <button
+                        onClick={() => setArchiveError(null)}
+                        aria-label="Dismiss archive error"
+                        className="bg-transparent border-0 text-lg leading-none cursor-pointer"
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
 
             {loading ? (
                 <div className="p-8 text-center text-text-secondary">Loading pipelines...</div>

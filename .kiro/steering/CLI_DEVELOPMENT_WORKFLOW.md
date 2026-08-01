@@ -49,8 +49,8 @@ Sync has a nested sub-command group:
 
 Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution APIs:
 
--   `pipeline create|get|list|update|delete`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
--   `workflow create|get|list|update|delete`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
+-   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
+-   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
 -   `execution list` (global, permission-filtered), `execution details|logs|abort|rerun|permanent-delete`
 
 Industry has nested sub-command groups:

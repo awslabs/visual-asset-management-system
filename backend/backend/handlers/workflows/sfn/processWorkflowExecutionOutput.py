@@ -20,16 +20,24 @@ from common.apiRoutes import API_UPLOAD_COMPLETE_EXTERNAL
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import success, validation_error, authorization_error, internal_error
-from common.s3 import validateS3AssetExtensionsAndContentType
+from models.common import success, validation_error, VAMSGeneralErrorResponse
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects
 from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import outputPathExtension as ope
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
+# Cap on PipelineExecutionOutputMetadata rows recorded for one execution (one row per applied
+# key). Bounds the sequential DynamoDB writes a metadata-heavy run performs within the lambda
+# timeout; rows past the cap are dropped from the provenance record.
+MAX_RECORDED_OUTPUT_METADATA_ROWS = 2000
+# Generic write-back failure summary recorded on the execution when a metadata/attribute file
+# cannot be read, parsed, or applied (specifics go to the log).
+METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
 
 try:
     s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
@@ -118,14 +126,11 @@ def verify_get_path_objects(bucketName: str, pathPrefix: str):
     if(not validateS3AssetExtensionsAndContentType(bucketName, pathPrefix)):
         raise Exception("Pipeline uploaded objects contains a potentially malicious executable type object. Unable to process asset upload.")
 
-    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.list_objects_v2
-    all_outputs = s3c.list_objects_v2(Bucket=bucketName, Prefix=pathPrefix)
-    if 'IsTruncated' in all_outputs and all_outputs['IsTruncated']:
-        logger.warning(
-            "WARN: s3 object listing exceeds 1,000 objects,"+
-            "this is unexpected for this operation with the bucket and prefix"+
-            bucketName+" "+pathPrefix
-        )
+    # Page the listing to exhaustion: an output block can hold more objects than a single
+    # list_objects_v2 page returns. The result mirrors the list_objects_v2 response shape
+    # ('Contents' present only when objects exist) that the callers read.
+    objects = list_all_objects(bucketName, pathPrefix, client=s3c)
+    all_outputs = {'Contents': objects} if objects else {}
     logger.info(all_outputs)
 
     return all_outputs
@@ -206,16 +211,19 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None):
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None):
     """Process an external upload using the fileIngestion Lambda.
 
-    file_base_execution_path_extension is inserted between the output asset's location key and
-    each output file's relative path (final key = assetLocationKey + extension + relativePath).
-    It defaults to '/' (no extra path segment). It applies to asset FILE outputs, whose key is
-    path-structured; preview outputs are basename-only and are unaffected."""
-    # Normalize the extension to a clean middle segment with no leading/trailing slashes; '/'
-    # (or empty) means no extra segment.
-    extension = (file_base_execution_path_extension or "/").strip("/")
+    file_base_execution_path_extension is inserted into each output file's relative path immediately
+    before the final filename (see common.workflows.outputPathExtension), so each pipeline's own
+    output folder structure is preserved and the extension names the leaf folder. It defaults to '/'
+    (no extra path segment). It applies to asset FILE outputs, whose key is path-structured; preview
+    outputs are basename-only and are unaffected.
+
+    mfa_enabled is the launching end user's MFA state, propagated on the cross-call so the
+    delegated write is authorized with the same MFA-gated roles the launch was. None leaves it
+    unset, which the cross-call treats as an MFA-satisfied system call."""
+    extension = file_base_execution_path_extension
     try:
         # Prepare the request payload
         file_list = []
@@ -232,10 +240,9 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                 if file_name.startswith('/'):
                     file_name = file_name[1:]
 
-                # Insert the output base-execution path extension between the asset location key
-                # and the file's relative path (the upload lambda prepends the asset base key).
-                if extension:
-                    file_name = f"{extension}/{file_name}"
+                # Insert the output base-execution path extension before the file's own filename,
+                # keeping the pipeline's output folder structure ahead of it.
+                file_name = ope.apply_output_path_extension(file_name, extension)
             else:
                 # For other upload types (like assetPreview), just use the filename
                 file_name = os.path.basename(file_key)
@@ -264,13 +271,18 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         # system action attributed to the executing user (SYSTEM_USER for auto-triggers), so
         # identity travels as a lambdaCrossCall rather than relying on the stored execution
         # request context, which carries no authorizer claims for trigger-launched executions.
+        # A cross-call on behalf of an end user carries that user's MFA state so MFA-gated roles
+        # are not activated for a non-MFA session.
+        cross_call = {"userName": change_user_id or "SYSTEM_USER"}
+        if mfa_enabled is not None:
+            cross_call["mfaEnabled"] = bool(mfa_enabled)
         lambda_payload = {
             "requestContext": request_context,
             "pathParameters": {
                 "uploadId": upload_id
             },
             "body": json.dumps(body),
-            "lambdaCrossCall": {"userName": change_user_id or "SYSTEM_USER"},
+            "lambdaCrossCall": cross_call,
         }
         # Synthetic internal route -- must match API_UPLOAD_COMPLETE_EXTERNAL in
         # common/apiRoutes.py, which the uploadFile dispatcher matches against.
@@ -372,8 +384,39 @@ def extract_file_path_from_metadata_filename(s3_key, metadata_path_key):
         return None
 
 
+def _metadata_value_text(value):
+    """Render a metadata/attribute value as the string the output-metadata row stores,
+    trimmed to the single-field byte budget."""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value)
+        except (TypeError, ValueError):
+            value = str(value)
+    text, _truncated = er.truncate_text(value)
+    return text
+
+
+def _applied_metadata_entries(metadata_items):
+    """Extract the {metadataKey, metadataValue} pairs a metadata/attribute file applies, skipping
+    entries with no key (nothing to record against)."""
+    entries = []
+    for item in metadata_items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get('metadataKey') or item.get('attributeKey') or ""
+        if not key:
+            continue
+        value = item.get('metadataValue', item.get('attributeValue', ""))
+        entries.append({"metadataKey": key, "metadataValue": _metadata_value_text(value)})
+    return entries
+
+
 def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, asset_id, file_path, metadata_type, request_context):
-    """Process metadata or attribute file from pipeline output"""
+    """Process metadata or attribute file from pipeline output.
+
+    Returns the {metadataKey, metadataValue} entries the file applied (empty when the file carried
+    no keys) so the caller can record them as output provenance, or None when the file could not be
+    read/parsed or the metadata service rejected the write."""
     try:
         logger.info(f"Processing {metadata_type} file: {s3_key}")
         
@@ -400,8 +443,8 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
             # Validate metadata array exists
             if 'metadata' not in data or not isinstance(data['metadata'], list):
                 logger.error(f"Invalid metadata structure in {s3_key}: missing or invalid 'metadata' array")
-                return
-            
+                return None
+
             # Build request body for metadata service
             request_body = {
                 'metadata': data['metadata'],
@@ -451,13 +494,33 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                 if json_response.get('statusCode') == 200:
                     body = json.loads(json_response['body'])
                     logger.info(f"Successfully processed {metadata_type} with updateType={update_type}: {body.get('message')}")
+                    return _applied_metadata_entries(data['metadata'])
                 else:
                     logger.error(f"Error processing {metadata_type}: {json_response}")
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in {s3_key}: {e}")
     except Exception as e:
         logger.exception(f"Error processing {metadata_type} file {s3_key}: {e}")
+    return None
+
+
+def _record_applied_metadata(collected, target_file_path, source_key, entries):
+    """Append one output-metadata descriptor per applied key onto `collected`, capped at
+    MAX_RECORDED_OUTPUT_METADATA_ROWS for the whole execution. target_file_path is '/' for
+    asset-level metadata and the asset-relative path (leading slash) for file-level."""
+    for entry in entries:
+        if len(collected) >= MAX_RECORDED_OUTPUT_METADATA_ROWS:
+            logger.warning(
+                f"Reached the {MAX_RECORDED_OUTPUT_METADATA_ROWS}-row output-metadata recording "
+                f"cap; remaining keys from {source_key} are not recorded")
+            return
+        collected.append({
+            "targetFilePath": target_file_path,
+            "metadataKey": entry["metadataKey"],
+            "metadataValue": entry["metadataValue"],
+            "sourceMetadataFileRelativePath": source_key,
+        })
 
 
 def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
@@ -466,19 +529,17 @@ def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
     object's S3 versionId (best-effort head_object; empty on failure).
 
     The recorded relativeFilePath reflects where the output lands in the asset, so the output
-    base-execution path extension (inserted between the asset location key and the relative path)
-    is prepended here too, keeping the recorded provenance aligned with the actual write location
-    (and with the asset file version-history join). Defaults to '/' (no extra segment)."""
-    extension = (file_base_execution_path_extension or "/").strip("/")
+    base-execution path extension (inserted before the final filename) is applied here too, keeping
+    the recorded provenance aligned with the actual write location (and with the asset file
+    version-history join). Defaults to '/' (no extra segment)."""
     descriptors = []
     for obj in objects_found.get('Contents', []):
         key = obj['Key']
         if key.endswith('/'):
             continue
         relative = key[len(prefix):] if key.startswith(prefix) else key
-        relative = relative.lstrip('/')
-        if extension:
-            relative = f"{extension}/{relative}"
+        relative = ope.apply_output_path_extension(
+            relative, file_base_execution_path_extension)
         version_id = ""
         try:
             head = s3c.head_object(Bucket=bucket_name, Key=key)
@@ -488,6 +549,10 @@ def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
         descriptors.append({
             "fileType": file_type,
             "relativeFilePath": relative,
+            # s3Key/s3VersionId are the LISTED object's locator, so the bucket recorded with them
+            # is the bucket they were listed in (the run I/O bucket), which may differ from the
+            # output asset's bucket.
+            "s3Bucket": bucket_name,
             "s3Key": key,
             "fileSize": obj.get('Size', 0),
             "contentType": "",
@@ -545,13 +610,21 @@ def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
 def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_execution_id,
                              workflow_database_id, workflow_id, bucket_name,
                              output_files, output_metadata, output_results, result_log, execution_log,
-                             log_group_arn, log_stream_name, execution_status):
+                             log_group_arn, log_stream_name, execution_status, execution_error=""):
     """Write end-state pipeline output/metadata/log rows and set completion status
     on the end-state PipelineExecutions row and the V2 main execution row.
 
     The end-state lambda runs on normal workflow completion, so it captures the full
     execution log (`execution_log`) onto the main row's executionLog field for every
     completed run (success or failure), not just failures.
+
+    bucket_name is the fallback bucket for output-file rows; a descriptor carrying its own
+    's3Bucket' (the bucket its s3Key/s3VersionId were listed in) wins, so the stored
+    (bucket, key, versionId) triple always resolves.
+
+    execution_error carries the write-back failure summary for a non-success status; it is
+    written to the main row's executionError field so the UI/CLI surface why the run did not
+    fully succeed.
 
     No-op when no execution context is present (non-workflow/direct invocations).
     """
@@ -569,7 +642,7 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
                 pipeline_execution_id=end_state_pipeline_execution_id,
                 file_type=f.get("fileType", "file"),
                 relative_file_path=f.get("relativeFilePath", ""),
-                s3_bucket=bucket_name, s3_key=f.get("s3Key", ""),
+                s3_bucket=f.get("s3Bucket") or bucket_name, s3_key=f.get("s3Key", ""),
                 file_size=f.get("fileSize", 0), content_type=f.get("contentType", ""),
                 s3_version_id=f.get("s3VersionId", ""),
             ))
@@ -616,12 +689,27 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
     # Completion status + full execution log on the main V2 row. The log is captured on
     # every completed run (success or failure) for later debugging by limited roles.
     main_table = dynamo.Table(workflow_execution_database_v2)
+    expression = "SET executionStopDate = :s, executionStatus = :st, executionLog = :lg"
+    values = {":s": stop_date, ":st": execution_status, ":lg": execution_log or ""}
+    if execution_error:
+        expression += ", executionError = :er"
+        values[":er"] = execution_error
     main_table.update_item(
         Key={"workflowExecutionId": workflow_execution_id,
              "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
-        UpdateExpression="SET executionStopDate = :s, executionStatus = :st, executionLog = :lg",
-        ExpressionAttributeValues={":s": stop_date, ":st": execution_status, ":lg": execution_log or ""},
+        UpdateExpression=expression,
+        ExpressionAttributeValues=values,
     )
+
+
+def _terminal_status(output_failures):
+    """Map the write-back failure list to the (executionStatus, executionError) recorded for the
+    run. Any failed ingestion or output listing means the execution did not deliver its outputs,
+    so it is recorded FAILED with a deduplicated summary rather than SUCCEEDED."""
+    if not output_failures:
+        return "SUCCEEDED", ""
+    unique = list(dict.fromkeys(output_failures))
+    return "FAILED", " ".join(unique)
 
 
 def _process_results_only(event):
@@ -633,6 +721,7 @@ def _process_results_only(event):
     source_bucket = event.get('workflowExecutionS3InputOutputBucket', '')
 
     collected_output_results = []
+    output_failures = []
     results_path_key = event.get('resultsPathKey', '')
     if results_path_key and source_bucket:
         objects_found = {}
@@ -640,6 +729,7 @@ def _process_results_only(event):
             objects_found = verify_get_path_objects(source_bucket, results_path_key)
         except Exception as e:
             logger.exception(f"Error listing result objects: {e}")
+            output_failures.append("Listing the pipeline results output failed.")
         for obj in objects_found.get('Contents', []):
             result_key = obj['Key']
             if result_key.endswith('/'):
@@ -655,12 +745,14 @@ def _process_results_only(event):
                 })
             except Exception as e:
                 logger.exception(f"Error reading result file {result_key}: {e}")
+                output_failures.append("Reading a pipeline results file failed.")
 
     try:
         log_group_arn = workflow_execution_log_group_arn
         workflow_execution_id = event.get('workflowExecutionId', '')
         end_state_pipeline_execution_id = event.get('endStatePipelineExecutionId', '')
         execution_log, stream_name = _fetch_execution_logs(log_group_arn, workflow_execution_id)
+        status, error_summary = _terminal_status(output_failures)
         record_execution_outputs(
             dynamo=dynamodb,
             workflow_execution_id=workflow_execution_id,
@@ -673,7 +765,7 @@ def _process_results_only(event):
             result_log="Workflow Execution Output Processing Complete (results-only)",
             execution_log=execution_log,
             log_group_arn=log_group_arn, log_stream_name=stream_name,
-            execution_status="SUCCEEDED",
+            execution_status=status, execution_error=error_summary,
         )
     except Exception as e:
         logger.exception(f"Error recording results-only execution outputs (non-critical): {e}")
@@ -813,10 +905,19 @@ def lambda_handler(event, context):
             bucket_name = bucketDetails['bucketName']
             source_bucket = event.get('workflowExecutionS3InputOutputBucket') or bucket_name
 
+            # The ingestion write-back is delegated on the executing end user's behalf, so it
+            # carries that user's MFA state from the launch claims. A SYSTEM_USER execution
+            # (trigger-launched) leaves it unset, keeping the system cross-call default.
+            write_back_mfa_enabled = (
+                None if event.get('executingUserName') == 'SYSTEM_USER'
+                else bool(claims_and_roles.get("mfaEnabled", False)))
+
             # Accumulate output descriptors for execution-output recording.
             collected_output_files = []
             collected_output_metadata = []
             collected_output_results = []
+            # Generic write-back failure summaries; a non-empty list records the run FAILED.
+            output_failures = []
 
             #Handle preview outputs
             if ('previewPathKey' in event):
@@ -829,6 +930,7 @@ def lambda_handler(event, context):
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in preview path")
                 except Exception as e:
                     logger.exception(f"Error listing preview objects: {e}")
+                    output_failures.append("Listing the pipeline preview output failed.")
 
                 if 'Contents' in objectsFound:
                     files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
@@ -836,16 +938,24 @@ def lambda_handler(event, context):
                     if(len(files) > 1):
                         logger.error("Multiple files present in pipeline output preview folder. Limiting to top 1 for now.")
 
-                    # Filter for image files
-                    image_files = [f for f in files if f.endswith(ALLOWED_PREVIEW_FILE_EXTENSIONS)]
-
-                    collected_output_files.extend(
-                        _collect_output_descriptors(objectsFound, "preview", previewPathKey, source_bucket)
-                    )
+                    # Filter for image files. ALLOWED_PREVIEW_FILE_EXTENSIONS is lowercase, so
+                    # match on a lowercased key -- extensions are case-insensitive in S3 keys.
+                    image_files = [f for f in files
+                                   if f.lower().endswith(ALLOWED_PREVIEW_FILE_EXTENSIONS)]
 
                     if image_files:
                         # Only process the first image file
                         preview_file = image_files[0]
+
+                        # The preview lands on the asset under its basename, so the recorded
+                        # descriptor covers just the ingested image at that flattened path.
+                        preview_folder = preview_file.rsplit("/", 1)[0] + "/" if "/" in preview_file else ""
+                        collected_output_files.extend(
+                            _collect_output_descriptors(
+                                {'Contents': [obj for obj in objectsFound['Contents']
+                                              if obj['Key'] == preview_file]},
+                                "preview", preview_folder, source_bucket)
+                        )
 
                         try:
                             # Create external upload record
@@ -877,17 +987,22 @@ def lambda_handler(event, context):
                                 workflow_id=event.get('workflowId'),
                                 execution_id=event.get('workflowExecutionId'),
                                 change_user_id=event.get('executingUserName'),
-                                source_bucket=source_bucket
+                                source_bucket=source_bucket,
+                                mfa_enabled=write_back_mfa_enabled
                             )
-                            
+
                             if result:
                                 logger.info("Preview upload completed successfully")
                             else:
                                 logger.error("Preview upload failed")
+                                output_failures.append("The asset preview write-back failed.")
                         except Exception as e:
                             logger.exception(f"Error processing preview upload: {e}")
-                    else:
+                            output_failures.append("The asset preview write-back failed.")
+                    elif files:
                         logger.error("No image files found in preview folder")
+                        output_failures.append(
+                            "The pipeline preview output contains no recognized image file.")
 
             #Handle asset file outputs
             if('filesPathKey' in event):
@@ -900,6 +1015,7 @@ def lambda_handler(event, context):
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in files path")
                 except Exception as e:
                     logger.exception(f"Error listing file objects: {e}")
+                    output_failures.append("Listing the pipeline file output failed.")
 
                 assets = []
                 if 'Contents' in objectsFound:
@@ -946,16 +1062,19 @@ def lambda_handler(event, context):
                                 execution_id=event.get('workflowExecutionId'),
                                 change_user_id=event.get('executingUserName'),
                                 file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'),
-                                source_bucket=source_bucket
+                                source_bucket=source_bucket,
+                                mfa_enabled=write_back_mfa_enabled
                             )
-                            
+
                             if result:
                                 logger.info("Asset file upload completed successfully")
                             else:
                                 logger.error("Asset file upload failed")
-                                
+                                output_failures.append("The asset file write-back failed.")
+
                         except Exception as e:
                             logger.exception(f"Error processing asset file upload: {e}")
+                            output_failures.append("The asset file write-back failed.")
                     else:
                         logger.warning("No files found in asset output folder")
 
@@ -970,6 +1089,7 @@ def lambda_handler(event, context):
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in metadata path")
                 except Exception as e:
                     logger.exception(f"Error listing metadata objects: {e}")
+                    output_failures.append("Listing the pipeline metadata output failed.")
 
                 if 'Contents' in objectsFound:
                     # Log all objects found for debugging
@@ -1003,10 +1123,11 @@ def lambda_handler(event, context):
                             file_metadata_files.append(file_obj)
                             logger.info(f"Found file-level metadata: {file_obj['Key']}")
                     
-                    # Process asset-level metadata (asset.metadata.json)
+                    # Process asset-level metadata (asset.metadata.json). Asset-level rows are
+                    # recorded against the '/' target path.
                     if asset_metadata_file:
                         try:
-                            process_metadata_file(
+                            applied = process_metadata_file(
                                 source_bucket,
                                 asset_metadata_file['Key'],
                                 metadataPathKey,
@@ -1016,9 +1137,15 @@ def lambda_handler(event, context):
                                 'metadata',
                                 requestContext
                             )
+                            if applied is None:
+                                output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                            else:
+                                _record_applied_metadata(
+                                    collected_output_metadata, "/", asset_metadata_file['Key'], applied)
                         except Exception as e:
                             logger.exception(f"Error processing asset metadata: {e}")
-                    
+                            output_failures.append(METADATA_WRITE_BACK_FAILURE)
+
                     # Process each file-level metadata
                     for file_obj in file_metadata_files:
                         try:
@@ -1027,17 +1154,11 @@ def lambda_handler(event, context):
                                 file_obj['Key'],
                                 metadataPathKey
                             )
-                            
+
                             if file_path:
                                 logger.info(f"Processing metadata for file: {file_path}")
-                                collected_output_metadata.append({
-                                    "targetFilePath": "/" + file_path.lstrip("/"),
-                                    "metadataKey": "",
-                                    "metadataValue": "",
-                                    "sourceMetadataFileRelativePath": file_obj['Key'],
-                                })
-                                process_metadata_file(
-                                    bucket_name,
+                                applied = process_metadata_file(
+                                    source_bucket,
                                     file_obj['Key'],
                                     metadataPathKey,
                                     event['databaseId'],
@@ -1046,11 +1167,19 @@ def lambda_handler(event, context):
                                     'metadata',
                                     requestContext
                                 )
+                                if applied is None:
+                                    output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                                else:
+                                    _record_applied_metadata(
+                                        collected_output_metadata, "/" + file_path.lstrip("/"),
+                                        file_obj['Key'], applied)
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
+                                output_failures.append(METADATA_WRITE_BACK_FAILURE)
                         except Exception as e:
                             logger.exception(f"Error processing file metadata {file_obj['Key']}: {e}")
-                    
+                            output_failures.append(METADATA_WRITE_BACK_FAILURE)
+
                     # Process each file-level attribute
                     for file_obj in attribute_files:
                         try:
@@ -1059,11 +1188,11 @@ def lambda_handler(event, context):
                                 file_obj['Key'],
                                 metadataPathKey
                             )
-                            
+
                             if file_path:
                                 logger.info(f"Processing attributes for file: {file_path}")
-                                process_metadata_file(
-                                    bucket_name,
+                                applied = process_metadata_file(
+                                    source_bucket,
                                     file_obj['Key'],
                                     metadataPathKey,
                                     event['databaseId'],
@@ -1072,10 +1201,18 @@ def lambda_handler(event, context):
                                     'attribute',
                                     requestContext
                                 )
+                                if applied is None:
+                                    output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                                else:
+                                    _record_applied_metadata(
+                                        collected_output_metadata, "/" + file_path.lstrip("/"),
+                                        file_obj['Key'], applied)
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
+                                output_failures.append(METADATA_WRITE_BACK_FAILURE)
                         except Exception as e:
                             logger.exception(f"Error processing file attribute {file_obj['Key']}: {e}")
+                            output_failures.append(METADATA_WRITE_BACK_FAILURE)
 
             # Handle structured result outputs (read content into the results table)
             if('resultsPathKey' in event):
@@ -1088,6 +1225,7 @@ def lambda_handler(event, context):
                     logger.info(f"Found {len(objectsFound.get('Contents', []))} objects in results path")
                 except Exception as e:
                     logger.exception(f"Error listing result objects: {e}")
+                    output_failures.append("Listing the pipeline results output failed.")
 
                 if 'Contents' in objectsFound:
                     result_files = [obj['Key'] for obj in objectsFound['Contents'] if obj['Key'][-1] != '/']
@@ -1104,6 +1242,7 @@ def lambda_handler(event, context):
                             })
                         except Exception as e:
                             logger.exception(f"Error reading result file {result_key}: {e}")
+                            output_failures.append("Reading a pipeline results file failed.")
 
 
             # Record end-state pipeline outputs + completion status.
@@ -1132,6 +1271,7 @@ def lambda_handler(event, context):
                     if baseline.get(f.get("s3Key", "")) is None
                     or baseline.get(f.get("s3Key", "")) != f.get("s3VersionId", "")
                 ]
+                status, error_summary = _terminal_status(output_failures)
                 record_execution_outputs(
                     dynamo=dynamodb,
                     workflow_execution_id=workflow_execution_id,
@@ -1145,7 +1285,7 @@ def lambda_handler(event, context):
                     result_log="Workflow Execution Output Processing Complete",
                     execution_log=execution_log,
                     log_group_arn=log_group_arn, log_stream_name=stream_name,
-                    execution_status="SUCCEEDED",
+                    execution_status=status, execution_error=error_summary,
                 )
             except Exception as e:
                 # Output recording is non-critical to the upload pipeline; log and continue.
@@ -1154,7 +1294,13 @@ def lambda_handler(event, context):
             return success(body={"message": "Workflow Execution Output Processing Complete"})
 
         else:
-            return authorization_error()
+            # Step Functions invokes this state as a plain lambda task and does not inspect the
+            # returned payload, so a failure must surface as a raised error for the state's Catch
+            # to route to the error-handler state (which marks the execution rows terminal).
+            raise VAMSGeneralErrorResponse(
+                "Write-back to the output asset is not authorized for the executing user")
     except Exception as e:
         logger.exception(e)
-        return internal_error()
+        # Propagate so the ASL Catch on this state fires; returning an error payload would let
+        # the state machine report the run SUCCEEDED with no outputs recorded.
+        raise

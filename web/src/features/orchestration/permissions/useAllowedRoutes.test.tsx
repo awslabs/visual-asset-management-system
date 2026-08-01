@@ -60,6 +60,30 @@ describe("useAllowedRoutes", () => {
         expect(result.current.can("GET", "/workflows/executions/abc123/different")).toBe(false);
     });
 
+    it("can() does not let a query {param} satisfy a concrete segment of a granted route", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock).mockResolvedValue([
+            true,
+            {
+                routes: [
+                    {
+                        path: "/workflows/{workflowDatabaseId}/{workflowId}/execute",
+                        methods: ["POST"],
+                        category: "workflow",
+                    },
+                ],
+                userId: "u",
+            },
+        ]);
+        const { result } = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(
+            result.current.can("POST", "/workflows/{workflowDatabaseId}/{workflowId}/execute")
+        ).toBe(true);
+        // "executions" is concrete in the query but the grant has a param there; the grant's
+        // concrete "execute" tail must not be matched by the query's "rerun".
+        expect(result.current.can("POST", "/workflows/executions/{executionId}/rerun")).toBe(false);
+    });
+
     it("can() returns false while loading (before promise resolves)", () => {
         (APIService.fetchAllowedApiRoutes as jest.Mock).mockImplementation(
             () => new Promise(() => {}) // Never resolves
@@ -74,6 +98,67 @@ describe("useAllowedRoutes", () => {
         const { result } = renderHook(() => useAllowedRoutes());
         await waitFor(() => expect(result.current.loading).toBe(false));
         expect(result.current.can("GET", "/workflows/executions/{executionId}/logs")).toBe(false);
+    });
+
+    it("retries after a failed fetch instead of caching the failure for the session", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockResolvedValueOnce([false, "Network error"])
+            .mockResolvedValueOnce([
+                true,
+                {
+                    routes: [{ path: "/workflows", methods: ["GET"], category: "workflow" }],
+                    userId: "u",
+                },
+            ]);
+
+        const first = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(first.result.current.loading).toBe(false));
+        expect(first.result.current.can("GET", "/workflows")).toBe(false);
+        first.unmount();
+
+        const second = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(second.result.current.loading).toBe(false));
+        expect(second.result.current.can("GET", "/workflows")).toBe(true);
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects are not cached either, so the next mount refetches", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock)
+            .mockRejectedValueOnce(new Error("boom"))
+            .mockResolvedValueOnce([
+                true,
+                {
+                    routes: [{ path: "/workflows", methods: ["GET"], category: "workflow" }],
+                    userId: "u",
+                },
+            ]);
+
+        const first = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(first.result.current.loading).toBe(false));
+        first.unmount();
+
+        const second = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(second.result.current.loading).toBe(false));
+        expect(second.result.current.can("GET", "/workflows")).toBe(true);
+    });
+
+    it("caches a successful fetch across mounts", async () => {
+        (APIService.fetchAllowedApiRoutes as jest.Mock).mockResolvedValue([
+            true,
+            {
+                routes: [{ path: "/workflows", methods: ["GET"], category: "workflow" }],
+                userId: "u",
+            },
+        ]);
+
+        const first = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(first.result.current.loading).toBe(false));
+        first.unmount();
+
+        const second = renderHook(() => useAllowedRoutes());
+        await waitFor(() => expect(second.result.current.loading).toBe(false));
+        expect(second.result.current.can("GET", "/workflows")).toBe(true);
+        expect(APIService.fetchAllowedApiRoutes).toHaveBeenCalledTimes(1);
     });
 
     it("can() is case-insensitive for methods", async () => {

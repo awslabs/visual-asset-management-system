@@ -9,6 +9,8 @@ import type { PipelineStageData } from "./ExecuteWizard";
 
 interface WizardReviewStageProps {
     workflow: Workflow;
+    /** Database the wizard was launched in; the fallback for a pipeline ref with no own database. */
+    databaseId: string;
     pipelines: (Pipeline | undefined)[];
     pipelineData: Record<string, PipelineStageData>;
     inputFiles: ExecuteInputFile[];
@@ -19,6 +21,7 @@ interface WizardReviewStageProps {
 
 const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
     workflow,
+    databaseId,
     pipelines,
     pipelineData,
     inputFiles,
@@ -66,12 +69,17 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                 <h4 className="text-md font-semibold text-text-primary">Pipelines</h4>
                 {workflow.specifiedPipelines.map((ref, idx) => {
                     const pipeline = pipelines[idx];
-                    const data = pipelineData[ref.pipelineId];
-                    const errors = validationErrors[ref.pipelineId] || [];
+                    // Per-pipeline stage data and errors are keyed by the composite pipeline key
+                    // (same-id pipelines can exist in different databases).
+                    const compositeKey = `${ref.pipelineDatabaseId || databaseId}:${
+                        ref.pipelineId
+                    }`;
+                    const data = pipelineData[compositeKey];
+                    const errors = validationErrors[compositeKey] || [];
 
                     return (
                         <div
-                            key={ref.pipelineId}
+                            key={compositeKey}
                             className="p-3 bg-surface-secondary rounded border border-border-default"
                         >
                             <h5 className="text-sm font-semibold text-text-primary">
@@ -89,7 +97,8 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                             )}
                             {data?.customTemplateOverride && (
                                 <p className="text-xs text-text-secondary">
-                                    Custom override enabled
+                                    Custom override enabled. System tag placeholders left in the
+                                    configuration are resolved per pipeline task at launch.
                                 </p>
                             )}
                             {errors.length > 0 && (

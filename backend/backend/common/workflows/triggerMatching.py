@@ -23,11 +23,37 @@ uploaded input file.
 
 from customLogging.logger import safeLogger
 from common.workflows import executionValidation as ev
+from common.s3MetadataKeys import VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
 
 logger = safeLogger(service_name="TriggerMatching")
 
 GLOBAL_DATABASE = "GLOBAL"
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
+
+
+def chaining_allows_trigger(candidate_workflow_id, change_source, change_workflow_id,
+                            allow_workflow_trigger_chaining):
+    """Whether a workflow may fire on this uploaded file, given who wrote it.
+
+    Three cases, in order:
+
+    1. The file was NOT written by a workflow (a user upload, a direct S3 write, a copy/move) — always
+       eligible. This is the ordinary trigger path.
+    2. The file was written by THIS workflow — never eligible, whatever the flag says. A workflow
+       re-firing on its own output is the A->A loop, and there is deliberately no way to enable it.
+    3. The file was written by ANOTHER workflow — eligible only when this workflow opts in via
+       `allowWorkflowTriggerChaining`. That is what lets a preview or metadata workflow run on a
+       conversion pipeline's output, while keeping chained triggering off by default.
+
+    A workflow-sourced record with no recorded originating workflow id is treated as "another
+    workflow": it cannot be proven to be self-output, and the conservative reading is the one that
+    still requires an explicit opt-in.
+    """
+    if change_source != VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+        return True
+    if change_workflow_id and change_workflow_id == candidate_workflow_id:
+        return False
+    return bool(allow_workflow_trigger_chaining)
 
 
 def _trigger_fires(trigger_row, upload_database_id, relative_file_key):
@@ -87,10 +113,19 @@ def build_trigger_execute_body(trigger_row, database_id, asset_id, relative_file
     }
 
 
-def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file_key, version_id=""):
+def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file_key, version_id="",
+                              change_source="", change_workflow_id="",
+                              chaining_allowed_for=None):
     """Return the list of (workflowDatabaseId, workflowId, executeBody) for every fileUpload trigger
     that fires for an uploaded file. Non-firing triggers (disabled, wrong database, filtered out) are
-    omitted. The dispatcher launches one execution per returned entry."""
+    omitted. The dispatcher launches one execution per returned entry.
+
+    `change_source` / `change_workflow_id` describe who wrote the uploaded object (from its S3
+    provenance metadata). `chaining_allowed_for` is an optional callable
+    ``(workflowDatabaseId, workflowId) -> bool`` returning that workflow's
+    `allowWorkflowTriggerChaining`; it is only consulted for a workflow-written file, so an ordinary
+    user upload costs no extra lookups. Omitting it means "no workflow opts in", which reproduces the
+    pre-chaining behavior of never re-firing on workflow output."""
     matches = []
     for trigger_row in trigger_rows or []:
         if trigger_row.get("triggerType", TRIGGER_TYPE_FILE_UPLOAD) != TRIGGER_TYPE_FILE_UPLOAD:
@@ -101,6 +136,16 @@ def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file
         workflow_id = trigger_row.get("workflowId", "")
         if not workflow_id:
             continue
+        # Only a workflow-written file needs the per-workflow flag, so the (possibly remote) lookup
+        # is deferred until the filters have already matched.
+        if change_source == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+            allowed = bool(chaining_allowed_for(workflow_database_id, workflow_id))                 if chaining_allowed_for else False
+            if not chaining_allows_trigger(workflow_id, change_source, change_workflow_id, allowed):
+                logger.info(
+                    f"Skipping trigger for workflow {workflow_database_id}:{workflow_id} — the file "
+                    f"was written by workflow execution of '{change_workflow_id or 'unknown'}' and "
+                    "chaining is not permitted for this workflow")
+                continue
         body = build_trigger_execute_body(
             trigger_row, database_id, asset_id, relative_file_key, version_id)
         matches.append((workflow_database_id, workflow_id, body))
