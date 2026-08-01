@@ -6,7 +6,10 @@
             "managedRuleGroupName": "AWSManagedRulesCommonRuleSet",
             "priority": 1,
             "block": true,
-            "ruleActionOverrides": [{ "name": "SizeRestrictions_BODY", "action": "count" }]
+            "ruleActionOverrides": [
+                { "name": "SizeRestrictions_BODY", "action": "count" },
+                { "name": "SizeRestrictions_QUERYSTRING", "action": "count" }
+            ]
         },
         {
             "name": "AWS-AWSManagedRulesKnownBadInputsRuleSet",
