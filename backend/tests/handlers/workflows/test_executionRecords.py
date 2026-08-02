@@ -6,6 +6,56 @@ from backend.backend.common.workflows import executionRecords as er
 
 
 @pytest.mark.unit
+class TestEffectiveSystemConfigSnapshot:
+    """The config snapshot records the systemConfig the STEP ran under, not just the pipeline's own.
+
+    A template may override inputFileArity / assetScope / metadataInputs / inputFileFilters, and the
+    template is chosen per execution — so the settings actually enforced are only knowable at execute
+    time. Without this a finished execution cannot say what it ran with, and a reader cannot tell that a
+    template raised the arity.
+    """
+
+    def test_effective_config_and_overrides_are_recorded(self):
+        row = er.build_input_configuration_record(
+            pipeline_execution_id="pe1", input_configuration="{}",
+            input_configuration_file_s3_key="k",
+            effective_system_config={"inputFileArity": "one", "requireTemplate": True},
+            template_overrides={"inputFileArity": "one"})
+        assert row["effectiveSystemConfig"] == {"inputFileArity": "one", "requireTemplate": True}
+        assert row["templateOverrides"] == {"inputFileArity": "one"}
+
+    def test_both_default_to_empty_maps(self):
+        """An older row (or a run with no template) has no overrides; readers must not KeyError."""
+        row = er.build_input_configuration_record(
+            pipeline_execution_id="pe1", input_configuration="{}",
+            input_configuration_file_s3_key="k")
+        assert row["effectiveSystemConfig"] == {}
+        assert row["templateOverrides"] == {}
+
+    def test_the_recorded_effective_config_is_the_documented_merge(self):
+        """Recompute the merge the way execute does, so the snapshot cannot drift from what was
+        enforced: a template override wins per key, and untouched keys keep the pipeline's value."""
+        from backend.backend.common.workflows.executionValidation import (
+            resolve_effective_pipeline_config)
+        pipeline_config = {"inputFileArity": "none", "requireTemplate": True,
+                           "inputFileFilters": {"allow": [], "exclude": []}}
+        overrides = {"inputFileArity": "one", "inputFileFilters": {"allow": ["*.mp4"],
+                                                                   "exclude": []}}
+        effective = resolve_effective_pipeline_config(pipeline_config, overrides)
+        row = er.build_input_configuration_record(
+            pipeline_execution_id="pe1", input_configuration="{}",
+            input_configuration_file_s3_key="k",
+            effective_system_config=effective, template_overrides=overrides)
+        # The template raised the arity above the pipeline's own default...
+        assert row["effectiveSystemConfig"]["inputFileArity"] == "one"
+        assert row["effectiveSystemConfig"]["inputFileFilters"]["allow"] == ["*.mp4"]
+        # ...while a key the template did not mention keeps the pipeline's value.
+        assert row["effectiveSystemConfig"]["requireTemplate"] is True
+        # And the overrides alone explain WHY the effective config differs from the pipeline's.
+        assert set(row["templateOverrides"]) == {"inputFileArity", "inputFileFilters"}
+
+
+@pytest.mark.unit
 class TestKeysAndDates:
     def test_workflow_composite_key_is_clean(self):
         assert er.workflow_composite_key("db1", "wf1") == "db1:wf1"
@@ -309,6 +359,99 @@ class TestOutputBuilders:
             output_file_base_execution_path_extension="/exec-2026/",
         )
         assert rec["outputFileBaseExecutionPathExtension"] == "/exec-2026/"
+
+    def test_metadata_envelope_rows_reads_the_grouped_schema(self):
+        # The details page reads DynamoDB rows, not the S3 envelope, so this flattening is what makes
+        # input metadata visible at all. Asset-level metadata lives on the '/' record: a reader that
+        # walks only per-FILE records reports "no input metadata" for an asset full of it.
+        envelope = er.build_grouped_metadata_envelope([
+            er.build_metadata_asset_group(
+                "db1", "a1",
+                files=[
+                    er.build_metadata_file_record("/", metadata={"GROOT_MAX_STEPS": "60"}),
+                    er.build_metadata_file_record("/x.glb", metadata={"kind": "mesh"}),
+                ]),
+        ])
+        rows = list(er.metadata_envelope_rows(envelope))
+        assert {r["filePath"] for r in rows} == {"/", "/x.glb"}
+        asset_row = next(r for r in rows if r["filePath"] == "/")
+        assert asset_row["metadata"] == {"GROOT_MAX_STEPS": "60"}
+        assert asset_row["databaseId"] == "db1" and asset_row["assetId"] == "a1"
+
+    def test_metadata_envelope_rows_skips_records_with_no_metadata(self):
+        # The envelope always emits a '/' record per asset so the file list is uniform, even when the
+        # asset carries nothing. Persisting those would fill the details response with empty rows.
+        envelope = er.build_grouped_metadata_envelope([
+            er.build_metadata_asset_group("db1", "a1", files=[
+                er.build_metadata_file_record("/", metadata=None),
+                er.build_metadata_file_record("/x.glb", metadata={}),
+            ]),
+        ])
+        assert list(er.metadata_envelope_rows(envelope)) == []
+
+    def test_metadata_envelope_rows_spans_multiple_assets(self):
+        envelope = er.build_grouped_metadata_envelope([
+            er.build_metadata_asset_group("db1", "a1", files=[
+                er.build_metadata_file_record("/", metadata={"k": "1"})]),
+            er.build_metadata_asset_group("db2", "a2", files=[
+                er.build_metadata_file_record("/", metadata={"k": "2"})]),
+        ])
+        rows = list(er.metadata_envelope_rows(envelope))
+        assert {(r["databaseId"], r["assetId"]) for r in rows} == {("db1", "a1"), ("db2", "a2")}
+
+    def test_metadata_envelope_rows_accepts_the_legacy_flat_shape(self):
+        # A caller holding either envelope version must work; misreading the grouped envelope as the
+        # legacy one is what made a working capture look like a broken one.
+        rows = list(er.metadata_envelope_rows({"VAMS": {"assetMetadata": {"k": "v"}}}))
+        assert rows == [{"databaseId": "", "assetId": "", "filePath": "/", "metadata": {"k": "v"}}]
+
+    @pytest.mark.parametrize("payload", [None, {}, [], "text", {"assets": []}])
+    def test_metadata_envelope_rows_tolerates_junk(self, payload):
+        assert list(er.metadata_envelope_rows(payload)) == []
+
+    def test_configuration_record_indexes_by_output_asset(self):
+        # Partition for WorkflowExecConfigByOutputAssetGSI. Without it an asset's execution history
+        # cannot include runs that only WROTE to the asset — and a results-only or arity-'none'
+        # pipeline has no input rows at all, so the output target is its only association.
+        rec = er.build_workflow_configuration_record(
+            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            specified_pipelines_snapshot=[], output_location_type="asset",
+            output_asset_id="a1", output_database_id="db1",
+            execution_start_date="2026-08-02T00:00:00Z",
+        )
+        assert rec["outputDatabaseId:outputAssetId"] == "db1:a1"
+        assert rec["executionStartDate"] == "2026-08-02T00:00:00Z"
+
+    def test_results_only_execution_is_absent_from_the_output_asset_index(self):
+        # The index is sparse ON PURPOSE: a results-only run writes to no asset, so indexing it under
+        # an empty partition would collect every such run into one hot key and surface them on an
+        # unrelated asset's history.
+        rec = er.build_workflow_configuration_record(
+            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            specified_pipelines_snapshot=[], output_location_type="none",
+        )
+        assert "outputDatabaseId:outputAssetId" not in rec
+
+    def test_asset_output_with_unresolved_destination_is_not_indexed(self):
+        # 'asset' with no ids resolved yet must not produce a partial key like "db1:" or ":a1".
+        for kwargs in ({"output_asset_id": "a1"}, {"output_database_id": "db1"}, {}):
+            rec = er.build_workflow_configuration_record(
+                workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+                specified_pipelines_snapshot=[], output_location_type="asset", **kwargs)
+            assert "outputDatabaseId:outputAssetId" not in rec, kwargs
+
+    def test_output_asset_partition_key_matches_the_input_gsi_shape(self):
+        # The by-input-asset GSI partitions on 'databaseId:assetId'; using the same shape means a
+        # caller listing one asset builds the key the same way for both directions.
+        assert er.output_asset_partition_key("db1", "a1") == "db1:a1"
+
+    def test_configuration_record_defaults_its_start_date(self):
+        # An omitted start date must still be sortable rather than empty, or the row would land at the
+        # bottom of every newest-first listing.
+        rec = er.build_workflow_configuration_record(
+            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            specified_pipelines_snapshot=[])
+        assert rec["executionStartDate"]
 
     def test_manifest_output_target_defaults_and_extension(self):
         # Default: location 'asset', empty ids, '/' extension (no extra path).

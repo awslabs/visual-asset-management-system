@@ -305,6 +305,50 @@ describe("validateWorkflow", () => {
         expect(r.warnings.some((w) => /exclude everything/i.test(w))).toBe(false);
     });
 
+    // The workflow's EXCLUDE list is a second, independent way to starve a pipeline: exclude is
+    // applied after allow, so the allow-lists can agree perfectly and the file still never arrives.
+    it("warns when the workflow excludes the pipeline's only accepted type", () => {
+        const r = validateWorkflow(
+            {
+                specifiedPipelines: [{ pipelineId: "p", pipelineDatabaseId: "db" }],
+                systemConfig: {
+                    inputFileFilters: { allow: ["*.glb", "*.obj"], exclude: ["*.glb"] },
+                },
+            } as any,
+            { "db:p": { systemConfig: { inputFileFilters: { allow: ["*.glb"] } } } as any }
+        );
+        // The allow-lists overlap, so the disjoint check stays quiet — only the exclude check fires.
+        expect(r.warnings.some((w) => /exclude everything/i.test(w))).toBe(false);
+        expect(r.warnings.some((w) => /no accepted input type/i.test(w))).toBe(true);
+    });
+
+    it("names what a pipeline is left with when only some of its types are excluded", () => {
+        const r = validateWorkflow(
+            {
+                specifiedPipelines: [{ pipelineId: "p", pipelineDatabaseId: "db" }],
+                // '.glb' and '*.glb' are the same type to the matcher.
+                systemConfig: { inputFileFilters: { exclude: [".glb"] } },
+            } as any,
+            {
+                "db:p": {
+                    systemConfig: { inputFileFilters: { allow: ["*.glb", "*.obj"] } },
+                } as any,
+            }
+        );
+        expect(r.warnings.some((w) => /only \*\.obj/.test(w))).toBe(true);
+    });
+
+    it("does not warn for a wildcard exclude it cannot resolve", () => {
+        const r = validateWorkflow(
+            {
+                specifiedPipelines: [{ pipelineId: "p", pipelineDatabaseId: "db" }],
+                systemConfig: { inputFileFilters: { exclude: ["*.previewFile.*"] } },
+            } as any,
+            { "db:p": { systemConfig: { inputFileFilters: { allow: ["*.glb"] } } } as any }
+        );
+        expect(r.warnings.some((w) => /exclude/i.test(w))).toBe(false);
+    });
+
     it("does not warn when pipeline is not in pipelinesById", () => {
         const r = validateWorkflow(
             {

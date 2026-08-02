@@ -110,7 +110,7 @@ from `resourceOverrides` per `executionConfig.executionType`. Author the block f
 resource fields empty (`"lambda": {}`, `"sqs": {}`, …). Copy the shape from
 `backendPipelines/conversion/3dBasic/vamsSchema/pipeline.json`.
 
-Verify these six things, each of which silently produces an unusable pipeline when wrong:
+Verify these seven things, each of which silently produces an unusable pipeline when wrong:
 
 1.  **`systemConfig.inputFileFilters.allow` matches the file types the container actually handles.**
     These globs are what the execute API and the file-upload trigger match against; a missing
@@ -133,7 +133,13 @@ Verify these six things, each of which silently produces an unusable pipeline wh
     `{"locationType": "asset", "allowOverride": true}` so a destination can be chosen per run.
     Registration runs the same model validation as the API and FAILS the deploy on a bundle that
     cannot execute, rather than storing an unusable row.
-6.  **A container must not create its own per-job output folder.** The workflow's
+6.  **Let the TEMPLATE decide whether a step needs an input file.** For a pipeline with several modes,
+    set its `inputFileArity` to the LOWEST any template needs (usually `none`) and let each template
+    raise it through `overrides` (`inputFileArity`, `assetScope`, `metadataInputs`,
+    `inputFileFilters`). One pipeline per MODEL, not per mode — and the execute form asks for a file
+    only when the chosen template consumes one. A workflow's arity is authored, so set it to the
+    MAXIMUM any pipeline/template combination in that workflow can require.
+7.  **A container must not create its own per-job output folder.** The workflow's
     `defaultOutputFileBaseExecutionPathExtension` (e.g. `/{{jobName}}/`) is what separates runs, and it
     is inserted just above each output file's own name so the container's folders are preserved. A
     container-side job folder shows up as a stray level inside every asset. Set

@@ -73,6 +73,8 @@ def _clean_validation_message(v):
 
 sfn = boto3.client('stepfunctions')
 logs_client = boto3.client('logs')
+# Used only to terminate a registered Batch job on abort (_terminate_batch_job_reporting).
+batch_client = boto3.client('batch')
 dynamodb = boto3.resource('dynamodb')
 
 try:
@@ -94,8 +96,6 @@ try:
     pipeline_database = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
     # Index of 'executions that wrote to this asset', written at launch; removed here alongside the
     # execution's other rows on permanent delete.
-    workflow_execution_outputs_index_table = get_table_name(
-        ResourceKeys.WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE)
     # Re-run delegates to the asset-less V2 execute handler (invoked as a lambda cross-call so the
     # caller's identity + a reconstructed execute body drive a fresh execution).
     execute_workflow_v2_function = os.environ.get("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "")
@@ -462,6 +462,52 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 "executionService inspected the most recent %d executions for asset %s; "
                 "older executions were not listed", MAX_EXECUTIONS_INSPECTED, asset_id)
 
+        # An asset's history is the UNION of runs that read it and runs that wrote to it. The output
+        # direction cannot be found through the inputs GSI at all: a results-only or
+        # generate-from-nothing pipeline (inputFileArity 'none') writes no input rows, so its output
+        # target is its only association with the asset.
+        #
+        # Queried second and merged, so an execution that is BOTH an input and the output target keeps
+        # its input row (first-seen wins) and is listed once. Bounded by the same
+        # MAX_EXECUTIONS_INSPECTED budget across both directions.
+        if len(deduped_inputs) < MAX_EXECUTIONS_INSPECTED:
+            cfg_table = dynamodb.Table(workflow_execution_configuration_table)
+            output_kwargs = {
+                'IndexName': 'WorkflowExecConfigByOutputAssetGSI',
+                'KeyConditionExpression': (
+                    Key('outputDatabaseId:outputAssetId').eq(
+                        er.output_asset_partition_key(database_id, asset_id))
+                    & Key('executionStartDate').gte(filter_start_date)),
+                'ScanIndexForward': False,
+            }
+            try:
+                out_resp = cfg_table.query(**output_kwargs)
+                while True:
+                    for cfg_item in out_resp.get('Items', []):
+                        execution_id = cfg_item.get('workflowExecutionId', '')
+                        if not execution_id or execution_id in deduped_inputs:
+                            continue
+                        # A placeholder input row: this execution has no input file for the asset (it
+                        # only wrote here), so the per-row input fields the response builder reads are
+                        # absent by design rather than missing.
+                        deduped_inputs[execution_id] = {
+                            'workflowExecutionId': execution_id,
+                            'databaseId': database_id,
+                            'assetId': asset_id,
+                            'executionStartDate': cfg_item.get('executionStartDate', ''),
+                        }
+                        if len(deduped_inputs) >= MAX_EXECUTIONS_INSPECTED:
+                            bounded = True
+                            break
+                    if bounded or 'LastEvaluatedKey' not in out_resp:
+                        break
+                    output_kwargs['ExclusiveStartKey'] = out_resp['LastEvaluatedKey']
+                    out_resp = cfg_table.query(**output_kwargs)
+            except Exception as e:
+                # Best-effort: the input-matched executions are still returned. A missing index on an
+                # un-migrated deployment must degrade the listing, not fail it.
+                logger.warning(f"Could not list executions by output asset (non-fatal): {e}")
+
         def _fetch_main_row(execution_id):
             r = main_table.query(
                 KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
@@ -524,6 +570,13 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             }
             if casbin_enforcer.enforce(enforce_obj, "GET"):
                 authorized_inputs.append(input_item)
+
+        # Each direction (input-side, then output-target) is read newest-first, but they are read as
+        # two separate queries and concatenated — so without this the output-only executions all trail
+        # the input-side ones regardless of date, and an asset whose newest activity was a pipeline
+        # writing INTO it shows that run below much older entries. Sorted here rather than in each
+        # caller so the API, the web tab, and the CLI all get one chronological list.
+        authorized_inputs.sort(key=lambda i: i.get('executionStartDate') or '', reverse=True)
 
         items = build_execution_items(
             input_items=authorized_inputs,
@@ -654,9 +707,35 @@ def _stop_sfn_execution_reporting(execution_arn):
         return False, str(e)
 
 
-# Sub-process resource type the abort path can stop today (mirrors registerPipelineExecution).
+def _terminate_batch_job_reporting(job_id):
+    """Best-effort AWS Batch TerminateJob for a registered job. Returns (ok, reason).
+
+    A job already in a terminal state is accepted rather than reported: TerminateJob is a no-op on a
+    finished job, and an abort racing a job that just completed is normal, not a failure. A real
+    failure (a missing permission, say) returns its error code so the caller can surface a warning
+    naming what was left running.
+    """
+    if not job_id:
+        return True, ""
+    try:
+        batch_client.terminate_job(jobId=job_id, reason="Aborted by VAMS execution abort")
+        return True, ""
+    except botocore.exceptions.ClientError as e:
+        code = e.response.get('Error', {}).get('Code', '')
+        logger.warning(f"Could not terminate registered Batch job {job_id}: {e}")
+        return False, code or str(e)
+    except Exception as e:
+        logger.warning(f"Could not terminate registered Batch job {job_id}: {e}")
+        return False, str(e)
+
+
+# Sub-process resource types the abort path can stop today (mirrors registerPipelineExecution).
 # Other registered types are tracked but not yet abortable.
 RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
+# An AWS Batch job a pipeline submitted ITSELF. A job submitted by a nested state machine through the
+# Step Functions `.sync` integration needs no entry here: Step Functions owns that job's lifecycle, so
+# stopping the sub-execution already terminates it.
+RESOURCE_TYPE_BATCH_JOB = "batchJob"
 
 
 def _abort_registered_sub_process(sub):
@@ -673,6 +752,18 @@ def _abort_registered_sub_process(sub):
         ok, err = _stop_sfn_execution_reporting(execution_arn)
         if not ok:
             return f"Sub-process abort failed for {execution_arn}: {err}"
+        return ""
+    if resource_type == RESOURCE_TYPE_BATCH_JOB:
+        # Only pipelines that submit their Batch job THEMSELVES register it: when a nested state
+        # machine submits through the Step Functions `.sync` integration, Step Functions owns the
+        # job and stopping that execution already terminates it. A self-submitted job has no such
+        # owner, so without this it would keep running (and billing) after an abort.
+        job_id = sub.get("jobId", "") or sub.get("jobArn", "")
+        if not job_id:
+            return ""
+        ok, err = _terminate_batch_job_reporting(job_id)
+        if not ok:
+            return f"Sub-process abort failed for Batch job {job_id}: {err}"
         return ""
     # Not yet abortable (e.g. batchJob, ecsTask). Surface what was left running.
     locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
@@ -909,6 +1000,11 @@ def _scrub_pipeline_detail(prow, pipeline_def, rendered_config="", rendered_conf
         "templateTags": snapshot.get('templateTags', []),
         "customTemplateOverrideUsed": bool(snapshot.get('customTemplateOverrideUsed', False)),
         "configFormat": snapshot.get('configFormat', ''),
+        # The systemConfig THIS STEP ran under (pipeline systemConfig merged with the chosen
+        # template's overrides), plus the overrides alone so a reader can see what the template
+        # changed. Empty for a run recorded before these were captured.
+        "effectiveSystemConfig": snapshot.get('effectiveSystemConfig', {}) or {},
+        "templateOverrides": snapshot.get('templateOverrides', {}) or {},
     }
 
 
@@ -1165,6 +1261,11 @@ def assemble_execution_details(execution_id, main_item):
         # Human-readable name for UI display (breadcrumbs/headers); falls back to the id downstream.
         "workflowName": workflow_def.get('workflowName', ''),
         "workflowDescription": workflow_def.get('description', ''),
+        # The workflow's systemConfig as it stands NOW. The workflow-level settings are the outer gate
+        # of the workflow -> pipeline -> template chain; each pipeline step's own resolved settings are
+        # snapshotted per step (see effectiveSystemConfig on each pipeline entry). This one is read live
+        # rather than snapshotted, so a settings view must label it as current, not as-run.
+        "workflowSystemConfig": workflow_def.get('systemConfig', {}) or {},
         "executionStatus": main_item.get('executionStatus', ''),
         "executionStartDate": main_item.get('executionStartDate', ''),
         "executionStopDate": main_item.get('executionStopDate', ''),
@@ -1304,6 +1405,52 @@ def _full_log_search(log_group_arn, filter_terms, query_params):
         for e in resp.get('events', [])
     ]
     return {"events": events, "nextToken": resp.get('nextToken')}
+
+
+def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
+    """The log group of the resource a step INVOKED, derived from what the execute path already
+    recorded — or "" when the step's execution type has no reachable invocation log.
+
+    This is the step's SECONDARY log: the primary per-step log is whatever the pipeline's own
+    sub-process registered, whereas this is the log of the invocation the top-level state machine made.
+    For a Lambda step (every use-case pipeline's vamsExecute) that log exists and holds the reason a
+    launch failed, but nothing pointed at it, so it was unreachable from the execution view.
+
+    Supported by execution type:
+      Lambda        -> /aws/lambda/{functionName}, derived from pipelineResourceArn.
+      SQS           -> none. A queue has no invocation log; the CONSUMER's log is a separate resource
+                       VAMS does not own, and a pipeline that wants it can register it explicitly.
+      EventBridge   -> none, for the same reason: the bus does not log deliveries by default.
+      DeadlineCloud -> none here. Its job logs live in Deadline Cloud's own session logs, reachable
+                       through the job, not through a CloudWatch group derivable from the pipeline.
+    Returning "" for those is deliberate: an empty section labelled "no log" is worse than no section.
+    """
+    row = pipeline_row or {}
+    if (row.get("pipelineExecutionType") or "Lambda") != "Lambda":
+        return ""
+    resource = row.get("pipelineResourceArn") or ""
+    if not resource:
+        return ""
+    # pipelineResourceArn holds either a bare function name or a full function ARN.
+    function_name = resource.split(":function:")[-1].split(":")[0] if ":" in resource else resource
+    if not function_name:
+        return ""
+    # Partition / region / account come from an ARN rather than being assumed: the resource's own ARN
+    # when it is one, else the execution's log-group ARN (always same-account, same-partition, and
+    # already on the main row). Nothing is hard-coded, so this holds in GovCloud and ISO partitions.
+    partition, region, account = "", os.environ.get("AWS_REGION", ""), ""
+    for candidate in (resource, reference_log_group_arn):
+        if not candidate.startswith("arn:"):
+            continue
+        parts = candidate.split(":")
+        if len(parts) > 4 and parts[4]:
+            partition = partition or parts[1]
+            region = parts[3] or region
+            account = account or parts[4]
+            break
+    if not (partition and region and account):
+        return ""
+    return f"arn:{partition}:logs:{region}:{account}:log-group:/aws/lambda/{function_name}:*"
 
 
 def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
@@ -1562,6 +1709,24 @@ def get_execution_logs(event, execution_id, query_params):
         # Log-group ARNs already read this request, so a group reported in registeredLogs is not
         # re-read when it is also resolved from a sub-execution's state machine (avoids duplicates).
         read_log_group_arns = set()
+        # The step's SECONDARY log: the log of the resource the top-level state machine invoked for
+        # this step. Derived from what the execute path already recorded (pipelineExecutionType +
+        # pipelineResourceArn), so it needs no registration by the pipeline — which is why a
+        # vamsExecute lambda's own log was previously unreachable. Empty for SQS / EventBridge /
+        # DeadlineCloud, which have no invocation log to read.
+        invocation_log_arn = step_invocation_log_group_arn(pipeline_row, log_group_arn)
+        if invocation_log_arn:
+            read_log_group_arns.add(invocation_log_arn)
+            ok, events_or_err = _fetch_registered_log_events(
+                invocation_log_arn, "", query_params, scope_terms=scope_terms)
+            if ok:
+                sub_process_events.extend(events_or_err)
+            else:
+                # Non-fatal and named: a missing IAM grant on this group must not fail the logs GET,
+                # but it should say which log could not be read rather than silently omitting it.
+                warnings.append(
+                    f"Step invocation log retrieval failed for {invocation_log_arn}: {events_or_err}")
+
         # Explicitly-registered log locations (logGroupArn reported by the pipeline). Capped so an
         # unbounded registration list cannot turn one logs GET into an unbounded CloudWatch burst.
         registered_logs = pipeline_row.get('registeredLogs', []) or []
@@ -2276,11 +2441,9 @@ def permanent_delete_execution(event, execution_id):
     dynamodb.Table(workflow_execution_configuration_table).delete_item(
         Key={"workflowExecutionId": execution_id, "recordType": "configuration"})
 
-    # Output index row (keyed on the captured output asset).
-    if output_database_id and output_asset_id:
-        dynamodb.Table(workflow_execution_outputs_index_table).delete_item(
-            Key={"databaseId:assetId": f"{output_database_id}:{output_asset_id}",
-                 "workflowExecutionId": execution_id})
+    # The output-asset relationship lives on the configuration row deleted just above (it carries the
+    # output target and the composite key backing WorkflowExecConfigByOutputAssetGSI), so deleting that
+    # row also removes the execution from the by-output-asset index.
 
     # Main row (query for the SK, then delete).
     dynamodb.Table(workflow_execution_database_v2).delete_item(

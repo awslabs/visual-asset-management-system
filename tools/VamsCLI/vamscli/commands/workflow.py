@@ -90,6 +90,17 @@ def format_workflow_output(workflow: Dict[str, Any]) -> str:
     triggers = workflow.get('triggers')
     if triggers:
         lines.append(f"Triggers: {', '.join(t.get('triggerType', '?') for t in triggers)}")
+    else:
+        # List responses carry counts rather than the trigger rows. Both numbers are shown when they
+        # differ: "2 (1 enabled)" is a workflow that will only partly fire, which reads very
+        # differently from "2" — and is why a workflow can look configured but sit idle.
+        trigger_count = workflow.get('triggerCount')
+        if trigger_count is not None:
+            enabled_count = workflow.get('triggersEnabledCount')
+            if enabled_count is not None and enabled_count != trigger_count:
+                lines.append(f"Triggers: {trigger_count} ({enabled_count} enabled)")
+            else:
+                lines.append(f"Triggers: {trigger_count}")
     workflow_arn = workflow.get('workflow_arn')
     if workflow_arn:
         lines.append(f"State Machine ARN: {workflow_arn}")
@@ -104,7 +115,10 @@ def _parse_specified_pipelines(pipelines_json: Optional[str], pipelines_file: Op
                                pipeline_refs: List[str]) -> List[Dict[str, Any]]:
     """Build the specifiedPipelines list from either a JSON option or repeated --pipeline refs.
 
-    A --pipeline ref is 'databaseId:pipelineId[:defaultTemplateId]'."""
+    A --pipeline ref is 'databaseId:pipelineId[:defaultTemplateId[:jobName]]'. The trailing segments
+    are positional, so a jobName without a default template is spelled with an empty third segment
+    ('db:pipe::my-step'). Supplying the full list as JSON remains the way to set anything else on a
+    reference."""
     parsed = _load_json_option(pipelines_json, pipelines_file, "specifiedPipelines")
     if parsed is not None:
         if not isinstance(parsed, list):
@@ -113,12 +127,18 @@ def _parse_specified_pipelines(pipelines_json: Optional[str], pipelines_file: Op
     result = []
     for ref in pipeline_refs:
         parts = ref.split(':')
-        if len(parts) < 2:
+        if len(parts) < 2 or len(parts) > 4 or not parts[0] or not parts[1]:
             raise click.ClickException(
-                f"Invalid --pipeline ref '{ref}'. Use 'databaseId:pipelineId[:defaultTemplateId]'.")
+                f"Invalid --pipeline ref '{ref}'. Use "
+                "'databaseId:pipelineId[:defaultTemplateId[:jobName]]' (leave the template segment "
+                "empty to set only a job name, e.g. 'db:pipe::my-step').")
         entry = {'pipelineDatabaseId': parts[0], 'pipelineId': parts[1]}
         if len(parts) >= 3 and parts[2]:
             entry['defaultTemplateId'] = parts[2]
+        # jobName becomes a folder in this step's output path (and the ASL state name); omitted means
+        # the pipeline id is used. Server-side it must satisfy the id charset, so tags are rejected.
+        if len(parts) >= 4 and parts[3]:
+            entry['jobName'] = parts[3]
         result.append(entry)
     return result
 
@@ -136,6 +156,8 @@ def workflow():
 @workflow.command('list')
 @click.option('-d', '--database-id', help='Database ID to list workflows from (omit for all accessible workflows)')
 @click.option('--include-archived', is_flag=True, help='Include archived workflows')
+@click.option('--has-triggers', type=click.Choice(['true', 'false']),
+              help='Only workflows that do (true) or do not (false) have an enabled trigger')
 @click.option('--page-size', type=int, help='Number of items per page')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
@@ -144,13 +166,15 @@ def workflow():
 @click.pass_context
 @requires_setup_and_auth
 def list_workflows(ctx: click.Context, database_id: Optional[str], include_archived: bool,
-                   page_size: Optional[int], max_items: Optional[int], starting_token: Optional[str],
+                   has_triggers: Optional[str], page_size: Optional[int],
+                   max_items: Optional[int], starting_token: Optional[str],
                    auto_paginate: bool, json_output: bool):
     """List workflows in a database, or all accessible workflows.
 
     Examples:
         vamscli workflow list
         vamscli workflow list -d my-database --auto-paginate
+        vamscli workflow list --has-triggers true
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
@@ -194,6 +218,8 @@ def list_workflows(ctx: click.Context, database_id: Optional[str], include_archi
                 params = {}
                 if page_size:
                     params['pageSize'] = page_size
+                if has_triggers:
+                    params['hasTriggers'] = has_triggers
                 if next_token:
                     params['startingToken'] = next_token
                 page = _message(api_client.list_workflows(
@@ -214,6 +240,8 @@ def list_workflows(ctx: click.Context, database_id: Optional[str], include_archi
         params = {}
         if page_size:
             params['pageSize'] = page_size
+        if has_triggers:
+            params['hasTriggers'] = has_triggers
         if starting_token:
             params['startingToken'] = starting_token
         result = _message(api_client.list_workflows(
@@ -254,7 +282,9 @@ def get_workflow(ctx: click.Context, database_id: str, workflow_id: str,
 @click.option('-n', '--name', 'workflow_name', required=True, help='Human-readable workflow name')
 @click.option('-w', '--workflow-id', help='Explicit workflow ID (a GUID is generated when omitted)')
 @click.option('--pipeline', 'pipeline_refs', multiple=True,
-              help="Referenced pipeline 'databaseId:pipelineId[:defaultTemplateId]' (repeatable)")
+              help="Referenced pipeline 'databaseId:pipelineId[:defaultTemplateId[:jobName]]' "
+                   "(repeatable; use an empty template segment to set only a job name, "
+                   "e.g. 'db:pipe::my-step')")
 @click.option('--specified-pipelines', help='specifiedPipelines as inline JSON list (alternative to --pipeline)')
 @click.option('--specified-pipelines-file', type=click.Path(exists=True),
               help='specifiedPipelines from a JSON file')
@@ -274,9 +304,17 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
                     sub_dashboard_url: str, disabled: bool, json_output: bool):
     """Create a workflow referencing one or more pipelines.
 
+    A --pipeline ref is 'databaseId:pipelineId[:defaultTemplateId[:jobName]]'. The segments are
+    positional, so leave the template segment empty to set only a job name. A jobName becomes a
+    folder in that step's output path; omit it to use the pipeline id.
+
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
             --pipeline global:conversion-3d-basic:to-glb --pipeline my-db:my-labeler
+        vamscli workflow create -d my-db -n "Convert for web" \\
+            --pipeline global:conversion-3d-basic:to-glb:convert-for-web
+        vamscli workflow create -d my-db -n "Label only" \\
+            --pipeline global:metadata-3d-labeling::label-step
         vamscli workflow create -d my-db -n "WF" --specified-pipelines-file pipes.json
     """
     api_client = _api(ctx)
@@ -321,7 +359,8 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
 @click.option('-w', '--workflow-id', required=True, help='Workflow ID to update')
 @click.option('-n', '--name', 'workflow_name', help='New workflow name')
 @click.option('--pipeline', 'pipeline_refs', multiple=True,
-              help="Replacement pipeline ref 'databaseId:pipelineId[:defaultTemplateId]' (repeatable)")
+              help="Replacement pipeline ref 'databaseId:pipelineId[:defaultTemplateId[:jobName]]' "
+                   "(repeatable; use an empty template segment to set only a job name)")
 @click.option('--specified-pipelines', help='Replacement specifiedPipelines as inline JSON list')
 @click.option('--specified-pipelines-file', type=click.Path(exists=True),
               help='Replacement specifiedPipelines from a JSON file')

@@ -12,9 +12,18 @@ interface DrawerProps {
     title: string;
     children: React.ReactNode;
     side?: "left" | "right";
+    /** Max-width utility for the panel. Override when the content is wide (long ids, table columns). */
+    maxWidthClass?: string;
 }
 
-const Drawer: React.FC<DrawerProps> = ({ open, onOpenChange, title, children, side = "right" }) => {
+const Drawer: React.FC<DrawerProps> = ({
+    open,
+    onOpenChange,
+    title,
+    children,
+    side = "right",
+    maxWidthClass = "max-w-md",
+}) => {
     const sideClasses = side === "left" ? "left-0 top-0 h-full" : "right-0 top-0 h-full";
 
     return (
@@ -24,7 +33,7 @@ const Drawer: React.FC<DrawerProps> = ({ open, onOpenChange, title, children, si
                     header.scss); at a lower z the drawer rendered UNDER the header bar. */}
                 <RadixDialog.Overlay className="fixed inset-0 bg-black/50 dark:bg-black/70 z-[3000]" />
                 <RadixDialog.Content
-                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full max-w-md overflow-auto z-[3001] p-6`}
+                    className={`orchestration-root fixed ${sideClasses} bg-surface-container shadow-xl w-full ${maxWidthClass} overflow-auto z-[3001] p-6`}
                 >
                     <RadixDialog.Title className="text-xl font-semibold text-text-primary mb-4">
                         {title}

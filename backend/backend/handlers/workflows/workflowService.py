@@ -212,8 +212,28 @@ def _resolve_referenced_pipelines(workflow_database_id, specified_pipelines, cla
 # Data operations
 #######################
 
-def _item_to_response(item, triggers=None, warnings=None, execution_count=None):
+def _aggregate_fields(item, pipeline_system_configs):
+    """The display-only aggregates for a workflow response. `pipeline_system_configs` is the ordered
+    list of the referenced pipelines' systemConfig dicts; pass None to omit the aggregates entirely
+    (rather than computing them from an empty list, which would misreport an open restriction)."""
+    if pipeline_system_configs is None:
+        return {}
+    wsc = item.get("systemConfig", {}) or {}
+    return {
+        "aggregateWorkflowPipelineInputFileFilters":
+            ev.aggregate_input_file_filters(wsc, pipeline_system_configs),
+        "aggregateWorkflowPipelineMetadataInputs":
+            ev.aggregate_metadata_inputs(wsc, pipeline_system_configs),
+    }
+
+
+def _item_to_response(item, triggers=None, warnings=None, execution_count=None,
+                      pipeline_system_configs=None, trigger_summary=None):
+    summary = trigger_summary or {}
     return WorkflowResponseModel(
+        **_aggregate_fields(item, pipeline_system_configs),
+        triggerCount=summary.get("triggerCount"),
+        triggersEnabledCount=summary.get("triggersEnabledCount"),
         databaseId=item.get("databaseId", ""),
         workflowId=item.get("workflowId", ""),
         workflowName=item.get("workflowName", ""),
@@ -270,6 +290,48 @@ def find_workflow_id_owner(workflow_id, excluding_database_id=None):
     return None
 
 
+def _trigger_summary(database_id, workflow_id):
+    """Trigger counts for one workflow: {"triggerCount": N, "triggersEnabledCount": M}.
+
+    Queries the triggers table by its partition key, so this is one bounded query per authorized
+    workflow on the page (the same shape and fan-out bound as _execution_count). The rows are read
+    rather than COUNTed because the enabled/disabled split is an item attribute, not a key — a
+    workflow can carry a trigger that exists but is switched off, and the list needs to show the
+    difference. A workflow has at most one trigger per triggerType, so the row set is tiny.
+
+    Best-effort: returns None on any error so a trigger-read failure never breaks the listing.
+    """
+    try:
+        rows = _triggers_table().query(
+            KeyConditionExpression=Key("workflowDatabaseId:workflowId").eq(
+                wr.workflow_composite_key(database_id, workflow_id))
+        ).get("Items", [])
+        return {
+            "triggerCount": len(rows),
+            # A row with no explicit `enabled` predates the flag and is treated as enabled, matching
+            # get_workflow_triggers and the trigger-dispatch default.
+            "triggersEnabledCount": sum(1 for r in rows if r.get("enabled", True)),
+        }
+    except Exception as e:
+        logger.warning(f"Trigger count failed for {database_id}:{workflow_id} (non-fatal): {e}")
+        return None
+
+
+def _matches_trigger_filter(summary, has_triggers_filter):
+    """Whether a workflow's trigger summary satisfies the optional hasTriggers list filter.
+
+    `has_triggers_filter` is the validated query value: "true" keeps workflows with at least one
+    ENABLED trigger, "false" keeps those with none. A workflow whose summary could not be read is
+    kept rather than dropped — a best-effort count failure must not silently shorten the list.
+    """
+    if not has_triggers_filter:
+        return True
+    if summary is None:
+        return True
+    enabled = summary.get("triggersEnabledCount", 0)
+    return enabled > 0 if has_triggers_filter == "true" else enabled == 0
+
+
 def get_workflow_triggers(database_id, workflow_id):
     composite = wr.workflow_composite_key(database_id, workflow_id)
     triggers = []
@@ -299,16 +361,34 @@ def _pagination_config(query_params):
     }
 
 
-def _filtered_page(page_iterator, include_archived, claims_and_roles):
-    items = []
+def _filtered_page(page_iterator, include_archived, claims_and_roles, has_triggers=""):
+    authorized = []
     for item in page_iterator.get("Items", []):
         if not include_archived and item.get("archived"):
             continue
         if _enforce_workflow(claims_and_roles, item, "GET"):
-            # Execution count is a bounded COUNT query per authorized workflow on this page
-            # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
-            count = _execution_count(item.get("databaseId", ""), item.get("workflowId", ""))
-            items.append(_item_to_response(item, execution_count=count))
+            authorized.append(item)
+
+    # Referenced pipelines are read once for the whole page, AFTER authorization filtering, so an
+    # unauthorized workflow's pipelines are never fetched.
+    pipeline_configs = _batch_pipeline_system_configs(authorized)
+
+    items = []
+    for item in authorized:
+        # Execution count is a bounded COUNT query per authorized workflow on this page
+        # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
+        count = _execution_count(item.get("databaseId", ""), item.get("workflowId", ""))
+        summary = _trigger_summary(item.get("databaseId", ""), item.get("workflowId", ""))
+        # The trigger filter is applied HERE rather than in the DynamoDB query: triggers live in a
+        # separate table, so "has an enabled trigger" is not expressible as a condition on the
+        # workflow row. Filtering after the page is read means a filtered page can return fewer
+        # items than pageSize while still reporting a NextToken — the caller pages until the token
+        # is absent, exactly as with the authorization filter above.
+        if not _matches_trigger_filter(summary, has_triggers):
+            continue
+        items.append(_item_to_response(
+            item, execution_count=count, trigger_summary=summary,
+            pipeline_system_configs=_ordered_pipeline_system_configs(item, pipeline_configs)))
     result = GetWorkflowsResponseModel(Items=items)
     if "NextToken" in page_iterator:
         result.NextToken = page_iterator["NextToken"]
@@ -325,7 +405,8 @@ def get_all_workflows(query_params, include_archived, claims_and_roles):
         ScanIndexForward=False,
         PaginationConfig=_pagination_config(query_params),
     ).build_full_result()
-    return _filtered_page(page_iterator, include_archived, claims_and_roles)
+    return _filtered_page(page_iterator, include_archived, claims_and_roles,
+                          has_triggers=query_params.get("hasTriggers", ""))
 
 
 def get_database_workflows(database_id, query_params, include_archived, claims_and_roles):
@@ -335,7 +416,8 @@ def get_database_workflows(database_id, query_params, include_archived, claims_a
         KeyConditionExpression=Key("databaseId").eq(database_id),
         PaginationConfig=_pagination_config(query_params),
     ).build_full_result()
-    return _filtered_page(page_iterator, include_archived, claims_and_roles)
+    return _filtered_page(page_iterator, include_archived, claims_and_roles,
+                          has_triggers=query_params.get("hasTriggers", ""))
 
 
 def _save_validation(workflow_system_config, pipeline_records):
@@ -413,7 +495,10 @@ def create_workflow(database_id, request, username, claims_and_roles):
     record["jobNames"] = job_names or []
 
     _workflow_table().put_item(Item=record)
-    return success(body={"message": _item_to_response(record, warnings=warnings).dict()})
+    return success(body={"message": _item_to_response(
+        record, warnings=warnings,
+        pipeline_system_configs=[rec.get("systemConfig", {}) or {}
+                                 for rec in pipeline_records]).dict()})
 
 
 def update_workflow(database_id, workflow_id, request, username, claims_and_roles):
@@ -486,7 +571,57 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
         item["jobNames"] = job_names or []
 
     _workflow_table().put_item(Item=item)
-    return success(body={"message": _item_to_response(item, warnings=warnings).dict()})
+    return success(body={"message": _item_to_response(
+        item, warnings=warnings,
+        pipeline_system_configs=[rec.get("systemConfig", {}) or {}
+                                 for rec in pipeline_records]).dict()})
+
+
+def _batch_pipeline_system_configs(workflow_items):
+    """systemConfig for every pipeline referenced by a page of workflows, as
+    {(databaseId, pipelineId): systemConfig}.
+
+    One BatchGetItem per 100 distinct pipelines instead of a get_item per reference: a page of
+    workflows referencing the same few built-in pipelines would otherwise re-read each of them once
+    per workflow. Best-effort — a pipeline that no longer exists is simply absent, and callers treat a
+    missing entry as an empty systemConfig."""
+    wanted = set()
+    for item in workflow_items:
+        for ref in item.get("specifiedPipelines", []) or []:
+            pipeline_id = ref.get("pipelineId")
+            if pipeline_id:
+                wanted.add((ref.get("pipelineDatabaseId", ""), pipeline_id))
+    if not wanted:
+        return {}
+
+    configs = {}
+    keys = [{"databaseId": db, "pipelineId": pid} for db, pid in sorted(wanted)]
+    for start in range(0, len(keys), 100):  # BatchGetItem caps at 100 keys per request
+        chunk = keys[start:start + 100]
+        try:
+            response = dynamodb.batch_get_item(
+                RequestItems={pipeline_table_name: {"Keys": chunk}})
+            for record in response.get("Responses", {}).get(pipeline_table_name, []):
+                configs[(record.get("databaseId", ""), record.get("pipelineId", ""))] = \
+                    record.get("systemConfig", {}) or {}
+            # UnprocessedKeys are left unread rather than retried: the aggregates are display-only, so
+            # a partial read degrades the hint instead of failing the list.
+            if response.get("UnprocessedKeys"):
+                logger.warning("Pipeline batch read left keys unprocessed; workflow filter "
+                               "aggregates on this page may be incomplete")
+        except Exception:
+            logger.exception("Failed batch-reading pipeline configs for workflow aggregates")
+    return configs
+
+
+def _ordered_pipeline_system_configs(workflow_item, configs_by_key):
+    """The referenced pipelines' systemConfig in workflow order, from a batch-read map."""
+    return [
+        configs_by_key.get(
+            (ref.get("pipelineDatabaseId", ""), ref.get("pipelineId", "")), {})
+        for ref in workflow_item.get("specifiedPipelines", []) or []
+        if ref.get("pipelineId")
+    ]
 
 
 def _resolve_snapshot_pipeline_records(workflow_item):
@@ -540,6 +675,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         query_parameters = event.get("queryStringParameters", {}) or {}
         include_archived = str(query_parameters.get("includeArchived", "")).lower() in (
             "true", "1", "yes")
+        # Optional list filter: keep only workflows that do ("true") or do not ("false") have an
+        # ENABLED trigger. Normalized to the canonical "true"/"false"/"" here so the filter helper
+        # never has to re-parse; an unrecognized value is rejected rather than silently ignored,
+        # which would return an unfiltered list the caller believes was filtered.
+        has_triggers_raw = str(query_parameters.get("hasTriggers", "")).strip().lower()
+        if has_triggers_raw in ("true", "1", "yes"):
+            query_parameters["hasTriggers"] = "true"
+        elif has_triggers_raw in ("false", "0", "no"):
+            query_parameters["hasTriggers"] = "false"
+        elif has_triggers_raw:
+            return validation_error(
+                body={"message": "hasTriggers must be true or false."}, event=event)
         # Bound the default page (100): an unparameterized list returns a small page + NextToken rather
         # than accumulating up to the 10000 default into one response (Rule 15 / 6MB cap).
         validate_pagination_info(query_parameters, 100)
@@ -571,7 +718,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 if not _enforce_workflow(claims_and_roles, item, "GET"):
                     return authorization_error()
                 triggers = get_workflow_triggers(database_id, workflow_id)
-                return success(body={"message": _item_to_response(item, triggers=triggers).dict()})
+                return success(body={"message": _item_to_response(
+                    item, triggers=triggers,
+                    pipeline_system_configs=_ordered_pipeline_system_configs(
+                        item, _batch_pipeline_system_configs([item]))).dict()})
             if database_id:
                 return success(body={"message": get_database_workflows(
                     database_id, query_parameters, include_archived, claims_and_roles).dict()})

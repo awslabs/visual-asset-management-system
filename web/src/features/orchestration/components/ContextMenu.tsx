@@ -33,7 +33,12 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                 <DropdownMenu.Content
                     align="end"
                     sideOffset={4}
-                    className="min-w-[200px] bg-surface-container rounded-md shadow-lg border border-border-default p-1 z-50"
+                    // Shaded rather than the container background, which is the same colour as the
+                    // page and row surfaces the menu opens over — it read as part of the table instead
+                    // of as a floating layer. surface-secondary is the category-header grey, and
+                    // resolves per theme through the same Cloudscape token (light #f6f6f9 / dark
+                    // #1b232d), so no dark: variant is needed.
+                    className="orch-outline min-w-[200px] bg-surface-secondary rounded-md shadow-lg border border-border-default p-1 z-50"
                 >
                     {visibleItems.map((item, idx) => (
                         <DropdownMenu.Item
@@ -45,7 +50,10 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                                     ? "text-text-disabled cursor-not-allowed"
                                     : item.danger
                                     ? "text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-                                    : "text-text-primary hover:bg-surface-hover"
+                                    : // The overlay hover, not the normal one: against the shaded menu
+                                      // background the normal hover is only ~1.03:1 and reads as no
+                                      // hover at all.
+                                      "text-text-primary hover:bg-surface-overlay-hover"
                             }`}
                         >
                             {item.label}

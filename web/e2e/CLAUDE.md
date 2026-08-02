@@ -34,13 +34,13 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-| | **Core specs (tracked)** | **Ad-hoc specs (untracked)** |
-| --- | --- | --- |
-| Purpose | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works |
-| Lifetime | Lives with the page; updated when the page changes | Deleted or left untracked after the change ships |
-| Data | **Must not require specific data** | May target known seed data |
-| Naming | `orchestration.{page}.spec.ts`, `viewers.spec.ts` | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes | No — keep out of git |
+|           | **Core specs (tracked)**                               | **Ad-hoc specs (untracked)**                                |
+| --------- | ------------------------------------------------------ | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes     | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                     | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`      | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                    | No — keep out of git                                        |
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -88,7 +88,10 @@ executions pushed that id off page 1 — the app was fine, the assumption was no
 They run against shared sandboxes. Open dialogs and wizards to assert they work, then dismiss:
 
 ```ts
-await items.filter({ hasText: /Execute/ }).first().click();
+await items
+    .filter({ hasText: /Execute/ })
+    .first()
+    .click();
 await expect(page.getByRole("dialog")).toBeVisible();
 await page.keyboard.press("Escape"); // never Launch
 ```
@@ -115,15 +118,15 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
 locators — the app's markup is not always guessable, and these were established empirically.
 
-| Helper | Use for |
-| --- | --- |
-| `gotoOrchestration(page, route, heading)` | Navigate + wait for first load (no data dependency) |
-| `searchBox(page)` | The orchestration filter-bar search input |
-| `facet(page, label)` | A native `<select>` filter |
-| `firstCardId(page)` | Id of the first card, or `null` when the list is empty |
-| `openCardMenu(page, id)` | Filter to a card and open its actions menu |
-| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion |
-| `collectPageErrors(page)` | Uncaught page errors, for crash-regression assertions |
+| Helper                                          | Use for                                                |
+| ----------------------------------------------- | ------------------------------------------------------ |
+| `gotoOrchestration(page, route, heading)`       | Navigate + wait for first load (no data dependency)    |
+| `searchBox(page)`                               | The orchestration filter-bar search input              |
+| `facet(page, label)`                            | A native `<select>` filter                             |
+| `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty |
+| `openCardMenu(page, id)`                        | Filter to a card and open its actions menu             |
+| `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion   |
+| `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions  |
 
 **Selector facts worth not rediscovering:**
 
@@ -153,7 +156,7 @@ expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
 ```
 
 **Layering** — a z-index alone does not prove a dialog is clickable. Confirm it actually receives the
-click (the Radix dialog once rendered *beneath* the fixed Cloudscape TopNavigation):
+click (the Radix dialog once rendered _beneath_ the fixed Cloudscape TopNavigation):
 
 ```ts
 const hit = await dialog.evaluate((el) => {

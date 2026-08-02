@@ -10,7 +10,7 @@
         "lambda": {}
     },
     "systemConfig": {
-        "inputFileArity": "one",
+        "inputFileArity": "none",
         "assetScope": {
             "wholeAsset": false
         },
@@ -22,7 +22,7 @@
         "requireTemplate": true,
         "allowCustomTemplateOverride": true,
         "inputFileFilters": {
-            "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+            "allow": [],
             "exclude": []
         }
     }

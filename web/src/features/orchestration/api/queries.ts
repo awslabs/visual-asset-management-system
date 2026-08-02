@@ -28,7 +28,13 @@ import type {
     ExecutionDetail,
 } from "../types";
 import type { DatabaseSummary } from "./databases";
-import type { AssetSummary, AssetFileSummary, AssetFileVersionSummary } from "./assets";
+import type {
+    AssetSummary,
+    AssetFileSummary,
+    AssetFileVersionSummary,
+    AssetSearchPage,
+    AssetFilePage,
+} from "./assets";
 
 // Query key factory for stable, structured keys
 export const qk = {
@@ -52,10 +58,14 @@ export const qk = {
     allowedRoutes: () => ["allowedRoutes"] as const,
     databases: () => ["databases"] as const,
     assets: (databaseId?: string) => ["assets", databaseId ?? null] as const,
+    assetSearch: (databaseId: string | undefined, query: string) =>
+        ["assetSearch", databaseId ?? null, query] as const,
     assetFiles: (databaseId: string, assetId: string) =>
         ["assetFiles", databaseId, assetId] as const,
-    assetVersions: (databaseId: string, assetId: string) =>
-        ["assetVersions", databaseId, assetId] as const,
+    assetFileSearch: (databaseId: string, assetId: string, query: string) =>
+        ["assetFileSearch", databaseId, assetId, query] as const,
+    fileVersions: (databaseId: string, assetId: string, relativeFileKey: string) =>
+        ["fileVersions", databaseId, assetId, relativeFileKey] as const,
 };
 
 /** All databases the caller can see — for the create-in-database picker on the global list pages. */
@@ -76,6 +86,24 @@ export function useAssets(databaseId?: string, enabled = true) {
     });
 }
 
+/**
+ * One SERVER-resolved page of assets matching `query`, for the execute wizard's asset pickers.
+ *
+ * Unlike `useAssets` (which loads a database's assets for client-side filtering) this re-queries per
+ * search term, so a database holding thousands of assets does not have to be pulled into the browser.
+ * `keepPreviousData` holds the previous page on screen while the next one loads, so the list does not
+ * flash empty on every keystroke.
+ */
+export function useAssetSearch(query: string, databaseId?: string, enabled = true) {
+    return useQuery({
+        queryKey: qk.assetSearch(databaseId, query),
+        queryFn: () =>
+            callService<AssetSearchPage>(() => assetService.searchAssetsPaged(query, databaseId)),
+        enabled,
+        placeholderData: (previous: any) => previous,
+    });
+}
+
 /** Non-folder files for an asset — for the wizard file selector. Disabled until an asset is chosen. */
 export function useAssetFiles(databaseId?: string, assetId?: string) {
     return useQuery({
@@ -88,15 +116,40 @@ export function useAssetFiles(databaseId?: string, assetId?: string) {
     });
 }
 
-/** VAMS asset versions for an asset — for the optional version selector. */
-export function useAssetVersions(databaseId?: string, assetId?: string) {
+/**
+ * One SERVER-resolved page of an asset's files matching `query`, for the wizard's file picker.
+ *
+ * The file-search counterpart to `useAssetSearch`: an asset can hold thousands of files, so the term
+ * is resolved against the search index rather than by filtering a full listing in the browser.
+ */
+export function useAssetFileSearch(query: string, databaseId?: string, assetId?: string) {
     return useQuery({
-        queryKey: qk.assetVersions(databaseId || "", assetId || ""),
+        queryKey: qk.assetFileSearch(databaseId || "", assetId || "", query),
         queryFn: () =>
-            callService<AssetFileVersionSummary[]>(() =>
-                assetService.listAssetVersions(databaseId as string, assetId as string)
+            callService<AssetFilePage>(() =>
+                assetService.searchAssetFilesPaged(query, databaseId as string, assetId as string)
             ),
         enabled: !!databaseId && !!assetId,
+        placeholderData: (previous: any) => previous,
+    });
+}
+
+/**
+ * The S3 object versions of ONE file — for the per-file version selector.
+ *
+ * Keyed on the file as well as the asset: an execution's `versionId` is an S3 VersionId for that exact
+ * key, so each selected file has its own version list. A whole-asset or folder selection has no single
+ * version, so the query stays disabled for a key ending in '/'.
+ */
+export function useFileVersions(databaseId?: string, assetId?: string, relativeFileKey?: string) {
+    const key = relativeFileKey || "";
+    return useQuery({
+        queryKey: qk.fileVersions(databaseId || "", assetId || "", key),
+        queryFn: () =>
+            callService<AssetFileVersionSummary[]>(() =>
+                assetService.listFileVersions(databaseId as string, assetId as string, key)
+            ),
+        enabled: !!databaseId && !!assetId && !!key && !key.endsWith("/"),
     });
 }
 

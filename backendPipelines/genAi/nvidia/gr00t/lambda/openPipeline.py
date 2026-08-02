@@ -98,6 +98,10 @@ def lambda_handler(event, context):
     input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
     orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
     external_sfn_task_token = event.get('sfnExternalTaskToken', '')
+    # finetune (default) trains; evaluate scores an existing checkpoint. Forwarded to the state machine
+    # so constructPipeline can name the Batch job and the container can branch. This lambda enumerates
+    # the fields it forwards, so a new one is silently dropped unless it is added here.
+    mode = str(event.get('mode', '') or 'finetune').strip().lower()
 
     # Validate asset path exists
     if not input_s3_asset_path:
@@ -110,7 +114,8 @@ def lambda_handler(event, context):
         }
 
     # Generate unique execution name
-    job_name = f"gr00t-finetune-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    job_name = (f"gr00t-{'eval' if mode == 'evaluate' else 'finetune'}-"
+                f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
 
     sfn_input = {
         "jobName": job_name,
@@ -124,7 +129,8 @@ def lambda_handler(event, context):
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "gr00tConfig": groot_config,
-        "externalSfnTaskToken": external_sfn_task_token
+        "externalSfnTaskToken": external_sfn_task_token,
+        "mode": mode
     }
 
     try:

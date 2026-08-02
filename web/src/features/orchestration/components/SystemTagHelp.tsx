@@ -194,7 +194,7 @@ const SystemTagHelp: React.FC<SystemTagHelpProps> = ({ defaultOpen = false }) =>
     const [open, setOpen] = useState(defaultOpen);
 
     return (
-        <div className="rounded-lg border border-border-default bg-surface-secondary">
+        <div className="orch-outline rounded-lg border border-border-default bg-surface-secondary">
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}

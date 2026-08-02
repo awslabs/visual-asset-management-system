@@ -78,6 +78,25 @@ vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec
 vamscli execution logs my-execution-id --mode full --limit 200
 ```
 
+`full` mode prints each group of logs under its own heading, and omits a heading it has nothing for:
+
+| Section                 | Contents                                                                                                                                                                                 |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Events`                | The CloudWatch search over the workflow log group, scoped to the execution.                                                                                                              |
+| `State Machine History` | The Step Functions state-transition timeline (whole-execution requests). Available immediately, with no ingestion lag.                                                                   |
+| `Sub-Process Logs`      | With `--pipeline-execution-id`: the step invocation log, any logs the pipeline registered, and any sub-execution history. Each line names the log group it came from.                    |
+| `Warnings`              | Logs that could not be read — a missing permission, or a registration list beyond the per-request cap. Shown rather than dropped, so partial output is not mistaken for complete output. |
+
+The **step invocation log** is the log of the resource the workflow invoked for that step — for a
+`Lambda` step, that function's own CloudWatch log group. It holds the reason a launch failed before
+the pipeline's own logging began. `SQS`, `EventBridge`, and `DeadlineCloud` steps have no derivable
+invocation log, so nothing is reported for them.
+
+```bash
+# Everything reachable for one step, including that step's own invocation log
+vamscli execution logs my-execution-id --pipeline-execution-id my-pipeline-exec --mode full
+```
+
 | Option                        | Description                                 |
 | ----------------------------- | ------------------------------------------- |
 | `--mode`                      | `truncated` (default) or `full`             |

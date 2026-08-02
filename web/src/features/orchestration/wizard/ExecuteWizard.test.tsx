@@ -20,8 +20,15 @@ jest.mock("../api/queries", () => ({
     // renders. Individual tests can override if they exercise the input selectors.
     useDatabases: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useAssets: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+    // The wizard resolves assets SERVER-side per search term (useAssetSearch), so the mock returns
+    // the paged shape: { items, total, listFallback }.
+    useAssetSearch: jest.fn(() => ({
+        data: { items: [], total: 0, listFallback: false },
+        isFetching: false,
+        error: null,
+    })),
     useAssetFiles: jest.fn(() => ({ data: [], isLoading: false, error: null })),
-    useAssetVersions: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+    useFileVersions: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 // Mock Monaco editor

@@ -26,7 +26,6 @@ os.environ.setdefault("PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME", "t
 os.environ.setdefault("PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME", "t-logs")
 os.environ.setdefault("WORKFLOW_STORAGE_TABLE_NAME", "t-workflows")
 os.environ.setdefault("PIPELINE_STORAGE_TABLE_NAME", "t-pipelines")
-os.environ.setdefault("WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE_NAME", "t-out-index")
 os.environ.setdefault("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "t-execv2")
 
 from backend.backend.handlers.workflows import executionService as le
@@ -628,6 +627,84 @@ class TestGetExecutionLogsLiveFallback:
         body = json.loads(resp["body"])["message"]
         assert body["sfnHistoryEvents"][0]["message"] == "ExecutionStarted"
 
+    def test_full_mode_reads_the_step_invocation_log_for_a_lambda_step(self):
+        # The SECONDARY per-step log: the log of the Lambda the top-level state machine INVOKED. It
+        # requires no registration by the pipeline (that is the point — a vamsExecute lambda never
+        # registers its own log), so it must be read from what the execute path already recorded.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
+        prow = {"pipelineExecutionId": "pe-1", "registeredLogs": [], "registeredSubExecutions": [],
+                "pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-vamsExecuteConv"}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events",
+                   return_value=(True, [{"timestamp": 5, "message": "START RequestId: abc"}])) as fetch:
+            resp = le.get_execution_logs(
+                {}, "E1", self._q(mode="full", pipelineExecutionId="pe-1"))
+        assert resp["statusCode"] == 200
+        # Read from the DERIVED lambda log group, not from anything registered.
+        read_arns = [c.args[0] for c in fetch.call_args_list]
+        assert "arn:aws:logs:us-west-2:1:log-group:/aws/lambda/vams-vamsExecuteConv:*" in read_arns
+        body = json.loads(resp["body"])["message"]
+        assert any("START RequestId" in e.get("message", "")
+                   for e in body.get("subProcessEvents", []))
+
+    def test_full_mode_scopes_the_invocation_log_to_this_execution(self):
+        # A lambda's log group is shared across every execution of that pipeline, so the read MUST be
+        # filtered to this execution (and step) or one run's view leaks another's events.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
+        prow = {"pipelineExecutionId": "pe-1", "registeredLogs": [], "registeredSubExecutions": [],
+                "pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-fn"}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [])) as fetch:
+            le.get_execution_logs({}, "E1", self._q(mode="full", pipelineExecutionId="pe-1"))
+        call = next(c for c in fetch.call_args_list
+                    if "/aws/lambda/vams-fn" in c.args[0])
+        scope = call.kwargs.get("scope_terms") or []
+        assert "E1" in scope and "pe-1" in scope
+
+    @pytest.mark.parametrize("execution_type,resource", [
+        ("SQS", "https://sqs.us-west-2.amazonaws.com/1/q"),
+        ("EventBridge", "arn:aws:events:us-west-2:1:event-bus/b"),
+        ("DeadlineCloud", ""),
+    ])
+    def test_full_mode_reads_no_invocation_log_for_types_without_one(
+            self, execution_type, resource):
+        # These have no reachable invocation log, so NO read is attempted — an empty section labelled
+        # "no log" is worse than no section, and a doomed CloudWatch call would only add a warning.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
+        prow = {"pipelineExecutionId": "pe-1", "registeredLogs": [], "registeredSubExecutions": [],
+                "pipelineExecutionType": execution_type, "pipelineResourceArn": resource}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events", return_value=(True, [])) as fetch:
+            resp = le.get_execution_logs(
+                {}, "E1", self._q(mode="full", pipelineExecutionId="pe-1"))
+        assert resp["statusCode"] == 200
+        assert not [c for c in fetch.call_args_list if "/aws/lambda/" in c.args[0]]
+
+    def test_a_denied_invocation_log_warns_instead_of_failing_the_request(self):
+        # A missing IAM grant on the invoked lambda's group must degrade to a NAMED warning: the rest
+        # of the logs are still useful, and a silent omission would look like "the lambda logged
+        # nothing".
+        le.claims_and_roles = {"tokens": ["u1"]}
+        main = {"workflowId": "wf", "workflowDatabaseId": "db",
+                "executionLogGroupArn": "arn:aws:logs:us-west-2:1:log-group:/g:*"}
+        prow = {"pipelineExecutionId": "pe-1", "registeredLogs": [], "registeredSubExecutions": [],
+                "pipelineExecutionType": "Lambda", "pipelineResourceArn": "vams-fn"}
+        with patch(f"{MOD}.get_execution_main_row", return_value=main),              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")),              patch(f"{MOD}.get_pipeline_execution_rows", return_value=[prow]),              patch(f"{MOD}._full_log_search", return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._sfn_execution_history_events",
+                   return_value={"events": [], "nextToken": None}),              patch(f"{MOD}._fetch_registered_log_events",
+                   return_value=(False, "AccessDeniedException")):
+            resp = le.get_execution_logs(
+                {}, "E1", self._q(mode="full", pipelineExecutionId="pe-1"))
+        assert resp["statusCode"] == 200
+        body = json.loads(resp["body"])["message"]
+        warnings = " ".join(body.get("warnings") or [])
+        assert "/aws/lambda/vams-fn" in warnings and "AccessDenied" in warnings
+
     def test_full_mode_pipeline_scope_resolves_sub_sfn_logs(self):
         # A registered Step Functions sub-execution surfaces its own history plus the resolved log
         # group of its state machine (discovered from the state-machine ARN, not explicitly reported).
@@ -966,3 +1043,52 @@ class TestListReconcileSharedLogBudget:
         assert log_text and error_text
         assert (len(log_text.encode("utf-8"))
                 + len(error_text.encode("utf-8"))) <= le.er.MAX_LOG_FIELD_BYTES
+
+
+@pytest.mark.unit
+class TestPerAssetListingIsChronological:
+    """An asset's history merges two independently-queried directions, so it needs an explicit sort.
+
+    Executions that READ the asset come from WorkflowExecInputsByAssetGSI; executions that WROTE to it
+    come from WorkflowExecConfigByOutputAssetGSI. Each is newest-first on its own, but they are two
+    queries whose results are concatenated — so without a sort every output-only execution trails all
+    the input-side ones regardless of date. Verified live before this test existed: an asset whose only
+    input-side run was from July listed it ABOVE an output-only run from today.
+    """
+
+    def _rows(self):
+        # Input-side row is OLD; the output-target row is NEW. Insertion order mimics the two queries.
+        return [
+            {"workflowExecutionId": "E-old-input", "executionStartDate": "2026-07-17T23:41:53Z",
+             "workflowId": "wf1", "workflowDatabaseId": "db"},
+            {"workflowExecutionId": "E-new-output", "executionStartDate": "2026-08-02T17:32:14Z",
+             "workflowId": "wf1", "workflowDatabaseId": "db"},
+        ]
+
+    def _listed_ids(self, rows):
+        le.claims_and_roles = {"tokens": ["u1"]}
+        table = MagicMock()
+        # One page of input rows; the output-asset query returns nothing extra, so the ORDER of the
+        # already-merged dict is what this exercises.
+        table.query.return_value = {"Items": rows}
+        with patch(f"{MOD}.get_asset_details", return_value={"databaseId": "db", "assetId": "a1"}), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.build_execution_items", return_value=[]) as m_build:
+            m_dynamo.Table.return_value = table
+            le.get_executions({}, "db", "a1", "", "", {})
+            passed = m_build.call_args.kwargs["input_items"]
+        return [i["workflowExecutionId"] for i in passed]
+
+    def test_newest_first_regardless_of_which_direction_found_it(self):
+        assert self._listed_ids(self._rows()) == ["E-new-output", "E-old-input"]
+
+    def test_order_is_independent_of_the_order_the_queries_returned(self):
+        # Same set, reversed input order: the result must not change.
+        assert self._listed_ids(list(reversed(self._rows()))) == ["E-new-output", "E-old-input"]
+
+    def test_a_missing_date_sorts_last_rather_than_raising(self):
+        # A row written before executionStartDate was recorded must not break the listing.
+        rows = self._rows() + [{"workflowExecutionId": "E-undated", "workflowId": "wf1",
+                                "workflowDatabaseId": "db"}]
+        assert self._listed_ids(rows) == ["E-new-output", "E-old-input", "E-undated"]

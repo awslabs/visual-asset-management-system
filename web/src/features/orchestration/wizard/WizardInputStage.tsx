@@ -5,9 +5,12 @@
 
 import React from "react";
 import type { Workflow, ExecuteInputFile } from "../types";
-import { useDatabases, useAssets } from "../api/queries";
+import { useDatabases, useAssetSearch } from "../api/queries";
 import InputFileSelector from "./InputFileSelector";
 import SearchableSelect from "../components/SearchableSelect";
+import RestrictionSummary from "./RestrictionSummary";
+import { resolveRestrictions } from "./resolveRestrictions";
+import type { PipelineInputConstraints } from "./ExecuteWizard";
 
 interface WizardInputStageProps {
     workflow: Workflow;
@@ -22,6 +25,9 @@ interface WizardInputStageProps {
     onOutputDatabaseIdChange: (dbId?: string) => void;
     onOutputPathPrefixChange: (prefix?: string) => void;
     offendingPipelines?: Array<{ pipelineId: string; pipelineName: string; reason: string }>;
+    /** Per-step effective config (pipeline systemConfig + the chosen template's overrides), so the
+     *  restriction summary reflects the templates actually selected. */
+    pipelineConstraints?: PipelineInputConstraints[];
 }
 
 const WizardInputStage: React.FC<WizardInputStageProps> = ({
@@ -37,6 +43,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     onOutputDatabaseIdChange,
     onOutputPathPrefixChange,
     offendingPipelines = [],
+    pipelineConstraints = [],
 }) => {
     const inputFileArity = workflow.systemConfig?.inputFileArity || "one";
     const allowOutputOverride = workflow.systemConfig?.outputTarget?.allowOverride || false;
@@ -46,6 +53,8 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     // NOT allowed, so the file picker requires a specific file.
     const scope = workflow.systemConfig?.assetScope || {};
     const allowWholeAsset = !!(scope.wholeAssetAllowed || scope.wholeAsset);
+    // Passed to every file picker so a file the workflow would reject is never offered.
+    const workflowFileFilters = workflow.systemConfig?.inputFileFilters;
 
     // Databases for the input/output selectors. On a database-scoped launch the database is fixed;
     // on the global page the user picks from the databases they can see.
@@ -54,9 +63,20 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         () => (databases || []).map((d: any) => ({ databaseId: d.databaseId })),
         [databases]
     );
-    // Assets for the optional output-target asset selector (scoped to the chosen output database).
+    // Assets for the optional output-target asset selector (scoped to the chosen output database),
+    // resolved server-side per search term so the picker scales past a page of assets.
     const outputDbForAssets = outputDatabaseId || databaseId;
-    const { data: outputAssets } = useAssets(outputDbForAssets, !!outputDbForAssets);
+    const [outputAssetQuery, setOutputAssetQuery] = React.useState("");
+    const { data: outputAssetPage, isFetching: outputAssetsLoading } = useAssetSearch(
+        outputAssetQuery,
+        outputDbForAssets,
+        !!outputDbForAssets
+    );
+    const outputAssets = outputAssetPage?.items || [];
+    const outputAssetFooter =
+        (outputAssetPage?.total ?? 0) > outputAssets.length
+            ? `Showing ${outputAssets.length} of ${outputAssetPage?.total} — refine the search`
+            : undefined;
 
     // Distinct assets across the selected input files (only entries that name an asset).
     const distinctInputAssets = React.useMemo(() => {
@@ -89,6 +109,24 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [distinctInputAssets, allowOutputOverride, isResultsOnly]);
+
+    // Resolved down the workflow -> pipeline -> template chain. Computed here rather than read from
+    // the backend's aggregate, because that aggregate deliberately excludes template overrides and a
+    // template may already be chosen by this point.
+    //
+    // Declared above the banner early-returns below: a hook after them runs on some renders and not
+    // others, which breaks React's hook ordering.
+    const restrictions = React.useMemo(
+        () =>
+            resolveRestrictions(
+                workflow.systemConfig,
+                pipelineConstraints.map((c) => ({
+                    systemConfig: c.systemConfig,
+                    templateOverrides: c.templateOverrides,
+                }))
+            ),
+        [workflow.systemConfig, pipelineConstraints]
+    );
 
     // Requirements banner
     if (!workflow.enabled || workflow.archived) {
@@ -138,6 +176,8 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         <div className="space-y-4">
             <h3 className="text-lg font-semibold text-text-primary">Input Files</h3>
 
+            <RestrictionSummary restrictions={restrictions} />
+
             {inputFileArity === "none" && (
                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-blue-900 dark:text-blue-200 text-sm">
                     This workflow does not require input files (results-only execution).
@@ -161,6 +201,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                         <InputFileSelector
                             databaseOptions={databaseOptions}
                             allowWholeAsset={allowWholeAsset}
+                            inputFileFilters={workflowFileFilters}
                             value={
                                 inputFiles[0] || {
                                     databaseId: presetAsset?.databaseId || databaseId,
@@ -196,6 +237,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                             <InputFileSelector
                                 databaseOptions={databaseOptions}
                                 allowWholeAsset={allowWholeAsset}
+                                inputFileFilters={workflowFileFilters}
                                 value={file}
                                 onChange={(updated) => {
                                     const next = [...inputFiles];
@@ -265,6 +307,9 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                                     ariaLabel="Output Asset"
                                     value={outputAssetId || ""}
                                     disabled={!outputDbForAssets}
+                                    loading={outputAssetsLoading}
+                                    onQueryChange={setOutputAssetQuery}
+                                    footerNote={outputAssetFooter}
                                     placeholder={
                                         outputDbForAssets
                                             ? "Search output assets…"

@@ -132,8 +132,6 @@ try:
     pipeline_execution_input_configuration_table = get_table_name(
         ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
-    workflow_execution_outputs_index_table = get_table_name(
-        ResourceKeys.WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE)
     workflow_execution_configuration_table = get_table_name(
         ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
@@ -331,6 +329,16 @@ def _input_exists_in_s3(bucket, key, version_id=""):
         # HeadObject against a delete-marker version answers 405 MethodNotAllowed; the version is
         # not readable, so it counts as a missing input rather than an unexpected failure.
         if code in ("404", "NoSuchKey", "NotFound", "405", "MethodNotAllowed"):
+            return False, ""
+        # A versionId that is not a well-formed S3 version answers 400 Bad Request rather than 404
+        # (S3 rejects the argument before it looks anything up). That is caller-supplied input, so it
+        # belongs with the other missing/unusable inputs and produces a 400 naming the file — not a
+        # 500. Only treated this way when a version was actually requested; a 400 on an unversioned
+        # head is a genuine fault and still raises.
+        if version_id and code in ("400", "BadRequest", "InvalidArgument", "InvalidVersionId"):
+            logger.warning(
+                f"Rejected input version for key ending '{key[-40:]}': S3 reports the requested "
+                f"versionId is not valid ({code}).")
             return False, ""
         raise
 
@@ -1241,11 +1249,16 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         output_location_type=output_location_type, output_asset_id=output_asset_id,
         output_database_id=output_database_id,
         output_file_base_execution_path_extension=output_extension,
-        input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", "")))
+        input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", ""),
+        # The SAME timestamp the main row and the per-input rows use (start_date, above), so an
+        # output-asset listing orders and bounds identically to the by-input-asset one instead of by
+        # when this particular row happened to be written.
+        execution_start_date=start_date))
 
     # 4) One PipelineExecutions row + config-snapshot row per pipeline.
     pexec_table = dynamodb.Table(pipeline_executions_table)
     pin_cfg_table = dynamodb.Table(pipeline_execution_input_configuration_table)
+    pin_md_table = dynamodb.Table(pipeline_execution_input_metadata_table)
     config_keys = input_locations.get("configKeys", [])
     prev_id = ""
     for idx, record in enumerate(pipeline_records):
@@ -1290,16 +1303,30 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
             template_tags=resolved.get("templateTags", []),
             custom_template_override_used=resolved.get("customTemplateOverrideUsed", False),
             custom_template_override=resolved.get("customTemplateOverrideRaw", ""),
-            config_format=resolved.get("configFormat", "")))
+            config_format=resolved.get("configFormat", ""),
+            # The merge of the pipeline's systemConfig with this run's chosen template overrides — the
+            # settings the step actually ran under, recomputed here from the same inputs the execute
+            # validation used so the snapshot cannot drift from what was enforced.
+            effective_system_config=ev.resolve_effective_pipeline_config(
+                record.get("systemConfig", {}) or {}, resolved.get("templateOverrides", {})),
+            template_overrides=resolved.get("templateOverrides", {})))
+
+        # Input-metadata snapshot, one row per (asset, filePath) this step received. The grouped
+        # envelope is already written to S3 for the pipeline to read; these rows are what the execution
+        # DETAILS response reads, so without them the details page reports no input metadata even when
+        # the pipeline was handed plenty. Asset-level metadata lands on the '/' filePath row.
+        for row in er.metadata_envelope_rows(metadata_envelope):
+            pin_md_table.put_item(Item=er.build_input_metadata_record(
+                pipeline_execution_id=pexec_id,
+                database_id=row["databaseId"], asset_id=row["assetId"],
+                file_path=row["filePath"], metadata=row["metadata"],
+                source_input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", "")))
         prev_id = pexec_id
 
-    # 5) Output index row: 'this execution wrote to (outputDatabaseId, outputAssetId)'. Backs the
-    #    global execution access rule (a caller with access to the output asset may see the run).
-    #    Skipped for results-only runs — there is no output asset, and the index PK (databaseId:assetId)
-    #    would be a meaningless ":" ghost key.
-    if output_database_id and output_asset_id:
-        dynamodb.Table(workflow_execution_outputs_index_table).put_item(
-            Item=wr.build_execution_output_index_record(output_database_id, output_asset_id, execution_id))
+    # The execution's output target is recorded on the configuration row above (outputDatabaseId /
+    # outputAssetId, plus the composite key that backs WorkflowExecConfigByOutputAssetGSI). That one
+    # row answers both output questions — "which executions wrote to this asset" via the GSI, and
+    # "what did this execution write to" by reading the row — so no separate index row is written.
 
 
 #######################

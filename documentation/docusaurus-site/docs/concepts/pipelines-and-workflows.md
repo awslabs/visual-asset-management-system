@@ -37,14 +37,14 @@ When `waitForCallback` is `Enabled`, AWS Step Functions sends a task token along
 
 A pipeline's `systemConfig` governs how the pipeline consumes input and whether it uses templates.
 
-| Field                         | Description                                                                                                                |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).        |
-| `assetScope`                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted selections. |
-| `metadataInputs`              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is gathered and passed to the pipeline.    |
-| `inputFileFilters`            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard (`*.previewFile.*`).                 |
-| `requireTemplate`             | When `true`, every execution of this pipeline must select one of its configuration templates.                              |
-| `allowCustomTemplateOverride` | When `true`, an execution may supply its own raw configuration body in place of a saved template.                          |
+| Field                         | Description                                                                                                                                               |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                       |
+| `assetScope`                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted selections.                                |
+| `metadataInputs`              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is gathered and passed to the pipeline.                                   |
+| `inputFileFilters`            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard (`*.previewFile.*`). See [Input-file filters](#input-file-filters). |
+| `requireTemplate`             | When `true`, every execution of this pipeline must select one of its configuration templates.                                                             |
+| `allowCustomTemplateOverride` | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                         |
 
 ### Templates and tag schemas
 
@@ -83,24 +83,60 @@ For the full workflow, trigger, and execution API, see the [Workflows API](../ap
 | -------------------- | -------------------------------------------------------------------------------- |
 | `pipelineId`         | Identifier of the referenced pipeline.                                           |
 | `pipelineDatabaseId` | Database that owns the referenced pipeline. Defaults to the workflow's database. |
-| `jobName`            | Label for this pipeline step within the workflow.                                |
+| `jobName`            | Label for this pipeline step within the workflow. Optional.                      |
 
 A `GLOBAL` workflow may reference only `GLOBAL` pipelines; a database workflow may reference `GLOBAL` pipelines or pipelines from its own database. The pipelines execute in the order they are listed.
+
+:::warning[List each pipeline at most once per workflow]
+A workflow cannot use the same pipeline for two of its steps. Everything resolved per step — the execution parameters, the template configuration, and the filtered input files — is keyed by `pipelineDatabaseId:pipelineId`, so a second reference to the same pipeline overwrites the first step's resolved configuration. Both steps then run with the same settings, and nothing reports a problem.
+
+When one model or container needs to run twice in a workflow with different settings — train and then evaluate, say — define **two pipelines** that share a container image, and list one of each. That also gives each step its own default template and its own output folder.
+:::
+
+#### Job names
+
+A step's `jobName` names the step in the workflow's state machine and becomes a segment of every output path that step writes:
+
+```
+pipelines/{pipelineName}/{jobName}/output/{executionId}/files/
+```
+
+When `jobName` is empty or omitted, the pipeline's own id is used in its place, so each step's outputs already land in a folder distinct from every other step's. Leaving it blank is the normal choice.
+
+The value is 3–63 characters of letters, numbers, hyphens, and underscores. It is a fixed label rather than a template: `{{tag}}` placeholders are **not** substituted in a `jobName` and are rejected on save, because the name is written into the state machine once when the workflow is deployed, not per execution. To vary the output path per run, use the workflow's `defaultOutputFileBaseExecutionPathExtension` (or an execution's own output path prefix), both of which resolve tags at launch.
+
+##### When to set a job name
+
+Because the pipeline id is already used as the folder name, a `jobName` is worth setting only when that id does not describe the step's role clearly enough:
+
+-   **A step's role in this workflow is narrower than its pipeline's name suggests.** A general-purpose conversion pipeline used specifically to produce a web preview writes to a folder named after the pipeline; naming the step `convert-for-web` records what the step is for, so its output is identifiable without opening the execution.
+-   **The pipeline id is opaque.** A generated or abbreviated id (for example `pl-7f3a91`) produces an output folder nobody can interpret later. A job name gives the folder a meaning that survives in the S3 layout.
+-   **Downstream tooling reads the output paths.** Anything that locates output by S3 prefix — a sync job, a report, an external consumer — is easier to write against a stable, intentional folder name than against a pipeline id that may be renamed.
+
+Leave it blank otherwise. Setting it to a value that merely restates the pipeline id adds a name to maintain without changing behavior.
+
+:::warning[A job name is part of the output path, not a display label]
+Changing a `jobName` on an existing workflow changes where its subsequent output is written. Output already written stays at its original path, so the workflow's history ends up split across the old and new folders, and anything that reads output by prefix has to account for both. Treat a change to this value as a storage-layout change rather than a rename.
+:::
+
+:::note[`jobName` the field versus `{{jobName}}` the tag]
+These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `{{jobName}}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves at launch to the workflow's generated job name for the run. Writing `{{jobName}}` into the `jobName` field is rejected.
+:::
 
 ### System configuration
 
 A workflow's `systemConfig` governs how the workflow consumes input, which asset selections it accepts, how concurrent runs are limited, and where output is written.
 
-| Field                                         | Description                                                                                                                                                                           |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`                              | Number of input files the workflow consumes: `none`, `one`, or `multi`.                                                                                                               |
-| `assetScope`                                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling selections.                                                                     |
-| `metadataInputs`                              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is passed to the pipelines.                                                                           |
-| `inputFileFilters`                            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard.                                                                                                |
-| `concurrencyRestriction`                      | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                         |
-| `outputTarget`                                | Where the workflow writes its output: `locationType` (`asset` or `none`) and `allowOverride`.                                                                                         |
-| `allowWorkflowTriggerChaining`                | Whether another workflow's output may fire this workflow's triggers. Self-output never re-triggers, whatever this is set to. Defaults to `false`.                                     |
-| `defaultOutputFileBaseExecutionPathExtension` | Output path prefix used when an execution names none, stored unresolved so `{{tag}}` placeholders resolve per run (e.g. `/{{jobName}}/`). Empty means outputs land at the asset root. |
+| Field                                         | Description                                                                                                                                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`                              | Number of input files the workflow consumes: `none`, `one`, or `multi`. Authored, not derived — set it to the MAXIMUM any pipeline/template combination in the workflow can require, since a template may raise a pipeline's own arity at execute time. |
+| `assetScope`                                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling selections.                                                                                                                                       |
+| `metadataInputs`                              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is passed to the pipelines.                                                                                                                                             |
+| `inputFileFilters`                            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard. An omitted or `*` allow list defers to the pipelines; see [Input-file filters](#input-file-filters).                                                             |
+| `concurrencyRestriction`                      | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                           |
+| `outputTarget`                                | Where the workflow writes its output: `locationType` (`asset` or `none`) and `allowOverride`.                                                                                                                                                           |
+| `allowWorkflowTriggerChaining`                | Whether another workflow's output may fire this workflow's triggers. Self-output never re-triggers, whatever this is set to. Defaults to `false`.                                                                                                       |
+| `defaultOutputFileBaseExecutionPathExtension` | Output path prefix used when an execution names none, stored unresolved so `{{tag}}` placeholders resolve per run (e.g. `/{{jobName}}/`). Empty means outputs land at the asset root.                                                                   |
 
 The `outputTarget.locationType` is `asset` to write output files and metadata to a VAMS asset, or `none` for a results-only workflow that records only results text and logs and writes no asset output. A results-only workflow may still take input files -- for example, reading files to emit a metadata report. When `locationType` is `asset`, `allowOverride` gates whether an execution may redirect output to a chosen asset.
 
@@ -109,10 +145,54 @@ The `outputTarget.locationType` is `asset` to write output files and metadata to
 Triggers auto-launch a workflow in response to an event. A `fileUpload` trigger runs the workflow when files matching its `inputFileFilters` are uploaded. Filters match by extension (`*.e57`), exact path, file name, or wildcard. A trigger's `defaultTemplateIds` map supplies the template each included pipeline uses when the trigger launches the workflow, keyed by the composite `<pipelineDatabaseId>:<pipelineId>`.
 
 :::note[Filter format]
-Input-file filters accept extension patterns such as `*.jpg` (or the `.jpg` shorthand), exact paths, file names, and wildcards. Matching is case-insensitive. A non-empty `allow` list restricts eligibility to matching files; `exclude` removes matches and takes precedence.
+Input-file filters accept extension patterns such as `*.jpg` (or the `.jpg` shorthand), exact paths, file names, and wildcards. Matching is case-insensitive. A non-empty `allow` list restricts eligibility to matching files; `exclude` removes matches and takes precedence. The same rules described in [Input-file filters](#input-file-filters) apply to a trigger's filters.
 :::
 
 A trigger-launched execution runs as the reserved system identity, not as the user whose action fired the trigger. This is intentional: a user may be permitted to upload a file without being permitted to run the workflow, yet the trigger must still process that upload reliably. Running the execution as the system identity decouples the trigger from the acting user's permissions so it functions consistently regardless of who performed the triggering action. Executions launched directly through the execute endpoint run as the calling user; trigger-launched executions are attributed to the system identity in their execution record and provenance.
+
+### Input-file filters
+
+An `inputFileFilters` block has two lists, and each is optional:
+
+| List      | Meaning                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `allow`   | The file types eligible to be processed. **Omitted, empty, or `*` means every file is eligible.** |
+| `exclude` | Files removed from that set. **Omitted or empty means nothing is excluded.**                      |
+
+`exclude` is applied after `allow`, so an exclusion always wins over an inclusion.
+
+Because an absent `allow` list means "everything", a filter is a way to _narrow_ eligibility, never to grant it. A pipeline that declares no filters accepts any file its container can read.
+
+:::warning[`exclude` may not match everything]
+A match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) in an `exclude` list is rejected when the pipeline, template, workflow, or trigger is saved. Since `exclude` is applied last, such a pattern would remove every file and leave the pipeline or workflow permanently unable to run. To exclude nothing, leave the list empty or omit it. The same patterns are valid in an `allow` list, where they simply mean "allow everything".
+:::
+
+#### The resolution chain
+
+Filters are declared at up to three levels, and a file must satisfy all of them to reach a pipeline:
+
+```
+workflow.systemConfig.inputFileFilters       the outer boundary for the whole execution
+  └── pipeline.systemConfig.inputFileFilters what that step accepts
+        └── template.overrides.inputFileFilters  replaces the pipeline's, when the step uses a template
+```
+
+Resolution reads down the chain, and an open list at one level defers to the next:
+
+-   When the workflow's `allow` list names specific types, that list is the boundary for the execution. No pipeline can widen it — a file the workflow excludes never reaches any step.
+-   When the workflow's `allow` list is open, eligibility comes from the pipelines instead. A file is eligible when **any** step in the workflow accepts it, so a workflow combining a mesh pipeline and a point-cloud pipeline accepts both kinds of file.
+-   A chosen template's `overrides.inputFileFilters` replaces its pipeline's list entirely for that execution, which is how one pipeline supports several modes with different inputs.
+-   `exclude` lists accumulate: an exclusion at any level removes the file.
+
+Validation applies this order at execution time. The selected files are first narrowed by the workflow's filters, and each pipeline is then checked against **that** narrowed set. If any pipeline is left without the input it requires, the whole execution is rejected rather than launching a step that cannot run.
+
+#### Seeing what a workflow accepts
+
+Because the chain spans several records, a workflow response reports the restriction it effectively imposes in `aggregateWorkflowPipelineInputFileFilters` — the workflow's own `allow` list when it names specific types, otherwise the combined lists of its pipelines.
+
+:::note[The aggregate excludes template overrides]
+`aggregateWorkflowPipelineInputFileFilters` carries `includesTemplateOverrides: false`. A template is chosen per execution, so its overrides cannot be known in advance and are not folded in. Treat the aggregate as a guide when browsing workflows, and resolve the full chain — including the chosen template — when validating a specific set of files. The web interface does this, which is why the file types it shows can narrow once a template is selected.
+:::
 
 ### GLOBAL workflows
 
@@ -180,6 +260,14 @@ During an execution, each pipeline writes to a set of Amazon S3 output locations
 | **Results**  | Structured result files recorded against the execution (for results-only runs). |
 
 A separate auxiliary location holds temporary working files and special non-versioned viewer data (such as Potree octree files). For output-path conventions and the `assetId` threading pattern that pipeline authors follow, see the pipeline development guide.
+
+:::note[What an execution's output listing covers]
+An execution records the files, metadata, and results it wrote to its output **asset**, each with the
+version it produced. Anything a pipeline writes to the **auxiliary** location is not recorded and does
+not appear in the execution's outputs — including special preview-file locations. Those are working and
+viewer-support files rather than tracked asset outputs, so they exist in the auxiliary bucket without a
+corresponding output record.
+:::
 
 ## Related topics
 

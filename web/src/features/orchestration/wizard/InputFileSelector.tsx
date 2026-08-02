@@ -4,9 +4,12 @@
  */
 
 import React from "react";
-import { useAssets, useAssetFiles, useAssetVersions } from "../api/queries";
+import { useAssetSearch, useAssetFileSearch, useFileVersions } from "../api/queries";
 import SearchableSelect from "../components/SearchableSelect";
+import { applyInputFileFilters } from "./ExecuteWizard";
 import type { ExecuteInputFile } from "../types";
+
+type InputFileFilters = { allow?: string[]; exclude?: string[] };
 
 interface InputFileSelectorProps {
     /** Databases the user may pick from (from useDatabases). GLOBAL is not a real asset database. */
@@ -20,6 +23,9 @@ interface InputFileSelectorProps {
     /** Whether "Whole asset (all files)" is an allowed file choice. When false (a pipeline that
      *  requires specific files), the whole-asset option is hidden so the user must pick a file. */
     allowWholeAsset?: boolean;
+    /** The workflow's inputFileFilters. Files the workflow would reject are hidden rather than
+     *  offered and then failed at validation. */
+    inputFileFilters?: InputFileFilters;
 }
 
 const selectClass =
@@ -38,22 +44,89 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
     onChange,
     showVersion = true,
     allowWholeAsset = true,
+    inputFileFilters,
 }) => {
     const databaseId = lockedDatabaseId || value.databaseId || "";
     const assetId = value.assetId || "";
 
-    const { data: assets, isLoading: assetsLoading } = useAssets(databaseId, !!databaseId);
-    const { data: files, isLoading: filesLoading } = useAssetFiles(databaseId, assetId);
-    const { data: versions } = useAssetVersions(showVersion ? databaseId : undefined, assetId);
+    // Asset lookup goes to the SERVER per search term rather than loading a database's whole asset list
+    // for client-side filtering — a database can hold thousands of assets. The empty initial term returns
+    // the first page, which seeds the picker before the user types.
+    const [assetQuery, setAssetQuery] = React.useState("");
+    const { data: assetPage, isFetching: assetsLoading } = useAssetSearch(
+        assetQuery,
+        databaseId,
+        !!databaseId
+    );
+    const assets = assetPage?.items || [];
+    const assetTotal = assetPage?.total ?? 0;
+    // Says so when the list is a capped page of a larger result set, so a missing asset reads as "refine
+    // the search" rather than "not there".
+    const assetFooter =
+        assetTotal > assets.length
+            ? `Showing ${assets.length} of ${assetTotal} — refine the search to narrow it` +
+              (assetPage?.listFallback ? " (search unavailable; filtered locally)" : "")
+            : undefined;
+    // Files resolve server-side per search term too — an asset can hold thousands of files, so the
+    // same reasoning as the asset picker applies.
+    const [fileQuery, setFileQuery] = React.useState("");
+    const { data: filePage, isFetching: filesLoading } = useAssetFileSearch(
+        fileQuery,
+        databaseId,
+        assetId
+    );
+    // Only files the WORKFLOW admits are offered. Showing a file the workflow's filters reject would
+    // let the user select it and then fail validation on the next step for a reason the picker
+    // already knew.
+    const files = React.useMemo(
+        () =>
+            applyInputFileFilters(
+                (filePage?.items || []).map((f) => ({
+                    databaseId,
+                    assetId,
+                    relativeFileKey: f.relativePath,
+                })),
+                inputFileFilters
+            ),
+        [filePage, inputFileFilters, databaseId, assetId]
+    );
+    const fileTotal = filePage?.total ?? 0;
+    const hiddenByFilters = (filePage?.items?.length || 0) - files.length;
+    const fileFooter = [
+        fileTotal > (filePage?.items?.length || 0)
+            ? `Showing ${filePage?.items?.length} of ${fileTotal} — refine the search to narrow it`
+            : undefined,
+        hiddenByFilters > 0
+            ? `${hiddenByFilters} file${
+                  hiddenByFilters === 1 ? "" : "s"
+              } hidden by the workflow's ` + `input-file filters`
+            : undefined,
+        filePage?.listFallback ? "search unavailable; filtered locally" : undefined,
+    ]
+        .filter(Boolean)
+        .join(" · ");
+    // Scoped to the SELECTED FILE, not the asset: `versionId` is sent to S3 as the object version of
+    // this exact key, so each row's list is its own file's version history.
+    const { data: versions, isFetching: versionsLoading } = useFileVersions(
+        showVersion ? databaseId : undefined,
+        assetId,
+        value.relativeFileKey
+    );
 
     // Default file selection: whole asset when allowed, else empty (forces an explicit file pick).
     const defaultFileKey = allowWholeAsset ? "/" : "";
     // Selecting a new database resets the downstream asset/file/version selection.
     const handleDatabase = (dbId: string) => {
+        // Clear the asset search as well: a term typed for the previous database would otherwise carry
+        // over and silently narrow the new database's first page.
+        setAssetQuery("");
+        setFileQuery("");
         onChange({ databaseId: dbId, assetId: "", relativeFileKey: defaultFileKey });
     };
-    // Selecting a new asset resets the downstream file/version selection.
+    // Selecting a new asset resets the downstream file/version selection. The file search term is
+    // cleared for the same reason the asset term is on a database change.
     const handleAsset = (aId: string) => {
+        setFileQuery("");
         onChange({ databaseId, assetId: aId, relativeFileKey: defaultFileKey });
     };
     const handleFile = (relativeFileKey: string) => {
@@ -62,6 +135,8 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
     const handleVersion = (versionId: string) => {
         onChange({ ...value, versionId: versionId || undefined });
     };
+    // A whole-asset ('/') or folder ('/dir/') selection is not a single object, so it has no version.
+    const isConcreteFile = !!value.relativeFileKey && !value.relativeFileKey.endsWith("/");
 
     return (
         <div className="space-y-2">
@@ -94,6 +169,8 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
                     loading={assetsLoading}
                     placeholder={databaseId ? "Search assets…" : "Select a database first"}
                     onChange={handleAsset}
+                    onQueryChange={setAssetQuery}
+                    footerNote={assetFooter}
                     options={(assets || []).map((a) => ({
                         value: a.assetId,
                         label: a.assetName || a.assetId,
@@ -115,34 +192,44 @@ const InputFileSelector: React.FC<InputFileSelectorProps> = ({
                     loading={filesLoading}
                     placeholder={assetId ? "Search files…" : "Select an asset first"}
                     onChange={handleFile}
+                    onQueryChange={setFileQuery}
+                    footerNote={fileFooter || undefined}
                     leadingOption={
                         allowWholeAsset
                             ? { value: "/", label: "Whole asset (all files)" }
                             : undefined
                     }
-                    options={(files || []).map((f) => ({
-                        value: f.relativePath,
-                        label: f.relativePath,
+                    options={files.map((f) => ({
+                        value: f.relativeFileKey,
+                        label: f.relativeFileKey,
                     }))}
                 />
             </label>
 
-            {showVersion && versions && versions.length > 0 && value.relativeFileKey !== "/" && (
+            {/* Only a concrete file has versions — a whole-asset ('/') or folder selection spans many
+                files, so there is no single object version to pin. */}
+            {showVersion && isConcreteFile && (
                 <label className="block">
                     <span className="block text-xs text-text-secondary mb-1">
-                        Version (optional)
+                        File version (optional)
                     </span>
                     <select
-                        aria-label="Version"
+                        aria-label="File version"
                         value={value.versionId || ""}
                         onChange={(e) => handleVersion(e.target.value)}
                         className={selectClass}
+                        disabled={versionsLoading && !versions}
                     >
-                        <option value="">Latest</option>
-                        {versions.map((v) => (
+                        {/* Empty is the default, so a run reads whatever is current at launch rather
+                            than a version pinned when the form was filled in. */}
+                        <option value="">
+                            {versionsLoading && !versions ? "Loading versions…" : "Latest"}
+                        </option>
+                        {(versions || []).map((v) => (
                             <option key={v.versionId} value={v.versionId}>
-                                {v.versionId}
-                                {v.dateCreated ? ` — ${v.dateCreated}` : ""}
+                                {v.isLatest ? "Current" : v.versionId}
+                                {v.lastModified ? ` — ${v.lastModified}` : ""}
+                                {v.isLatest ? ` (${v.versionId})` : ""}
                             </option>
                         ))}
                     </select>

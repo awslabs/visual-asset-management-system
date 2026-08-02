@@ -16,16 +16,7 @@
             "fileAttributes": true
         },
         "inputFileFilters": {
-            "allow": [
-                "*.stl",
-                "*.obj",
-                "*.ply",
-                "*.glb",
-                "*.usd",
-                "*.dae",
-                "*.abc",
-                "*.fbx"
-            ],
+            "allow": ["*.stl", "*.obj", "*.ply", "*.glb", "*.usd", "*.dae", "*.abc", "*.fbx"],
             "exclude": []
         },
         "concurrencyRestriction": "none",
@@ -39,16 +30,7 @@
         {
             "triggerType": "fileUpload",
             "inputFileFilters": {
-                "allow": [
-                    "*.stl",
-                    "*.obj",
-                    "*.ply",
-                    "*.glb",
-                    "*.usd",
-                    "*.dae",
-                    "*.abc",
-                    "*.fbx"
-                ],
+                "allow": ["*.stl", "*.obj", "*.ply", "*.glb", "*.usd", "*.dae", "*.abc", "*.fbx"],
                 "exclude": []
             },
             "defaultTemplateIds": {

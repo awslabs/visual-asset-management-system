@@ -25,7 +25,7 @@ changed in Stage 1. This document is the reference the next stage builds on.
 | PipelineExecutionOutputResultsStorageTable      | pipelineExecutionId | relativeFilePath                     | —                                                                                                                                                                                                                                                                                        |
 | PipelineExecutionLogsStorageTable               | pipelineExecutionId | logType ("summary")                  | —                                                                                                                                                                                                                                                                                        |
 | WorkflowExecutionInputsStorageTable             | workflowExecutionId | databaseId:assetId:inputAssetFileKey | GSI WorkflowExecInputsByAssetGSI (PK databaseId:assetId, SK executionStartDate)                                                                                                                                                                                                          |
-| WorkflowExecutionConfigurationStorageTable      | workflowExecutionId | recordType ("configuration")         | —                                                                                                                                                                                                                                                                                        |
+| WorkflowExecutionConfigurationStorageTable      | workflowExecutionId | recordType ("configuration")         | GSI WorkflowExecConfigByOutputAssetGSI (PK outputDatabaseId:outputAssetId, SK executionStartDate) — sparse: written only for an asset-targeted run with a resolved destination                                                                                                           |
 
 The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration read source.
 
@@ -34,7 +34,11 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 -   **executionId is a VAMS GUID** passed as the Step Functions execution name, so
     `$$.Execution.Name == executionId` and all existing ASL S3 paths keep working.
 -   **Executions are workflow-keyed.** Asset/database linkage lives in the input tables.
-    The asset-scoped GET resolves through `WorkflowExecInputsByAssetGSI`.
+    The asset-scoped GET resolves through `WorkflowExecInputsByAssetGSI` for executions that READ the
+    asset, and through `WorkflowExecConfigByOutputAssetGSI` for executions that WROTE to it, merging
+    the two so an execution that is both appears once. The output direction needs its own index
+    because a results-only or `inputFileArity: none` pipeline writes no input rows at all, leaving its
+    output target as the only association it has with an asset.
 -   **Clean composite keys** (no legacy `$` prefix); ISO-8601 UTC dates.
 -   **`triggeredByUserId`** (or `system`) and **`triggerType`** (`Manual` | `File-Upload`)
     are recorded on the main row.

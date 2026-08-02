@@ -92,6 +92,37 @@ class TestPipelineInputFileFilters:
         with pytest.raises(ValidationError):
             UpdatePipelineRequestModel(systemConfig={"inputFileFilters": {"deny": ["*.glb"]}})
 
+    @pytest.mark.parametrize("pattern", ["*", "**", "*.*", "/*", "/**", " * "])
+    def test_match_everything_exclude_rejected(self, pattern):
+        # Exclude is applied AFTER allow, so a match-everything exclude removes every file and makes
+        # the pipeline permanently unrunnable — always a mistake rather than an intent. An empty
+        # exclude list is how "exclude nothing" is expressed.
+        with pytest.raises(ValidationError):
+            _create({"inputFileFilters": {"allow": ["*.glb"], "exclude": [pattern]}})
+
+    def test_match_everything_allow_is_accepted(self):
+        # The same pattern in `allow` is fine: it means allow-all, which is also what an absent allow
+        # list means, and the chain reads it as "defer to the next level down".
+        m = _create({"inputFileFilters": {"allow": ["*"], "exclude": []}})
+        assert m.systemConfig["inputFileFilters"]["allow"] == ["*"]
+
+    def test_empty_exclude_accepted(self):
+        m = _create({"inputFileFilters": {"exclude": []}})
+        assert m.systemConfig["inputFileFilters"]["exclude"] == []
+
+    def test_update_model_rejects_match_everything_exclude(self):
+        with pytest.raises(ValidationError):
+            UpdatePipelineRequestModel(systemConfig={"inputFileFilters": {"exclude": ["*"]}})
+
+    def test_template_override_exclude_is_validated_too(self):
+        # A template's `overrides` can carry inputFileFilters, so the same rule must apply there —
+        # otherwise the restriction could be reintroduced one level down the chain.
+        from backend.backend.models.pipelines import CreateTemplateRequestModel
+        with pytest.raises(ValidationError):
+            CreateTemplateRequestModel(
+                databaseId="db1", pipelineId="p1", templateName="T", configFormat="json",
+                configBody="{}", overrides={"inputFileFilters": {"exclude": ["*"]}})
+
 
 @pytest.mark.unit
 class TestSqsResourceValidation:

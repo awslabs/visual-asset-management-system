@@ -3,8 +3,24 @@
     "templateName": "Text-to-Video (Super)",
     "description": "Generate high-quality video from a text prompt with the Cosmos 3 Super (64B) omni model.",
     "configFormat": "json",
-    "configBody": "{\"MODEL_VARIANT\":\"super\",\"TASK_MODE\":\"text2video\",\"DISABLE_GUARDRAILS\":\"true\"}",
+    "configBody": "{\"MODEL_VARIANT\": \"super\", \"TASK_MODE\": \"text2video\", \"DISABLE_GUARDRAILS\": \"true\", \"PROMPT\": \"{{PROMPT}}\", \"NEGATIVE_PROMPT\": \"{{NEGATIVE_PROMPT}}\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Provide the generation prompt via the COSMOS3_PROMPT asset/file metadata key. TASK_MODE may be switched (e.g. transfer on capable variants).",
-    "isDefault": true
+    "inputInstructions": "Enter the generation prompt below. Leaving it blank falls back to the COSMOS3_PROMPT key on the output asset's metadata. This mode takes no input file.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS3_PROMPT asset metadata key."
+        },
+        {
+            "tagKey": "NEGATIVE_PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Negative prompt",
+            "description": "What to avoid in the generation. Blank falls back to COSMOS3_NEGATIVE_PROMPT asset metadata."
+        }
+    ]
 }

@@ -123,7 +123,6 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
-        workflowExecutionOutputsIndexTable: dynamodb.Table;
     };
 }
 
@@ -1109,24 +1108,6 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // Secondary output-asset index: "executions that wrote to this asset" resolves
-    // without scanning the inputs table. One row per (execution, output asset).
-    const workflowExecutionOutputsIndexTable = new dynamodb.Table(
-        scope,
-        "WorkflowExecutionOutputsIndexStorageTable",
-        {
-            ...dynamodbDefaultProps,
-            partitionKey: { name: "databaseId:assetId", type: dynamodb.AttributeType.STRING },
-            sortKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
-        }
-    );
-    workflowExecutionOutputsIndexTable.addGlobalSecondaryIndex({
-        indexName: "OutputsByExecutionGSI",
-        partitionKey: { name: "workflowExecutionId", type: dynamodb.AttributeType.STRING },
-        sortKey: { name: "databaseId:assetId", type: dynamodb.AttributeType.STRING },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
     const workflowExecutionsStorageTable = new dynamodb.Table(
         scope,
         "WorkflowExecutionsStorageTable",
@@ -1366,6 +1347,21 @@ export function storageResourcesBuilder(
             sortKey: { name: "recordType", type: dynamodb.AttributeType.STRING },
         }
     );
+
+    // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
+    // runs that wrote to it, and the latter cannot be found any other way: a results-only or
+    // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
+    // target is its only asset association. The partition attribute is written only on configuration
+    // rows whose outputLocationType is 'asset', which keeps the index off results-only executions.
+    workflowExecutionConfigurationStorageTable.addGlobalSecondaryIndex({
+        indexName: "WorkflowExecConfigByOutputAssetGSI",
+        partitionKey: {
+            name: "outputDatabaseId:outputAssetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: { name: "executionStartDate", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
 
     //old
     const metadataStorageTableLegacy = new dynamodb.Table(scope, "MetadataStorageTable", {
@@ -2147,7 +2143,6 @@ export function storageResourcesBuilder(
             pipelineTemplateTagSchemaStorageTable: pipelineTemplateTagSchemaStorageTable,
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
-            workflowExecutionOutputsIndexTable: workflowExecutionOutputsIndexTable,
         },
     };
 
@@ -2663,8 +2658,6 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowStorageTableV2.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowTriggersStorage]:
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
-        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionOutputsIndex]:
-            storageResources.dynamo.workflowExecutionOutputsIndexTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

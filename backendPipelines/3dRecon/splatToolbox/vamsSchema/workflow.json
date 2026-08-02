@@ -16,11 +16,7 @@
             "fileAttributes": true
         },
         "inputFileFilters": {
-            "allow": [
-                "*.zip",
-                "*.mov",
-                "*.mp4"
-            ],
+            "allow": ["*.zip", "*.mov", "*.mp4"],
             "exclude": []
         },
         "concurrencyRestriction": "none",

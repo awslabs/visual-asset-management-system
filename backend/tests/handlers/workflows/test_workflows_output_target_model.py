@@ -173,6 +173,24 @@ class TestSpecifiedPipelineIdValidation:
         with pytest.raises(ValidationError):
             self._create({"pipelineId": "pipe1", "jobName": job_name})
 
+    @pytest.mark.parametrize("job_name", ["{{jobName}}", "step-{{executionId}}", "{{assetId}}"])
+    def test_template_tags_in_job_name_rejected(self, job_name):
+        # jobName is a FIXED label, not a template: it is baked into the state machine at deploy time,
+        # once per workflow, so there is no per-run substitution step that could resolve a tag. The id
+        # charset excludes braces, which is what enforces it. Documented in the field's help text and
+        # the workflow docs — vary the output path per run with the workflow's output path prefix,
+        # which IS tag-aware.
+        with pytest.raises(ValidationError):
+            self._create({"pipelineId": "pipe1", "jobName": job_name})
+
+    @pytest.mark.parametrize("job_name", ["", None])
+    def test_blank_job_name_defers_to_the_pipeline_id(self, job_name):
+        # Empty and null are both accepted and both mean "use the pipeline id" downstream
+        # (workflowAsl.to_asl_pipeline_dict falls back to pipelineId for the ASL `name`), so the output
+        # path stays unique per pipeline rather than collapsing to a shared folder.
+        m = self._create({"pipelineId": "pipe1", "jobName": job_name})
+        assert not m.specifiedPipelines[0].jobName
+
 
 @pytest.mark.unit
 class TestSetTriggerInputFileFilters:
@@ -194,6 +212,20 @@ class TestSetTriggerInputFileFilters:
         with pytest.raises(ValidationError):
             SetTriggerRequestModel(inputFileFilters={"allowed": ["*.glb"]})
 
+    @pytest.mark.parametrize("pattern", ["*", "**", "*.*", "/*"])
+    def test_match_everything_exclude_rejected(self, pattern):
+        # A trigger whose exclude matches everything can never fire — the same authoring mistake the
+        # workflow and pipeline levels reject, and triggers share that validator.
+        from backend.backend.models.workflows import SetTriggerRequestModel
+        with pytest.raises(ValidationError):
+            SetTriggerRequestModel(inputFileFilters={"exclude": [pattern]})
+
+    def test_star_allow_accepted_and_means_fire_on_anything(self):
+        # Consistent with the chain: '*' in an allow list is "no restriction", the same as omitting it.
+        from backend.backend.models.workflows import SetTriggerRequestModel
+        m = SetTriggerRequestModel(inputFileFilters={"allow": ["*"]})
+        assert m.inputFileFilters["allow"] == ["*"]
+
 
 @pytest.mark.unit
 class TestWorkflowSystemConfigShapeValidation:
@@ -211,6 +243,16 @@ class TestWorkflowSystemConfigShapeValidation:
     def test_unknown_asset_scope_key_rejected(self):
         with pytest.raises(ValidationError):
             _create({"assetScope": {"bogus": True}})
+
+    @pytest.mark.parametrize("pattern", ["*", "**", "/*"])
+    def test_match_everything_exclude_rejected(self, pattern):
+        # A workflow-level match-everything exclude would starve every pipeline in the workflow.
+        with pytest.raises(ValidationError):
+            _create({"inputFileFilters": {"exclude": [pattern]}})
+
+    def test_star_allow_accepted(self):
+        m = _create({"inputFileFilters": {"allow": ["*"]}})
+        assert m.systemConfig["inputFileFilters"]["allow"] == ["*"]
 
     def test_non_boolean_metadata_value_rejected(self):
         with pytest.raises(ValidationError):

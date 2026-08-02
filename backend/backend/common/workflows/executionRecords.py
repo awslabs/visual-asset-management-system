@@ -541,6 +541,43 @@ def build_workflow_execution_input_record(
     }
 
 
+def metadata_envelope_rows(envelope):
+    """Flatten a grouped metadata envelope into one row per (asset, filePath) that HAS metadata.
+
+    Yields dicts of {databaseId, assetId, filePath, metadata} ready for build_input_metadata_record.
+    Asset-level metadata lives on the fileKey '/' record, so it flattens to a '/' filePath row — a
+    reader that walks only per-FILE records misses asset metadata entirely.
+
+    Records with no metadata are skipped: the envelope always emits a '/' record per asset (so the
+    file list is uniform) even when the asset carries nothing, and persisting those would fill the
+    details response with empty rows.
+
+    Accepts the legacy flat shape too, so a caller holding either envelope version works.
+    """
+    payload = envelope or {}
+    if not isinstance(payload, dict):
+        return
+    if payload.get("schemaVersion") == METADATA_SCHEMA_VERSION_GROUPED and "assets" in payload:
+        for group in payload.get("assets") or []:
+            database_id = (group or {}).get("databaseId", "")
+            asset_id = (group or {}).get("assetId", "")
+            for record in (group or {}).get("files") or []:
+                metadata = (record or {}).get("metadata")
+                if not metadata:
+                    continue
+                yield {
+                    "databaseId": database_id,
+                    "assetId": asset_id,
+                    "filePath": (record or {}).get("fileKey", "/"),
+                    "metadata": metadata,
+                }
+        return
+    # Legacy flat shape: {"VAMS": {"assetMetadata": {...}}} carries asset metadata only.
+    legacy = (payload.get("VAMS") or {}).get("assetMetadata") or {}
+    if legacy:
+        yield {"databaseId": "", "assetId": "", "filePath": "/", "metadata": legacy}
+
+
 def build_input_metadata_record(
     pipeline_execution_id, database_id, asset_id, file_path, metadata,
     source_input_metadata_file_s3_key,
@@ -562,7 +599,7 @@ def build_input_configuration_record(
     pipeline_execution_id, input_configuration, input_configuration_file_s3_key,
     template_id="", template_schema_version="", tag_schema_version="",
     template_tags=None, custom_template_override_used=False, custom_template_override="",
-    config_format="",
+    config_format="", effective_system_config=None, template_overrides=None,
 ):
     """PipelineExecutionInputConfigurationStorageTable row (SK='configuration').
 
@@ -577,6 +614,13 @@ def build_input_configuration_record(
       - customTemplateOverride: the RAW override body (pre-render, tags un-substituted) when one was
         supplied, so a re-run can faithfully reconstruct a template-less override execution (there is
         no templateId to re-resolve). Truncated inline; empty when no override was used.
+      - effectiveSystemConfig: the systemConfig this step actually ran under — the pipeline's own
+        systemConfig merged with the chosen template's `overrides`
+        (executionValidation.resolve_effective_pipeline_config). Only knowable at execute time, because
+        the template is chosen per run; without it a finished execution cannot say which
+        inputFileArity / assetScope / metadataInputs / inputFileFilters were in force.
+      - templateOverrides: just the keys the template overrode, so a reader can see WHY the effective
+        config differs from the pipeline's own (e.g. a template raising inputFileArity from 'none').
     """
     # Both text fields land in the same item and share one byte budget.
     ((content, truncated),
@@ -599,6 +643,9 @@ def build_input_configuration_record(
         "customTemplateOverrideTruncated": override_truncated,
         # Format of the rendered config body, so the detail view highlights it correctly.
         "configFormat": config_format or "",
+        # The settings this step ran under, and the template overrides that shaped them.
+        "effectiveSystemConfig": effective_system_config or {},
+        "templateOverrides": template_overrides or {},
     }
 
 
@@ -668,18 +715,27 @@ def build_log_record(
     }
 
 
+def output_asset_partition_key(output_database_id, output_asset_id):
+    """Partition value for WorkflowExecConfigByOutputAssetGSI: '{outputDatabaseId}:{outputAssetId}'.
+
+    Mirrors the 'databaseId:assetId' shape the by-input-asset GSI uses, so a caller listing an asset's
+    executions builds the same key for both directions."""
+    return f"{output_database_id}:{output_asset_id}"
+
+
 def build_workflow_configuration_record(
     workflow_execution_id, workflow_configuration, input_metadata, specified_pipelines_snapshot,
     output_location_type="asset", output_asset_id="", output_database_id="",
     output_file_base_execution_path_extension="/",
     input_metadata_asset_id="", input_metadata_database_id="",
     input_metadata_file_s3_key="",
+    execution_start_date="",
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration')."""
     ((config_content, config_truncated),
      (metadata_content, metadata_truncated)) = truncate_text_budget(
         [workflow_configuration or "", input_metadata or ""])
-    return {
+    record = {
         "workflowExecutionId": workflow_execution_id,  # PK
         "recordType": "configuration",  # SK
         "workflowConfiguration": config_content,
@@ -694,8 +750,19 @@ def build_workflow_configuration_record(
         # Path segment inserted between the output asset location key and each output file's
         # relative path ('/' = none).
         "outputFileBaseExecutionPathExtension": output_file_base_execution_path_extension or "/",
+        # Sort key for WorkflowExecConfigByOutputAssetGSI, so an output-asset listing can be bounded
+        # and ordered by recency exactly like the by-input-asset one.
+        "executionStartDate": execution_start_date or iso_now(),
         # Input-metadata source (recording only).
         "inputMetadataAssetId": input_metadata_asset_id or "",
         "inputMetadataDatabaseId": input_metadata_database_id or "",
         "inputMetadataFileS3Key": input_metadata_file_s3_key or "",
     }
+    # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
+    # with a resolved destination. Omitting the attribute keeps the row out of the index entirely
+    # (DynamoDB indexes sparsely), so results-only executions never appear in an asset's history and
+    # an empty-string partition can never collect unrelated rows.
+    if (output_location_type or "asset") == "asset" and output_asset_id and output_database_id:
+        record["outputDatabaseId:outputAssetId"] = output_asset_partition_key(
+            output_database_id, output_asset_id)
+    return record

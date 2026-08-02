@@ -45,7 +45,10 @@ describe("ExecutionQuickView", () => {
         renderPanel();
         expect(screen.getByText("Output Target")).toBeInTheDocument();
         expect(screen.getByText("Output Type")).toBeInTheDocument();
-        expect(screen.getByText("asset")).toBeInTheDocument();
+        // Scoped to the Output Type row: the Output Path Prefix row renders "None (asset root)" for a
+        // run with no prefix, so a bare "asset" lookup is now ambiguous.
+        const typeRow = screen.getByText("Output Type").closest("div")!;
+        expect(typeRow).toHaveTextContent("asset");
         expect(screen.getByText("Output Database ID")).toBeInTheDocument();
         expect(screen.getByText("out-db")).toBeInTheDocument();
         expect(screen.getByText("Output Asset ID")).toBeInTheDocument();

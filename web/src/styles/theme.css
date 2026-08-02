@@ -20,6 +20,10 @@
     --vams-bg-secondary: var(--color-background-cell-shaded-v7o6so, #f6f6f9);
     --vams-bg-hover: #f2f3f3;
     --vams-bg-container: #ffffff;
+    /* Hover INSIDE a shaded overlay (the record "..." action menus). The normal hover (#f2f3f3) sits
+     * only 1.03:1 from the shaded menu background, so it reads as no hover at all; this steps further
+     * from it while staying lighter than the border. */
+    --vams-bg-overlay-hover: #e9ebed;
 
     /* Input surfaces + the orchestration page surface alias Amazon Cloudscape's OWN runtime custom
      * properties, so a form control on a Tailwind page paints the exact colour a Cloudscape control
@@ -127,6 +131,9 @@
     --vams-bg-secondary: var(--color-background-cell-shaded-v7o6so, #1b232d);
     --vams-bg-hover: #1a2b3c;
     --vams-bg-container: #192534;
+    /* Dark counterpart: LIGHTER than the shaded menu background, since darkening from #1b232d would
+     * approach black and lose the row edges. */
+    --vams-bg-overlay-hover: #2a3542;
 
     /* Input + page surfaces alias Amazon Cloudscape's own dark values (see the light block). Only the
      * dark fallbacks differ, and this is where a hard-coded value was visibly wrong: Cloudscape paints

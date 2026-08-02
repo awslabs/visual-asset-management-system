@@ -430,3 +430,152 @@ class TestExecutionCountEnrichment:
         expr = kwargs["KeyConditionExpression"]
         rendered = expr.get_expression() if hasattr(expr, "get_expression") else {}
         assert rendered.get("operator") == "AND"
+
+
+@pytest.mark.unit
+class TestTriggerSummaryEnrichment:
+    """The workflow list reports how many triggers each workflow has and how many are ENABLED.
+
+    Both numbers are needed: triggerCount alone cannot distinguish "no triggers" from "triggers that
+    exist but are all switched off", which is exactly the state an operator is looking for when a
+    workflow silently stops firing.
+    """
+
+    def _page(self):
+        return {"Items": [
+            {"databaseId": "db1", "workflowId": "wf-a", "workflowName": "A"},
+            {"databaseId": "db1", "workflowId": "wf-b", "workflowName": "B"},
+            {"databaseId": "db1", "workflowId": "wf-c", "workflowName": "C"},
+        ]}
+
+    # wf-a: one enabled; wf-b: two rows, one enabled; wf-c: none.
+    SUMMARIES = {
+        "wf-a": {"triggerCount": 1, "triggersEnabledCount": 1},
+        "wf-b": {"triggerCount": 2, "triggersEnabledCount": 1},
+        "wf-c": {"triggerCount": 0, "triggersEnabledCount": 0},
+    }
+
+    def _run(self, has_triggers="", summaries=None):
+        from backend.backend.handlers.workflows import workflowService as ws
+        table = summaries if summaries is not None else self.SUMMARIES
+        with patch.object(ws, "_enforce_workflow", return_value=True), \
+             patch.object(ws, "_execution_count", return_value=0), \
+             patch.object(ws, "_trigger_summary", side_effect=lambda db, wid: table.get(wid)):
+            return ws._filtered_page(self._page(), include_archived=False,
+                                     claims_and_roles={"tokens": ["u"]},
+                                     has_triggers=has_triggers)
+
+    def test_counts_are_reported_per_workflow(self):
+        items = {i.workflowId: i for i in self._run().Items}
+        assert (items["wf-a"].triggerCount, items["wf-a"].triggersEnabledCount) == (1, 1)
+        # The distinguishing case: triggers exist, but only one of them fires.
+        assert (items["wf-b"].triggerCount, items["wf-b"].triggersEnabledCount) == (2, 1)
+        assert (items["wf-c"].triggerCount, items["wf-c"].triggersEnabledCount) == (0, 0)
+
+    def test_filter_true_keeps_only_workflows_with_an_enabled_trigger(self):
+        assert sorted(i.workflowId for i in self._run("true").Items) == ["wf-a", "wf-b"]
+
+    def test_filter_false_keeps_only_workflows_with_no_enabled_trigger(self):
+        assert [i.workflowId for i in self._run("false").Items] == ["wf-c"]
+
+    def test_a_workflow_whose_triggers_are_all_disabled_is_not_counted_as_triggered(self):
+        # The load-bearing case for filtering on the ENABLED count rather than the raw count.
+        summaries = dict(self.SUMMARIES,
+                         **{"wf-b": {"triggerCount": 3, "triggersEnabledCount": 0}})
+        assert sorted(i.workflowId for i in self._run("true", summaries).Items) == ["wf-a"]
+        assert sorted(i.workflowId for i in self._run("false", summaries).Items) == ["wf-b", "wf-c"]
+
+    def test_no_filter_returns_every_authorized_workflow(self):
+        assert len(self._run("").Items) == 3
+
+    def test_an_unreadable_summary_keeps_the_workflow_rather_than_dropping_it(self):
+        # The counts are best-effort. Dropping a workflow because its trigger read failed would
+        # silently shorten the list; the workflow is kept with null counts instead.
+        summaries = dict(self.SUMMARIES, **{"wf-a": None})
+        kept = self._run("true", summaries)
+        assert "wf-a" in [i.workflowId for i in kept.Items]
+        wf_a = next(i for i in kept.Items if i.workflowId == "wf-a")
+        assert wf_a.triggerCount is None and wf_a.triggersEnabledCount is None
+
+
+@pytest.mark.unit
+class TestTriggerSummaryQuery:
+    """_trigger_summary reads the triggers table for one workflow."""
+
+    def _summary(self, rows):
+        from backend.backend.handlers.workflows import workflowService as ws
+        table = MagicMock()
+        table.query.return_value = {"Items": rows}
+        with patch.object(ws, "_triggers_table", return_value=table):
+            return ws._trigger_summary("db1", "wf1")
+
+    def test_counts_enabled_and_total(self):
+        assert self._summary([{"enabled": True}, {"enabled": False}, {"enabled": True}]) == {
+            "triggerCount": 3, "triggersEnabledCount": 2}
+
+    def test_a_row_without_the_flag_counts_as_enabled(self):
+        # Matches get_workflow_triggers and the dispatch default, so an older row is not reported as
+        # disabled (which would read as "this trigger will not fire" when it will).
+        assert self._summary([{}])["triggersEnabledCount"] == 1
+
+    def test_no_triggers(self):
+        assert self._summary([]) == {"triggerCount": 0, "triggersEnabledCount": 0}
+
+    def test_a_query_failure_is_best_effort(self):
+        from backend.backend.handlers.workflows import workflowService as ws
+        table = MagicMock()
+        table.query.side_effect = Exception("throttled")
+        with patch.object(ws, "_triggers_table", return_value=table):
+            assert ws._trigger_summary("db1", "wf1") is None
+
+
+@pytest.mark.unit
+class TestHasTriggersQueryParam:
+    """The hasTriggers list filter is normalized (or rejected) at the handler boundary.
+
+    An unrecognized value must not fall through as "no filter": the caller would receive a full,
+    unfiltered list while believing it was filtered.
+    """
+
+    def _event(self, value):
+        return {
+            "requestContext": {"http": {"method": "GET", "path": "/workflows"}, "authorizer": {}},
+            "pathParameters": None,
+            "queryStringParameters": {"hasTriggers": value} if value is not None else None,
+            "headers": {"authorization": "Bearer t"},
+        }
+
+    def _call(self, value):
+        from backend.backend.handlers.workflows import workflowService as ws
+        captured = {}
+
+        def _fake_all(query_params, include_archived, claims_and_roles):
+            captured["hasTriggers"] = query_params.get("hasTriggers", "")
+            from backend.backend.models.workflows import GetWorkflowsResponseModel
+            return GetWorkflowsResponseModel(Items=[])
+
+        with patch.object(ws, "request_to_claims", return_value={"tokens": ["u1"]}), \
+             patch.object(ws, "CasbinEnforcer") as m_enf, \
+             patch.object(ws, "get_all_workflows", side_effect=_fake_all):
+            m_enf.return_value.enforceAPI.return_value = True
+            resp = ws.lambda_handler(self._event(value), MagicMock())
+        return resp, captured
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("true", "true"), ("TRUE", "true"), ("1", "true"), ("yes", "true"),
+        ("false", "false"), ("False", "false"), ("0", "false"), ("no", "false"),
+    ])
+    def test_accepted_values_normalize(self, raw, expected):
+        resp, captured = self._call(raw)
+        assert resp["statusCode"] == 200
+        assert captured["hasTriggers"] == expected
+
+    def test_absent_means_no_filter(self):
+        resp, captured = self._call(None)
+        assert resp["statusCode"] == 200
+        assert captured["hasTriggers"] == ""
+
+    @pytest.mark.parametrize("bad", ["maybe", "enabled", "2"])
+    def test_an_unrecognized_value_is_rejected_not_ignored(self, bad):
+        resp, _ = self._call(bad)
+        assert resp["statusCode"] == 400

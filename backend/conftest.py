@@ -52,7 +52,6 @@ os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTab
 # os.environ.setdefault at import and assert on it (e.g. test_processOutput_records). Seed a
 # default only when unset so workflowService can resolve it at import without overriding those.
 os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
-os.environ['WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE_NAME'] = 'workflowExecutionOutputsIndexTable'
 os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
 
 # AWS credentials for testing

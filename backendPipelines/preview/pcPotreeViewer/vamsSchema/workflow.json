@@ -16,12 +16,7 @@
             "fileAttributes": true
         },
         "inputFileFilters": {
-            "allow": [
-                "*.laz",
-                "*.las",
-                "*.e57",
-                "*.ply"
-            ],
+            "allow": ["*.laz", "*.las", "*.e57", "*.ply"],
             "exclude": []
         },
         "concurrencyRestriction": "none",
@@ -35,12 +30,7 @@
         {
             "triggerType": "fileUpload",
             "inputFileFilters": {
-                "allow": [
-                    "*.laz",
-                    "*.las",
-                    "*.e57",
-                    "*.ply"
-                ],
+                "allow": ["*.laz", "*.las", "*.e57", "*.ply"],
                 "exclude": []
             },
             "defaultTemplateIds": {},

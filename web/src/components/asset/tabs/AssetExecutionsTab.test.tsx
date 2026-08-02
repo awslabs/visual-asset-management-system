@@ -20,6 +20,13 @@ jest.mock("../../../features/orchestration/api/queries", () => ({
     // scope (the scope pins the database), but the hook still runs.
     useDatabases: jest.fn(() => ({ data: [] })),
     useWorkflow: jest.fn(() => ({ data: undefined })),
+    // The execute modal reads the referenced pipelines' systemConfig to summarize what the selected
+    // workflow accepts.
+    useAllPipelines: jest.fn(() => ({ data: [] })),
+    useExecuteWorkflow: jest.fn(() => ({ mutateAsync: jest.fn() })),
+    useAssetSearch: jest.fn(() => ({ data: { items: [], total: 0 }, isFetching: false })),
+    useAssetFileSearch: jest.fn(() => ({ data: { items: [], total: 0 }, isFetching: false })),
+    useFileVersions: jest.fn(() => ({ data: [] })),
 }));
 
 jest.mock("../../../features/orchestration/permissions/useAllowedRoutes", () => ({

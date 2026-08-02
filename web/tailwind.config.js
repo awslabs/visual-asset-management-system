@@ -18,6 +18,9 @@ module.exports = {
                 "surface-secondary": "var(--vams-bg-secondary)",
                 "surface-container": "var(--vams-orch-container-bg)",
                 "surface-hover": "var(--vams-bg-hover)",
+                // Hover inside a shaded overlay (the record action menus), where the normal hover is
+                // too close to the menu background to register.
+                "surface-overlay-hover": "var(--vams-bg-overlay-hover)",
                 "surface-selected": "var(--vams-bg-selected)",
                 "surface-input": "var(--vams-bg-input)",
                 "text-primary": "var(--vams-text-primary)",

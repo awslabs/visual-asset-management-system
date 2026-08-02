@@ -339,6 +339,74 @@ The `allListPartition` attribute holds the constant value `execution` on every r
 
 The per-pipeline and per-input execution detail records live in supporting tables (`PipelineExecutionsStorageTable`, `PipelineExecutionInput*`/`Output*StorageTable`, `PipelineExecutionLogsStorageTable`, `WorkflowExecutionInputsStorageTable`, `WorkflowExecutionConfigurationStorageTable`), all keyed by `pipelineExecutionId` or `workflowExecutionId`. See [AWS Resources Inventory](aws-resources.md#workflow-execution-tables-v2-data-model) for the full table and index list.
 
+#### What an execution stores
+
+An execution is a snapshot as much as a status record: templates, tag schemas and pipeline configuration
+can all change or be archived after a run finishes, so each run records what it was actually built from
+rather than pointing at definitions that may since have moved.
+
+**Main row** (`WorkflowExecutionsStorageTableV2`) — identity and status only: `executionStatus`,
+`executionStartDate` / `executionStopDate`, `triggerType`, `triggeredByUserId`, `executionGroupId`,
+`executionError`, the full `executionLog`, the Step Functions ARNs, and `lastSfnSyncCheckDate` (which
+bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+configuration fields — those live on the configuration rows below, so a status list never pays to read
+them.
+
+**Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
+`configuration`) — the run's workflow-level inputs:
+
+| Attribute                                                                     | What it records                                                                                                                                       |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `specifiedPipelinesSnapshot`                                                  | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                 |
+| `inputMetadata` / `inputMetadataTruncated`                                    | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                         |
+| `outputLocationType`, `outputAssetId`, `outputDatabaseId`                     | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                     |
+| `outputFileBaseExecutionPathExtension`                                        | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags |
+| `inputMetadataAssetId` / `inputMetadataDatabaseId` / `inputMetadataFileS3Key` | Provenance of the metadata source                                                                                                                     |
+| `outputDatabaseId:outputAssetId`                                              | Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset                                                 |
+
+This row also carries the index that answers "which executions wrote to this asset?":
+
+| GSI Name                             | Partition Key                    | Sort Key             | Projection | Purpose                                                   |
+| ------------------------------------ | -------------------------------- | -------------------- | ---------- | --------------------------------------------------------- |
+| `WorkflowExecConfigByOutputAssetGSI` | `outputDatabaseId:outputAssetId` | `executionStartDate` | ALL        | List executions whose **output** target was a given asset |
+
+An asset's execution history is the union of two queries: the executions that consumed the asset as an
+input (via `WorkflowExecutionInputsStorageTable`) and the executions that wrote to it as an output (via
+this GSI). Without the second, a run that produced a file in an asset without reading anything from it —
+the normal case for a conversion writing into a different asset — would not appear in that asset's history.
+
+The GSI is **sparse**: the `outputDatabaseId:outputAssetId` attribute is written only when
+`outputLocationType` is `asset` and both ids are present, so results-only runs stay out of the index
+entirely rather than crowding it. Because a DynamoDB item missing the partition attribute is absent from
+the index altogether, every path that writes a configuration row — including data migration — has to set
+the attribute, or those executions silently vanish from the by-output-asset listing.
+
+**Per-pipeline configuration row** (`PipelineExecutionInputConfigurationStorageTable`, `recordType` =
+`configuration`) — one per pipeline step, recording the settings and configuration that step ran under:
+
+| Attribute                                                 | What it records                                                                                                                                                                                            |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputConfiguration` / `inputConfigurationTruncated`      | The final rendered configuration body actually sent to the pipeline. The complete body is the per-execution S3 file at `inputConfigurationFileS3Key`; the inline copy is truncated to fit the item         |
+| `configFormat`                                            | Format of that body (`json`, `yaml`, `openjd`, `xml`, `raw`), so a viewer highlights it correctly                                                                                                          |
+| `templateId`, `templateSchemaVersion`, `tagSchemaVersion` | The template and schema versions resolved at run time — the run stays readable after the template changes or is archived                                                                                   |
+| `templateTags`                                            | The resolved dynamic tag values passed (for example a prompt entered on the execute screen)                                                                                                                |
+| `customTemplateOverrideUsed` / `customTemplateOverride`   | Whether a caller supplied a one-off configuration body, and the RAW pre-render body when they did — a template-less override run has no `templateId` to re-resolve, so a re-run needs this to reproduce it |
+| `effectiveSystemConfig`                                   | **The systemConfig this step actually ran under**: the pipeline's own `systemConfig` merged with the chosen template's `overrides`. Only knowable at execute time, because the template is chosen per run  |
+| `templateOverrides`                                       | Just the keys that template overrode, so a reader can see _why_ the effective config differs from the pipeline's own (for example a template raising `inputFileArity` from `none` to `one`)                |
+
+`effectiveSystemConfig` is what makes a finished execution self-describing: without it the stored run
+names its template but not the `inputFileArity` / `assetScope` / `metadataInputs` / `inputFileFilters`
+that were enforced. Both fields are absent on runs recorded before they were captured, so readers treat
+a missing value as "not recorded" rather than as empty settings.
+
+**Input and output rows** — `WorkflowExecutionInputsStorageTable` and
+`PipelineExecutionInputFilesStorageTable` record each selected input file with the concrete S3
+`versionId` the run read (empty for a folder or whole-asset selection, which have no single version).
+`PipelineExecutionOutputFilesStorageTable` records each produced file with its `relativeFilePath`,
+`s3VersionId` and size; `Output*Metadata` and `Output*Results` records carry metadata written back to the
+asset and results text from a results-only run. `PipelineExecutionLogsStorageTable` holds the per-step
+result and error logs.
+
 ### Authorization Tables
 
 #### Constraints Storage Table

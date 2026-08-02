@@ -26,7 +26,7 @@ const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
 }) => {
     const [open, setOpen] = useState(defaultOpen);
     return (
-        <section className="border border-border-default rounded-lg overflow-hidden">
+        <section className="orch-outline border border-border-default rounded-lg overflow-hidden">
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}

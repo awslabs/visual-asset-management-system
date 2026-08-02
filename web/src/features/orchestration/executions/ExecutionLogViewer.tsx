@@ -90,7 +90,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                         aria-label="Log scope"
                         value={scope}
                         onChange={(e) => setScope(e.target.value)}
-                        className="px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                        className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value={WHOLE_EXECUTION}>Whole execution</option>
                         {scopedPipelines.map((p, idx) => (
@@ -109,7 +109,7 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                         aria-label="Log source"
                         value={source}
                         onChange={(e) => setSource(e.target.value as LogSource)}
-                        className="px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                        className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value="full">Live (CloudWatch)</option>
                         <option value="truncated">Stored</option>
@@ -133,13 +133,13 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
 
             {loading ? (
                 <div className="flex items-center gap-2">
-                    <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 dark:border-blue-400" />
+                    <div className="orch-outline inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 dark:border-blue-400" />
                     <span>Loading logs…</span>
                 </div>
             ) : errorMsg ? (
                 <p className="text-vams-error text-sm">{errorMsg}</p>
             ) : logText ? (
-                <div className="border border-border-default rounded overflow-hidden">
+                <div className="orch-outline border border-border-default rounded overflow-hidden">
                     <ConfigEditor value={logText} language="plaintext" readOnly height="500px" />
                 </div>
             ) : (

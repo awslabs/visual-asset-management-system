@@ -410,7 +410,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 type="text"
                                 value={state.workflowIdValue}
                                 disabled
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
                             />
                         </div>
                     )}
@@ -432,7 +432,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                     value: e.target.value,
                                 })
                             }
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
@@ -453,7 +453,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                     value: e.target.value,
                                 })
                             }
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
@@ -474,7 +474,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 })
                             }
                             rows={3}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
@@ -495,7 +495,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                     value: e.target.value,
                                 })
                             }
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
                     </div>
                     <div>
@@ -613,7 +613,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
             {wizardStep === "review" && (
                 <div className="space-y-4">
-                    <div className="bg-surface-container border border-border-default rounded-lg p-4 space-y-2">
+                    <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-2">
                         <h2 className="text-base font-semibold text-text-primary">Review</h2>
                         <div className="text-sm text-text-primary grid grid-cols-1 md:grid-cols-2 gap-2">
                             <div>

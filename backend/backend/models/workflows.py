@@ -206,13 +206,6 @@ class WorkflowTriggerRecord(BaseModel, extra='ignore'):
     dateModified: Optional[str] = ""
 
 
-class WorkflowExecutionOutputIndexRecord(BaseModel, extra='ignore'):
-    """WorkflowExecutionOutputsIndexStorageTable row (PK databaseId:assetId, SK workflowExecutionId)."""
-    databaseId: str
-    assetId: str
-    workflowExecutionId: str
-
-
 #######################
 # Workflow API request / response models
 #######################
@@ -331,6 +324,24 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     # Total number of executions for this workflow. Present on list responses (computed per page
     # via a bounded COUNT query on the WorkflowExecutionsByWorkflowGSI); None when not computed.
     executionCount: Optional[int] = None
+    # How many triggers the workflow has, and how many of those are enabled. Present on list
+    # responses (one bounded triggers query per workflow on the page); None when not computed.
+    # The two differ when a trigger exists but is switched off, which is why both are reported —
+    # `triggerCount` alone cannot distinguish "no triggers" from "triggers, all disabled".
+    triggerCount: Optional[int] = None
+    triggersEnabledCount: Optional[int] = None
+    # The file restriction this workflow effectively imposes, computed server-side from the workflow's
+    # own inputFileFilters and (when those are open) its pipelines':
+    # {allow, exclude, source: 'workflow'|'pipelines', includesTemplateOverrides: false}.
+    #
+    # For DISPLAY only. `includesTemplateOverrides` is always false: a template is chosen per
+    # execution, so its `overrides` cannot be folded in here. A caller validating a concrete file
+    # selection must resolve the chain itself (workflow -> pipeline -> chosen template's overrides)
+    # rather than testing against this aggregate. None when not computed.
+    aggregateWorkflowPipelineInputFileFilters: Optional[Dict[str, Any]] = None
+    # The metadata inputs, input arity and output target the chain implies, for the same display
+    # purpose and with the same template-override caveat.
+    aggregateWorkflowPipelineMetadataInputs: Optional[Dict[str, Any]] = None
 
 
 class GetWorkflowsResponseModel(BaseModel, extra='ignore'):

@@ -38,6 +38,28 @@ function patternsMayOverlap(patternA: string, patternB: string): boolean {
     return ["*", "?", "["].some((ch) => a.includes(ch) || b.includes(ch));
 }
 
+/**
+ * The pipeline allow-patterns the workflow's EXCLUDE list would suppress (mirrors
+ * _excluded_pipeline_allows in common/workflows/executionValidation.py). Decidable only for
+ * extension-vs-extension comparisons; a wildcard on either side is left alone rather than guessed at,
+ * since a false warning on every glob-filtered workflow would train users to ignore the panel.
+ */
+function excludedPipelineAllows(
+    workflowExclude: string[] | undefined,
+    pipelineAllow: string[] | undefined
+): string[] {
+    const ext = (p: string) => p.toLowerCase().replace(/^\*/, "");
+    return (pipelineAllow || []).filter(
+        (allowed) =>
+            allowed &&
+            EXTENSION_PATTERN.test(allowed) &&
+            (workflowExclude || []).some(
+                (excluded) =>
+                    excluded && EXTENSION_PATTERN.test(excluded) && ext(excluded) === ext(allowed)
+            )
+    );
+}
+
 /** True when every pipeline reference names a pipeline (the picker starts each card empty). */
 export function allPipelineRefsSelected(refs?: { pipelineId?: string }[]): boolean {
     return !!refs && refs.every((ref) => !!ref.pipelineId);
@@ -151,9 +173,11 @@ export function validateWorkflow(
                 }
             });
 
-            // Disjoint allow-lists: everything the workflow admits, the pipeline filters out.
+            // Two independent ways the workflow's filters can starve this pipeline of its input.
             const workflowAllow = wf.systemConfig?.inputFileFilters?.allow || [];
             const pipelineAllow = pipeline.systemConfig?.inputFileFilters?.allow || [];
+
+            // (1) The workflow's allow-list admits nothing the pipeline accepts.
             if (
                 workflowAllow.length > 0 &&
                 pipelineAllow.length > 0 &&
@@ -161,6 +185,26 @@ export function validateWorkflow(
             ) {
                 warnings.push(
                     `Pipeline '${ref.pipelineId}' input-file filters may exclude everything the workflow filters allow`
+                );
+            }
+
+            // (2) The workflow EXCLUDES a type the pipeline accepts. Distinct from (1): the
+            // allow-lists can overlap perfectly and an exclude still removes the file afterwards,
+            // since exclude is applied second. Separate message because the fix is a different field.
+            const suppressed = excludedPipelineAllows(
+                wf.systemConfig?.inputFileFilters?.exclude,
+                pipelineAllow
+            );
+            if (suppressed.length > 0) {
+                const remaining = pipelineAllow.filter((p) => !suppressed.includes(p));
+                const detail =
+                    remaining.length === 0
+                        ? "leaving it no accepted input type"
+                        : `leaving it only ${remaining.join(", ")}`;
+                warnings.push(
+                    `Pipeline '${ref.pipelineId}' accepts ${suppressed.join(", ")} but the ` +
+                        `workflow's input-file filters exclude ` +
+                        `${suppressed.length === 1 ? "that" : "those"}, ${detail}`
                 );
             }
         });

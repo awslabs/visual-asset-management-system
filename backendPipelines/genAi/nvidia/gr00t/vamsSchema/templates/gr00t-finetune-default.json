@@ -3,7 +3,8 @@
     "templateName": "Default fine-tuning (SO-100 dual-cam)",
     "description": "Default NVIDIA Gr00t N1.5 3B fine-tuning configuration (so100_dualcam data config, 6000 steps, single GPU).",
     "configFormat": "json",
-    "configBody": "{\"datasetPath\":\"dataset\",\"dataConfig\":\"so100_dualcam\",\"baseModelPath\":\"nvidia/GR00T-N1.5-3B\",\"maxSteps\":\"6000\",\"batchSize\":\"32\",\"learningRate\":\"1e-4\",\"weightDecay\":\"1e-5\",\"warmupRatio\":\"0.05\",\"saveSteps\":\"2000\",\"numGpus\":\"1\",\"loraRank\":\"0\",\"loraAlpha\":\"16\",\"loraDropout\":\"0.1\",\"tuneLlm\":\"false\",\"tuneVisual\":\"false\",\"tuneProjector\":\"true\",\"tuneDiffusionModel\":\"true\",\"embodimentTag\":\"new_embodiment\",\"videoBackend\":\"torchvision_av\"}",
+    "configBody": "{\"mode\": \"finetune\", \"datasetPath\": \"dataset\", \"dataConfig\": \"so100_dualcam\", \"baseModelPath\": \"nvidia/GR00T-N1.5-3B\", \"maxSteps\": \"6000\", \"batchSize\": \"32\", \"learningRate\": \"1e-4\", \"weightDecay\": \"1e-5\", \"warmupRatio\": \"0.05\", \"saveSteps\": \"2000\", \"numGpus\": \"1\", \"loraRank\": \"0\", \"loraAlpha\": \"16\", \"loraDropout\": \"0.1\", \"tuneLlm\": \"false\", \"tuneVisual\": \"false\", \"tuneProjector\": \"true\", \"tuneDiffusionModel\": \"true\", \"embodimentTag\": \"new_embodiment\", \"videoBackend\": \"torchvision_av\"}",
     "allowCustomEdit": true,
+    "isDefault": true,
     "inputInstructions": "Tune the training hyperparameters (maxSteps, batchSize, learningRate, LoRA rank/alpha/dropout, which modules to tune) and the dataConfig / embodimentTag for your robot dataset. Asset metadata keys prefixed GROOT_* override these at run time."
 }

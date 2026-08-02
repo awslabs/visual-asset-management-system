@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from common.workflows import executionValidation as ev
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="PipelineV2Models")
@@ -46,6 +47,9 @@ _METADATA_INPUT_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes")
 # The only keys an inputFileFilters map may carry. An absent `allow` list means allow-all, so a
 # mistyped key would silently widen the filter instead of narrowing it.
 _INPUT_FILE_FILTER_KEYS = ("allow", "exclude")
+# Rejected in an exclude list (they would exclude every file); allowed in an allow list, where they
+# simply mean allow-all. Defined with the filter semantics in common/workflows/executionValidation.
+_MATCH_EVERYTHING_PATTERNS = ev.MATCH_EVERYTHING_PATTERNS
 
 
 def _validate_system_config_shape(cfg, context):
@@ -89,7 +93,13 @@ def _validate_system_config_shape(cfg, context):
 
 def _validate_input_file_filters(filters, context):
     """Validate an {allow, exclude} input-file-filter map: only those two keys, each a list of
-    strings. Raises ValueError on failure."""
+    strings. Raises ValueError on failure.
+
+    A match-everything pattern in `exclude` is rejected. Exclude is applied after allow, so a bare
+    '*' there excludes every file and makes the pipeline or workflow permanently unrunnable — always
+    an authoring mistake rather than an intent. An empty or absent exclude list is the way to express
+    'exclude nothing'. The same pattern in `allow` is fine: it means allow-all, which is also what an
+    absent allow list means."""
     if not isinstance(filters, dict):
         raise ValueError(f"{context} must be an object")
     for key in filters:
@@ -101,6 +111,11 @@ def _validate_input_file_filters(filters, context):
             lst = filters[list_key]
             if not isinstance(lst, list) or not all(isinstance(x, str) for x in lst):
                 raise ValueError(f"{context}.{list_key} must be a list of strings")
+    for pattern in filters.get("exclude") or []:
+        if pattern.strip() in _MATCH_EVERYTHING_PATTERNS:
+            raise ValueError(
+                f"{context}.exclude may not contain '{pattern.strip()}': it would exclude every "
+                "file. Use an empty exclude list to exclude nothing.")
 
 
 def _validate_template_overrides(overrides):

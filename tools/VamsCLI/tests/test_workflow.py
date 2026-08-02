@@ -109,6 +109,58 @@ class TestWorkflowCreate:
                 'workflow', 'create', '-d', 'my-db', '-n', 'X', '--pipeline', 'badref'])
             assert result.exit_code != 0
 
+    def test_create_with_job_name(self, cli_runner, generic_command_mocks):
+        # A job name becomes a folder in the step's output path, so it must be settable from the
+        # shorthand ref and not only through --specified-pipelines JSON.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].create_workflow.return_value = {'message': {'workflowId': 'gen'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'create', '-d', 'my-db', '-n', 'WF',
+                '--pipeline', 'global:conv:to-glb:convert-for-web'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].create_workflow.call_args.args[1]
+            assert body['specifiedPipelines'][0] == {
+                'pipelineDatabaseId': 'global', 'pipelineId': 'conv',
+                'defaultTemplateId': 'to-glb', 'jobName': 'convert-for-web'}
+
+    def test_create_with_job_name_and_no_default_template(self, cli_runner, generic_command_mocks):
+        # The segments are positional, so an empty third segment sets a job name without a template.
+        # defaultTemplateId must be ABSENT rather than empty — an empty string would be sent as a
+        # template id the backend then tries to resolve.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].create_workflow.return_value = {'message': {'workflowId': 'gen'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'create', '-d', 'my-db', '-n', 'WF',
+                '--pipeline', 'global:conv::convert-for-web'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].create_workflow.call_args.args[1]
+            assert body['specifiedPipelines'][0] == {
+                'pipelineDatabaseId': 'global', 'pipelineId': 'conv', 'jobName': 'convert-for-web'}
+
+    @pytest.mark.parametrize("ref", [
+        'db:pipe:tpl:job:extra',   # a 5th segment is not a ref shape the parser supports
+        ':pipe',                   # blank database
+        'db:',                     # blank pipeline
+    ])
+    def test_create_rejects_malformed_refs(self, ref, cli_runner, generic_command_mocks):
+        # Silently dropping the extra segment (or accepting a blank id) would create a workflow
+        # pointing somewhere the author did not intend.
+        with generic_command_mocks('workflow'):
+            result = cli_runner.invoke(cli, [
+                'workflow', 'create', '-d', 'my-db', '-n', 'X', '--pipeline', ref])
+            assert result.exit_code != 0
+
+    def test_json_pipeline_list_passes_through_verbatim(self, cli_runner, generic_command_mocks):
+        # --specified-pipelines stays the escape hatch for any field the shorthand cannot express.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].create_workflow.return_value = {'message': {'workflowId': 'gen'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'create', '-d', 'my-db', '-n', 'WF', '--specified-pipelines',
+                '[{"pipelineDatabaseId":"global","pipelineId":"conv","jobName":"step-one"}]'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].create_workflow.call_args.args[1]
+            assert body['specifiedPipelines'][0]['jobName'] == 'step-one'
+
     def test_create_invalid_data(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:
             mocks['api_client'].create_workflow.side_effect = InvalidWorkflowDataError("bad")
@@ -401,3 +453,78 @@ class TestWorkflowListExecutions:
             result = cli_runner.invoke(cli, [
                 'workflow', 'list-executions', '-d', 'my-db', '-a', 'bad'])
             assert result.exit_code != 0
+
+
+class TestWorkflowListTriggerCounts:
+    """The workflow list surfaces trigger counts and can filter on them."""
+
+    def test_has_triggers_filter_is_passed_through(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflows.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['workflow', 'list', '--has-triggers', 'true'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].list_workflows.call_args.kwargs['params']['hasTriggers'] == 'true'
+
+    def test_has_triggers_filter_is_passed_through_when_auto_paginating(self, cli_runner,
+                                                                       generic_command_mocks):
+        # The filter has to reach EVERY page request, not just the first — otherwise page 2 onward
+        # comes back unfiltered and the combined result silently includes non-matching workflows.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflows.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['workflow', 'list', '--has-triggers', 'false',
+                                             '--auto-paginate'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].list_workflows.call_args.kwargs['params']['hasTriggers'] == 'false'
+
+    def test_omitting_the_filter_sends_no_param(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflows.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, ['workflow', 'list'])
+            assert result.exit_code == 0
+            assert 'hasTriggers' not in mocks['api_client'].list_workflows.call_args.kwargs['params']
+
+    def test_an_invalid_filter_value_is_rejected_by_click(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            result = cli_runner.invoke(cli, ['workflow', 'list', '--has-triggers', 'maybe'])
+            assert result.exit_code != 0
+            mocks['api_client'].list_workflows.assert_not_called()
+
+    def test_counts_are_rendered(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflows.return_value = {'message': {'Items': [
+                {'workflowId': 'wf1', 'triggerCount': 2, 'triggersEnabledCount': 2},
+            ]}}
+            result = cli_runner.invoke(cli, ['workflow', 'list'])
+            assert result.exit_code == 0
+            assert 'Triggers: 2' in result.output
+
+    def test_a_partly_disabled_trigger_set_says_so(self, cli_runner, generic_command_mocks):
+        # "2 (1 enabled)" is the state that explains a workflow that looks configured but only
+        # partly fires; rendering just "2" would hide it.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflows.return_value = {'message': {'Items': [
+                {'workflowId': 'wf1', 'triggerCount': 2, 'triggersEnabledCount': 1},
+            ]}}
+            result = cli_runner.invoke(cli, ['workflow', 'list'])
+            assert result.exit_code == 0
+            assert 'Triggers: 2 (1 enabled)' in result.output
+
+    def test_zero_triggers_is_shown_rather_than_omitted(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflows.return_value = {'message': {'Items': [
+                {'workflowId': 'wf1', 'triggerCount': 0, 'triggersEnabledCount': 0},
+            ]}}
+            result = cli_runner.invoke(cli, ['workflow', 'list'])
+            assert result.exit_code == 0
+            assert 'Triggers: 0' in result.output
+
+    def test_a_details_response_still_lists_the_trigger_types(self, cli_runner,
+                                                             generic_command_mocks):
+        # `workflow get` returns the trigger rows themselves; those keep taking precedence over the
+        # counts so the detail view still names each trigger type.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].get_workflow.return_value = {'message': {
+                'workflowId': 'wf1', 'triggers': [{'triggerType': 'fileUpload'}]}}
+            result = cli_runner.invoke(cli, ['workflow', 'get', '-d', 'db1', '-w', 'wf1'])
+            assert result.exit_code == 0
+            assert 'Triggers: fileUpload' in result.output

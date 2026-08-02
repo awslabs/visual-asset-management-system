@@ -258,3 +258,180 @@ describe("WorkflowsPage", () => {
         expect(screen.queryByText("View Executions")).not.toBeInTheDocument();
     });
 });
+
+/**
+ * Trigger counts and the trigger facet.
+ *
+ * The list has to answer "will this workflow fire on its own?" at a glance. A raw count cannot: a
+ * workflow with two triggers that are both switched off looks identical to one with two live
+ * triggers, and that is exactly the state behind "why did nothing run?".
+ */
+describe("WorkflowsPage trigger counts", () => {
+    let queryClient: QueryClient;
+
+    const wf = (over: any) => ({
+        workflowId: "wf-x",
+        workflowName: "WF X",
+        databaseId: "db1",
+        category: "Processing",
+        enabled: true,
+        archived: false,
+        specifiedPipelines: [],
+        ...over,
+    });
+
+    const renderWith = (items: any[]) => {
+        const { useWorkflows, useWorkflowMutations } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useWorkflows.mockReturnValue(infinite(items));
+        useWorkflowMutations.mockReturnValue({ archiveWorkflow: { mutateAsync: jest.fn() } });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: () => true });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <WorkflowsPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+    });
+
+    it("shows the trigger count", () => {
+        renderWith([wf({ triggerCount: 3, triggersEnabledCount: 3 })]);
+        expect(screen.getByText(/Triggers: 3/)).toBeInTheDocument();
+        // Nothing is off, so no qualifier is added.
+        expect(screen.queryByText(/on\)/)).not.toBeInTheDocument();
+    });
+
+    it("flags a partly-disabled trigger set", () => {
+        renderWith([wf({ triggerCount: 3, triggersEnabledCount: 1 })]);
+        expect(screen.getByText(/Triggers: 3/)).toBeInTheDocument();
+        expect(screen.getByText(/\(1 on\)/)).toBeInTheDocument();
+    });
+
+    it("shows zero rather than omitting the label", () => {
+        // Absent would be ambiguous with "the backend did not report counts".
+        renderWith([wf({ triggerCount: 0, triggersEnabledCount: 0 })]);
+        expect(screen.getByText(/Triggers: 0/)).toBeInTheDocument();
+    });
+
+    it("omits the row label entirely when the backend reported no counts", () => {
+        // Scoped to the row's "Triggers: <n>" text — the facet select also renders the word
+        // "Triggers" (as its aria-label and its "Triggers: All" option), which is always present.
+        renderWith([wf({})]);
+        expect(screen.queryByText(/Triggers: \d/)).not.toBeInTheDocument();
+    });
+
+    it("treats a response with only a total as fully enabled", () => {
+        // Defensive: a count without the enabled split must not render as "all off".
+        renderWith([wf({ triggerCount: 2 })]);
+        expect(screen.getByText(/Triggers: 2/)).toBeInTheDocument();
+        expect(screen.queryByText(/on\)/)).not.toBeInTheDocument();
+    });
+
+    it("offers a Triggers filter facet", () => {
+        renderWith([wf({ triggerCount: 1, triggersEnabledCount: 1 })]);
+        const facet = screen.getByLabelText("Triggers");
+        const values = Array.from(facet.querySelectorAll("option")).map((o) =>
+            o.getAttribute("value")
+        );
+        expect(values).toEqual(expect.arrayContaining(["", "enabled", "disabled", "none"]));
+    });
+
+    it("filters to workflows with an enabled trigger", async () => {
+        renderWith([
+            wf({
+                workflowId: "wf-live",
+                workflowName: "Live",
+                triggerCount: 1,
+                triggersEnabledCount: 1,
+            }),
+            wf({
+                workflowId: "wf-off",
+                workflowName: "AllOff",
+                triggerCount: 2,
+                triggersEnabledCount: 0,
+            }),
+            wf({
+                workflowId: "wf-none",
+                workflowName: "NoTriggers",
+                triggerCount: 0,
+                triggersEnabledCount: 0,
+            }),
+        ]);
+        await userEvent.selectOptions(screen.getByLabelText("Triggers"), "enabled");
+        expect(screen.getByText("Live")).toBeInTheDocument();
+        expect(screen.queryByText("AllOff")).not.toBeInTheDocument();
+        expect(screen.queryByText("NoTriggers")).not.toBeInTheDocument();
+    });
+
+    it("filters to workflows whose triggers are all off", async () => {
+        renderWith([
+            wf({
+                workflowId: "wf-live",
+                workflowName: "Live",
+                triggerCount: 1,
+                triggersEnabledCount: 1,
+            }),
+            wf({
+                workflowId: "wf-off",
+                workflowName: "AllOff",
+                triggerCount: 2,
+                triggersEnabledCount: 0,
+            }),
+            wf({
+                workflowId: "wf-none",
+                workflowName: "NoTriggers",
+                triggerCount: 0,
+                triggersEnabledCount: 0,
+            }),
+        ]);
+        await userEvent.selectOptions(screen.getByLabelText("Triggers"), "disabled");
+        // "All off" means triggers EXIST but none fire — a workflow with no triggers is a different
+        // state and must not be swept in.
+        expect(screen.getByText("AllOff")).toBeInTheDocument();
+        expect(screen.queryByText("Live")).not.toBeInTheDocument();
+        expect(screen.queryByText("NoTriggers")).not.toBeInTheDocument();
+    });
+
+    it("filters to workflows with no triggers", async () => {
+        renderWith([
+            wf({
+                workflowId: "wf-live",
+                workflowName: "Live",
+                triggerCount: 1,
+                triggersEnabledCount: 1,
+            }),
+            wf({
+                workflowId: "wf-none",
+                workflowName: "NoTriggers",
+                triggerCount: 0,
+                triggersEnabledCount: 0,
+            }),
+        ]);
+        await userEvent.selectOptions(screen.getByLabelText("Triggers"), "none");
+        expect(screen.getByText("NoTriggers")).toBeInTheDocument();
+        expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    });
+
+    it("keeps a workflow whose counts are unknown rather than hiding it", async () => {
+        // The counts are best-effort server-side; a read failure must not make a workflow vanish
+        // from a filtered list.
+        renderWith([
+            wf({ workflowId: "wf-unknown", workflowName: "Unknown" }),
+            wf({
+                workflowId: "wf-none",
+                workflowName: "NoTriggers",
+                triggerCount: 0,
+                triggersEnabledCount: 0,
+            }),
+        ]);
+        await userEvent.selectOptions(screen.getByLabelText("Triggers"), "enabled");
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+        expect(screen.queryByText("NoTriggers")).not.toBeInTheDocument();
+    });
+});

@@ -18,12 +18,24 @@ GET /workflows
 
 ### Query parameters
 
-| Parameter         | Type   | Required | Default | Description                             |
-| ----------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`        | number | No       | `100`   | Maximum number of items to return       |
-| `pageSize`        | number | No       | `100`   | Number of items per page                |
-| `startingToken`   | string | No       | `null`  | Pagination token from previous response |
-| `includeArchived` | string | No       | `false` | Include archived workflows              |
+| Parameter         | Type   | Required | Default | Description                                                                                                                                                      |
+| ----------------- | ------ | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxItems`        | number | No       | `100`   | Maximum number of items to return                                                                                                                                |
+| `pageSize`        | number | No       | `100`   | Number of items per page                                                                                                                                         |
+| `startingToken`   | string | No       | `null`  | Pagination token from previous response                                                                                                                          |
+| `includeArchived` | string | No       | `false` | Include archived workflows                                                                                                                                       |
+| `hasTriggers`     | string | No       | --      | `true` returns only workflows with at least one **enabled** trigger; `false` only those with none. Any other value is rejected with a `400` rather than ignored. |
+
+Each returned workflow carries `triggerCount` and `triggersEnabledCount`. Both are reported because they
+differ when a trigger exists but is switched off — the state behind a workflow that looks configured yet
+never fires. They are best-effort: a workflow whose triggers could not be read returns `null` for both
+and is never dropped from a filtered result.
+
+:::note[Filtering happens after the page is read]
+Triggers live in their own table, so "has an enabled trigger" is not expressible as a condition on the
+workflow record. A filtered page can therefore return fewer items than `pageSize` while still reporting a
+`NextToken` — page until the token is absent, exactly as with the authorization filter.
+:::
 
 ### Response
 
@@ -59,7 +71,9 @@ GET /workflows
                 "workflow_arn": "arn:aws:states:us-east-1:123456789012:stateMachine:vams-convert-and-preview",
                 "dateCreated": "2026-03-15T10:30:00Z",
                 "dateModified": "2026-03-16T14:20:00Z",
-                "executionCount": 42
+                "executionCount": 42,
+                "triggerCount": 1,
+                "triggersEnabledCount": 1
             }
         ],
         "NextToken": null
@@ -96,9 +110,10 @@ GET /database/{databaseId}/workflows
 
 Same as [List all workflows](#list-all-workflows), plus:
 
-| Parameter         | Type   | Required | Default | Description                |
-| ----------------- | ------ | -------- | ------- | -------------------------- |
-| `includeArchived` | string | No       | `false` | Include archived workflows |
+| Parameter         | Type   | Required | Default | Description                                                      |
+| ----------------- | ------ | -------- | ------- | ---------------------------------------------------------------- |
+| `includeArchived` | string | No       | `false` | Include archived workflows                                       |
+| `hasTriggers`     | string | No       | --      | Filter on enabled triggers (`true`/`false`), as described above. |
 
 :::note[Archived workflows]
 Archived workflows are hidden by default. Set `includeArchived=true` to include workflows whose `archived` flag is set.
@@ -463,11 +478,11 @@ PUT /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Request body
 
-| Field                | Type    | Required | Description                                                                                                                                              |
-| -------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileFilters`   | object  | No       | `allow` and `exclude` arrays matching by extension (`*.glb`), path, name, or wildcard (`*.previewFile.*`); case-insensitive. Omitted means no filtering. |
-| `defaultTemplateIds` | object  | No       | Template used for each included pipeline when the trigger launches, keyed by `<pipelineDatabaseId>:<pipelineId>`.                                        |
-| `enabled`            | boolean | No       | Whether the trigger is enabled (default `true`).                                                                                                         |
+| Field                | Type    | Required | Description                                                                                                                                                                                                                                                                                                      |
+| -------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileFilters`   | object  | No       | `allow` and `exclude` arrays matching by extension (`*.glb`), path, name, or wildcard (`*.previewFile.*`); case-insensitive. Omitted means the trigger fires on any uploaded file. Follows the same rules as [Input-file filters](#input-file-filters), including the rejection of a match-everything `exclude`. |
+| `defaultTemplateIds` | object  | No       | Template used for each included pipeline when the trigger launches, keyed by `<pipelineDatabaseId>:<pipelineId>`.                                                                                                                                                                                                |
+| `enabled`            | boolean | No       | Whether the trigger is enabled (default `true`).                                                                                                                                                                                                                                                                 |
 
 #### Request body example
 
@@ -556,7 +571,17 @@ The `specifiedPipelines` array lists, in order, the pipelines a workflow runs. E
 | -------------------- | ------ | -------- | -------------------------------------------------------------------------------- |
 | `pipelineId`         | string | Yes      | Identifier of the referenced pipeline.                                           |
 | `pipelineDatabaseId` | string | No       | Database that owns the referenced pipeline. Defaults to the workflow's database. |
-| `jobName`            | string | No       | Label for this pipeline step within the workflow.                                |
+| `jobName`            | string | No       | Label for this pipeline step within the workflow. See below.                     |
+
+A `jobName` names the step in the workflow's state machine and becomes a segment of the step's output paths (`pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`). When empty or omitted, the pipeline's id is used in its place, so each step's outputs stay in a distinct folder — omitting it is the normal choice.
+
+Supply one when the pipeline id alone would not identify the step: a general-purpose pipeline used for a narrower purpose in this workflow, a pipeline whose id is generated or abbreviated, or output that downstream tooling locates by S3 prefix and therefore benefits from a stable, meaningful folder name.
+
+The value is 3–63 characters of letters, numbers, hyphens, and underscores. It is a fixed label rather than a template: `{{tag}}` placeholders are not substituted in a `jobName` and are rejected, because the name is written into the state machine when the workflow is deployed rather than resolved per execution. Use the workflow's `defaultOutputFileBaseExecutionPathExtension`, or an execution's `outputFileBaseExecutionPathExtension`, to vary the output path per run.
+
+:::warning[A job name is part of the output path]
+Changing a `jobName` on an existing workflow redirects where subsequent output is written. Output already written remains at its original path, splitting the workflow's history across two folders.
+:::
 
 ## System configuration
 
@@ -567,11 +592,40 @@ The `systemConfig` object describes how a workflow consumes input, which asset s
 | `inputFileArity`                              | string  | Number of input files the workflow consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                      |
 | `assetScope`                                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections. See [Asset scope](#asset-scope).                                                                                                                                                                                                                                                                        |
 | `metadataInputs`                              | object  | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is gathered from the input assets/files and passed to the pipelines.                                                                                                                                                                                                                                                                                     |
-| `inputFileFilters`                            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path (`/models/x.glb`), file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. A non-empty `allow` restricts inputs to matching files; `exclude` removes matches and takes precedence over `allow`.                                                                               |
+| `inputFileFilters`                            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path (`/models/x.glb`), file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. See [Input-file filters](#input-file-filters).                                                                                                                                                     |
 | `concurrencyRestriction`                      | string  | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                                                                                                                                                                                                            |
 | `outputTarget`                                | object  | Where the workflow writes its output. See [Output target](#output-target).                                                                                                                                                                                                                                                                                                                                                               |
 | `allowWorkflowTriggerChaining`                | boolean | Whether a file written by **another** workflow's execution may fire this workflow's triggers -- for example generating a preview or metadata from a conversion pipeline's output. A workflow never fires on output it wrote itself, whatever this is set to, so it cannot re-trigger itself in a loop. A chained file must still match the trigger's `inputFileFilters`. Defaults to `false`. See [Trigger chaining](#trigger-chaining). |
 | `defaultOutputFileBaseExecutionPathExtension` | string  | The output path prefix an execution uses when its request supplies none. Stored **unresolved**, so `{{tag}}` placeholders resolve per run — one stored `/{{jobName}}/` gives every execution its own output folder. Empty means no default. See [Output path prefix](#output-path-prefix).                                                                                                                                               |
+
+### Input-file filters
+
+Both lists in an `inputFileFilters` block are optional, and an absent list is not the same as an empty match:
+
+| List      | Meaning                                                                                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allow`   | Eligible file types. Omitted, empty, or a match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) means every file is eligible **at that level**. |
+| `exclude` | Files removed from that set, applied after `allow` so an exclusion always wins. Omitted or empty excludes nothing.                                 |
+
+A filter therefore only ever narrows eligibility, never grants it.
+
+A match-everything pattern in an `exclude` list is **rejected** when the pipeline, template, workflow, or trigger is saved: because `exclude` is applied last, it would remove every file and leave the pipeline or workflow permanently unable to run. Leave the list empty to exclude nothing.
+
+Filters resolve down a three-level chain, and an open list defers to the next level:
+
+1. **Workflow** — when its `allow` list names specific types, that list bounds the whole execution and no pipeline can widen it. When it is open, eligibility comes from the pipelines instead, where a file is eligible if **any** step accepts it.
+2. **Pipeline** — what that individual step accepts.
+3. **Template `overrides.inputFileFilters`** — replaces its pipeline's list entirely for executions using that template.
+
+`exclude` lists accumulate across all three levels.
+
+At execute time the selected files are narrowed by the workflow's filters first, and each pipeline is then checked against that narrowed set. If any pipeline is left without the input it requires, the request is rejected rather than launching a step that cannot run.
+
+A workflow response also reports `aggregateWorkflowPipelineInputFileFilters`, the restriction the workflow effectively imposes, with `source` naming whether it came from the workflow or its pipelines.
+
+:::note[The aggregate excludes template overrides]
+`includesTemplateOverrides` is always `false` — a template is chosen per execution, so its overrides cannot be known in advance. Use the aggregate to describe a workflow, and resolve the full chain including the chosen template when validating a specific file selection.
+:::
 
 ### Asset scope
 
@@ -698,15 +752,15 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 
 ### Request body
 
-| Field                                  | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFiles`                           | array  | No       | Selected input files (`0..N`; arity is enforced against the workflow/pipeline configuration). Each item has `databaseId`, `assetId`, `relativeFileKey`, and optional `versionId`.                                                                                                                                                                                                                                                                                   |
-| `outputAssetId`                        | string | No       | Output asset. Honored whenever the input files do not resolve to a single input asset (regardless of override); for a single input asset only when the workflow's `outputTarget` allows override, otherwise the output is locked to the input asset. Omit for a results-only workflow. See [Output target](#output-target).                                                                                                                                         |
-| `outputDatabaseId`                     | string | No       | Output database. When the input files resolve to zero or multiple assets, supply it together with `outputAssetId`. For a single-input-asset override it falls back to the input asset's database when omitted.                                                                                                                                                                                                                                                      |
-| `outputFileBaseExecutionPathExtension` | string | No       | Base path (under the output asset) that output files are written beneath, inserted immediately before each output file's own name. May contain dynamic tag placeholders (e.g. `{{firstAssetFileFileNameNoExt}}`) resolved at launch. **Omit** to inherit the workflow's `defaultOutputFileBaseExecutionPathExtension`; send `""` or `/` to write at the asset root regardless. Must not contain `..` or backslashes. See [Output path prefix](#output-path-prefix). |
-| `pipelineExecutionParameters`          | object | No       | Per-pipeline execution parameters, keyed by `pipelineId`. Each value may set `templateId`, `templateTags`, or a `customTemplateOverride`.                                                                                                                                                                                                                                                                                                                           |
-| `executionGroupId`                     | string | No       | Group id for bulk grouping / abort-by-group.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `triggerType`                          | string | No       | `manual` (default) or `fileUpload`.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Field                                  | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFiles`                           | array  | No       | Selected input files (`0..N`; arity is enforced against the workflow/pipeline configuration). Each item has `databaseId`, `assetId`, `relativeFileKey`, and optional `versionId`. `versionId` is the **S3 object version of that file** (as returned by `GET /database/{databaseId}/assets/{assetId}/fileInfo?includeVersions=true`), not an asset version number; omit it to read whatever version is current when the execution launches. A `versionId` that names no readable version of the key — including a value from the asset-version list — is reported as a missing input. |
+| `outputAssetId`                        | string | No       | Output asset. Honored whenever the input files do not resolve to a single input asset (regardless of override); for a single input asset only when the workflow's `outputTarget` allows override, otherwise the output is locked to the input asset. Omit for a results-only workflow. See [Output target](#output-target).                                                                                                                                                                                                                                                           |
+| `outputDatabaseId`                     | string | No       | Output database. When the input files resolve to zero or multiple assets, supply it together with `outputAssetId`. For a single-input-asset override it falls back to the input asset's database when omitted.                                                                                                                                                                                                                                                                                                                                                                        |
+| `outputFileBaseExecutionPathExtension` | string | No       | Base path (under the output asset) that output files are written beneath, inserted immediately before each output file's own name. May contain dynamic tag placeholders (e.g. `{{firstAssetFileFileNameNoExt}}`) resolved at launch. **Omit** to inherit the workflow's `defaultOutputFileBaseExecutionPathExtension`; send `""` or `/` to write at the asset root regardless. Must not contain `..` or backslashes. See [Output path prefix](#output-path-prefix).                                                                                                                   |
+| `pipelineExecutionParameters`          | object | No       | Per-pipeline execution parameters, keyed by `pipelineId`. Each value may set `templateId`, `templateTags`, or a `customTemplateOverride`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `executionGroupId`                     | string | No       | Group id for bulk grouping / abort-by-group.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `triggerType`                          | string | No       | `manual` (default) or `fileUpload`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 `relativeFileKey` is asset-relative (leading `/`); `/` selects the whole asset and `/folder/` a folder.
 
@@ -765,7 +819,9 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 
 ## List workflow executions for an asset
 
-Retrieves execution history for workflows on a specific asset.
+Retrieves execution history for workflows on a specific asset, in both directions: executions that read the asset as an **input** and executions whose **output target** was the asset. A conversion that wrote a file into this asset without reading anything from it therefore appears here alongside the runs that consumed it.
+
+Both directions are merged into one listing ordered newest-first by `executionStartDate`, so a run that wrote into the asset appears in date order among the runs that read from it. An execution that both read from and wrote to the asset is returned once.
 
 ```
 GET /database/{databaseId}/assets/{assetId}/workflows/executions
@@ -1145,6 +1201,8 @@ Each entry also carries `pipelineType`, which reports the referenced pipeline's 
 :::note[Traceability, not internals]
 The response is scoped to input/output traceability. Internal details — Step Functions and resource ARNs, temporary and auxiliary S3 input/output locations, and credential-vending fields — are intentionally omitted. Output file size and content type are included when still available; a lifecycle policy may expire temporary output files, in which case only the relative path and type are returned.
 
+The `outputs` collections list what the execution wrote to its output **asset**. Files a pipeline writes to the **auxiliary** location are not recorded and are absent from the response, including special preview-file locations — they are working and viewer-support files rather than tracked asset outputs.
+
 Each input file carries the concrete S3 `versionId` the run read, resolved when the execution launched — the exact version processed. It is empty for folder or whole-asset selections, which have no single version.
 
 For executions whose output target is an asset, each output file carries the target asset identity — `assetId` and `databaseId` — derived from the execution's output target. When a matching file version-history record exists, `assetFileVersionId` is also added, identifying the specific S3 file version the execution wrote. `assetFileVersionId` is absent for outputs with no history record (for example, executions that ran before file version history was recorded).
@@ -1234,12 +1292,34 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
         "subProcessEvents": [
             { "timestamp": 1718496000000, "message": "...", "logGroupArn": "..." }
         ],
+        "warnings": [],
         "nextToken": null
     }
 }
 ```
 
-For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries any logs the pipeline registered, plus — for a pipeline step that runs its own Step Functions sub-execution — that sub-execution's history and the resolved log group of its state machine.
+For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries three kinds of log, merged and sorted together:
+
+| Source                    | What it is                                                                                                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Step invocation log       | The log of the resource the workflow's state machine invoked for this step — for a `Lambda` step, that function's own CloudWatch log group. Derived from the step's recorded execution type and resource, so a pipeline does not register it. |
+| Registered logs           | Any log location the pipeline reported for itself while running (`registeredLogs`).                                                                                                                                                           |
+| Registered sub-executions | For a step that runs its own Step Functions sub-execution: that sub-execution's history, plus the resolved log group of its state machine.                                                                                                    |
+
+The step invocation log is what holds the reason a launch failed before the pipeline's own logging started. Only execution types with a log group that can be derived have one:
+
+| Execution type  | Step invocation log                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------------- |
+| `Lambda`        | Yes — the invoked function's log group                                                          |
+| `SQS`           | No — a queue has no invocation log; the consumer's log is a separate resource VAMS does not own |
+| `EventBridge`   | No — a bus does not log deliveries by default                                                   |
+| `DeadlineCloud` | No — session logs are reachable through the job rather than a derivable CloudWatch group        |
+
+`warnings` is present only when a log could not be read — a missing permission on one group, or a registration list longer than the per-request cap. Each entry names the log in question. A warning never fails the request: the logs that could be read are still returned.
+
+:::note[Redaction]
+Every log string in the response passes through credential redaction first, so an inline token, AWS key, or JWT in a log message is masked before it reaches the caller.
+:::
 
 :::note[Scope]
 A full-mode CloudWatch search is always restricted to the requested execution within the shared workflow log group. When `pipelineExecutionId` is supplied, the search is further restricted to that single pipeline execution — logs from other pipelines or executions are never returned.

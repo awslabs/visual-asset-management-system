@@ -132,6 +132,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/rapidpipeline",
                         "pipelines/model-ops",
                         "pipelines/custom-pipelines",
+                        "pipelines/migrating-pipelines-v25-to-v26",
                     ],
                 },
                 {

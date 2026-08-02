@@ -4126,7 +4126,7 @@ paths:
                                                 description: "Asset-relative file key (leading /); '/' selects the whole asset, '/folder/' a folder."
                                             versionId:
                                                 type: string
-                                                description: "Optional asset file version (latest when empty)."
+                                                description: "Optional S3 object version of this file, as returned by GET /database/{databaseId}/assets/{assetId}/fileInfo?includeVersions=true. NOT an asset version number. Empty reads whatever version is current when the execution launches. A value that names no readable version of the key is reported as a missing input."
                                         required:
                                             - databaseId
                                             - assetId
@@ -7326,6 +7326,7 @@ paths:
     /workflows:
         get:
             summary: "List all workflows."
+            description: "Each item reports triggerCount and triggersEnabledCount (both null when the workflow's triggers could not be read). The two differ when a trigger exists but is disabled — the state behind a workflow that looks configured yet never fires. hasTriggers filters on the ENABLED count. Because triggers live in a separate table, the filter is applied after the page is read, so a filtered page may return fewer items than pageSize while still reporting a NextToken; page until the token is absent."
             responses:
                 "200":
                     description: OK
@@ -7354,6 +7355,13 @@ paths:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
+              - in: query
+                name: hasTriggers
+                required: false
+                schema:
+                    type: string
+                    enum: [true, false]
+                description: "true returns only workflows with at least one ENABLED trigger; false only those with none. Any other value is rejected with a 400 rather than silently ignored."
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
@@ -7504,7 +7512,7 @@ paths:
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents (registered logs plus, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group). Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges three sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
             parameters:
               - in: path
                 name: executionId
@@ -9247,17 +9255,32 @@ components:
                 file name, or wildcard ("*.previewFile.*", "/models/*"). Matching is case-insensitive.
                 A non-empty allow restricts inputs to matching files; exclude removes matches and takes
                 precedence over allow.
+
+
+                Both lists are optional. An omitted, empty, or match-everything allow list places NO
+                restriction at that level and defers to the next level of the chain
+                (workflow -> pipeline -> the chosen template's overrides); an omitted or empty exclude
+                list excludes nothing. A filter therefore only ever narrows eligibility, never grants it.
+                The same rules apply to a workflow trigger's filters.
             properties:
                 allow:
                     type: array
                     items:
                         type: string
-                    description: 'Patterns eligible as inputs (e.g. ["*.glb", "*.obj"]). Empty means allow all.'
+                    description: >-
+                        Patterns eligible as inputs (e.g. ["*.glb", "*.obj"]). Omitted, empty, or a
+                        match-everything pattern ("*", "**", "*.*", "/*", "/**") means every file is
+                        eligible at this level, deferring the decision to the next level down.
                 exclude:
                     type: array
                     items:
                         type: string
-                    description: 'Patterns removed from the input set (applied after allow).'
+                    description: >-
+                        Patterns removed from the input set, applied AFTER allow so an exclusion always
+                        wins. A match-everything pattern ("*", "**", "*.*", "/*", "/**") is REJECTED on
+                        save at every level (pipeline, template overrides, workflow, trigger): it would
+                        remove every file and leave the pipeline or workflow unable to run. Omit the list
+                        or leave it empty to exclude nothing.
         pipelineSystemConfig:
             type: object
             description: "Input handling and templating defaults for a pipeline."
@@ -9618,7 +9641,7 @@ components:
                     description: "Database that owns the referenced pipeline. Defaults to the workflow's database when omitted."
                 jobName:
                     type: string
-                    description: "Optional label for this pipeline step within the workflow."
+                    description: "Optional label for this pipeline step. Names the step in the workflow's state machine and becomes the {jobName} segment of the step's output paths (pipelines/{pipelineName}/{jobName}/output/{executionId}/files/). Empty or omitted falls back to the pipelineId, keeping each step's outputs in a distinct folder. 3-63 characters of letters, numbers, hyphens and underscores: a FIXED label, not a template - {{tag}} placeholders are NOT substituted here and are rejected, because the name is baked into the state machine at deploy time rather than resolved per run. Use the workflow's defaultOutputFileBaseExecutionPathExtension (or an execution's outputFileBaseExecutionPathExtension) to vary the output path per run."
             required:
                 - pipelineId
         workflowOutputTarget:
@@ -9725,6 +9748,72 @@ components:
                     type: integer
                     nullable: true
                     description: "Total number of executions recorded for the workflow. Present on list responses; null when not computed."
+                triggerCount:
+                    type: integer
+                    nullable: true
+                    description: "How many triggers the workflow has. Present on list responses; null when the triggers could not be read (best-effort, so such a workflow is never dropped from a filtered result)."
+                triggersEnabledCount:
+                    type: integer
+                    nullable: true
+                    description: "How many of the workflow's triggers are enabled. Differs from triggerCount when a trigger exists but is switched off — the state behind a workflow that looks configured yet never fires. Present on list responses; null when not computed."
+                aggregateWorkflowPipelineInputFileFilters:
+                    type: object
+                    nullable: true
+                    description: >-
+                        The file restriction this workflow effectively imposes, computed server-side.
+                        When the workflow's own allow list names specific types, that list is returned
+                        (source "workflow"); when it is open, the referenced pipelines' allow lists are
+                        combined instead (source "pipelines"). Exclude lists are combined across the
+                        workflow and every pipeline.
+
+
+                        FOR DISPLAY ONLY. includesTemplateOverrides is always false: a template is
+                        chosen per execution, so its overrides cannot be folded in here. Resolve the
+                        full chain (workflow -> pipeline -> chosen template) when validating a concrete
+                        file selection rather than testing against this value.
+                    properties:
+                        allow:
+                            type: array
+                            items:
+                                type: string
+                            description: "Effective allow patterns; empty means every file type is accepted."
+                        exclude:
+                            type: array
+                            items:
+                                type: string
+                            description: "Effective exclude patterns; empty means nothing is excluded."
+                        source:
+                            type: string
+                            enum: ["workflow", "pipelines"]
+                            description: "Which level the allow list came from."
+                        includesTemplateOverrides:
+                            type: boolean
+                            description: "Always false — template overrides are not represented."
+                aggregateWorkflowPipelineMetadataInputs:
+                    type: object
+                    nullable: true
+                    description: >-
+                        The metadata inputs the workflow's steps actually receive. A type is delivered
+                        only when the workflow gate enables it AND some pipeline asks for it, so a type
+                        the workflow gates off reads false however many pipelines want it.
+                        gatedOffByWorkflow names the types a pipeline asked for but the workflow
+                        suppresses, meaning that pipeline runs without them. Carries the same
+                        template-override caveat as the filter aggregate.
+                    properties:
+                        assetMetadata:
+                            type: boolean
+                        fileMetadata:
+                            type: boolean
+                        fileAttributes:
+                            type: boolean
+                        gatedOffByWorkflow:
+                            type: array
+                            items:
+                                type: string
+                            description: "Metadata types a pipeline uses but the workflow does not provide."
+                        includesTemplateOverrides:
+                            type: boolean
+                            description: "Always false — template overrides are not represented."
                 triggers:
                     type: array
                     description: "The workflow's configured triggers."

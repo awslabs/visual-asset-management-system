@@ -38,7 +38,7 @@ const DatabasePickerDialog: React.FC<DatabasePickerDialogProps> = ({
                 <>
                     <button
                         onClick={() => onOpenChange(false)}
-                        className="px-4 py-2 rounded border border-border-default text-text-primary hover:bg-surface-hover"
+                        className="orch-outline px-4 py-2 rounded border border-border-default text-text-primary hover:bg-surface-hover"
                     >
                         Cancel
                     </button>
@@ -64,7 +64,7 @@ const DatabasePickerDialog: React.FC<DatabasePickerDialogProps> = ({
                     <select
                         value={selected}
                         onChange={(e) => setSelected(e.target.value)}
-                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                        className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value="">Select a database…</option>
                         {/* GLOBAL is a valid create target (cross-database pipelines/workflows) but is

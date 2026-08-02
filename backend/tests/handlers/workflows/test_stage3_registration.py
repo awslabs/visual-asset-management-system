@@ -316,14 +316,14 @@ class TestAbortRegisteredSubExecutions:
         assert "warnings" in body
         assert any("arn:ex:denied" in w for w in body["warnings"])
 
-    def test_abort_warns_for_not_yet_abortable_resource_type(self):
-        # A registered Batch job is tracked but not abortable today: it must NOT be sent to
-        # StopExecution, the abort still succeeds, and a non-fatal warning names what was left
-        # running.
+    def test_abort_terminates_a_registered_batch_job(self):
+        # A pipeline that submits its OWN Batch job registers it as resourceType batchJob.
+        # Nothing else stops that job (Step Functions owns only jobs submitted through the
+        # `.sync` integration), so abort must call TerminateJob or the job keeps running.
         prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
                 "executionStatus": "RUNNING", "executionStopDate": "",
                 "registeredSubExecutions": [
-                    {"resourceType": "batchJob", "jobArn": "arn:batch:job:777"}]}
+                    {"resourceType": "batchJob", "jobId": "batch-job-777"}]}
         pexec_table = MagicMock()
         main_table = MagicMock()
 
@@ -337,6 +337,7 @@ class TestAbortRegisteredSubExecutions:
              patch.object(le, "get_asset_details", return_value={"assetId": "a1", "databaseId": "dbx"}), \
              patch.object(le, "get_pipeline_execution_rows", return_value=[prow]), \
              patch.object(le.dynamodb, "Table", side_effect=_table), \
+             patch.object(le.batch_client, "terminate_job", return_value={}) as mock_terminate, \
              patch.object(le.sfn, "stop_execution", side_effect=lambda executionArn: {}) as mock_stop:
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = True
@@ -345,10 +346,11 @@ class TestAbortRegisteredSubExecutions:
         assert resp["statusCode"] == 200
         body = json.loads(resp["body"])
         assert body["message"] == "Execution aborted"
-        # The Batch job was NOT sent to StopExecution (only the main SFN execution was).
+        # Terminated by id, and NOT sent to StopExecution (a Batch job is not an SFN
+        # execution); only the main SFN execution was stopped.
+        assert mock_terminate.call_args.kwargs["jobId"] == "batch-job-777"
         stopped = {c.kwargs.get("executionArn") for c in mock_stop.call_args_list}
-        assert "arn:batch:job:777" not in stopped
+        assert "batch-job-777" not in stopped
         assert "arn:ex:main" in stopped
-        # A non-fatal warning names the un-abortable resource type + locator.
-        assert "warnings" in body
-        assert any("batchJob" in w and "arn:batch:job:777" in w for w in body["warnings"])
+        # Terminating cleanly is not a warning-worthy outcome.
+        assert not any("batch" in w.lower() for w in body.get("warnings", []))

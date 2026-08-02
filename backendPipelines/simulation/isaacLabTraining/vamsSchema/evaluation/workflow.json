@@ -6,9 +6,7 @@
         {
             "triggerType": "fileUpload",
             "inputFileFilters": {
-                "allow": [
-                    "*.json"
-                ],
+                "allow": ["*.json"],
                 "exclude": []
             },
             "defaultTemplateIds": {
@@ -31,9 +29,7 @@
             "fileAttributes": false
         },
         "inputFileFilters": {
-            "allow": [
-                "*.json"
-            ],
+            "allow": ["*.json"],
             "exclude": []
         },
         "concurrencyRestriction": "none",

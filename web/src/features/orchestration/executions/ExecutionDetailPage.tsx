@@ -11,6 +11,8 @@ import StatusBadge from "../components/StatusBadge";
 import ConfigEditor from "../components/ConfigEditor";
 import Breadcrumb from "../components/Breadcrumb";
 import DataTable from "../components/DataTable";
+import InfoTooltip from "../components/InfoTooltip";
+import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
@@ -20,25 +22,104 @@ interface ExecutionDetailPageProps {
     executionId: string;
 }
 
-type TabKey = "inputs" | "pipelines" | "outputs" | "logs";
+type TabKey = "inputs" | "pipelines" | "outputs" | "settings" | "logs";
 
 /** Bordered section container so detail content reads as grouped cards, not floating labels. */
-const Card: React.FC<{ title?: string; children: React.ReactNode; className?: string }> = ({
-    title,
-    children,
-    className = "",
-}) => (
+const Card: React.FC<{
+    title?: string;
+    children: React.ReactNode;
+    className?: string;
+    /** Rendered beside the title — used for the outputs-scope help icon. */
+    titleAdornment?: React.ReactNode;
+}> = ({ title, children, className = "", titleAdornment }) => (
     <section
-        className={`bg-surface-container border border-border-default rounded-lg shadow-sm ${className}`}
+        className={`orch-outline bg-surface-container border border-border-default rounded-lg shadow-sm ${className}`}
     >
         {title && (
-            <header className="px-4 py-2 border-b border-border-default">
+            <header className="orch-outline px-4 py-2 border-b border-border-default flex items-center gap-2">
                 <h2 className="text-base font-bold text-text-primary">{title}</h2>
+                {titleAdornment}
             </header>
         )}
         <div className="p-3">{children}</div>
     </section>
 );
+
+/**
+ * The output path prefix the run actually wrote under. Stored RESOLVED, so any {{tag}} in the
+ * workflow's default was already substituted at launch. An empty value or a bare "/" both mean the
+ * asset root, which reads better spelled out than as a lone slash.
+ */
+const outputPathPrefixText = (prefix?: string): string =>
+    !prefix || prefix === "/" ? "None (asset root)" : prefix;
+
+/** True when a settings object carries anything worth rendering. */
+const hasSettings = (config?: Record<string, any>): boolean =>
+    !!config && Object.keys(config).length > 0;
+
+/** Human label for a stored (camelCase) systemConfig key. */
+const SETTING_LABELS: Record<string, string> = {
+    inputFileArity: "Input file count",
+    assetScope: "Asset selection rules",
+    metadataInputs: "Metadata provided",
+    inputFileFilters: "Input file filters",
+    concurrencyRestriction: "Concurrency restriction",
+    outputTarget: "Output destination",
+    allowWorkflowTriggerChaining: "Allow workflow trigger chaining",
+    defaultOutputFileBaseExecutionPathExtension: "Default output path prefix",
+    requireTemplate: "Requires a template",
+    allowCustomTemplateOverride: "Allows a custom configuration",
+    auxPreviewPipelineSuffix: "Auxiliary preview suffix",
+};
+
+/** One settings value, rendered readably rather than as raw JSON. */
+const settingValue = (value: any): string => {
+    if (value === null || value === undefined || value === "") return "None";
+    if (typeof value === "boolean") return value ? "Yes" : "No";
+    if (Array.isArray(value)) return value.length ? value.join(", ") : "None";
+    if (typeof value === "object") {
+        const entries = Object.entries(value);
+        // A boolean map (assetScope / metadataInputs) reads best as the list of what is enabled.
+        if (entries.length && entries.every(([, v]) => typeof v === "boolean")) {
+            const on = entries.filter(([, v]) => v).map(([k]) => k);
+            return on.length ? on.join(", ") : "None";
+        }
+        return JSON.stringify(value);
+    }
+    return String(value);
+};
+
+/**
+ * A settings block. When `overrides` is supplied, each key the template changed is flagged — that is what
+ * explains why a step's effective settings differ from its pipeline's own defaults.
+ */
+const SettingsGrid: React.FC<{
+    config?: Record<string, any>;
+    overrides?: Record<string, any>;
+}> = ({ config, overrides }) => {
+    if (!hasSettings(config)) {
+        return <p className="text-text-secondary">No settings recorded.</p>;
+    }
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+            {Object.keys(config as Record<string, any>)
+                .sort()
+                .map((key) => (
+                    <div key={key} className="text-sm">
+                        <span className="text-text-secondary">{SETTING_LABELS[key] || key}:</span>{" "}
+                        <span className="text-text-primary">
+                            {settingValue((config as Record<string, any>)[key])}
+                        </span>
+                        {overrides && key in overrides && (
+                            <span className="ml-2 text-xs font-bold text-blue-600 dark:text-blue-400">
+                                overridden
+                            </span>
+                        )}
+                    </div>
+                ))}
+        </div>
+    );
+};
 
 /** Header progress summary: "Pipeline N of M · <status>" + a segmented bar colored per pipeline. */
 const TERMINAL_OK = new Set(["SUCCEEDED", "COMPLETE"]);
@@ -113,7 +194,9 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     // shared/deep link) opens directly on the requested tab instead of the default Inputs tab.
     const initialTab = React.useMemo<TabKey>(() => {
         const t = new URLSearchParams(location.search).get("tab");
-        return t === "pipelines" || t === "outputs" || t === "logs" ? t : "inputs";
+        return t === "pipelines" || t === "outputs" || t === "settings" || t === "logs"
+            ? t
+            : "inputs";
     }, [location.search]);
     const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
 
@@ -126,7 +209,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mb-4" />
+                    <div className="orch-outline inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mb-4" />
                     <p>Loading execution details...</p>
                 </div>
             </div>
@@ -155,6 +238,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         { key: "inputs", label: "Inputs" },
         { key: "pipelines", label: "Pipelines" },
         { key: "outputs", label: "Outputs" },
+        { key: "settings", label: "Settings" },
         { key: "logs", label: "Logs", hidden: !canViewLogs },
     ];
 
@@ -355,15 +439,15 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             "N/A"
                         )}
                     </Field>
-                    {execution.outputFileBaseExecutionPathExtension &&
-                        execution.outputFileBaseExecutionPathExtension !== "/" && (
-                            <Field label="Output path prefix" mono>
-                                {execution.outputFileBaseExecutionPathExtension}
-                            </Field>
-                        )}
+                    {/* Always shown, alongside the other three output fields: "no prefix" is itself
+                        information about where the run wrote, and hiding the row made the answer
+                        indistinguishable from the field not existing. */}
+                    <Field label="Output Path Prefix" mono>
+                        {outputPathPrefixText(execution.outputFileBaseExecutionPathExtension)}
+                    </Field>
                 </div>
                 {execution.executionError && (
-                    <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                    <div className="orch-outline mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
                         <p className="text-sm font-semibold text-red-800 dark:text-red-300 mb-1">
                             Execution Error:
                         </p>
@@ -375,7 +459,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                     </div>
                 )}
                 {execution.truncatedCollections && execution.truncatedCollections.length > 0 && (
-                    <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
+                    <div className="orch-outline mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
                         <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-300 mb-1">
                             Warning:
                         </p>
@@ -412,10 +496,11 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 </nav>
             </div>
 
-            {/* Tab Content. Cloudscape's Tabs puts padding-block:16px between the tab bar and its
-                panel and no inline padding; -mt-4 cancels the parent's space-y-4 so the two gaps are
-                not additive, then pt-4 supplies exactly that 16px. */}
-            <div className="-mt-4 pt-4">
+            {/* Tab Content. The parent's space-y-4 already places 16px below the tab strip — the same
+                gap Cloudscape's Tabs uses (padding-block: 16px) — so this wrapper adds NOTHING. The
+                previous `-mt-4 pt-4` cancelled that margin and then re-added it as padding, which is
+                why the gap never shrank. */}
+            <div>
                 {activeTab === "inputs" && (
                     <div className="space-y-4">
                         <Card title={`Input Files (${execution.inputFiles?.length || 0})`}>
@@ -490,7 +575,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     {(pipeline.templateId ||
                                         pipeline.templateTags ||
                                         pipeline.customTemplateOverrideUsed !== undefined) && (
-                                        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
+                                        <div className="orch-outline mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
                                             <h4 className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">
                                                 Template Snapshot
                                             </h4>
@@ -559,7 +644,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                             )}
                                             {!expandedEditors[idx] ? (
                                                 <div>
-                                                    <pre className="text-sm overflow-auto p-3 bg-surface-secondary border border-border-default rounded max-h-[300px]">
+                                                    <pre className="orch-outline text-sm overflow-auto p-3 bg-surface-secondary border border-border-default rounded max-h-[300px]">
                                                         {pipeline.renderedConfig}
                                                     </pre>
                                                     <button
@@ -575,7 +660,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                                     </button>
                                                 </div>
                                             ) : (
-                                                <div className="border border-border-default rounded overflow-hidden">
+                                                <div className="orch-outline border border-border-default rounded overflow-hidden">
                                                     <ConfigEditor
                                                         value={pipeline.renderedConfig}
                                                         language={pipeline.configFormat || "json"}
@@ -614,12 +699,25 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                 <Field label="Output Asset ID" mono>
                                     {execution.outputAssetId || "N/A"}
                                 </Field>
+                                <Field label="Output Path Prefix" mono>
+                                    {outputPathPrefixText(
+                                        execution.outputFileBaseExecutionPathExtension
+                                    )}
+                                </Field>
                             </div>
                         </Card>
 
                         {/* Files */}
                         {execution.outputs?.files && execution.outputs.files.length > 0 && (
-                            <Card title={`Output Files (${execution.outputs.files.length})`}>
+                            <Card
+                                title={`Output Files (${execution.outputs.files.length})`}
+                                titleAdornment={
+                                    <InfoTooltip
+                                        text={OUTPUTS_SCOPE_HELP}
+                                        label="What this list includes"
+                                    />
+                                }
+                            >
                                 <DataTable
                                     columns={outputFileColumns}
                                     rows={execution.outputs.files}
@@ -648,7 +746,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     {execution.outputs.results.map((result: any, idx: number) => (
                                         <div
                                             key={idx}
-                                            className="p-3 bg-surface-secondary border border-border-default rounded"
+                                            className="orch-outline p-3 bg-surface-secondary border border-border-default rounded"
                                         >
                                             {result.resultsContentTruncated && (
                                                 <div className="mb-2 text-sm text-yellow-600 dark:text-yellow-400">
@@ -668,10 +766,90 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         {!execution.outputs?.files?.length &&
                             !execution.outputs?.metadata?.length &&
                             !execution.outputs?.results?.length && (
-                                <Card title="Outputs">
-                                    <p className="text-text-secondary">No outputs</p>
+                                <Card
+                                    title="Outputs"
+                                    titleAdornment={
+                                        <InfoTooltip
+                                            text={OUTPUTS_SCOPE_HELP}
+                                            label="What this list includes"
+                                        />
+                                    }
+                                >
+                                    {/* Said explicitly: a pipeline that wrote only to the auxiliary
+                                        bucket lands here, and "No outputs" alone reads as a failure
+                                        rather than as out-of-scope. */}
+                                    <p className="text-text-secondary">
+                                        No asset outputs were recorded for this execution. Files
+                                        written to the auxiliary location are not tracked as
+                                        outputs.
+                                    </p>
                                 </Card>
                             )}
+                    </div>
+                )}
+
+                {activeTab === "settings" && (
+                    <div className="space-y-4">
+                        {/* Workflow level. Read LIVE from the workflow, so it is labelled "current":
+                            a workflow edited since this run legitimately differs from what ran. */}
+                        <Card title="Workflow settings (current)">
+                            <p className="text-sm text-text-secondary mb-3">
+                                Read from the workflow as it stands now. The per-step settings below
+                                are the snapshot recorded when this execution ran, so the two can
+                                differ if the workflow has been edited since.
+                            </p>
+                            <SettingsGrid config={execution.workflowSystemConfig} />
+                        </Card>
+
+                        {/* Per step: the settings that step actually ran under, and what its template
+                            changed. This cannot be reconstructed later — a template may be edited or
+                            archived after the run, which is why it is snapshotted. */}
+                        {(execution.pipelines || []).length > 0 ? (
+                            (execution.pipelines || []).map((pipeline: any, idx: number) => (
+                                <Card
+                                    key={`settings-${idx}`}
+                                    title={`Step ${idx + 1}: ${
+                                        pipeline.pipelineName || pipeline.pipelineId
+                                    }`}
+                                >
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 mb-3">
+                                        <Field label="Template" mono>
+                                            {pipeline.templateId || "None"}
+                                        </Field>
+                                        <Field label="Custom configuration used">
+                                            {pipeline.customTemplateOverrideUsed ? "Yes" : "No"}
+                                        </Field>
+                                    </div>
+                                    {hasSettings(pipeline.effectiveSystemConfig) ? (
+                                        <>
+                                            <SettingsGrid
+                                                config={pipeline.effectiveSystemConfig}
+                                                overrides={pipeline.templateOverrides}
+                                            />
+                                            {hasSettings(pipeline.templateOverrides) && (
+                                                <p className="text-sm text-text-secondary mt-3">
+                                                    Values marked{" "}
+                                                    <span className="font-bold text-blue-600 dark:text-blue-400">
+                                                        overridden
+                                                    </span>{" "}
+                                                    were changed by the chosen template; the rest
+                                                    come from the pipeline&apos;s own settings.
+                                                </p>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <p className="text-text-secondary">
+                                            No settings recorded for this step. Executions from
+                                            before settings capture was added show nothing here.
+                                        </p>
+                                    )}
+                                </Card>
+                            ))
+                        ) : (
+                            <Card title="Step settings">
+                                <p className="text-text-secondary">No pipeline steps recorded.</p>
+                            </Card>
+                        )}
                     </div>
                 )}
 

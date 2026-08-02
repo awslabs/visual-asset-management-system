@@ -28,6 +28,12 @@ interface ExecuteWizardProps {
     workflow: Workflow;
     databaseId: string;
     presetAsset?: { databaseId: string; assetId: string };
+    /**
+     * Files to start with, when the caller already knows the selection (the asset file manager's
+     * Automation action). Takes precedence over presetAsset's empty seed row: those files ARE the
+     * selection, so the input step opens complete and only needs confirming.
+     */
+    presetInputFiles?: ExecuteInputFile[];
 }
 
 export interface PipelineStageData {
@@ -50,27 +56,12 @@ export interface PipelineStageData {
 
 type InputFileFilters = { allow?: string[]; exclude?: string[] };
 
-/** Keys a template's `overrides` may replace on a pipeline's systemConfig. */
-const TEMPLATE_OVERRIDABLE_KEYS = [
-    "inputFileArity",
-    "metadataInputs",
-    "assetScope",
-    "inputFileFilters",
-] as const;
+// The effective-config merge lives in the pure resolveRestrictions module (a component module is the
+// wrong home for it: mocking this file in a test would strip the function out from under other
+// importers). Re-exported here because existing callers import it from the wizard.
+import { resolveEffectivePipelineConfig } from "./resolveRestrictions";
 
-export function resolveEffectivePipelineConfig(
-    systemConfig?: PipelineSystemConfig,
-    templateOverrides?: Record<string, any>
-): PipelineSystemConfig {
-    const effective: Record<string, any> = { ...(systemConfig || {}) };
-    const overrides = templateOverrides || {};
-    TEMPLATE_OVERRIDABLE_KEYS.forEach((key) => {
-        if (overrides[key] !== undefined && overrides[key] !== null) {
-            effective[key] = overrides[key];
-        }
-    });
-    return effective as PipelineSystemConfig;
-}
+export { resolveEffectivePipelineConfig };
 
 const isWholeAssetKey = (key?: string) => key === "/";
 
@@ -282,6 +273,13 @@ export function validateInputSelection(
         errors.push("One or more input files fail the workflow input-file filters.");
     }
 
+    // The workflow gate is the outer boundary of what an execution may carry, so each pipeline is
+    // judged against the files the WORKFLOW admits rather than the raw selection. Mirrors the
+    // backend's two-stage order in common/workflows/executionValidation.py; judging on the raw list
+    // both invents errors (a pipeline blamed for a file the workflow already dropped) and hides them
+    // (a pipeline's arity satisfied by a file that never reaches it).
+    const workflowInputs = applyInputFileFilters(inputs, wfFilters);
+
     // Per-pipeline effective config (the chosen template's overrides merged over the pipeline's).
     pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }) => {
         const effective = resolveEffectivePipelineConfig(systemConfig, templateOverrides);
@@ -289,10 +287,19 @@ export function validateInputSelection(
         // A 'none' pipeline never consumes files, whatever the workflow selected.
         if (arity === "none") return;
 
-        const pipelineInputs = applyInputFileFilters(inputs, effective.inputFileFilters);
-        if (inputs.length > 0 && pipelineInputs.length === 0) {
+        const pipelineInputs = applyInputFileFilters(workflowInputs, effective.inputFileFilters);
+        if (workflowInputs.length > 0 && pipelineInputs.length === 0) {
             errors.push(
                 `${label} requires input files but its input-file filters exclude all selected inputs.`
+            );
+            return;
+        }
+        // Which filter emptied the list decides the message: naming the workflow's filters when they
+        // are the cause points at the actual misconfiguration.
+        if (inputs.length > 0 && workflowInputs.length === 0) {
+            errors.push(
+                `${label} requires input files but the workflow's input-file filters exclude every ` +
+                    `selected input, so no file reaches it.`
             );
             return;
         }
@@ -312,6 +319,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     workflow,
     databaseId,
     presetAsset,
+    presetInputFiles,
 }) => {
     const toast = useToast();
     const { data: workflowData, isLoading: workflowLoading } = useWorkflow(
@@ -349,8 +357,11 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     // the whole asset: the file remains selectable (and, for a whole-asset-disallowed pipeline, must
     // be a specific file). relativeFileKey starts empty so the file picker requires an explicit
     // choice rather than silently defaulting to the whole asset.
+    // A supplied selection wins: the caller resolved the actual files, so there is nothing to pick.
     const [inputFiles, setInputFiles] = useState<ExecuteInputFile[]>(
-        presetAsset
+        presetInputFiles && presetInputFiles.length > 0
+            ? presetInputFiles
+            : presetAsset
             ? [
                   {
                       databaseId: presetAsset.databaseId,
@@ -646,6 +657,7 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                         onOutputDatabaseIdChange={setOutputDatabaseId}
                         onOutputPathPrefixChange={setOutputPathPrefix}
                         offendingPipelines={offendingPipelines}
+                        pipelineConstraints={pipelineInputConstraints}
                     />
                 </>
             );

@@ -835,6 +835,11 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
                 'outputLocationType': s('asset'),
                 'outputAssetId': s(asset_id),
                 'outputDatabaseId': s(database_id),
+                # Partition key of WorkflowExecConfigByOutputAssetGSI, which backs "executions that
+                # wrote to this asset" in the asset's execution history. The index is sparse, so a row
+                # omitting this attribute is absent from it entirely — a migrated execution would not
+                # appear in its own output asset's history.
+                'outputDatabaseId:outputAssetId': s(f"{database_id}:{asset_id}"),
                 'outputFileBaseExecutionPathExtension': s('/'),
                 'inputMetadataAssetId': s(''),
                 'inputMetadataDatabaseId': s(''),

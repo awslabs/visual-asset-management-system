@@ -7,6 +7,8 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 import QuickView from "../components/QuickView";
 import StatusBadge from "../components/StatusBadge";
+import InfoTooltip from "../components/InfoTooltip";
+import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import { useExecutionDetails } from "../api/queries";
 
 interface ExecutionQuickViewProps {
@@ -16,10 +18,16 @@ interface ExecutionQuickViewProps {
 }
 
 /** Bordered group used throughout the quick-view panel so data reads as cards, not a text block. */
-const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-    <div className="rounded-lg border border-border-default bg-surface-container p-3">
+const Section: React.FC<{
+    title: string;
+    children: React.ReactNode;
+    /** Rendered beside the title — used for the outputs-scope help icon. */
+    titleAdornment?: React.ReactNode;
+}> = ({ title, children, titleAdornment }) => (
+    <div className="orch-outline rounded-lg border border-border-default bg-surface-container p-3">
         <div className="text-sm font-semibold uppercase tracking-wide text-text-secondary mb-2">
             {title}
+            {titleAdornment ? <span className="ml-2 normal-case">{titleAdornment}</span> : null}
         </div>
         {children}
     </div>
@@ -88,6 +96,11 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
     const inputFiles = details?.inputFiles || [];
     const outputFiles = details?.outputs?.files || [];
     const outputResults = details?.outputs?.results || [];
+    // Metadata outputs were omitted here, so a metadata-producing pipeline (the GenAI labelers) looked
+    // like it had produced nothing. All three kinds the backend returns are listed, each labelled so a
+    // reader can tell a written file from a metadata record from a result.
+    const outputMetadata = details?.outputs?.metadata || [];
+    const outputTotal = outputFiles.length + outputMetadata.length + outputResults.length;
 
     return (
         <QuickView open={open} onClose={onClose} title="Execution Details">
@@ -117,7 +130,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
 
                     {/* Error */}
                     {details.executionError && (
-                        <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3 min-w-0">
+                        <div className="orch-outline rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3 min-w-0">
                             <div className="font-semibold text-red-800 dark:text-red-300 mb-1">
                                 Error
                             </div>
@@ -134,7 +147,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                 {details.pipelines.map((pipeline: any, idx: number) => (
                                     <span
                                         key={idx}
-                                        className="px-2 py-1 text-sm rounded bg-surface-secondary text-text-primary border border-border-default"
+                                        className="orch-outline px-2 py-1 text-sm rounded bg-surface-secondary text-text-primary border border-border-default"
                                     >
                                         {pipeline.name ||
                                             pipeline.pipelineId ||
@@ -182,11 +195,31 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                         />
                         <Row label="Output Database ID" value={details.outputDatabaseId || "—"} />
                         <Row label="Output Asset ID" value={details.outputAssetId || "—"} />
+                        {/* The RESOLVED prefix, i.e. what the run actually wrote under — any {{tag}}
+                            in the workflow's default was substituted at launch. "/" means the outputs
+                            went to the asset root, which reads more clearly than a bare slash. */}
+                        <Row
+                            label="Output Path Prefix"
+                            value={
+                                !details.outputFileBaseExecutionPathExtension ||
+                                details.outputFileBaseExecutionPathExtension === "/"
+                                    ? "None (asset root)"
+                                    : details.outputFileBaseExecutionPathExtension
+                            }
+                        />
                     </Section>
 
                     {/* Outputs */}
-                    {(outputFiles.length > 0 || outputResults.length > 0) && (
-                        <Section title={`Outputs (${outputFiles.length + outputResults.length})`}>
+                    {outputTotal > 0 && (
+                        <Section
+                            title={`Outputs (${outputTotal})`}
+                            titleAdornment={
+                                <InfoTooltip
+                                    text={OUTPUTS_SCOPE_HELP}
+                                    label="What this list includes"
+                                />
+                            }
+                        >
                             <ul className="space-y-1">
                                 {outputFiles
                                     .slice(0, QUICK_VIEW_LIMIT)
@@ -201,20 +234,42 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                                 : ""}
                                         </li>
                                     ))}
-                                {outputResults
+                                {outputMetadata
                                     .slice(0, Math.max(0, QUICK_VIEW_LIMIT - outputFiles.length))
+                                    .map((m: any, idx: number) => (
+                                        <li
+                                            key={`m-${idx}`}
+                                            className="font-mono text-sm break-all text-text-primary"
+                                        >
+                                            {m.relativeFilePath || "metadata"}
+                                            <span className="ml-1 font-sans text-text-secondary">
+                                                (metadata)
+                                            </span>
+                                        </li>
+                                    ))}
+                                {outputResults
+                                    .slice(
+                                        0,
+                                        Math.max(
+                                            0,
+                                            QUICK_VIEW_LIMIT -
+                                                outputFiles.length -
+                                                outputMetadata.length
+                                        )
+                                    )
                                     .map((r: any, idx: number) => (
                                         <li
                                             key={`r-${idx}`}
                                             className="font-mono text-sm break-all text-text-primary"
                                         >
                                             {r.relativeFilePath || "result"}
+                                            <span className="ml-1 font-sans text-text-secondary">
+                                                (result)
+                                            </span>
                                         </li>
                                     ))}
                             </ul>
-                            {outputFiles.length + outputResults.length > QUICK_VIEW_LIMIT && (
-                                <MoreNote />
-                            )}
+                            {outputTotal > QUICK_VIEW_LIMIT && <MoreNote />}
                         </Section>
                     )}
 

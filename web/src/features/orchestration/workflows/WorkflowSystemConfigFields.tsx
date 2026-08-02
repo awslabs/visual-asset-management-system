@@ -112,7 +112,7 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                 <FieldLabel
                     htmlFor="inputFileArity"
                     text="Input file count"
-                    info="How many input files an execution takes: 'none' (results-only, no input), 'one' (a single input file), or 'multi' (multiple input files, possibly across assets)."
+                    info="How many input files an execution takes: 'none' (no input file), 'one' (a single input file), or 'multi' (multiple input files, possibly across assets). This is the outer gate for the whole workflow, so set it to the MAXIMUM any of its pipelines - or any template those pipelines offer - can require. A template may raise its pipeline's own arity when it is chosen at execute time, and a workflow gate lower than that would reject a selection the template would have accepted."
                 />
                 <select
                     id="inputFileArity"

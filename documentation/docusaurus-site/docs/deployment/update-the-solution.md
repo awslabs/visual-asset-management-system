@@ -290,6 +290,16 @@ The migration requires `dynamodb:Scan` on source tables, `dynamodb:BatchWriteIte
 
 ### v2.5 to v2.6
 
+:::info[Custom pipelines need code changes as well]
+The migration steps below move stored pipeline and workflow **definitions** onto the new data model. They
+cannot update the **code** of a pipeline you wrote yourself: v2.6 delivers inputs through a manifest
+rather than on the payload, expects asynchronous pipelines to return a task token, and expects a pipeline
+to register its sub-processes and logs so aborts and log retrieval work. See
+[Migrating custom pipelines from v2.5 to v2.6](../pipelines/migrating-pipelines-v25-to-v26.md) for the
+porting order and checklist. Deployments that run only VAMS built-in pipelines need nothing beyond the
+steps here.
+:::
+
 **Breaking changes:**
 
 -   The backend API moves from API Gateway HTTP API (v2) to REST API (v1), served under a stage path (default `/api`). The API Gateway identifier and invoke URL change on deployment. **Any client registered directly against the old API Gateway endpoint URL must be re-setup against the new endpoint** — re-run `vamscli setup` for the CLI, and update any external integrations or scripts that stored the API base URL. Clients that reach the API through the CloudFront or ALB front (the web application, and CLIs configured with the front's `/api` URL) continue to work without change. See [API Gateway REST API endpoint change](#api-gateway-rest-api-endpoint-change).

@@ -13,9 +13,18 @@ interface QuickViewProps {
     children: React.ReactNode;
 }
 
+/**
+ * Read-only detail panel. Wider than the base drawer (33.6rem vs 28rem): the values it shows are
+ * execution ids, asset ids and file paths, which wrapped by a few characters at the narrower width.
+ */
 const QuickView: React.FC<QuickViewProps> = ({ open, onClose, title, children }) => {
     return (
-        <Drawer open={open} onOpenChange={(isOpen) => !isOpen && onClose()} title={title}>
+        <Drawer
+            open={open}
+            onOpenChange={(isOpen) => !isOpen && onClose()}
+            title={title}
+            maxWidthClass="max-w-[33.6rem]"
+        >
             {children}
         </Drawer>
     );

@@ -25,7 +25,7 @@ const WorkflowValidationPanel: React.FC<WorkflowValidationPanelProps> = ({
         backendWarnings.length > 0;
 
     return (
-        <div className="border border-border-default rounded p-6 bg-surface-container">
+        <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
             <h2 className="text-xl font-semibold text-text-primary mb-4">Validation</h2>
             <div className="space-y-4">
                 {saveError && (

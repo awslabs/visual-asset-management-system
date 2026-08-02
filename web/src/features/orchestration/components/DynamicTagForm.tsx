@@ -97,7 +97,163 @@ const TagFormSubmitButton: React.FC<SubmitButtonProps> = ({ uiSchema }) => {
     );
 };
 
+/**
+ * Field chrome for one tag. RJSF's default FieldTemplate emits a bare label + control with no styling,
+ * which rendered every tag as one undifferentiated run of text — the name, the description and the
+ * input all reading as prose rather than as a form.
+ *
+ * It also caused an invisible control in LIGHT mode: Tailwind's preflight is disabled module-wide, so
+ * the scoped reset in styles/tailwind.css sets `border-width: 0` on bare input/select/textarea. A
+ * control with no border utility therefore painted NO border at all — white-on-white on light, while
+ * dark mode still read because its fill differs from the panel. The widget classes below supply the
+ * border explicitly.
+ */
+const TagFieldTemplate = (props: any) => {
+    const { id, label, required, description, errors, children, hidden, schema, displayLabel } =
+        props;
+    if (hidden) return <div className="hidden">{children}</div>;
+
+    // The object wrapper and array items carry no label of their own; rendering the chrome for them
+    // would add an empty bordered row around the real fields.
+    const isContainer = schema?.type === "object" || schema?.type === "array";
+    if (isContainer) {
+        return (
+            <div className="space-y-3">
+                {children}
+                {errors}
+            </div>
+        );
+    }
+
+    return (
+        <div className="orch-outline rounded-md border border-border-default bg-surface-secondary p-3">
+            {displayLabel !== false && label && (
+                <label
+                    htmlFor={id}
+                    className="block text-sm font-semibold text-text-primary mb-0.5"
+                >
+                    {label}
+                    {required && <span className="ml-1 text-vams-error">*</span>}
+                </label>
+            )}
+            {/* Instructions read as guidance, distinct from the label above and the control below. */}
+            {description && <div className="text-xs text-text-secondary mb-2">{description}</div>}
+            {children}
+            {errors}
+        </div>
+    );
+};
+
+/** The tag description. RJSF renders this through its own template, so restyling has to happen HERE —
+ *  wrapping props.description in the field template leaves RJSF's markup (class "field-description")
+ *  untouched, which is what kept the description looking like part of the same text block. */
+const TagDescriptionFieldTemplate = (props: any) => {
+    const text = props.description;
+    if (!text) return null;
+    return <div className="text-xs text-text-secondary mb-2">{text}</div>;
+};
+
+/** The object wrapper: tags stacked with real separation instead of running together. */
+const TagObjectFieldTemplate = (props: any) => (
+    <div className="space-y-3">
+        {props.properties.map((element: any) => (
+            <div key={element.name}>{element.content}</div>
+        ))}
+    </div>
+);
+
+/** Shared control chrome. `orch-outline` is what opts a control into a painted border. */
+const widgetClass =
+    "orch-outline w-full px-3 py-2 text-sm rounded border border-border-input " +
+    "bg-surface-input text-text-primary focus:outline-none focus:ring-2 focus:ring-blue-500 " +
+    "disabled:opacity-50";
+
+const TagTextWidget = (props: any) => (
+    <input
+        id={props.id}
+        type={
+            props.schema?.type === "integer" || props.schema?.type === "number" ? "number" : "text"
+        }
+        className={widgetClass}
+        value={props.value ?? ""}
+        required={props.required}
+        disabled={props.disabled || props.readonly}
+        placeholder={props.placeholder}
+        onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "") return props.onChange(undefined);
+            if (props.schema?.type === "integer") {
+                const n = parseInt(raw, 10);
+                return props.onChange(Number.isNaN(n) ? undefined : n);
+            }
+            if (props.schema?.type === "number") {
+                const n = parseFloat(raw);
+                return props.onChange(Number.isNaN(n) ? undefined : n);
+            }
+            props.onChange(raw);
+        }}
+    />
+);
+
+const TagSelectWidget = (props: any) => {
+    const options = props.options?.enumOptions || [];
+    return (
+        <select
+            id={props.id}
+            className={widgetClass}
+            value={props.value ?? ""}
+            required={props.required}
+            disabled={props.disabled || props.readonly}
+            onChange={(e) => props.onChange(e.target.value === "" ? undefined : e.target.value)}
+        >
+            {/* An optional enum needs an explicit empty choice, or the first member looks pre-selected
+                when the user has not chosen anything. */}
+            {!props.required && <option value="">Not set</option>}
+            {options.map((o: any) => (
+                <option key={String(o.value)} value={o.value}>
+                    {o.label}
+                </option>
+            ))}
+        </select>
+    );
+};
+
+const TagCheckboxWidget = (props: any) => (
+    <label className="inline-flex items-center gap-2 text-sm text-text-primary">
+        <input
+            id={props.id}
+            type="checkbox"
+            checked={!!props.value}
+            disabled={props.disabled || props.readonly}
+            onChange={(e) => props.onChange(e.target.checked)}
+        />
+        <span>{props.value ? "Enabled" : "Disabled"}</span>
+    </label>
+);
+
+const TagTextareaWidget = (props: any) => (
+    <textarea
+        id={props.id}
+        rows={3}
+        className={widgetClass}
+        value={props.value ?? ""}
+        required={props.required}
+        disabled={props.disabled || props.readonly}
+        onChange={(e) => props.onChange(e.target.value === "" ? undefined : e.target.value)}
+    />
+);
+
+const tagFormWidgets = {
+    TextWidget: TagTextWidget,
+    SelectWidget: TagSelectWidget,
+    CheckboxWidget: TagCheckboxWidget,
+    TextareaWidget: TagTextareaWidget,
+};
+
 const tagFormTemplates = {
+    FieldTemplate: TagFieldTemplate,
+    ObjectFieldTemplate: TagObjectFieldTemplate,
+    DescriptionFieldTemplate: TagDescriptionFieldTemplate,
     ButtonTemplates: {
         AddButton: TagFormAddButton,
         RemoveButton: TagFormRemoveButton,
@@ -209,6 +365,7 @@ const DynamicTagForm: React.FC<DynamicTagFormProps> = ({
             formData={formData}
             validator={validator}
             templates={tagFormTemplates}
+            widgets={tagFormWidgets}
             onChange={handleChange}
             onSubmit={handleSubmit}
         />

@@ -396,6 +396,54 @@ class TestValidateExecution:
              {"assetId": "a", "relativeFileKey": "/y.glb"}])
         assert any("single input file" in e for e in errs2)
 
+    def test_pipeline_is_judged_on_the_workflow_filtered_list_not_the_raw_selection(self):
+        # Ordering matters: the workflow gate narrows the selection first, and each pipeline is judged
+        # against THAT list. Here the workflow admits only .glb, so the .obj never reaches the
+        # pipeline — a single-arity pipeline therefore sees one file and passes. Judged on the raw
+        # two-file selection it would wrongly fail with "accepts a single input file".
+        # Workflow arity is multi so the workflow's own arity gate stays quiet and the assertion below
+        # measures only the PIPELINE's arity verdict.
+        wf = self._wf(inputFileArity="multi",
+                      inputFileFilters={"allow": ["*.glb"], "exclude": []})
+        errs, filt = ev.validate_execution(
+            wf, [self._pipe(arity="one")],
+            [{"assetId": "a", "relativeFileKey": "/x.glb"},
+             {"assetId": "a", "relativeFileKey": "/y.obj"}])
+        # The workflow-level filter check still reports the excluded file as a hard error...
+        assert any("workflow input-file filters" in e for e in errs)
+        # ...but the pipeline is not additionally blamed for an arity it does not violate.
+        assert not any("single input file" in e for e in errs)
+        assert filt["p1"] == [{"assetId": "a", "relativeFileKey": "/x.glb"}]
+
+    def test_pipeline_arity_unmet_after_workflow_filtering_fails_execution(self):
+        # The converse: the workflow admits nothing the pipeline needs, so the pipeline's requirement
+        # is unmet and the whole execution must fail rather than launch with an empty manifest.
+        wf = self._wf(inputFileFilters={"allow": ["*.txt"], "exclude": []})
+        errs, filt = ev.validate_execution(
+            wf, [self._pipe(arity="one", inputFileFilters={"allow": ["*.glb"], "exclude": []})],
+            [{"assetId": "a", "relativeFileKey": "/x.glb"}])
+        assert errs, "an execution no pipeline can consume must not validate"
+        # The message names the WORKFLOW filters, since they are what emptied the list — blaming the
+        # pipeline's own .glb filter for excluding a .glb file would send the user to the wrong config.
+        assert any("workflow's input-file filters" in e for e in errs)
+        assert filt["p1"] == []
+
+    def test_any_single_unmet_pipeline_fails_the_whole_execution(self):
+        # Every pipeline's needs must be met by the filtered list; one unmet pipeline is fatal even
+        # when its siblings are satisfied.
+        wf = self._wf(inputFileArity="multi",
+                      assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
+                                  "wholeAssetAllowed": False, "folderAllowed": False})
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._pipe(pid="ok", arity="multi",
+                        inputFileFilters={"allow": ["*.glb"], "exclude": []}),
+             self._pipe(pid="unmet", arity="multi",
+                        inputFileFilters={"allow": ["*.e57"], "exclude": []})],
+            [{"assetId": "a", "relativeFileKey": "/x.glb"}])
+        assert any("db:unmet" in e for e in errs)
+        assert not any("db:ok" in e for e in errs)
+
     def test_path_glob_still_filters_container_selections(self):
         # A non-extension pattern (path glob) still applies to a folder selection.
         inputs = [{"relativeFileKey": "/models/"}, {"relativeFileKey": "/textures/"}]
@@ -405,6 +453,131 @@ class TestValidateExecution:
             {"relativeFileKey": "/models/"}]
         assert ev.apply_input_file_filters(inputs, {"allow": [], "exclude": ["*models*"]}) == [
             {"relativeFileKey": "/textures/"}]
+
+
+# ==================== executionValidation: open-include semantics + aggregates ====================
+
+@pytest.mark.unit
+class TestOpenAllowList:
+    @pytest.mark.parametrize("allow", [None, [], [""], ["  "], ["*"], ["**"], ["*.*"], ["/*"],
+                                       ["*", "  "]])
+    def test_open_forms(self, allow):
+        # "No restriction" has several spellings; all must read identically so a '*' at one level of
+        # the chain defers to the next rather than acting as a pattern.
+        assert ev.is_open_allow_list(allow) is True
+
+    @pytest.mark.parametrize("allow", [["*.glb"], [".glb"], ["/models/*"], ["*", "*.glb"]])
+    def test_restrictive_forms(self, allow):
+        # A list carrying ANY real pattern is a restriction, even alongside a '*'.
+        assert ev.is_open_allow_list(allow) is False
+
+    def test_star_allow_admits_a_container_selection(self):
+        # A '*' allow list must behave exactly like an absent one. It previously did not: extension
+        # patterns are stripped for container selections, so ['*.glb'] became empty (allow-all) while
+        # ['*'] survived stripping and was matched — two spellings of "open" behaving differently.
+        inputs = [{"relativeFileKey": "/"}, {"relativeFileKey": "/models/"}]
+        assert ev.apply_input_file_filters(inputs, {"allow": ["*"]}) == inputs
+        assert ev.apply_input_file_filters(inputs, {"allow": []}) == inputs
+
+    def test_star_allow_does_not_restrict_files(self):
+        inputs = [{"relativeFileKey": "/a.glb"}, {"relativeFileKey": "/b.txt"}]
+        assert ev.apply_input_file_filters(inputs, {"allow": ["*"]}) == inputs
+
+    def test_absent_filters_allow_everything(self):
+        # The documented rule: no include entry == all files allowed, no excludes == no exclusions.
+        inputs = [{"relativeFileKey": "/a.glb"}, {"relativeFileKey": "/b.txt"}]
+        assert ev.apply_input_file_filters(inputs, None) == inputs
+        assert ev.apply_input_file_filters(inputs, {}) == inputs
+
+
+@pytest.mark.unit
+class TestAggregateInputFileFilters:
+    def _agg(self, wf_filters, pipeline_filters):
+        return ev.aggregate_input_file_filters(
+            {"inputFileFilters": wf_filters},
+            [{"inputFileFilters": f} for f in pipeline_filters])
+
+    def test_workflow_allow_wins_when_restrictive(self):
+        # The workflow gate is the outer boundary, so nothing a pipeline allows can widen it.
+        agg = self._agg({"allow": ["*.glb"]}, [{"allow": ["*.obj", "*.e57"]}])
+        assert agg["allow"] == ["*.glb"]
+        assert agg["source"] == "workflow"
+
+    def test_open_workflow_allow_falls_through_to_the_pipelines(self):
+        agg = self._agg({"allow": ["*"]}, [{"allow": ["*.glb"]}, {"allow": ["*.obj"]}])
+        assert sorted(agg["allow"]) == ["*.glb", "*.obj"]
+        assert agg["source"] == "pipelines"
+
+    @pytest.mark.parametrize("wf_allow", [None, [], ["*"]])
+    def test_every_open_spelling_falls_through(self, wf_allow):
+        agg = self._agg({"allow": wf_allow}, [{"allow": ["*.glb"]}])
+        assert agg["allow"] == ["*.glb"]
+
+    def test_pipelines_are_unioned_not_intersected(self):
+        # From a file's point of view the pipelines are alternatives: a file ANY pipeline can consume
+        # is a file the workflow can do something with. Intersecting would report an empty (i.e.
+        # nothing-allowed) restriction for a perfectly runnable workflow.
+        agg = self._agg({}, [{"allow": ["*.glb"]}, {"allow": ["*.las"]}])
+        assert sorted(agg["allow"]) == ["*.glb", "*.las"]
+
+    def test_one_open_pipeline_makes_the_aggregate_open(self):
+        # A pipeline accepting anything means the workflow as a whole restricts nothing, so reporting
+        # the other pipeline's list would understate what can be selected.
+        agg = self._agg({}, [{"allow": ["*.glb"]}, {"allow": []}])
+        assert agg["allow"] == []
+
+    def test_excludes_union_across_every_level(self):
+        # An exclusion anywhere removes the file, so excludes accumulate regardless of the allow logic.
+        agg = self._agg({"exclude": ["*.tmp"]},
+                        [{"exclude": ["*.previewFile.*"]}, {"exclude": ["*.tmp"]}])
+        assert sorted(agg["exclude"]) == ["*.previewFile.*", "*.tmp"]
+
+    def test_duplicates_collapse_case_insensitively(self):
+        # The matcher is case-insensitive, so '*.GLB' and '*.glb' are one restriction, not two.
+        agg = self._agg({}, [{"allow": ["*.GLB"]}, {"allow": ["*.glb"]}])
+        assert agg["allow"] == ["*.GLB"]
+
+    def test_flags_that_template_overrides_are_not_included(self):
+        # The contract that keeps callers from validating against this value: a template is chosen per
+        # execution, so its overrides cannot be folded in here.
+        agg = self._agg({"allow": ["*.glb"]}, [{}])
+        assert agg["includesTemplateOverrides"] is False
+
+    def test_no_filters_anywhere_reports_no_restriction(self):
+        agg = ev.aggregate_input_file_filters({}, [{}, {}])
+        assert agg["allow"] == []
+        assert agg["exclude"] == []
+
+
+@pytest.mark.unit
+class TestAggregateMetadataInputs:
+    def test_requires_both_the_workflow_gate_and_a_pipeline_asking(self):
+        # The gate loads the payload; a pipeline that does not ask is not handed it. So a type is
+        # actually delivered only when both are true.
+        agg = ev.aggregate_metadata_inputs(
+            {"metadataInputs": {"assetMetadata": True, "fileMetadata": True}},
+            [{"metadataInputs": {"assetMetadata": True}}])
+        assert agg["assetMetadata"] is True
+        assert agg["fileMetadata"] is False   # gate on, but nothing asks for it
+        assert agg["gatedOffByWorkflow"] == []
+
+    def test_names_a_type_the_workflow_gates_off(self):
+        # Worth surfacing: the pipeline declared it uses this and will run without it.
+        agg = ev.aggregate_metadata_inputs(
+            {"metadataInputs": {"assetMetadata": False}},
+            [{"metadataInputs": {"assetMetadata": True}}])
+        assert agg["assetMetadata"] is False
+        assert agg["gatedOffByWorkflow"] == ["assetMetadata"]
+
+    def test_any_pipeline_asking_is_enough(self):
+        agg = ev.aggregate_metadata_inputs(
+            {"metadataInputs": {"fileAttributes": True}},
+            [{"metadataInputs": {}}, {"metadataInputs": {"fileAttributes": True}}])
+        assert agg["fileAttributes"] is True
+
+    def test_carries_the_template_override_caveat(self):
+        agg = ev.aggregate_metadata_inputs({}, [{}])
+        assert agg["includesTemplateOverrides"] is False
 
 
 # ============================ executionValidation: workflow-save checks ============================
@@ -463,6 +636,36 @@ class TestValidateWorkflowSave:
                   "systemConfig": {"inputFileFilters": {"allow": ["*.glb"]}}}]
         _, warns = ev.validate_workflow_save(wf, pipes)
         assert not any("may exclude everything" in w for w in warns)
+
+    def test_workflow_exclude_of_a_pipelines_only_type_warns(self):
+        # A workflow can starve a pipeline through its EXCLUDE list even when the allow-lists agree
+        # perfectly, because exclude is applied second. Check (1) sees an overlap and stays quiet.
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"allow": ["*.glb", "*.obj"], "exclude": ["*.glb"]}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"inputFileFilters": {"allow": ["*.glb"]}}}]
+        _, warns = ev.validate_workflow_save(wf, pipes)
+        assert not any("may exclude everything" in w for w in warns)
+        assert any("no accepted input type" in w for w in warns)
+
+    def test_workflow_exclude_of_one_of_several_types_names_what_remains(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"exclude": [".glb"]}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"inputFileFilters": {"allow": ["*.glb", "*.obj"]}}}]
+        _, warns = ev.validate_workflow_save(wf, pipes)
+        # The equivalent extension forms ('.glb' vs '*.glb') must still be recognised as the same type.
+        assert any("only *.obj" in w for w in warns)
+
+    def test_workflow_exclude_glob_does_not_warn(self):
+        # A wildcard exclude cannot be resolved pattern-to-pattern, so it must not warn — a false
+        # positive on every glob-filtered workflow would train users to ignore the panel.
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"exclude": ["*.previewFile.*"]}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"inputFileFilters": {"allow": ["*.glb"]}}}]
+        _, warns = ev.validate_workflow_save(wf, pipes)
+        assert not any("exclude" in w for w in warns)
 
     def test_trigger_default_undefaulted_warns(self):
         wf = {"inputFileArity": "one", "metadataInputs": {}, "inputFileFilters": {}}

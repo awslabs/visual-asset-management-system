@@ -100,7 +100,6 @@ export function buildExecutionServiceFunction(
     storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowExecutionOutputsIndexTable.grantReadWriteData(fun);
     // Definition tables (V2) are read only to cross-fetch human-readable workflow/pipeline
     // names + descriptions for the detail view.
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
@@ -127,6 +126,19 @@ export function buildExecutionServiceFunction(
                 IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachine,
                 IAMArn(PIPELINE_SUB_STATE_MACHINE_PATTERN).statemachineExecution,
             ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            // Terminate a Batch job a pipeline registered as an abortable sub-process. Needed only
+            // for jobs a pipeline submits ITSELF: a job submitted through the Step Functions `.sync`
+            // Batch integration is stopped by StopExecution on its state machine (granted above).
+            // AWS Batch generates job ids with no deployment-specific prefix to scope on, so the
+            // resource is a wildcard; the abort path only ever passes an id read from a registration
+            // row on the execution being aborted.
+            actions: ["batch:TerminateJob"],
+            resources: ["*"],
         })
     );
     fun.addToRolePolicy(
@@ -225,7 +237,6 @@ export function buildExecuteWorkflowV2Function(
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowExecutionOutputsIndexTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 

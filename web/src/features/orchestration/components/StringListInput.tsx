@@ -55,12 +55,12 @@ const StringListInput: React.FC<StringListInputProps> = ({
                         }
                     }}
                     placeholder={placeholder}
-                    className="flex-1 px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                    className="orch-outline flex-1 px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                 />
                 <button
                     type="button"
                     onClick={add}
-                    className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                    className="orch-outline px-3 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
                 >
                     Add
                 </button>

@@ -20,6 +20,9 @@ jest.mock("../api/queries", () => ({
     // the Workflow Database dropdown lists databases. Default both to empty.
     useAllWorkflows: jest.fn(() => ({ data: [] })),
     useDatabases: jest.fn(() => ({ data: [] })),
+    // ExecuteWorkflowButton reads the referenced pipelines' systemConfig to summarize what the
+    // selected workflow accepts.
+    useAllPipelines: jest.fn(() => ({ data: [] })),
     // Breadcrumb label lookup for the workflow-scoped board.
     useWorkflow: jest.fn(() => ({ data: undefined })),
 }));

@@ -31,7 +31,6 @@ os.environ.setdefault("PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME", "t-pexec")
 os.environ.setdefault("PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME", "t-pin-md")
 os.environ.setdefault("PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME", "t-pin-cfg")
 os.environ.setdefault("WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME", "t-wf-inputs")
-os.environ.setdefault("WORKFLOW_EXECUTION_OUTPUTS_INDEX_TABLE_NAME", "t-wf-out-index")
 os.environ.setdefault("WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME", "t-wf-cfg")
 
 # handlers.workflows package __init__ imports get_task_builder at import time; the shared mock package
@@ -883,6 +882,55 @@ class TestDeleteMarkerInput:
             m_s3.head_object.side_effect = self._client_error("AccessDenied")
             with pytest.raises(botocore.exceptions.ClientError):
                 ewv2._input_exists_in_s3("b", "a1/f.glb")
+
+
+@pytest.mark.unit
+class TestMalformedInputVersionId:
+    """A versionId that is not a well-formed S3 version is caller input, not a server fault.
+
+    S3 rejects the argument before looking anything up, so HeadObject answers 400 Bad Request rather
+    than 404. Left unhandled that propagated as a 500 with an unexplained stack trace. A VAMS ASSET
+    version number ("0", "3") is the realistic way to hit this — it is what an asset-version list
+    offers, and the execute API's versionId is an S3 object version of one key.
+    """
+
+    def _client_error(self, code):
+        return botocore.exceptions.ClientError(
+            {"Error": {"Code": code, "Message": "Bad Request"}}, "HeadObject")
+
+    @pytest.mark.parametrize("code", ["400", "BadRequest", "InvalidArgument", "InvalidVersionId"])
+    def test_a_malformed_requested_version_is_a_missing_input(self, code):
+        with patch(f"{MOD}.s3c") as m_s3:
+            m_s3.head_object.side_effect = self._client_error(code)
+            assert ewv2._input_exists_in_s3("b", "a1/f.glb", "0") == (False, "")
+
+    def test_a_400_without_a_requested_version_still_raises(self):
+        # Nothing about the caller's input can produce this one, so it is a genuine fault and must not
+        # be reported to the user as "your file is missing".
+        with patch(f"{MOD}.s3c") as m_s3:
+            m_s3.head_object.side_effect = self._client_error("400")
+            with pytest.raises(botocore.exceptions.ClientError):
+                ewv2._input_exists_in_s3("b", "a1/f.glb")
+
+    def test_the_handler_answers_404_rather_than_500(self):
+        # End-to-end through the handler: the status code is the whole point of the fix.
+        p = TestExecuteOrchestration()._patches()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1",
+                                "relativeFileKey": "/f.glb", "versionId": "0"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["asset_bucket"], \
+             p["enforcer"], p["claims"], patch(f"{MOD}.s3c") as m_s3, \
+             patch(f"{MOD}.sfn_client") as m_sfn:
+            m_s3.head_object.side_effect = self._client_error("400")
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 404
+        # And it must not have launched anything.
+        m_sfn.start_execution.assert_not_called()
+
+    def test_a_valid_version_is_unaffected(self):
+        with patch(f"{MOD}.s3c") as m_s3:
+            m_s3.head_object.return_value = {"VersionId": "real-s3-ver"}
+            assert ewv2._input_exists_in_s3("b", "a1/f.glb", "real-s3-ver") == (
+                True, "real-s3-ver")
 
 
 @pytest.mark.unit

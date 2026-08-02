@@ -50,7 +50,8 @@ def resolve_input_asset_prefix(resolved):
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path,
                       inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location,
                       orchestration_event_prefix, external_task_token,
-                      executing_userName, executing_requestContext, asset_id, database_id, groot_config):
+                      executing_userName, executing_requestContext, asset_id, database_id, groot_config,
+                      mode="finetune"):
     """
     Execute the Gr00t Fine-Tuning pipeline by invoking the openPipeline Lambda.
     Asset-level pipeline: downloads entire asset, not a single file.
@@ -70,7 +71,10 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
         "databaseId": database_id,
-        "gr00tConfig": json.dumps(groot_config) if isinstance(groot_config, dict) else groot_config
+        "gr00tConfig": json.dumps(groot_config) if isinstance(groot_config, dict) else groot_config,
+        # Lifted out of the resolved config so constructPipeline can name the Batch job and the
+        # container can branch. 'finetune' unless a template asked for 'evaluate'.
+        "mode": mode
     }
 
     logger.info("Invoking openPipeline Lambda .........")
@@ -189,6 +193,17 @@ def lambda_handler(event, context):
                     "tuneDiffusionModel": "tuneDiffusionModel",
                     "embodimentTag": "embodimentTag",
                     "videoBackend": "videoBackend",
+                    # Evaluation-only. checkpointFolder empty means "the newest gr00tOutput_* folder on
+                    # the asset", so an evaluation can follow a training run without naming it.
+                    "checkpointFolder": "checkpointFolder",
+                    "evalTrajectories": "evalTrajectories",
+                    "evalSteps": "evalSteps",
+                    "evalStartTrajectory": "evalStartTrajectory",
+                    "evalModalityKeys": "evalModalityKeys",
+                    "evaluationKind": "evaluationKind",
+                    # Which job to run. Supplied by the template's config body, so the SAME pipeline
+                    # can host a training template and an evaluation template.
+                    "mode": "mode",
                 }
                 for param_key, config_key in param_mappings.items():
                     if param_key in params_obj:
@@ -196,6 +211,14 @@ def lambda_handler(event, context):
             except Exception as e:
                 logger.warning(f"Failed to parse input parameters: {e}")
 
+
+        # The template decides which job this is. Popped so it does not also appear inside
+        # gr00tConfig, where it is not a training/eval parameter.
+        mode = str(groot_config.pop("mode", "") or "finetune").strip().lower()
+        if mode not in ("finetune", "evaluate"):
+            raise Exception(
+                f"Gr00t pipeline mode must be 'finetune' or 'evaluate', got '{mode}'.")
+        logger.info(f"Gr00t pipeline mode: {mode}")
 
         executing_userName = data.get('executingUserName', '')
         executing_requestContext = data.get('executingRequestContext', '')
@@ -214,7 +237,8 @@ def lambda_handler(event, context):
             executing_requestContext,
             resolved['assetId'],
             resolved['databaseId'],
-            groot_config
+            groot_config,
+            mode
         )
 
         return {

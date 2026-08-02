@@ -13,6 +13,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from backend.backend.common.workflows import vamsSchemaImport as vsi
+from backend.backend.common.workflows import executionValidation as ev
 
 
 # ============================ pure request builder ============================
@@ -621,6 +622,12 @@ class TestBuiltInSchemasValidate:
                 found.add(os.path.normpath(f))
         return sorted(found)
 
+    def _template_files(self, pipeline_file):
+        """A bundle's template files. They live in a `templates/` subdirectory beside pipeline.json —
+        NOT alongside it, which is why this is centralized rather than globbed per test."""
+        import glob
+        return sorted(glob.glob(os.path.join(os.path.dirname(pipeline_file), "templates", "*.json")))
+
     def test_all_built_in_pipeline_bundles_validate(self):
         from backend.backend.models.pipelines import (
             CreatePipelineRequestModel, CreateTemplateRequestModel)
@@ -629,6 +636,7 @@ class TestBuiltInSchemasValidate:
         pipeline_files = self._pipeline_files()
         # Sanity: the built-in pipelines exist and are being checked.
         assert len(pipeline_files) >= 20
+        templates_seen = 0
 
         for pf in pipeline_files:
             d = os.path.dirname(pf)
@@ -646,8 +654,77 @@ class TestBuiltInSchemasValidate:
                     w, "GLOBAL", w.get("workflowId") or pid, "GLOBAL", pid)
                 CreateWorkflowRequestModel(**wbody)
 
-            import glob
-            for tf in glob.glob(d + "/template*.json"):
-                t = json.load(open(tf))
+            template_files = self._template_files(pf)
+            templates_seen += len(template_files)
+            for tf in template_files:
+                t = json.load(open(tf, encoding="utf-8"))
                 CreateTemplateRequestModel(
                     **vsi._template_create_body(t, t.get("templateId") or "tid"))
+
+        # The built-ins DO ship templates, so a run that validated none means the discovery glob broke
+        # rather than that everything passed.
+        assert templates_seen >= 20, f"only {templates_seen} built-in templates discovered"
+
+    def test_no_bundle_excludes_everything(self):
+        """No shipped bundle may carry a match-everything exclude at any level.
+
+        Exclude is applied after allow, so '*' in an exclude removes every file — the pipeline or
+        workflow becomes permanently unrunnable, and a trigger can never fire. The request models
+        reject it, which means such a bundle would fail the deploy-time import; this catches it at
+        commit time instead of at deploy."""
+        offenders = []
+
+        def check(filters, path, where):
+            for pattern in (filters or {}).get("exclude") or []:
+                if str(pattern).strip() in ev.MATCH_EVERYTHING_PATTERNS:
+                    offenders.append(f"{os.path.basename(path)}:{where}:{pattern}")
+
+        for pf in self._pipeline_files():
+            pipeline = json.load(open(pf, encoding="utf-8"))
+            check((pipeline.get("systemConfig") or {}).get("inputFileFilters"), pf, "systemConfig")
+
+            wf = os.path.join(os.path.dirname(pf), "workflow.json")
+            if os.path.exists(wf):
+                workflow = json.load(open(wf, encoding="utf-8"))
+                check((workflow.get("systemConfig") or {}).get("inputFileFilters"), wf,
+                      "systemConfig")
+                for trigger in workflow.get("triggers") or []:
+                    check((trigger or {}).get("inputFileFilters"), wf, "trigger")
+
+            for tf in self._template_files(pf):
+                template = json.load(open(tf, encoding="utf-8"))
+                check((template.get("overrides") or {}).get("inputFileFilters"), tf, "overrides")
+
+        assert not offenders, (
+            "these bundles exclude every file, so nothing could ever run: " f"{offenders}")
+
+    def test_declared_tags_are_referenced_by_the_config_body(self):
+        """A declared tag whose {{key}} appears nowhere in the configBody is silently dropped.
+
+        Substitution is textual: the resolver replaces {{key}} occurrences in the body and returns
+        that text as the renderedConfig. So a template can declare a tag, the execute screen can
+        collect a value for it, the value can be recorded on the execution — and the pipeline still
+        never sees it, because nothing in the body referenced it. Nothing errors: an unmatched
+        PROVIDED tag is ignored by design, and an unreferenced DECLARED tag is not checked at all.
+
+        The failure is near-invisible for a pipeline that defaults the missing value (a prompt, say):
+        the run succeeds, just not on the caller's input. This asserts the link exists."""
+        unreferenced = []
+        checked = 0
+        for pf in self._pipeline_files():
+            for tf in self._template_files(pf):
+                t = json.load(open(tf, encoding="utf-8"))
+                schema = t.get("tagSchema") or []
+                if not schema:
+                    continue
+                checked += 1
+                body = t.get("configBody") or ""
+                for field in schema:
+                    key = field.get("tagKey")
+                    if key and "{{" + str(key) + "}}" not in body:
+                        unreferenced.append(f"{os.path.basename(tf)}:{key}")
+
+        assert checked > 0, "no built-in template declares a tagSchema; audit would be vacuous"
+        assert not unreferenced, (
+            "these templates declare tags their configBody never references, so the values are "
+            f"collected and then dropped: {unreferenced}")

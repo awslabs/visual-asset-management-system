@@ -16,6 +16,14 @@
         }
     ],
     "systemConfig": {
-        "inputFileArity": "one"
+        "inputFileArity": "none",
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        },
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": true
+        }
     }
 }

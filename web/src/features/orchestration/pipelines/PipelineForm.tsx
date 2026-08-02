@@ -399,7 +399,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 id="pipelineId"
                                 value={initial.pipelineId}
                                 disabled
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
                             />
                         </div>
                     )}
@@ -413,7 +413,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             {...register("pipelineName")}
                             disabled={isDeadlineCloudDisabled}
                             maxLength={256}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="Pipeline name"
                         />
                         {validationErrors.pipelineName && (
@@ -432,7 +432,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             {...register("category")}
                             disabled={isDeadlineCloudDisabled}
                             maxLength={256}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="e.g. 3D, GenAI"
                         />
                         {validationErrors.category && (
@@ -452,7 +452,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             disabled={isDeadlineCloudDisabled}
                             rows={3}
                             maxLength={1024}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="Pipeline description"
                         />
                         {validationErrors.description && (
@@ -489,7 +489,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             id="executionType"
                             {...register("executionConfig.executionType")}
                             disabled={isDeadlineCloudDisabled}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                         >
                             <option value="Lambda">Lambda</option>
                             <option value="SQS">SQS</option>
@@ -518,7 +518,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 id="lambdaResourceId"
                                 {...register("executionConfig.lambda.resourceId")}
                                 disabled={isDeadlineCloudDisabled}
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 placeholder="Lambda function ARN or name"
                             />
                             {validationErrors["executionConfig.lambda.resourceId"] && (
@@ -543,7 +543,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 id="queueUrl"
                                 {...register("executionConfig.sqs.queueUrl")}
                                 disabled={isDeadlineCloudDisabled}
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 placeholder="https://sqs.region.amazonaws.com/account/queue"
                             />
                             {validationErrors["executionConfig.sqs.queueUrl"] && (
@@ -564,7 +564,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     id="busArn"
                                     {...register("executionConfig.eventBridge.busArn")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     placeholder="arn:aws:events:region:account:event-bus/name"
                                 />
                                 {validationErrors["executionConfig.eventBridge.busArn"] && (
@@ -581,7 +581,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     id="source"
                                     {...register("executionConfig.eventBridge.source")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     placeholder="e.g. vams.pipeline"
                                 />
                                 {validationErrors["executionConfig.eventBridge.source"] && (
@@ -601,7 +601,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     id="detailType"
                                     {...register("executionConfig.eventBridge.detailType")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     placeholder="e.g. PipelineExecution"
                                 />
                                 {validationErrors["executionConfig.eventBridge.detailType"] && (
@@ -623,7 +623,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     id="farmId"
                                     {...register("executionConfig.deadlineCloud.farmId")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     placeholder="farm-..."
                                 />
                                 {validationErrors["executionConfig.deadlineCloud.farmId"] && (
@@ -640,7 +640,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     id="queueId"
                                     {...register("executionConfig.deadlineCloud.queueId")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                     placeholder="queue-..."
                                 />
                                 {validationErrors["executionConfig.deadlineCloud.queueId"] && (
@@ -656,7 +656,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 <input
                                     {...register("executionConfig.deadlineCloud.storageProfileId")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
                             </div>
                             <div>
@@ -668,7 +668,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     )}
                                     type="number"
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
                             </div>
                             <div>
@@ -682,7 +682,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     )}
                                     type="number"
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
                             </div>
                             <div>
@@ -696,7 +696,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                     )}
                                     type="number"
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
                             </div>
                             <div>
@@ -706,7 +706,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 <input
                                     {...register("executionConfig.deadlineCloud.templateType")}
                                     disabled={isDeadlineCloudDisabled}
-                                    className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
                             </div>
                         </>
@@ -720,7 +720,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             id="waitForCallback"
                             {...register("executionConfig.waitForCallback")}
                             disabled={executionType === "DeadlineCloud" || isDeadlineCloudDisabled}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                         >
                             <option value="Enabled">Enabled</option>
                             <option value="Disabled">Disabled</option>
@@ -744,7 +744,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                         <input
                             {...register("executionConfig.taskTimeout")}
                             disabled={isDeadlineCloudDisabled}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="1-604800 (max 1 week)"
                         />
                         {validationErrors["executionConfig.taskTimeout"] && (
@@ -761,7 +761,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                         <input
                             {...register("executionConfig.taskHeartbeatTimeout")}
                             disabled={isDeadlineCloudDisabled}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="1-604800 (max 1 week)"
                         />
                         {validationErrors["executionConfig.taskHeartbeatTimeout"] && (
@@ -796,7 +796,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 setValue("systemConfig.inputFileArity", value as any);
                             }}
                             disabled={isDeadlineCloudDisabled}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                         >
                             <option value="none">None</option>
                             <option value="one">One file</option>
@@ -920,7 +920,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                         <input
                             {...register("systemConfig.auxPreviewPipelineSuffix")}
                             disabled={isDeadlineCloudDisabled}
-                            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             placeholder="e.g. -preview"
                         />
                     </div>

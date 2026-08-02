@@ -166,6 +166,18 @@ class TestExecutionConfigurationSnapshot:
         assert row["outputFileBaseExecutionPathExtension"] == {"S": "/"}
         assert counts["wf_config"] == 1
 
+    def test_workflow_config_row_carries_the_output_asset_index_key(self):
+        """WorkflowExecConfigByOutputAssetGSI is SPARSE, so a row omitting its partition attribute is
+        absent from the index entirely — the migrated execution would then be missing from its own
+        output asset's execution history, with the output-target fields still looking correct."""
+        client, _counts, _total = _run_executions([_legacy_execution("e1", "")])
+
+        row = client.writes["wfConfig"][0]
+        assert row["outputDatabaseId:outputAssetId"] == {"S": "db1:asset1"}
+        # Must agree with the target fields it indexes; a mismatch indexes the run under another asset.
+        assert row["outputDatabaseId:outputAssetId"] == {
+            "S": f"{row['outputDatabaseId']['S']}:{row['outputAssetId']['S']}"}
+
     def test_pipeline_config_row_per_pipeline_execution(self):
         client, counts, _total = _run_executions([_legacy_execution("e1", "")])
 

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from "react";
+import CollapsibleSection from "../components/CollapsibleSection";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm, { formDataToTags } from "../components/DynamicTagForm";
 import SystemTagHelp from "../components/SystemTagHelp";
@@ -181,7 +182,7 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                     <select
                         value={selectedTemplateId || ""}
                         onChange={(e) => handleTemplateChange(e.target.value)}
-                        className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                        className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                     >
                         <option value="">-- Select Template --</option>
                         {templates.map((tpl) => (
@@ -196,9 +197,12 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
             {/* Tag form */}
             {selectedTemplate?.tagSchema && selectedTemplate.tagSchema.length > 0 && (
                 <div>
-                    <label className="block text-sm font-medium text-text-primary mb-2">
-                        Template Tags
-                    </label>
+                    <div className="text-sm font-semibold text-text-primary">Template inputs</div>
+                    <p className="text-xs text-text-secondary mb-2">
+                        Values this template asks for. A field left blank uses the template&apos;s
+                        own default, or falls back to the asset&apos;s metadata where the pipeline
+                        supports it.
+                    </p>
                     <DynamicTagForm
                         schema={selectedTemplate.tagSchema}
                         formData={tagFormData}
@@ -236,10 +240,18 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
             {/* Config editor — shown when a template is selected OR the run is customizing a
                 template-less config. Editable only while customizing. */}
             {(selectedTemplate || customize) && (
-                <div>
-                    <label className="block text-sm font-medium text-text-primary mb-2">
-                        {customize ? "Configuration (editable)" : "Configuration (from template)"}
-                    </label>
+                <CollapsibleSection
+                    title={customize ? "Configuration (editable)" : "Configuration (from template)"}
+                    description={
+                        customize
+                            ? "Edit the body sent for this run."
+                            : "The body this run will send. Expand to review it."
+                    }
+                    // Collapsed by default: 300px of monospace dominated the step, and a read-only
+                    // body is reference material rather than something to fill in. Opens
+                    // automatically while customizing, since then it IS the thing being edited.
+                    defaultOpen={customize}
+                >
                     <ConfigEditor
                         value={resolvedConfigBody}
                         language={selectedTemplate?.configFormat || "json"}
@@ -257,12 +269,12 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                             <SystemTagHelp />
                         </div>
                     )}
-                </div>
+                </CollapsibleSection>
             )}
 
             {/* Validation errors */}
             {validationResult.errors.length > 0 && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                <div className="orch-outline p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
                     <p className="text-sm font-semibold text-red-900 dark:text-red-200 mb-1">
                         Validation Errors:
                     </p>

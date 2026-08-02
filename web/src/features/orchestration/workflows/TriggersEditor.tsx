@@ -28,7 +28,7 @@ const PipelineTemplateSelect: React.FC<{
         <select
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
         >
             <option value="">
                 {isLoading ? "Loading templates…" : "None (choose at run time)"}
@@ -176,7 +176,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
 
     if (!editing && !fileUploadTrigger) {
         return (
-            <div className="border border-border-default rounded p-6 bg-surface-container">
+            <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
                 <h2 className="text-xl font-semibold text-text-primary mb-4">Triggers</h2>
                 <div className="text-center py-8">
                     <div className="space-y-2">
@@ -198,31 +198,31 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     if (!editing && fileUploadTrigger) {
         return (
             <>
-                <div className="border border-border-default rounded p-6 bg-surface-container">
+                <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
                     <h2 className="text-xl font-semibold text-text-primary mb-4">Triggers</h2>
-                    <table className="min-w-full border-collapse border border-border-default">
+                    <table className="orch-outline min-w-full border-collapse border border-border-default">
                         <thead className="bg-surface-secondary">
                             <tr>
-                                <th className="border border-border-default px-4 py-2 text-left text-text-primary">
+                                <th className="orch-outline border border-border-default px-4 py-2 text-left text-text-primary">
                                     Type
                                 </th>
-                                <th className="border border-border-default px-4 py-2 text-left text-text-primary">
+                                <th className="orch-outline border border-border-default px-4 py-2 text-left text-text-primary">
                                     Enabled
                                 </th>
-                                <th className="border border-border-default px-4 py-2 text-left text-text-primary">
+                                <th className="orch-outline border border-border-default px-4 py-2 text-left text-text-primary">
                                     Actions
                                 </th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr className="hover:bg-surface-hover">
-                                <td className="border border-border-default px-4 py-2 text-text-primary">
+                                <td className="orch-outline border border-border-default px-4 py-2 text-text-primary">
                                     File Upload
                                 </td>
-                                <td className="border border-border-default px-4 py-2 text-text-primary">
+                                <td className="orch-outline border border-border-default px-4 py-2 text-text-primary">
                                     {fileUploadTrigger.enabled ? "Yes" : "No"}
                                 </td>
-                                <td className="border border-border-default px-4 py-2 text-text-primary">
+                                <td className="orch-outline border border-border-default px-4 py-2 text-text-primary">
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => setEditing(true)}
@@ -270,7 +270,7 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     }
 
     return (
-        <div className="border border-border-default rounded p-6 bg-surface-container">
+        <div className="orch-outline border border-border-default rounded p-6 bg-surface-container">
             <h2 className="text-xl font-semibold text-text-primary mb-4">
                 Edit File Upload Trigger
             </h2>
@@ -323,13 +323,13 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                     <label className="block text-sm font-medium mb-1 text-text-primary">
                         Default Template IDs (per pipeline)
                     </label>
-                    <table className="min-w-full border-collapse border border-border-default">
+                    <table className="orch-outline min-w-full border-collapse border border-border-default">
                         <thead className="bg-surface-secondary">
                             <tr>
-                                <th className="border border-border-default px-4 py-2 text-left text-text-primary">
+                                <th className="orch-outline border border-border-default px-4 py-2 text-left text-text-primary">
                                     Pipeline
                                 </th>
-                                <th className="border border-border-default px-4 py-2 text-left text-text-primary">
+                                <th className="orch-outline border border-border-default px-4 py-2 text-left text-text-primary">
                                     Default template
                                 </th>
                             </tr>
@@ -339,10 +339,10 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
                                 const compositeKey = `${item.pipelineDatabaseId}:${item.pipelineId}`;
                                 return (
                                     <tr key={idx} className="hover:bg-surface-hover">
-                                        <td className="border border-border-default px-4 py-2 text-text-primary">
+                                        <td className="orch-outline border border-border-default px-4 py-2 text-text-primary">
                                             {compositeKey}
                                         </td>
-                                        <td className="border border-border-default px-4 py-2 text-text-primary">
+                                        <td className="orch-outline border border-border-default px-4 py-2 text-text-primary">
                                             {/* Pick by template name — the trigger stores the id. */}
                                             <PipelineTemplateSelect
                                                 pipelineDatabaseId={item.pipelineDatabaseId || ""}

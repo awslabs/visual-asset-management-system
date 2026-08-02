@@ -22,12 +22,24 @@ interface SearchableSelectProps {
     ariaLabel?: string;
     /** Shown as the first, always-present option (e.g. a "whole asset" sentinel). */
     leadingOption?: SelectOption;
+    /**
+     * Supply this to resolve matches on the SERVER instead of filtering locally. The component reports
+     * the typed text (and reports it again on Enter) and renders whatever `options` it is then given, so
+     * a picker can back onto a search API rather than needing every option up front. Omit it to keep the
+     * client-side filtering, which is right when the caller already holds the full list.
+     */
+    onQueryChange?: (query: string) => void;
+    /** Message under the list, e.g. "showing 100 of 4,312 — refine the search". */
+    footerNote?: string;
 }
 
 /**
  * A type-to-filter single-select combobox for the orchestration (Tailwind) module. Used where a
- * plain <select> would be unwieldy — e.g. picking one asset/file out of many. Filters the provided
- * option list client-side (the caller supplies options from a search API or a full list).
+ * plain <select> would be unwieldy — e.g. picking one asset/file out of many.
+ *
+ * By default it filters the supplied option list client-side. Pass `onQueryChange` to have the CALLER
+ * resolve matches (a search API) instead: the component then renders the options it is given verbatim,
+ * which is what lets a picker work against thousands of records without loading them all.
  */
 const SearchableSelect: React.FC<SearchableSelectProps> = ({
     options,
@@ -38,6 +50,8 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     loading,
     ariaLabel,
     leadingOption,
+    onQueryChange,
+    footerNote,
 }) => {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
@@ -58,6 +72,10 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     }, [allOptions, value]);
 
     const filtered = useMemo(() => {
+        // Server-query mode: the caller already resolved the matches for this query, so filtering again
+        // here would hide results the server deliberately returned (a metadata or fuzzy match whose
+        // label does not contain the typed text).
+        if (onQueryChange) return allOptions;
         const q = query.trim().toLowerCase();
         if (!q) return allOptions;
         return allOptions.filter(
@@ -66,7 +84,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 (o.detail || "").toLowerCase().includes(q) ||
                 o.value.toLowerCase().includes(q)
         );
-    }, [allOptions, query]);
+    }, [allOptions, query, onQueryChange]);
 
     const close = () => {
         setOpen(false);
@@ -122,7 +140,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 aria-expanded={open}
                 disabled={disabled}
                 onClick={() => setOpen((o) => !o)}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary text-left disabled:opacity-50"
+                className="orch-outline w-full flex items-center justify-between gap-2 px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary text-left disabled:opacity-50"
             >
                 <span className={selectedLabel ? "" : "text-text-secondary"}>
                     {loading ? "Loading…" : selectedLabel || placeholder || "Select…"}
@@ -132,20 +150,35 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 </span>
             </button>
             {open && !disabled && (
-                <div className="absolute z-50 mt-1 w-full rounded border border-border-default bg-surface-container shadow-lg">
+                <div className="orch-outline absolute z-50 mt-1 w-full rounded border border-border-default bg-surface-container shadow-lg">
                     <input
                         autoFocus
                         type="text"
                         value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Type to search…"
-                        className="w-full px-3 py-2 border-b border-border-default bg-surface-input text-text-primary focus:outline-none"
+                        onChange={(e) => {
+                            setQuery(e.target.value);
+                            onQueryChange?.(e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                            // Enter re-runs the search, matching how the rest of the app's asset search
+                            // behaves (press Enter to search).
+                            if (e.key === "Enter" && onQueryChange) {
+                                e.preventDefault();
+                                onQueryChange(query);
+                            }
+                        }}
+                        placeholder={
+                            onQueryChange ? "Type to search, Enter to refresh…" : "Type to search…"
+                        }
+                        className="orch-outline w-full px-3 py-2 border-b border-border-default bg-surface-input text-text-primary focus:outline-none"
                     />
                     {/* role="option" elements are direct children of the listbox: an intervening
                         <li> would break the owned-element relationship. */}
                     <div className="max-h-60 overflow-auto py-1" role="listbox">
                         {filtered.length === 0 ? (
-                            <div className="px-3 py-2 text-sm text-text-secondary">No matches</div>
+                            <div className="px-3 py-2 text-sm text-text-secondary">
+                                {loading ? "Searching…" : "No matches"}
+                            </div>
                         ) : (
                             filtered.map((o) => (
                                 <button
@@ -173,6 +206,11 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                             ))
                         )}
                     </div>
+                    {footerNote && (
+                        <div className="orch-outline border-t border-border-default px-3 py-1.5 text-xs text-text-secondary">
+                            {footerNote}
+                        </div>
+                    )}
                 </div>
             )}
         </div>

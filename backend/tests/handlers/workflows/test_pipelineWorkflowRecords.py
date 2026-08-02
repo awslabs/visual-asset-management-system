@@ -138,10 +138,6 @@ class TestWorkflowRecords:
         assert rec["triggerConfig"]["defaultTemplateIds"] == {"db1:p1": "t1"}
         assert rec["triggerConfig"]["inputFileFilters"]["allow"] == ["*.glb"]
 
-    def test_output_index_record_keys(self):
-        rec = wr.build_execution_output_index_record("db1", "a1", "EXEC1")
-        assert rec["databaseId:assetId"] == "db1:a1"  # PK
-        assert rec["workflowExecutionId"] == "EXEC1"  # SK / GSI PK
 
 
 # ============================ templateBodyStorage ============================

@@ -332,13 +332,33 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
                                ('resultLog', 'Result Log'), ('errorLog', 'Error Log')):
                 if message.get(key):
                     out.append(f"\n== {label} ==\n{message[key]}")
-            events = message.get('events')
-            if events:
-                out.append(f"\n== Events ({len(events)}) ==")
-                for ev in events:
-                    out.append(f"  [{ev.get('timestamp', '')}] {ev.get('message', '')}".rstrip())
-                if message.get('nextToken'):
-                    out.append(f"\nNext token: {message['nextToken']}")
+            def _events(key, label):
+                evs = message.get(key)
+                if not evs:
+                    return
+                out.append(f"\n== {label} ({len(evs)}) ==")
+                for ev in evs:
+                    line = f"  [{ev.get('timestamp', '')}] {ev.get('message', '')}".rstrip()
+                    # subProcessEvents mix several log groups; name the source so a step's own
+                    # invocation log is distinguishable from the pipeline's registered logs.
+                    if ev.get('logGroupArn'):
+                        line += f"  ({ev['logGroupArn'].rsplit(':log-group:', 1)[-1]})"
+                    out.append(line)
+
+            _events('events', 'Events')
+            if message.get('nextToken'):
+                out.append(f"\nNext token: {message['nextToken']}")
+            # The state-transition timeline and the per-step logs (step invocation log, the
+            # pipeline's registered logs, any sub-execution history) were reachable only via
+            # --json-output before; they are the logs that explain a failed launch.
+            _events('sfnHistoryEvents', 'State Machine History')
+            _events('subProcessEvents', 'Sub-Process Logs')
+            warnings = message.get('warnings')
+            if warnings:
+                # A log VAMS could not read (missing permission, or past the per-request cap). Shown
+                # rather than swallowed: the alternative is output that looks complete but is not.
+                out.append(f"\n== Warnings ({len(warnings)}) ==")
+                out.extend(f"  {w}" for w in warnings)
             return '\n'.join(out) if len(out) > 1 else "No log content."
 
         output_result(_message(result), json_output, cli_formatter=_fmt)

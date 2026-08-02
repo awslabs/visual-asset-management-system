@@ -137,6 +137,11 @@ export interface Workflow {
     warnings?: string[];
     // Total executions for this workflow; present on list responses (computed server-side per page).
     executionCount?: number;
+    // How many triggers the workflow has and how many are ENABLED; present on list responses.
+    // Both are reported because they differ when a trigger exists but is switched off — the state
+    // that explains a workflow which looks configured yet never fires.
+    triggerCount?: number;
+    triggersEnabledCount?: number;
 }
 
 /** Create body: workflowId is null when the backend generates it. */
@@ -194,6 +199,12 @@ export interface Execution {
 }
 
 export interface ExecutionDetail extends Execution {
+    /**
+     * The workflow's systemConfig, read LIVE from the workflow record — so it reflects the workflow as
+     * it stands now, not necessarily as it was when this execution ran. Per-step settings below ARE the
+     * recorded snapshot; a settings view must label the difference.
+     */
+    workflowSystemConfig?: Record<string, any>;
     workflowName?: string;
     workflowDescription?: string;
     pipelines?: any[];

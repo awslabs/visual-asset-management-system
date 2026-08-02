@@ -122,6 +122,11 @@ partition. Author it with the block for your execution type present but empty:
 1. **`inputFileFilters.allow` must match what the container actually accepts.** The filter is what
    the execute API and the file-upload trigger match against — a missing extension makes the pipeline
    silently unselectable for that file type.
+   **An omitted, empty, or `*` allow list means "any file"** and defers the decision to the rest of the
+   chain (workflow -> pipeline -> the chosen template's `overrides`); an omitted exclude list excludes
+   nothing. A filter only ever NARROWS eligibility. A match-everything pattern in an `exclude` list
+   (`*`, `**`, `*.*`, `/*`, `/**`) is REJECTED on save at every level including triggers, since exclude
+   is applied last and would remove every file — leave the list empty to exclude nothing.
 2. **`requireTemplate: true` needs a default template.** Execute auto-selects the pipeline's default;
    with no default the caller _must_ name a `templateId` or the run is rejected. The importer
    promotes a **single** template to default automatically, but with two or more templates the choice
@@ -153,6 +158,31 @@ partition. Author it with the block for your execution type present but empty:
    **A container must therefore not create its own per-job folder** -- the workflow prefix is what
    separates runs, and a container-side folder shows up as a stray level inside every asset. The
    Gaussian Splat and Isaac Lab bundles use it for exactly this.
+8. **Let the TEMPLATE decide whether a step needs an input file.** When one pipeline supports several
+   modes that differ in what they consume, set the pipeline's `inputFileArity` to the LOWEST value any
+   of its templates needs (usually `none`) and let each template raise it via its `overrides`
+   (`inputFileArity`, `assetScope`, `metadataInputs`, `inputFileFilters` — validated on save; unknown
+   keys and bad arity values are rejected). A text-to-video template then needs no input file while an
+   image-to-video template on the same pipeline overrides arity to `one`. This keeps one pipeline per
+   MODEL rather than one per mode, and the execute form asks for a file only when the chosen template
+   consumes one. The Cosmos 3 bundles are configured this way.
+   **A workflow's `inputFileArity` is authored, not derived** — templates are chosen per execution, so
+   set it to the MAXIMUM any pipeline/template combination in that workflow can require; a lower gate
+   rejects a selection a template would have accepted.
+9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
+   `{jobName}` folder in `pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`, is persisted
+   on the workflow record as the derived `jobNames[]`, and is what `executeWorkflow` reads to
+   reconstruct those prefixes at launch. Omit it in a bundle unless the pipeline id would not identify
+   the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
+   takes the id charset only (3-63 chars), so **`{{tag}}` placeholders are rejected**: use the
+   workflow's `defaultOutputFileBaseExecutionPathExtension` (rule 7) to vary the path per run. Do not
+   confuse the FIELD with the `{{jobName}}` TAG, which resolves to the run's generated job name.
+10. **A workflow may not list the same pipeline twice.** Per-step execute params, resolved template
+    configs, and filtered inputs are all keyed by `pipelineDatabaseId:pipelineId`, so a repeated
+    pipeline silently overwrites the earlier step's resolved config and both steps run identically —
+    with no error. When one model needs two modes in one workflow (train then evaluate, say), ship two
+    pipelines sharing a container image / ECR repo / compute environment rather than one pipeline
+    listed twice with different templates.
 
 Verify registration after a deploy rather than assuming it:
 

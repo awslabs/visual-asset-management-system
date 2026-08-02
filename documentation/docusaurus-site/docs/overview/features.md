@@ -185,7 +185,7 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes fourteen built-in processing pipelines, each deployable through configuration flags:
+VAMS includes fifteen built-in processing pipelines, each deployable through configuration flags:
 
 | Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
 | ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
@@ -202,6 +202,7 @@ VAMS includes fourteen built-in processing pipelines, each deployable through co
 | NVIDIA Cosmos 3              | `useNvidiaCosmos3`                       | Omnimodal world-model generation using Cosmos3-Nano (16B) and Cosmos3-Super (64B) models for text2image, text2video, and image2video                                                          | Disabled |
 | RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization                                                                                                                                                            | Disabled |
 | VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                                                                                                                                                                | Disabled |
+| NVIDIA Gr00t Fine-Tuning     | `useNvidiaGr00t`                         | Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning                                                                      | Disabled |
 | NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation                                                                                                                                                | Disabled |
 
 ### Pipeline Capabilities

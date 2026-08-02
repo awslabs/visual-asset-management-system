@@ -459,6 +459,62 @@ Synchronous AWS Lambda pipelines (`waitForCallback` disabled) return normally an
 `TaskToken`. Amazon SQS, Amazon EventBridge, and AWS Deadline Cloud pipelines are asynchronous;
 Deadline Cloud always uses the callback.
 
+## Registering sub-processes and logs
+
+VAMS can only stop, and only read logs from, the resources a pipeline tells it about. A pipeline that
+starts its own nested state machine, submits its own compute job, or writes to its own log group should
+report each one — otherwise aborting the VAMS execution leaves that work running, and its logs are
+unreachable from the execution view.
+
+Report a resource by publishing a registration event to the orchestration bus. The bus name is injected
+into the pipeline's Lambda environment by the CDK, and the event source prefix arrives on the payload:
+
+```python
+events_client.put_events(Entries=[{
+    "EventBusName": ORCHESTRATION_BUS_NAME,
+    "Source": orchestration_event_prefix,
+    "DetailType": "pipeline.execution.register",
+    "Detail": json.dumps({
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {"resourceType": "stepFunctionsExecution",
+                         "stateMachineArn": state_machine_arn,
+                         "executionArn": sub_execution_arn},
+        "logs": [{"logGroupArn": log_group_arn, "logGroupName": log_group_name}],
+    }),
+}])
+```
+
+Registration is **best-effort by design**: wrap it so a registration failure is logged and ignored rather
+than failing a pipeline whose real work already started. Re-reporting the same locator is safe — an
+already-registered resource is skipped, so an at-least-once event delivery does not duplicate it.
+
+| Register                                  | So that                                                                                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| A nested Step Functions execution         | Aborting the VAMS execution stops it, and its state history appears in the execution's logs.         |
+| A log group the pipeline writes to        | Its events appear under the step's logs without an operator needing to know where the pipeline logs. |
+| A compute job the pipeline submits itself | Aborting terminates the job rather than leaving it running and billing.                              |
+
+`resourceType` is what keeps this open-ended: the registration path validates and stores whichever locator
+keys are reported (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`, `queueId`, or a
+generic `arn`). A type VAMS cannot yet stop is still recorded, and an abort reports it as left running
+instead of silently forgetting it.
+
+:::tip[AWS Batch: which integration submits the job matters]
+When a nested state machine submits its Batch job through the Step Functions `.sync` integration
+(`IntegrationPattern.RUN_JOB`), Step Functions owns the job's lifecycle — registering the sub-execution is
+sufficient, because stopping it stops the job.
+
+When the pipeline submits the job itself (for example from a Lambda under `WAIT_FOR_TASK_TOKEN`), nothing
+stops the job when the state machine stops. Register it explicitly:
+
+```python
+"subExecution": {"resourceType": "batchJob", "jobId": response["jobId"]}
+```
+
+The pipeline's role needs `batch:TerminateJob` for the abort to succeed. This is the difference between an
+abort that stops a long-running GPU job and one that leaves it running for hours.
+:::
+
 ## Per-type envelopes
 
 ### AWS Lambda
@@ -604,11 +660,35 @@ partition. Include the block for the execution type with its resource fields lef
 | `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                   |
 | `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                 |
 
-Four points determine whether a registered pipeline is actually usable:
+**Declare only what differs from the defaults.** Registration completes the block before storing it: every
+field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and
+`metadataInputs` are filled key by key, so naming one rule does not drop its siblings. The stored record
+replaces `systemConfig` wholesale rather than merging into it. This is also what keeps a newly added
+`systemConfig` field from changing the meaning of bundles written before it existed.
+
+These points determine whether a registered pipeline is actually usable:
 
 -   **`inputFileFilters.allow` must match the file types the pipeline handles.** These patterns are what
     the execute API and the file-upload trigger match against. A missing extension makes the pipeline
     unselectable for that file type without producing an error.
+
+    An omitted, empty, or `*` allow list means **any file**, deferring the decision to the rest of the
+    chain (workflow, then pipeline, then the chosen template's overrides). An omitted exclude list
+    excludes nothing. A filter only ever narrows eligibility — it can never re-admit a file something
+    upstream rejected. A match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) in an **exclude** list
+    is rejected on save at every level, including triggers: exclude is applied last, so it would remove
+    every file. Leave the list empty to exclude nothing.
+
+-   **A template can raise the pipeline's input requirements.** When one pipeline supports several modes
+    that consume different inputs, set the pipeline's `inputFileArity` to the **lowest** value any of its
+    templates needs — usually `none` — and let each template raise it through its `overrides`, which may
+    set `inputFileArity`, `assetScope`, `metadataInputs`, and `inputFileFilters` (validated on save;
+    unknown keys and invalid arity values are rejected rather than silently ignored at execute time).
+
+    A text-to-video template then needs no input file while an image-to-video template on the same
+    pipeline requires one. This keeps one pipeline per **model** rather than one per mode, and the execute
+    form asks for a file only when the chosen template consumes one.
+
 -   **A `requireTemplate` pipeline needs a default template.** Execution auto-selects the pipeline's
     default template; without one, every caller must name a `templateId` explicitly. A bundle shipping
     exactly one template has it promoted to the default automatically. With two or more templates the
@@ -623,6 +703,60 @@ Four points determine whether a registered pipeline is actually usable:
     vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
     vamscli pipeline template list -d GLOBAL -p {pipelineId}
     ```
+
+    `assetScope` accepts two vocabularies: the shorthand `{"wholeAsset": true|false}` and the canonical
+    four `*Allowed` keys. Both are valid, so a bundle written either way imports — but a malformed value
+    can fail the import while the deployment still exits successfully, which is why the check above
+    matters.
+
+### workflow.json
+
+A bundle may ship one runnable workflow for its pipeline. Its `systemConfig` is the gate an execution
+is checked against, and it is authored rather than derived from the pipeline:
+
+```json
+{
+    "workflowName": "3D Gaussian Splat Toolbox",
+    "category": "3D Reconstruction",
+    "description": "Process images and videos into 3D splats.",
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": { "singleAssetOnly": true, "wholeAssetAllowed": false },
+        "inputFileFilters": { "allow": ["*.zip", "*.mov", "*.mp4"], "exclude": [] },
+        "outputTarget": { "locationType": "asset", "allowOverride": false },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": "/{{executionId}}/"
+    }
+}
+```
+
+-   **`inputFileArity` is authored, not inherited.** Templates are chosen per execution, so set it to the
+    **maximum** any pipeline/template combination in the workflow can require. A lower value rejects a
+    selection a template would have accepted.
+
+-   **The workflow's `inputFileFilters` are applied before the pipelines'.** The selected files are
+    narrowed by the workflow first, and each pipeline is then judged against what survived. A workflow
+    whose filters exclude a type its own pipeline requires produces a workflow that can never satisfy
+    that pipeline — the API rejects such an execution, and the workflow editor warns while saving.
+
+-   **`allowWorkflowTriggerChaining`** (default `false`) lets another workflow's _output_ fire this
+    workflow's triggers — how a preview or metadata workflow runs on a conversion's result. A workflow
+    never fires on output it wrote itself whatever the value, so it cannot loop on its own files, and a
+    chained file must still match the trigger's own `inputFileFilters`.
+
+-   **`defaultOutputFileBaseExecutionPathExtension`** supplies the output path prefix when an execution
+    names none. It is stored **unresolved**, so its `{{tag}}` placeholders resolve per run: one stored
+    `/{{executionId}}/` gives every execution its own output folder. The prefix is inserted immediately
+    before each output file's own name, so a container's own output folder structure is preserved.
+
+    :::warning[Do not create a per-job folder inside the container]
+    The workflow prefix is what separates one run's output from another's. A container that also creates
+    its own per-job folder adds a stray level inside every asset.
+    :::
+
+A workflow may not list the same pipeline twice — see
+[Specified pipelines](../concepts/pipelines-and-workflows.md#specified-pipelines). Ship two pipelines
+sharing a container image when one model needs two modes in a single workflow.
 
 ### Built-in pipelines: registration through the CDK
 
@@ -786,6 +920,8 @@ Use this checklist when building a new pipeline:
 -   [ ] `constructPipeline` Lambda uses the correct output path for the pipeline's output type
 -   [ ] Container preserves relative paths when writing asset-adjacent files
 -   [ ] `assetId` is threaded through the entire chain (vamsExecute -> constructPipeline -> container)
+-   [ ] Every sub-process and log location registered (nested state machines, log groups, and any compute job the pipeline submits itself) — see [Registering sub-processes and logs](#registering-sub-processes-and-logs)
+-   [ ] `SendTaskFailure` sent on every error path, not only the expected ones
 -   [ ] CDK nested stack created with Lambda builders, AWS Step Functions, and compute resources
 -   [ ] All Lambda builders follow the standard security pattern (4 required security calls)
 -   [ ] Configuration flag added to `ConfigPublic` with backward-compatibility defaults in `getConfig()`

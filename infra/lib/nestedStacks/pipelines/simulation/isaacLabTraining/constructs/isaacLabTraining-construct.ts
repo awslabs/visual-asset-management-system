@@ -344,6 +344,10 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 "outputS3AssetFilesPath.$": "$.outputS3AssetFilesPath",
                 "inputS3AssetFilePath.$": "$.inputS3AssetFilePath",
+                // Needed so the lambda can register the submitted Batch job as an abortable
+                // sub-process: this pipeline submits under WAIT_FOR_TASK_TOKEN rather than the
+                // Batch .sync integration, so Step Functions does not stop the job on abort.
+                "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(8)),

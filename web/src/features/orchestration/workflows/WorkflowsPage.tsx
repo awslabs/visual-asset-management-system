@@ -98,6 +98,19 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
             return false;
         }
 
+        // Trigger facet. Filtered client-side because the counts already ride along on every row of
+        // the list response, so no extra request is needed. A row whose counts the backend could not
+        // read (undefined) is kept rather than hidden — a best-effort count failure must not look
+        // like a workflow that does not match.
+        const triggerFacet = filters.facets.triggers;
+        if (triggerFacet && w.triggerCount !== undefined && w.triggerCount !== null) {
+            const enabled = w.triggersEnabledCount ?? w.triggerCount;
+            if (triggerFacet === "enabled" && enabled < 1) return false;
+            // "Configured but off" is the diagnostic case: triggers exist, none of them will fire.
+            if (triggerFacet === "disabled" && !(w.triggerCount > 0 && enabled === 0)) return false;
+            if (triggerFacet === "none" && w.triggerCount !== 0) return false;
+        }
+
         return true;
     });
 
@@ -128,6 +141,10 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
         // executionCount comes from the list response (computed server-side per page); omit the
         // label when the backend did not supply it.
         const executionCount = workflow.executionCount;
+        // Same for the trigger counts. `triggersEnabledCount` falls back to the total so an older
+        // response that carries only the count does not render as "all triggers disabled".
+        const triggerCount = workflow.triggerCount;
+        const enabledTriggerCount = workflow.triggersEnabledCount ?? triggerCount;
 
         const contextMenuItems: ContextMenuItem[] = [
             {
@@ -187,6 +204,30 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                         <span className="mr-3">Pipelines: {pipelineCount}</span>
                         {executionCount !== undefined && executionCount !== null && (
                             <span className="mr-3">Executions: {executionCount}</span>
+                        )}
+                        {triggerCount !== undefined && triggerCount !== null && (
+                            <span
+                                className="mr-3"
+                                // Spelled out on hover: the count alone does not say whether the
+                                // triggers will actually fire.
+                                title={
+                                    triggerCount === 0
+                                        ? "This workflow has no triggers and runs only when started manually"
+                                        : `${enabledTriggerCount} of ${triggerCount} trigger${
+                                              triggerCount === 1 ? "" : "s"
+                                          } enabled`
+                                }
+                            >
+                                Triggers: {triggerCount}
+                                {/* Only shown when some trigger is switched off: "2 (1 on)" is a
+                                    workflow that fires partly, which reads very differently from "2". */}
+                                {triggerCount > 0 && enabledTriggerCount !== triggerCount && (
+                                    <span className="text-vams-warning">
+                                        {" "}
+                                        ({enabledTriggerCount} on)
+                                    </span>
+                                )}
+                            </span>
                         )}
                         {workflow.subDashboardUrl && (
                             <a
@@ -259,6 +300,16 @@ const WorkflowsPage: React.FC<WorkflowsPageProps> = ({ databaseId }) => {
                                     { label: "Enabled", value: "enabled" },
                                     { label: "Disabled", value: "disabled" },
                                     { label: "Archived", value: "archived" },
+                                ],
+                            },
+                            {
+                                key: "triggers",
+                                label: "Triggers",
+                                options: [
+                                    { label: "Enabled trigger", value: "enabled" },
+                                    // The diagnostic case: triggers configured, none of them firing.
+                                    { label: "All triggers off", value: "disabled" },
+                                    { label: "No triggers", value: "none" },
                                 ],
                             },
                             ...(databaseOptions.length > 0

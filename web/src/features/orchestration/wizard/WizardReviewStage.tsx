@@ -80,7 +80,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                     return (
                         <div
                             key={compositeKey}
-                            className="p-3 bg-surface-secondary rounded border border-border-default"
+                            className="orch-outline p-3 bg-surface-secondary rounded border border-border-default"
                         >
                             <h5 className="text-sm font-semibold text-text-primary">
                                 {pipeline?.pipelineName || ref.pipelineId}
@@ -102,7 +102,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                                 </p>
                             )}
                             {errors.length > 0 && (
-                                <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                                <div className="orch-outline mt-2 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
                                     <p className="text-xs font-semibold text-red-900 dark:text-red-200">
                                         Errors:
                                     </p>
@@ -120,7 +120,7 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
 
             {/* Hard error gate */}
             {hasAnyErrors && (
-                <div className="p-4 bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 rounded">
+                <div className="orch-outline p-4 bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 rounded">
                     <p className="text-sm font-semibold text-red-900 dark:text-red-200">
                         Cannot launch: One or more pipelines have validation errors. Please go back
                         and fix the issues.

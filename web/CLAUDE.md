@@ -70,7 +70,13 @@ web/
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
         versions/             # Asset version management (list, comparison, edit/archive modals)
-      common/ containers/ createupdate/ filemanager/ form/
+      common/ containers/ createupdate/ form/
+      filemanager/            # Asset file manager (Cloudscape)
+        components/             #   FileDetailsPanel toolbar: Export | Automation | operations.
+                                #   AutomationActions.tsx lazy-loads the orchestration execute modal,
+                                #   so this Cloudscape tree never bundles that module.
+        utils/                  #   automationSelection.ts — maps a selection (whole asset / folder /
+                                #   one file / many) to workflow input files
       interactive/            # Map/geospatial components
       list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - main search UI

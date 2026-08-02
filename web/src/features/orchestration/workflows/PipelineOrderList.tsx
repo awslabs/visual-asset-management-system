@@ -23,6 +23,60 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { SpecifiedPipelineRef, Pipeline, Template } from "../types";
 import { JOB_NAME_PATTERN } from "./workflowValidation";
+import InfoTooltip from "../components/InfoTooltip";
+
+/**
+ * What the job name actually controls, per workflowAsl.to_asl_pipeline_dict: it becomes the ASL state
+ * name AND the `{jobName}` segment of every output path this step writes, defaulting to the pipeline
+ * id when left blank. It is validated with the shared id validator, so it takes a literal value only —
+ * NOT template tags (see SpecifiedPipelineInput.validate_ids).
+ */
+const JOB_NAME_HELP = (
+    <>
+        <p className="mb-1">
+            A label for this step. It names the step in the workflow&apos;s state machine and
+            becomes a folder in the output path:
+        </p>
+        <p className="mb-1 font-mono text-[11px] break-all">
+            pipelines/&#123;pipeline&#125;/<span className="underline">&#123;jobName&#125;</span>
+            /output/&#123;executionId&#125;/files/
+        </p>
+        <p className="mb-1">
+            <strong>Leave this blank unless you need it.</strong> Blank uses the pipeline&apos;s own
+            id, which already keeps each step&apos;s output in its own folder.
+        </p>
+        <p className="mb-1">
+            Set it when the pipeline id alone would not identify the step: a general-purpose
+            pipeline used here for a narrower purpose (
+            <span className="font-mono">convert-for-web</span>), an opaque pipeline id (
+            <span className="font-mono">pl-7f3a91</span>), or output that downstream tooling locates
+            by S3 prefix and needs a stable, meaningful folder.
+        </p>
+        <p className="mb-1">
+            3–63 characters: letters, numbers, hyphens and underscores only. It is a fixed label,
+            not a template —{" "}
+            <strong>
+                tags such as <span className="font-mono">&#123;&#123;jobName&#125;&#125;</span> are
+                not substituted here
+            </strong>{" "}
+            and are rejected, because this name is written into the state machine when the workflow
+            is deployed rather than resolved per run. To vary the output path per run, use the
+            workflow&apos;s output path prefix, which does support tags.
+        </p>
+        <p className="mb-1">
+            Note the two are different things: this field is a fixed label, while the{" "}
+            <span className="font-mono">&#123;&#123;jobName&#125;&#125;</span> tag — valid in output
+            path prefixes and template bodies — resolves to the workflow&apos;s generated job name
+            for the run.
+        </p>
+        <p>
+            <strong>This is part of the output path, not a display label.</strong> Changing it on an
+            existing workflow changes where subsequent output is written; output already written
+            stays put, so the workflow&apos;s history ends up split across the old and new folders.
+            Treat a change here as a storage-layout change.
+        </p>
+    </>
+);
 
 export function moveItem<T>(list: T[], from: number, to: number): T[] {
     const newList = [...list];
@@ -164,7 +218,8 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                                 htmlFor={`jobName-${index}`}
                                 className="block text-sm font-medium mb-1 text-text-primary"
                             >
-                                Job Name (optional)
+                                Job Name (optional){" "}
+                                <InfoTooltip text={JOB_NAME_HELP} label="About the job name" />
                             </label>
                             {/* The job name becomes a Step Functions state name and an S3
                                 output-path segment, so it is limited to the id character set. */}

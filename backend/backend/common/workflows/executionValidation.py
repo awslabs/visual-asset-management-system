@@ -24,6 +24,12 @@ TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "
 
 _METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes")
 
+# Patterns that match every file. In an ALLOW list these mean allow-all, which is also what an absent
+# or empty allow list means — so an allow list consisting only of these is "open" and defers to the
+# next level down the chain. In an EXCLUDE list they are rejected at save time (they would exclude
+# everything); see _validate_input_file_filters in models/pipelines.py.
+MATCH_EVERYTHING_PATTERNS = ("*", "**", "*.*", "/*", "/**")
+
 # assetScope shorthand -> canonical key. The pipeline registration schemas (vamsSchema/pipeline.json)
 # spell whole-asset support as `wholeAsset`; the canonical record/UI vocabulary is the four *Allowed
 # booleans. Both spellings are accepted on a stored config and evaluate identically.
@@ -119,6 +125,34 @@ def _non_extension_patterns(patterns):
     return [p for p in patterns or [] if p and not _is_extension_pattern(p)]
 
 
+def _excluded_pipeline_allows(workflow_exclude, pipeline_allow):
+    """The pipeline allow-patterns the workflow's EXCLUDE list would suppress.
+
+    Decidable only for extension-vs-extension comparisons: '*.glb' excluded kills a pipeline that
+    only accepts '*.glb'. A wildcard on either side cannot be resolved pattern-to-pattern, so it is
+    left alone rather than guessed at — a false warning on every glob-filtered workflow would train
+    users to ignore the panel."""
+    suppressed = []
+    for allowed in pipeline_allow or []:
+        if not allowed or not _is_extension_pattern(allowed):
+            continue
+        for excluded in workflow_exclude or []:
+            if (excluded and _is_extension_pattern(excluded)
+                    and _normalized_extension(excluded) == _normalized_extension(allowed)):
+                suppressed.append(allowed)
+                break
+    return suppressed
+
+
+def is_open_allow_list(allow):
+    """True when an allow list places no restriction: absent, empty, or made up only of
+    match-everything patterns. An open allow list at one level of the chain defers the decision to the
+    next level down (workflow -> pipeline -> template override), which is what lets a permissive
+    workflow host restrictive pipelines."""
+    patterns = [p.strip() for p in (allow or []) if p and p.strip()]
+    return not patterns or all(p in MATCH_EVERYTHING_PATTERNS for p in patterns)
+
+
 def apply_input_file_filters(selected_inputs, input_file_filters):
     """Return the subset of selected_inputs that passes an {allow, exclude} filter. Empty allow means
     allow-all; exclude is applied after allow. Each input is a dict with 'relativeFileKey'.
@@ -129,7 +163,12 @@ def apply_input_file_filters(selected_inputs, input_file_filters):
     patterns therefore admits a container selection, leaving its admissibility to the assetScope
     whole-asset / folder gates."""
     filters = input_file_filters or {}
-    allow = filters.get("allow") or []
+    # An allow list of only match-everything patterns is treated exactly like an absent one, so '*'
+    # reads as "no restriction at this level" rather than as a pattern to match against. Without this
+    # the two spellings of the same intent behave differently on container selections, where
+    # extension patterns are stripped: a ['*'] allow list would survive stripping and match, while
+    # ['*.glb'] would be stripped to nothing and fall through to allow-all.
+    allow = [] if is_open_allow_list(filters.get("allow")) else (filters.get("allow") or [])
     exclude = filters.get("exclude") or []
     result = []
     for item in selected_inputs or []:
@@ -142,6 +181,106 @@ def apply_input_file_filters(selected_inputs, input_file_filters):
         if entry_exclude and _matches_any(fk, entry_exclude):
             continue
         result.append(item)
+    return result
+
+
+def _dedupe(patterns):
+    """Patterns with duplicates removed, first occurrence order preserved. Compared case-insensitively
+    because the matcher is case-insensitive, so '*.GLB' and '*.glb' are the same restriction."""
+    seen = set()
+    result = []
+    for pattern in patterns or []:
+        text = (pattern or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def aggregate_input_file_filters(workflow_system_config, pipeline_system_configs):
+    """The file restriction a workflow effectively imposes, for display alongside its systemConfig.
+
+    Resolution follows the chain's own precedence:
+      - The workflow's allow list, when it is NOT open, IS the answer — it is the outer boundary, so
+        nothing a pipeline allows can widen it.
+      - When the workflow's allow list is open (absent/empty/'*'), the restriction is whatever its
+        pipelines impose, so the pipelines' allow lists are unioned. A union is correct because the
+        pipelines are alternatives from a file's point of view: a file usable by ANY pipeline in the
+        workflow is a file the workflow can do something with.
+
+    Excludes are unioned across the workflow and every pipeline regardless, since an exclusion at any
+    level removes the file.
+
+    Returns {allow, exclude, source, includesTemplateOverrides: False}. `source` is 'workflow' or
+    'pipelines' so a caller can label where the restriction came from.
+
+    IMPORTANT: template `overrides` are deliberately NOT folded in — a template is chosen per
+    execution, so the aggregate cannot know them. This value is therefore indicative for browsing, and
+    must not be used to validate a concrete selection; the execute path resolves the real effective
+    config per pipeline (resolve_effective_pipeline_config) instead."""
+    wsc = workflow_system_config or {}
+    wf_filters = wsc.get("inputFileFilters") or {}
+    wf_allow = wf_filters.get("allow") or []
+
+    excludes = list(wf_filters.get("exclude") or [])
+    pipeline_allows = []
+    for psc in pipeline_system_configs or []:
+        filters = (psc or {}).get("inputFileFilters") or {}
+        pipeline_allows.extend(filters.get("allow") or [])
+        excludes.extend(filters.get("exclude") or [])
+
+    if not is_open_allow_list(wf_allow):
+        allow, source = list(wf_allow), "workflow"
+    else:
+        # Any pipeline being open means the union is open, so it collapses to no restriction.
+        open_pipeline = any(
+            is_open_allow_list(((psc or {}).get("inputFileFilters") or {}).get("allow"))
+            for psc in pipeline_system_configs or []
+        )
+        allow = [] if (open_pipeline or not pipeline_allows) else pipeline_allows
+        source = "pipelines"
+
+    return {
+        "allow": _dedupe(allow),
+        "exclude": _dedupe(excludes),
+        "source": source,
+        "includesTemplateOverrides": False,
+    }
+
+
+def aggregate_metadata_inputs(workflow_system_config, pipeline_system_configs):
+    """The metadata inputs a workflow's steps will actually receive, for display alongside its
+    systemConfig.
+
+    A metadata type reaches a pipeline only when BOTH the workflow gate has it on and some pipeline
+    asks for it — the workflow gate is what loads the payload, and a pipeline that does not ask for it
+    is not handed it. So each key is (workflow gate AND any pipeline wants it), and a key the workflow
+    gates off is reported as off however many pipelines want it.
+
+    Returns {assetMetadata, fileMetadata, fileAttributes, gatedOffByWorkflow: [keys]} where
+    `gatedOffByWorkflow` names the types a pipeline asked for but the workflow suppressed — the case
+    worth showing, since the pipeline runs without data it declared it uses.
+
+    Carries the same template-override caveat as aggregate_input_file_filters."""
+    wsc = workflow_system_config or {}
+    gate = wsc.get("metadataInputs") or {}
+    result = {}
+    gated_off = []
+    for key in _METADATA_KEYS:
+        wanted = any(
+            ((psc or {}).get("metadataInputs") or {}).get(key)
+            for psc in pipeline_system_configs or []
+        )
+        allowed = bool(gate.get(key))
+        result[key] = bool(allowed and wanted)
+        if wanted and not allowed:
+            gated_off.append(key)
+    result["gatedOffByWorkflow"] = gated_off
+    result["includesTemplateOverrides"] = False
     return result
 
 
@@ -244,12 +383,22 @@ def _validate_workflow_level(workflow_system_config, selected_inputs, output_tar
 
 
 def _evaluate(workflow_system_config, pipeline_effective_configs, selected_inputs, output_target):
-    """Core evaluation shared by execute-time and save-time. Returns (errors, warnings, filtered)."""
+    """Core evaluation shared by execute-time and save-time. Returns (errors, warnings, filtered).
+
+    Two-stage by design: the workflow's own inputFileFilters narrow the selection FIRST, and every
+    pipeline is then judged against that narrowed list rather than against the raw selection. The
+    workflow gate is the outer boundary of what an execution may carry, so a file it excludes is not
+    available to any pipeline and must not count toward one's arity or filters. Judging a pipeline on
+    the raw list can both invent errors (a pipeline blamed for a file the workflow already dropped)
+    and hide them (a pipeline's arity satisfied by a file that never reaches it)."""
     errors = []
     warnings = []
     filtered = {}
 
     _validate_workflow_level(workflow_system_config, selected_inputs, output_target, errors)
+
+    workflow_inputs = apply_input_file_filters(
+        selected_inputs, (workflow_system_config or {}).get("inputFileFilters"))
 
     for pipeline in pipeline_effective_configs or []:
         pid = pipeline.get("pipelineId", "")
@@ -271,14 +420,22 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
             filtered[pid] = []
             continue
 
-        # Filter the workflow inputs down to what this pipeline accepts.
-        pipeline_inputs = apply_input_file_filters(selected_inputs, psc.get("inputFileFilters"))
+        # Filter the WORKFLOW-ADMITTED inputs down to what this pipeline accepts.
+        pipeline_inputs = apply_input_file_filters(workflow_inputs, psc.get("inputFileFilters"))
         filtered[pid] = pipeline_inputs
 
-        # A file-requiring pipeline whose filters exclude all selected inputs is a hard error.
-        if selected_inputs and not pipeline_inputs:
+        # A file-requiring pipeline left with nothing is a hard error. Which filter emptied the list
+        # decides the message: naming the workflow's filters when they are the cause points at the
+        # actual misconfiguration instead of blaming a pipeline whose own filters were never reached.
+        if workflow_inputs and not pipeline_inputs:
             errors.append(
                 f"{label} requires input files but its input-file filters exclude all selected inputs."
+            )
+            continue
+        if selected_inputs and not workflow_inputs:
+            errors.append(
+                f"{label} requires input files but the workflow's input-file filters exclude every "
+                "selected input, so no file reaches it."
             )
             continue
 
@@ -367,13 +524,31 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
                 "multi-file executions may fail this pipeline."
             )
 
-        # Filter shadowing: workflow allow-list disjoint from pipeline allow-list.
+        # Filter shadowing, two independent ways a workflow can starve a pipeline of its input:
+        p_filters = psc.get("inputFileFilters") or {}
+        p_allow = p_filters.get("allow") or []
+
+        # (1) The workflow's allow-list admits nothing the pipeline accepts.
         wf_allow = wf_filters.get("allow") or []
-        p_allow = (psc.get("inputFileFilters") or {}).get("allow") or []
         overlap = any(_patterns_may_overlap(w, p) for w in wf_allow for p in p_allow)
         if wf_allow and p_allow and not overlap:
             warnings.append(
                 f"{label} input-file filters may exclude everything the workflow filters allow."
+            )
+
+        # (2) The workflow EXCLUDES a type the pipeline accepts. Distinct from (1): the allow-lists
+        # can overlap perfectly and an exclude still removes the file afterwards, since exclude is
+        # applied second. Worth a separate message because the fix is a different field.
+        suppressed = _excluded_pipeline_allows(wf_filters.get("exclude"), p_allow)
+        if suppressed:
+            remaining = [p for p in p_allow if p not in suppressed]
+            detail = (
+                "leaving it no accepted input type" if not remaining
+                else f"leaving it only {', '.join(remaining)}"
+            )
+            warnings.append(
+                f"{label} accepts {', '.join(suppressed)} but the workflow's input-file filters "
+                f"exclude {'that' if len(suppressed) == 1 else 'those'}, {detail}."
             )
 
     # Trigger-default sanity: each default template must have all required tags defaulted.

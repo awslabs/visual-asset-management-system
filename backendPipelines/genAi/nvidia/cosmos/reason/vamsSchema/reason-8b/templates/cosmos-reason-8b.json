@@ -3,8 +3,17 @@
     "templateName": "Reason 8B (analyze / reason)",
     "description": "Analyze and reason over a video or image with the Cosmos Reason 8B vision-language model.",
     "configFormat": "json",
-    "configBody": "{\"INVALIDATE_COSMOS_MODELS\":\"false\"}",
+    "configBody": "{\"INVALIDATE_COSMOS_MODELS\": \"false\", \"PROMPT\": \"{{PROMPT}}\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Provide the analysis/reasoning prompt via the COSMOS_REASON_PROMPT file metadata key (or PROMPT in the config); a sensible default caption prompt is used when none is set. INVALIDATE_COSMOS_MODELS=true clears the cached model weights before the run. The model size is fixed by the registered pipeline.",
-    "isDefault": true
+    "inputInstructions": "Enter the prompt below. Leaving it blank falls back to the COSMOS_REASON_PROMPT key on the asset's metadata.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS_REASON_PROMPT key on the asset's metadata."
+        }
+    ]
 }

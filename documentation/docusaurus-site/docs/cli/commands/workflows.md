@@ -22,17 +22,24 @@ List workflows in a database, or all workflows you can access.
 vamscli workflow list
 vamscli workflow list -d my-database
 vamscli workflow list -d my-database --include-archived --auto-paginate
+vamscli workflow list --has-triggers true
 vamscli workflow list --json-output
 ```
 
-| Option               | Description                                                        |
-| -------------------- | ------------------------------------------------------------------ |
-| `-d, --database-id`  | Database ID to list from (omit to list all accessible workflows)   |
-| `--include-archived` | Include archived workflows                                         |
-| `--page-size`        | Items per page                                                     |
-| `--auto-paginate`    | Fetch all pages automatically (up to `--max-items`, default 10000) |
-| `--starting-token`   | Continuation token for manual pagination                           |
-| `--json-output`      | Emit the raw JSON response                                         |
+Each workflow reports its trigger count. When some of its triggers are switched off the enabled count is
+shown alongside — `Triggers: 2 (1 enabled)` is a workflow that only partly fires, which reads very
+differently from `Triggers: 2`. A workflow with no triggers shows `Triggers: 0` and runs only when
+started manually.
+
+| Option               | Description                                                                       |
+| -------------------- | --------------------------------------------------------------------------------- |
+| `-d, --database-id`  | Database ID to list from (omit to list all accessible workflows)                  |
+| `--include-archived` | Include archived workflows                                                        |
+| `--has-triggers`     | `true` lists only workflows with an enabled trigger; `false` only those with none |
+| `--page-size`        | Items per page                                                                    |
+| `--auto-paginate`    | Fetch all pages automatically (up to `--max-items`, default 10000)                |
+| `--starting-token`   | Continuation token for manual pagination                                          |
+| `--json-output`      | Emit the raw JSON response                                                        |
 
 ---
 
@@ -49,8 +56,8 @@ vamscli workflow get -d my-db -w my-workflow
 ## workflow create
 
 Create a workflow referencing one or more pipelines. Each `--pipeline` ref is
-`databaseId:pipelineId[:defaultTemplateId]` and may be repeated; alternatively supply the full
-`specifiedPipelines` list as JSON.
+`databaseId:pipelineId[:defaultTemplateId[:jobName]]` and may be repeated; alternatively supply the
+full `specifiedPipelines` list as JSON.
 
 ```bash
 # Reference two pipelines, one with a default template
@@ -69,13 +76,40 @@ vamscli workflow create -d my-db -n "My Workflow" \
 | `-d, --database-id`            | Database to create the workflow in (`GLOBAL` allowed)                                                         |
 | `-n, --name`                   | Human-readable workflow name                                                                                  |
 | `-w, --workflow-id`            | Explicit workflow ID (a GUID is generated when omitted)                                                       |
-| `--pipeline`                   | Referenced pipeline `databaseId:pipelineId[:defaultTemplateId]` (repeatable)                                  |
+| `--pipeline`                   | Referenced pipeline `databaseId:pipelineId[:defaultTemplateId[:jobName]]` (repeatable)                        |
 | `--specified-pipelines[-file]` | Full `specifiedPipelines` list as inline JSON or a file                                                       |
 | `--category`                   | Workflow category                                                                                             |
 | `--description`                | Workflow description                                                                                          |
 | `--system-config[-file]`       | `systemConfig` (input-file arity, asset scope, metadata inputs, concurrency, output target, trigger chaining) |
 | `--sub-dashboard-url`          | Optional sub-dashboard URL                                                                                    |
 | `--disabled`                   | Create the workflow disabled                                                                                  |
+
+:::note[Setting a step's job name]
+The fourth segment of a `--pipeline` ref is the step's optional `jobName`. Because the segments are
+positional, use an empty third segment to set a job name without a default template:
+
+```bash
+# With a default template
+vamscli workflow create -d my-db -n "Convert then label" \
+    --pipeline global:conversion-3d-basic:to-glb:convert-to-glb \
+    --pipeline global:metadata-3d-labeling::label-converted
+```
+
+A `jobName` becomes a folder in the step's output path, so it is worth setting when the pipeline id
+alone would not identify the step. Omit it to use the pipeline id. See
+[Job names](../../concepts/pipelines-and-workflows.md) for the full rules.
+
+Supply the list as JSON when a reference needs anything the shorthand cannot express — the JSON is
+passed through as given:
+
+```bash
+vamscli workflow create -d my-db -n "Convert then label" --specified-pipelines '[
+  {"pipelineDatabaseId":"global","pipelineId":"conversion-3d-basic",
+   "defaultTemplateId":"to-glb","jobName":"convert-to-glb"}
+]'
+```
+
+:::
 
 :::note
 A `GLOBAL` workflow may only reference `GLOBAL` pipelines; a database workflow may reference `GLOBAL`
@@ -95,6 +129,15 @@ vamscli workflow update -d my-db -w my-workflow --description "Updated"
 vamscli workflow update -d my-db -w my-workflow --pipeline my-db:new-pipeline
 vamscli workflow update -d my-db -w my-workflow --disable
 ```
+
+`--pipeline` takes the same `databaseId:pipelineId[:defaultTemplateId[:jobName]]` shape as `create`,
+and the refs supplied **replace** the workflow's pipeline list rather than adding to it — include every
+step the workflow should keep.
+
+:::warning[Changing a step's job name moves its output]
+A `jobName` is part of the step's output path. Changing one on an existing workflow means subsequent
+output is written under the new folder while output already written stays under the old one.
+:::
 
 ---
 
@@ -196,7 +239,7 @@ vamscli workflow execute --workflow-database-id global -w my-workflow \
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--workflow-database-id`                     | The workflow's database (`GLOBAL` allowed)                                                                                                                                                                                                                         |
 | `-w, --workflow-id`                          | Workflow to execute                                                                                                                                                                                                                                                |
-| `--input-file`                               | `databaseId:assetId:relativeFileKey[:versionId]` (repeatable)                                                                                                                                                                                                      |
+| `--input-file`                               | `databaseId:assetId:relativeFileKey[:versionId]` (repeatable). `versionId` is the file's S3 object version (see `vamscli file info … --include-versions`), not an asset version number; omit it to read the current version at launch                              |
 | `--input-files[-file]`                       | Full `inputFiles` list as inline JSON or a file                                                                                                                                                                                                                    |
 | `--pipeline-parameters[-file]`               | Per-pipeline `{templateId, templateTags, customTemplateOverride}` keyed by pipelineId                                                                                                                                                                              |
 | `--output-asset-id` / `--output-database-id` | Override the output target (when the workflow allows it)                                                                                                                                                                                                           |
@@ -225,6 +268,20 @@ list with rich filters, use [`execution list`](executions.md#execution-list).
 vamscli workflow list-executions -d my-db -a my-asset
 vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-paginate
 ```
+
+| Option                   | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| `-d, --database-id`      | Database containing the asset (required)                           |
+| `-a, --asset-id`         | Asset to list executions for (required)                            |
+| `-w, --workflow-id`      | Filter to one workflow                                             |
+| `--workflow-database-id` | The filtered workflow's database                                   |
+| `--auto-paginate`        | Fetch every page rather than the first                             |
+| `--page-size`            | Items per page (max 50)                                            |
+| `--max-items`            | Cap on total items fetched; only meaningful with `--auto-paginate` |
+| `--starting-token`       | Resume from a previous response's token (manual pagination)        |
+
+The listing covers executions in both directions: those that read the asset as an input **and** those
+that wrote to it as their output target, merged newest-first.
 
 :::note
 Per-asset execution listing is limited to a page size of 50 due to Step Functions API throttling.

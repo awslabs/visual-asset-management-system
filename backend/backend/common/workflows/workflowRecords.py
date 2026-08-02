@@ -7,7 +7,6 @@ This module has NO AWS or environment dependencies so it can be imported and uni
 isolation, mirroring common/workflows/executionRecords.py. It builds:
   - WorkflowStorageTableV2 rows:          PK databaseId, SK workflowId
   - WorkflowTriggersStorageTable rows:    PK workflowDatabaseId:workflowId, SK triggerType
-  - WorkflowExecutionOutputsIndexStorageTable rows: PK databaseId:assetId, SK workflowExecutionId
 
 Each specifiedPipelines ref stores pipelineDatabaseId + pipelineId together so the composite
 pipeline key resolves unambiguously.
@@ -150,11 +149,3 @@ def build_file_upload_trigger_config(input_file_filters=None, default_template_i
     }
 
 
-def build_execution_output_index_record(database_id, asset_id, workflow_execution_id):
-    """WorkflowExecutionOutputsIndexStorageTable row: 'executions that wrote to this asset'."""
-    return {
-        "databaseId:assetId": f"{database_id}:{asset_id}",  # PK
-        "workflowExecutionId": workflow_execution_id,  # SK / GSI PK
-        "databaseId": database_id,
-        "assetId": asset_id,
-    }

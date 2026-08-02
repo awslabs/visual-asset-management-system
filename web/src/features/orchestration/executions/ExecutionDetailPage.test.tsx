@@ -44,6 +44,91 @@ describe("ExecutionDetailPage", () => {
         jest.clearAllMocks();
     });
 
+    it("shows the recorded per-step settings and flags what the template overrode", async () => {
+        // The point of the Settings tab: a finished run must explain which settings were ENFORCED, even
+        // after the template or pipeline has since been edited or archived. effectiveSystemConfig is the
+        // recorded merge; templateOverrides says which keys the template changed.
+        const { useExecutionDetails } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-set",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                workflowSystemConfig: { inputFileArity: "one", concurrencyRestriction: "perAsset" },
+                pipelines: [
+                    {
+                        pipelineId: "p1",
+                        pipelineName: "Cosmos 3 Nano",
+                        executionStatus: "SUCCEEDED",
+                        templateId: "cosmos3-nano-text2video",
+                        effectiveSystemConfig: { inputFileArity: "one", requireTemplate: true },
+                        templateOverrides: { inputFileArity: "one" },
+                    },
+                ],
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-set" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await userEvent.click(await screen.findByRole("tab", { name: /Settings/i }));
+
+        // Workflow level is labelled CURRENT, because it is read live rather than snapshotted.
+        expect(screen.getByText(/Workflow settings \(current\)/i)).toBeInTheDocument();
+        expect(screen.getByText(/can differ if/i)).toBeInTheDocument();
+
+        // Per-step card names the step and its template.
+        expect(screen.getByText(/Step 1: Cosmos 3 Nano/)).toBeInTheDocument();
+        expect(screen.getByText("cosmos3-nano-text2video")).toBeInTheDocument();
+
+        // Settings are rendered with readable labels, not raw camelCase keys.
+        expect(screen.getAllByText(/Input file count:/).length).toBeGreaterThan(0);
+        // And the key the template changed is flagged. (Only the step grid receives overrides, but the
+        // badge renders once per overridden key, so assert on the count rather than a single match.)
+        expect(screen.getAllByText("overridden").length).toBeGreaterThan(0);
+    });
+
+    it("says so when a step recorded no settings, rather than implying empty settings", async () => {
+        // Executions from before settings capture existed have no effectiveSystemConfig. Showing an empty
+        // grid would read as "no restrictions", which is a materially different claim.
+        const { useExecutionDetails } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-old",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                pipelines: [{ pipelineId: "p1", executionStatus: "SUCCEEDED" }],
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-old" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await userEvent.click(await screen.findByRole("tab", { name: /Settings/i }));
+        expect(screen.getByText(/No settings recorded for this step/i)).toBeInTheDocument();
+        expect(screen.queryByText("overridden")).not.toBeInTheDocument();
+    });
+
     it("exposes the tab strip with tablist/tab semantics and marks the active tab", async () => {
         // Styled after Cloudscape's Tabs (a bordered strip with the selected tab lifted onto the
         // container surface). The ARIA roles are what make it a tab strip rather than loose buttons,

@@ -6,5 +6,12 @@
     "configBody": "{\"MODEL_VARIANT\":\"super-image2video\",\"TASK_MODE\":\"image2video\",\"DISABLE_GUARDRAILS\":\"true\"}",
     "allowCustomEdit": true,
     "inputInstructions": "Supply an input image; provide an optional guiding prompt via the COSMOS3_PROMPT asset/file metadata key.",
-    "isDefault": true
+    "isDefault": true,
+    "overrides": {
+        "inputFileArity": "one",
+        "inputFileFilters": {
+            "allow": ["*.jpg", "*.jpeg", "*.png", "*.webp"],
+            "exclude": []
+        }
+    }
 }

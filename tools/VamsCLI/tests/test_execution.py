@@ -138,6 +138,57 @@ class TestExecutionLogs:
             result = cli_runner.invoke(cli, ['execution', 'logs', 'bad'])
             assert result.exit_code != 0
 
+    def test_logs_full_mode_renders_the_per_step_and_history_logs(self, cli_runner,
+                                                                  generic_command_mocks):
+        """subProcessEvents and sfnHistoryEvents must reach the human-readable output.
+
+        These carry the step invocation log (a Lambda step's own CloudWatch log) and the state
+        transition timeline — the logs that explain a launch that failed before the pipeline started.
+        Rendering only `events` left them reachable solely via --json-output.
+        """
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {
+                'mode': 'full',
+                'pipelineExecutionId': 'p1',
+                'events': [{'timestamp': 1, 'message': 'main-evt'}],
+                'sfnHistoryEvents': [{'timestamp': 2, 'message': 'TaskStateEntered: Convert'}],
+                'subProcessEvents': [{
+                    'timestamp': 3, 'message': 'lambda-evt',
+                    'logGroupArn': 'arn:aws:logs:us-west-2:1:log-group:/aws/lambda/vams-fn:*'}],
+            }}
+            result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', '--mode', 'full'])
+            assert result.exit_code == 0
+            assert 'main-evt' in result.output
+            assert 'TaskStateEntered: Convert' in result.output
+            assert 'lambda-evt' in result.output
+            # The originating log group is named: subProcessEvents mix several groups, so an
+            # unlabelled line cannot be attributed to the step's own log vs a registered one.
+            assert '/aws/lambda/vams-fn' in result.output
+
+    def test_logs_warnings_are_shown_not_swallowed(self, cli_runner, generic_command_mocks):
+        # A log VAMS could not read. Hiding it makes partial output look complete.
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {
+                'mode': 'full',
+                'events': [{'timestamp': 1, 'message': 'evt'}],
+                'warnings': ['Step invocation log retrieval failed for arn:...: AccessDenied'],
+            }}
+            result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', '--mode', 'full'])
+            assert result.exit_code == 0
+            assert 'Warnings' in result.output
+            assert 'AccessDenied' in result.output
+
+    def test_logs_omits_empty_sections(self, cli_runner, generic_command_mocks):
+        # An execution type with no invocation log (SQS/EventBridge/DeadlineCloud) returns no
+        # subProcessEvents; an empty section header would read as "there is a log and it is blank".
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_logs.return_value = {'message': {
+                'mode': 'full', 'events': [{'timestamp': 1, 'message': 'evt'}]}}
+            result = cli_runner.invoke(cli, ['execution', 'logs', 'e1', '--mode', 'full'])
+            assert result.exit_code == 0
+            assert 'Sub-Process Logs' not in result.output
+            assert 'Warnings' not in result.output
+
 
 class TestExecutionAbort:
     def test_abort_single_success(self, cli_runner, generic_command_mocks):

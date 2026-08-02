@@ -28,8 +28,11 @@ def lambda_handler(event, context):
     input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     groot_config = event.get("gr00tConfig", "{}")
     external_sfn_task_token = event.get("externalSfnTaskToken", "")
+    # finetune (default) trains; evaluate scores an existing checkpoint. Threaded through the
+    # definition so both modes share one Batch job definition, queue, and state machine.
+    mode = str(event.get("mode", "") or "finetune").strip().lower()
 
-    job_name = f"gr00t-finetune-{str(uuid.uuid4())[:8]}"
+    job_name = f"gr00t-{'eval' if mode == 'evaluate' else 'finetune'}-{str(uuid.uuid4())[:8]}"
 
     definition = {
         "jobName": job_name,
@@ -43,7 +46,8 @@ def lambda_handler(event, context):
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "gr00tConfig": groot_config,
-        "externalSfnTaskToken": external_sfn_task_token
+        "externalSfnTaskToken": external_sfn_task_token,
+        "mode": mode
     }
 
     logger.info(f"Definition: {definition}")

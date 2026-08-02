@@ -199,7 +199,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
 
             <Stepper steps={STEPS} current={wizardStep} />
 
-            <div className="bg-surface-container border border-border-default rounded-lg p-4 space-y-4">
+            <div className="orch-outline bg-surface-container border border-border-default rounded-lg p-4 space-y-4">
                 {wizardStep === "basic" && (
                     <>
                         <div>
@@ -210,7 +210,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 type="text"
                                 value={templateName}
                                 onChange={(e) => setTemplateName(e.target.value)}
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 placeholder="Template name"
                             />
                             {basicError && (
@@ -222,7 +222,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             <textarea
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 rows={2}
                                 placeholder="Template description"
                             />
@@ -234,7 +234,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             <textarea
                                 value={inputInstructions}
                                 onChange={(e) => setInputInstructions(e.target.value)}
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                                 rows={2}
                                 placeholder="Instructions shown to the person running an execution with this template"
                             />
@@ -271,7 +271,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             <select
                                 value={configFormat}
                                 onChange={(e) => setConfigFormat(e.target.value as ConfigFormat)}
-                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                             >
                                 {CONFIG_FORMATS.map((format) => (
                                     <option key={format} value={format}>
@@ -350,7 +350,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                     Live preview
                                     <InfoTooltip text="How the tag fields appear on the execute form when this template is chosen." />
                                 </div>
-                                <div className="rounded-lg border border-border-default bg-surface-secondary p-4">
+                                <div className="orch-outline rounded-lg border border-border-default bg-surface-secondary p-4">
                                     <div className="text-xs text-text-secondary mb-3">
                                         Execute-form preview
                                     </div>
@@ -396,7 +396,7 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                 )}
 
                 {saveError && (
-                    <div className="p-3 bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 rounded">
+                    <div className="orch-outline p-3 bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 rounded">
                         <p className="text-sm text-red-800 dark:text-red-200 whitespace-pre-line">
                             {saveError}
                         </p>
@@ -464,7 +464,7 @@ export const TemplateFormEditLoader: React.FC<{
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
+                    <div className="orch-outline inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
                     <p className="text-text-secondary">Loading template…</p>
                 </div>
             </div>
