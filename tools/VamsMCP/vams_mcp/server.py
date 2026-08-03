@@ -29,12 +29,15 @@ def _force_logging_to_stderr() -> None:
 
 # Importing .client pulls in vamscli (which may install stdout log handlers),
 # so reconfigure logging immediately afterward and before any client activity.
-from .client import VamsClient  # noqa: E402
+from .client import VamsClient, API_ASSETS, API_DATABASE_ASSETS  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 
 _force_logging_to_stderr()
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+try:  # mcp >= 2.0 renamed FastMCP to MCPServer and dropped the fastmcp module
+    from mcp.server.mcpserver import MCPServer as McpServer  # noqa: E402
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as McpServer  # noqa: E402
 
 # --- Bootstrap -----------------------------------------------------------
 
@@ -50,7 +53,10 @@ except ConfigError as exc:
     CLIENT = None  # type: ignore[assignment]
     STARTUP_ERROR = str(exc)
 
-mcp = FastMCP("vams")
+mcp = McpServer("vams")
+
+# The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
+WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
 
 
 def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -77,6 +83,16 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 @mcp.tool()
 @tool_result
+def list_allowed_api_routes() -> Dict[str, Any]:
+    """List the VAMS API routes and methods the authenticated user is authorized
+    to call. Call this first to scope what this session can actually do — the
+    user's two-tier permissions bound every other tool, and a route missing here
+    will be refused with a 403."""
+    return CLIENT.api.list_allowed_api_routes()
+
+
+@mcp.tool()
+@tool_result
 def list_databases(include_deleted: bool = False, max_items: Optional[int] = None) -> Dict[str, Any]:
     """List VAMS databases (auto-paginated). Returns database IDs, descriptions,
     asset counts, and bucket info."""
@@ -95,16 +111,21 @@ def get_database(database_id: str, include_deleted: bool = False) -> Dict[str, A
 
 @mcp.tool()
 @tool_result
-def list_buckets() -> Dict[str, Any]:
+def list_buckets(max_items: Optional[int] = None) -> Dict[str, Any]:
     """List asset storage buckets available for creating databases."""
-    return CLIENT.api.list_buckets()
+    return CLIENT.paginate(lambda params: CLIENT.api.list_buckets(params=params), max_items=max_items)
 
 
 @mcp.tool()
 @tool_result
-def list_assets(database_id: str, include_archived: bool = False, max_items: Optional[int] = None) -> Dict[str, Any]:
-    """List assets within a database (auto-paginated)."""
-    endpoint = f"/database/{database_id}/assets"
+def list_assets(
+    database_id: Optional[str] = None,
+    include_archived: bool = False,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List assets, scoped to a database when database_id is given, otherwise
+    across all databases the user can read (auto-paginated)."""
+    endpoint = API_DATABASE_ASSETS.format(databaseId=database_id) if database_id else API_ASSETS
 
     def fetch(params: Dict[str, Any]) -> Dict[str, Any]:
         if include_archived:
@@ -128,6 +149,7 @@ def list_asset_files(database_id: str, asset_id: str, max_items: Optional[int] =
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_asset_files(database_id, asset_id, params=params),
         max_items=max_items,
+        items_key="items",
     )
 
 
@@ -135,14 +157,24 @@ def list_asset_files(database_id: str, asset_id: str, max_items: Optional[int] =
 @tool_result
 def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
     """Get all metadata key/value pairs for an asset."""
-    return CLIENT.api.get_asset_metadata_v2(database_id, asset_id)
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_asset_metadata_v2(
+            database_id, asset_id, page_size=params["pageSize"], starting_token=params.get("startingToken")
+        ),
+        items_key="metadata",
+    )
 
 
 @mcp.tool()
 @tool_result
 def get_database_metadata(database_id: str) -> Dict[str, Any]:
     """Get metadata key/value pairs for a database."""
-    return CLIENT.api.get_database_metadata_v2(database_id)
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.get_database_metadata_v2(
+            database_id, page_size=params["pageSize"], starting_token=params.get("startingToken")
+        ),
+        items_key="metadata",
+    )
 
 
 @mcp.tool()
@@ -152,6 +184,7 @@ def list_asset_versions(database_id: str, asset_id: str, max_items: Optional[int
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_versions(database_id, asset_id, params=params),
         max_items=max_items,
+        items_key="versions",
     )
 
 
@@ -165,7 +198,8 @@ def get_asset_version(database_id: str, asset_id: str, asset_version_id: str) ->
 @mcp.tool()
 @tool_result
 def get_asset_history(database_id: str, asset_id: str, max_items: Optional[int] = None) -> Dict[str, Any]:
-    """Get the change history for an asset (auto-paginated)."""
+    """Get the asset lifecycle history (create/edit/archive/unarchive/delete
+    records, newest first, auto-paginated)."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.get_asset_history(database_id, asset_id, params=params),
         max_items=max_items,
@@ -186,6 +220,7 @@ def _build_search_request(
     metadata_query: Optional[str],
     size: int,
     include_archived: bool,
+    geo_search: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     request: Dict[str, Any] = {
         "entityTypes": entity_types,
@@ -203,6 +238,8 @@ def _build_search_request(
         request["metadataSearchMode"] = "both"
     if database_id:
         request["filters"] = [{"query_string": {"query": f'str_databaseid:"{database_id}"'}}]
+    if geo_search:
+        request["geoSearch"] = geo_search
     return request
 
 
@@ -214,14 +251,24 @@ def search_assets(
     metadata_query: Optional[str] = None,
     size: int = 25,
     include_archived: bool = False,
+    geo_search: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Full-text / metadata search across assets (OpenSearch).
+    """Full-text / metadata / geospatial search across assets (OpenSearch).
 
     - query: free text (matches names, descriptions, metadata)
     - database_id: restrict to one database
-    - metadata_query: metadata field search, e.g. 'MD_str_product:Training'
+    - metadata_query: metadata field search. Metadata is indexed with an `MD_`
+      prefix plus a type prefix, e.g. 'MD_str_product:Training'. Call
+      get_search_fields() to see the indexed field names.
+    - geo_search: geospatial filter on `geo_MD_location`. Supply exactly one of
+      `point` ({lat, lon, radiusMeters}), `bbox` ({topLeft, bottomRight} of
+      points), or `geoJson` (GeoJSON geometry/Feature/FeatureCollection), plus
+      an optional `relation` of intersects (default) / within / contains /
+      disjoint.
     Returns a compact list of hits (id, score, source fields)."""
-    request = _build_search_request(["asset"], query, database_id, metadata_query, size, include_archived)
+    request = _build_search_request(
+        ["asset"], query, database_id, metadata_query, size, include_archived, geo_search
+    )
     raw = CLIENT.api.search_query(request)
     return CLIENT.trim_search_results(raw, max_hits=size)
 
@@ -231,11 +278,16 @@ def search_assets(
 def search_files(
     query: Optional[str] = None,
     database_id: Optional[str] = None,
+    metadata_query: Optional[str] = None,
     size: int = 25,
     include_archived: bool = False,
+    geo_search: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Full-text search across asset files (OpenSearch)."""
-    request = _build_search_request(["file"], query, database_id, None, size, include_archived)
+    """Full-text / metadata / geospatial search across asset files (OpenSearch).
+    Takes the same metadata_query and geo_search shapes as search_assets."""
+    request = _build_search_request(
+        ["file"], query, database_id, metadata_query, size, include_archived, geo_search
+    )
     raw = CLIENT.api.search_query(request)
     return CLIENT.trim_search_results(raw, max_hits=size)
 
@@ -264,6 +316,8 @@ def list_workflow_executions(database_id: str, asset_id: str, max_items: Optiona
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_workflow_executions(database_id, asset_id, params=params),
         max_items=max_items,
+        # The executions endpoint caps pageSize at 50 to avoid Step Functions throttling.
+        page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
     )
 
 
@@ -283,9 +337,21 @@ def list_tag_types(max_items: Optional[int] = None) -> Dict[str, Any]:
 
 @mcp.tool()
 @tool_result
-def list_metadata_schemas(database_id: Optional[str] = None) -> Dict[str, Any]:
-    """List metadata schemas, optionally filtered by database."""
-    return CLIENT.api.list_metadata_schemas(database_id=database_id)
+def list_metadata_schemas(
+    database_id: Optional[str] = None,
+    metadata_entity_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List metadata schemas, optionally filtered by database and entity type
+    (databaseMetadata, assetMetadata, fileMetadata, fileAttribute,
+    assetLinkMetadata)."""
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_metadata_schemas(
+            database_id=database_id,
+            metadata_entity_type=metadata_entity_type,
+            page_size=params["pageSize"],
+            starting_token=params.get("startingToken"),
+        ),
+    )
 
 
 @mcp.tool()
@@ -315,12 +381,17 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
     for hit in trimmed.get("results", []):
         source = hit.get("source", {}) or {}
         db = source.get("str_databaseid") or database_id
-        aid = source.get("str_assetid") or source.get("str_assetId") or hit.get("id")
+        aid = source.get("str_assetid") or hit.get("id")
         entry: Dict[str, Any] = {"asset_id": aid, "database_id": db, "score": hit.get("score"), "source": source}
         if db and aid:
             try:
-                versions = CLIENT.api.get_asset_versions(db, aid, params={"pageSize": 1})
-                entry["version_count"] = versions.get("count") or len(versions.get("Items", []))
+                versions = CLIENT.paginate(
+                    lambda params: CLIENT.api.get_asset_versions(db, aid, params=params),
+                    items_key="versions",
+                )
+                entry["version_count"] = versions.get("count")
+                if versions.get("truncated"):
+                    entry["version_count_truncated"] = True
             except Exception as exc:  # noqa: BLE001
                 entry["version_lookup_error"] = str(exc)
         enriched.append(entry)
@@ -351,13 +422,13 @@ if CONFIG.enable_writes:
     def create_asset(
         database_id: str,
         asset_name: str,
-        description: str = "",
+        description: str,
         is_distributable: bool = False,
-        asset_type: str = "",
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Create a new asset in a database.
+        """Create a new asset in a database. The asset ID is generated by VAMS.
 
+        description is required and must be at least 4 characters.
         is_distributable controls whether the asset may be downloaded/exported;
         defaults to False (non-distributable) as the safe default."""
         payload: Dict[str, Any] = {
@@ -365,17 +436,15 @@ if CONFIG.enable_writes:
             "assetName": asset_name,
             "description": description,
             "isDistributable": is_distributable,
+            "tags": tags or [],
         }
-        if asset_type:
-            payload["assetType"] = asset_type
-        if tags:
-            payload["tags"] = tags
         return CLIENT.api.create_asset(payload)
 
     @mcp.tool()
     @tool_result
     def update_asset(database_id: str, asset_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update fields on an existing asset (e.g. description, tags)."""
+        """Update fields on an existing asset. At least one of assetName,
+        description, isDistributable, or tags must be supplied."""
         return CLIENT.api.update_asset(database_id, asset_id, updates)
 
     @mcp.tool()
@@ -385,27 +454,55 @@ if CONFIG.enable_writes:
         asset_id: str,
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Create or update metadata key/value pairs on an asset."""
-        items = [{"metadataKey": k, "metadataValue": v} for k, v in metadata.items()]
+        """Create or update metadata key/value pairs on an asset (upsert; keys
+        not listed are left untouched). Values are sent as strings."""
+        items = [
+            {"metadataKey": k, "metadataValue": str(v), "metadataValueType": "string"}
+            for k, v in metadata.items()
+        ]
         return CLIENT.api.update_asset_metadata_v2(database_id, asset_id, items, update_type="update")
 
     @mcp.tool()
     @tool_result
     def create_folder(database_id: str, asset_id: str, folder_path: str) -> Dict[str, Any]:
-        """Create a folder within an asset's file tree."""
-        return CLIENT.api.create_folder(database_id, asset_id, {"folderPath": folder_path})
+        """Create a folder within an asset's file tree. folder_path is relative
+        to the asset root and must end with a slash."""
+        relative_key = folder_path if folder_path.endswith("/") else f"{folder_path}/"
+        return CLIENT.api.create_folder(database_id, asset_id, {"relativeKey": relative_key})
 
     @mcp.tool()
     @tool_result
-    def create_asset_version(database_id: str, asset_id: str, comment: str = "") -> Dict[str, Any]:
-        """Create a new version snapshot of an asset."""
-        return CLIENT.api.create_asset_version(database_id, asset_id, {"comment": comment})
+    def create_asset_version(
+        database_id: str,
+        asset_id: str,
+        comment: str,
+        version_alias: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a new version snapshot of an asset from its latest files.
+        comment is required (1-256 characters)."""
+        payload: Dict[str, Any] = {"useLatestFiles": True, "comment": comment}
+        if version_alias:
+            payload["versionAlias"] = version_alias
+        return CLIENT.api.create_asset_version(database_id, asset_id, payload)
 
     @mcp.tool()
     @tool_result
-    def execute_workflow(database_id: str, asset_id: str, workflow_id: str) -> Dict[str, Any]:
-        """Run a processing workflow/pipeline on an asset. May incur AWS cost."""
-        return CLIENT.api.execute_workflow(database_id, asset_id, workflow_id)
+    def execute_workflow(
+        database_id: str,
+        asset_id: str,
+        workflow_id: str,
+        workflow_database_id: str,
+        file_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run a processing workflow/pipeline on an asset. May incur AWS cost.
+
+        workflow_database_id is the database the workflow itself belongs to
+        (use "GLOBAL" for a global workflow) and may differ from the asset's
+        database_id; list_workflows() reports it. file_key scopes the run to one
+        file instead of the whole asset."""
+        return CLIENT.api.execute_workflow(
+            database_id, asset_id, workflow_id, workflow_database_id, file_key=file_key
+        )
 
 
 # =========================================================================
@@ -422,9 +519,18 @@ if CONFIG.enable_destructive:
 
     @mcp.tool()
     @tool_result
-    def unarchive_asset(database_id: str, asset_id: str, reason: str = "") -> Dict[str, Any]:
-        """Restore a previously archived asset."""
-        return CLIENT.api.unarchive_asset(database_id, asset_id, reason=reason or None)
+    def unarchive_asset(
+        database_id: str,
+        asset_id: str,
+        reason: str = "",
+        unarchive_files: bool = False,
+    ) -> Dict[str, Any]:
+        """Restore a previously archived asset. Files stay archived unless
+        unarchive_files is set, which restores the files archived by the asset
+        archive (files archived individually beforehand always stay archived)."""
+        return CLIENT.api.unarchive_asset(
+            database_id, asset_id, reason=reason or None, unarchive_files=unarchive_files
+        )
 
     @mcp.tool()
     @tool_result
@@ -435,7 +541,8 @@ if CONFIG.enable_destructive:
     @mcp.tool()
     @tool_result
     def delete_database(database_id: str) -> Dict[str, Any]:
-        """PERMANENTLY delete an (empty) database. Irreversible."""
+        """PERMANENTLY delete a database. Irreversible, and rejected while the
+        database still holds active assets, workflows, or pipelines."""
         return CLIENT.api.delete_database(database_id)
 
 

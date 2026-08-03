@@ -68,6 +68,49 @@ def test_paginate_respects_max_pages():
 
     result = client.paginate(fetch)
     assert result["pages"] == 2  # stopped at max_pages
+    # max_pages cut the walk short while more items remain, so flag it.
+    assert result["truncated"] is True
+
+
+def test_paginate_custom_items_key():
+    client = _client()
+
+    def fetch(_params):
+        return {"versions": [{"assetVersionId": "1"}], "NextToken": None}
+
+    result = client.paginate(fetch, items_key="versions")
+    # Normalized onto Items regardless of the source key.
+    assert result["Items"] == [{"assetVersionId": "1"}]
+    assert result["count"] == 1
+
+
+def test_paginate_unwraps_message_envelope():
+    client = _client()
+    responses = [
+        {"message": {"Items": [1, 2], "NextToken": "t1"}},
+        {"message": {"Items": [3], "NextToken": None}},
+    ]
+    calls = []
+
+    def fetch(params):
+        calls.append(params.get("startingToken"))
+        return responses[len(calls) - 1]
+
+    result = client.paginate(fetch)
+    assert result["Items"] == [1, 2, 3]
+    assert calls == [None, "t1"]
+
+
+def test_paginate_page_size_override():
+    client = _client(page_size=100)
+    seen = []
+
+    def fetch(params):
+        seen.append(params["pageSize"])
+        return {"Items": [1], "NextToken": None}
+
+    client.paginate(fetch, page_size=50)
+    assert seen == [50]
 
 
 def test_trim_search_results():

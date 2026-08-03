@@ -12,7 +12,8 @@ authors = [{ name = "AWS Labs", email = "aws-labs@amazon.com" }]
 keywords = ["aws", "vams", "mcp", "agentic", "3d", "asset", "management"]
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.2.0",
+    # Supports both the mcp 1.x FastMCP and the mcp 2.x MCPServer entry points.
+    "mcp>=1.2.0,<3.0.0",
     "requests>=2.25.0",
     # vamscli provides the battle-tested APIClient this server reuses.
     # Install it into the same environment: `pip install -e ../VamsCLI`

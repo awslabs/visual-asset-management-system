@@ -25,8 +25,9 @@ typed errors, and automatic token refresh.
 
 ## Requirements
 
-- Python 3.12+
-- [`vamscli`](../VamsCLI) installed and configured (see below)
+-   Python 3.12+
+-   [`vamscli`](../VamsCLI) installed and configured (see below)
+-   `mcp` 1.2+ or 2.x — both SDK generations are supported
 
 ## Setup
 
@@ -74,14 +75,22 @@ secrets** — just the command:
 
 ```json
 {
-  "mcpServers": {
-    "vams": {
-      "command": "/absolute/path/to/tools/VamsMCP/.venv/bin/vams-mcp",
-      "env": {},
-      "disabled": false,
-      "autoApprove": ["list_databases", "get_database", "list_assets", "get_asset", "search_assets", "find_and_summarize"]
+    "mcpServers": {
+        "vams": {
+            "command": "/absolute/path/to/tools/VamsMCP/.venv/bin/vams-mcp",
+            "env": {},
+            "disabled": false,
+            "autoApprove": [
+                "list_allowed_api_routes",
+                "list_databases",
+                "get_database",
+                "list_assets",
+                "get_asset",
+                "search_assets",
+                "find_and_summarize"
+            ]
+        }
     }
-  }
 }
 ```
 
@@ -90,27 +99,36 @@ To use a non-default profile, add `"env": { "VAMS_PROFILE": "myprofile" }`.
 ## Tools
 
 ### Read / search (always available)
-`list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
-`list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
-`list_asset_versions`, `get_asset_version`, `get_asset_history`,
-`get_asset_links`, `search_assets`, `search_files`, `get_search_fields`,
-`list_workflows`, `list_workflow_executions`, `list_tags`, `list_tag_types`,
-`list_metadata_schemas`, `generate_download_url`, `find_and_summarize`.
+
+`list_allowed_api_routes`, `list_databases`, `get_database`, `list_buckets`,
+`list_assets`, `get_asset`, `list_asset_files`, `get_asset_metadata`,
+`get_database_metadata`, `list_asset_versions`, `get_asset_version`,
+`get_asset_history`, `get_asset_links`, `search_assets`, `search_files`,
+`get_search_fields`, `list_workflows`, `list_workflow_executions`, `list_tags`,
+`list_tag_types`, `list_metadata_schemas`, `generate_download_url`,
+`find_and_summarize`.
+
+Call `list_allowed_api_routes` first — it reports what the authenticated user is
+actually authorized to do, so an agent can scope its plan instead of discovering
+a 403 mid-task. `search_assets` and `search_files` accept a `geo_search` filter
+(point + radius, bounding box, or GeoJSON) against the `geo_MD_location` field.
 
 ### Write (require `VAMS_ENABLE_WRITES=true`)
+
 `create_database`, `create_asset`, `update_asset`, `set_asset_metadata`,
 `create_folder`, `create_asset_version`, `execute_workflow`.
 
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
+
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
 
 ## Security notes
 
-- Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
-- Writes and destructive tools are **off by default**. Keep destructive tools
-  out of `autoApprove`.
-- The server persists nothing; revoking access is just `vamscli auth logout`
-  (or letting your session expire).
+-   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
+-   Writes and destructive tools are **off by default**. Keep destructive tools
+    out of `autoApprove`.
+-   The server persists nothing; revoking access is just `vamscli auth logout`
+    (or letting your session expire).
 
 ## License
 

@@ -13,13 +13,13 @@ hosts). This command is the Claude Code entry point for it.
 1. Read `tools/VamsAgentSkill/SKILL.md` and adopt it as your operating
    instructions for this task.
 2. Follow it exactly, in particular:
-   - **Authenticate per session** and set the vamscli profile to the current
-     user's token before doing VAMS work (Step 1 of the skill).
-   - **Self-discover** commands via `vamscli --help` — never assume or hardcode
-     commands.
-   - **Default to read-only**; only use mutating commands (create, delete,
-     edit/modify, execute, upload) if the user has explicitly authorized changes,
-     and confirm destructive/bulk actions first.
+    - **Authenticate per session** and set the vamscli profile to the current
+      user's token before doing VAMS work (Step 1 of the skill).
+    - **Self-discover** commands via `vamscli --help` — never assume or hardcode
+      commands.
+    - **Default to read-only**; only use mutating commands (create, delete,
+      edit/modify, execute, upload) if the user has explicitly authorized changes,
+      and confirm destructive/bulk actions first.
 3. Treat the user's request in `$ARGUMENTS` as the task to accomplish.
 
 ## Workflow

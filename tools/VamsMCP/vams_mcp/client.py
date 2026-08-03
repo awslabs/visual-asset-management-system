@@ -38,6 +38,7 @@ def _ensure_vamscli_importable() -> None:
 
 _ensure_vamscli_importable()
 
+from vamscli.constants import API_ASSETS, API_DATABASE_ASSETS  # noqa: E402,F401
 from vamscli.utils.api_client import APIClient  # noqa: E402
 from vamscli.utils.profile import ProfileManager  # noqa: E402
 
@@ -101,40 +102,61 @@ class VamsClient:
 
     # --- Pagination helper ------------------------------------------------
 
+    @staticmethod
+    def unwrap_message(page: Any) -> Dict[str, Any]:
+        """Return the payload dict, unwrapping the legacy ``message`` envelope.
+
+        Several VAMS list endpoints (tags, tag types, workflows, workflow
+        executions) nest the paged payload under ``message`` for backwards
+        compatibility, so the items and ``NextToken`` are one level down.
+        """
+        if not isinstance(page, dict):
+            return {}
+        message = page.get("message")
+        if isinstance(message, dict):
+            return message
+        return page
+
     def paginate(
         self,
         fetch_page,
         max_items: Optional[int] = None,
+        items_key: str = "Items",
+        page_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Follow VAMS ``NextToken`` pagination up to configured limits.
 
         ``fetch_page`` is a callable taking a ``params`` dict and returning a
         response dict shaped like ``{"Items": [...], "NextToken": "..."}``.
+        ``items_key`` names the list field, which differs per endpoint
+        (``Items``, ``items``, ``versions``). Results are always returned under
+        ``Items`` so every list tool has one shape.
         """
         limit = max_items if max_items is not None else (self.config.max_pages * self.config.page_size)
+        effective_page_size = page_size or self.config.page_size
         items: List[Any] = []
         next_token: Optional[str] = None
         pages = 0
 
         while True:
             pages += 1
-            params: Dict[str, Any] = {"pageSize": self.config.page_size}
+            params: Dict[str, Any] = {"pageSize": effective_page_size}
             if next_token:
                 params["startingToken"] = next_token
 
-            page = fetch_page(params)
-            page_items = page.get("Items", []) if isinstance(page, dict) else []
-            items.extend(page_items)
+            payload = self.unwrap_message(fetch_page(params))
+            items.extend(payload.get(items_key, []) or [])
 
-            next_token = page.get("NextToken") if isinstance(page, dict) else None
+            next_token = payload.get("NextToken")
             if not next_token or len(items) >= limit or pages >= self.config.max_pages:
                 break
 
         result: Dict[str, Any] = {"Items": items[:limit], "count": len(items[:limit]), "pages": pages}
-        if next_token and len(items) >= limit:
+        if next_token:
             result["truncated"] = True
             result["note"] = (
-                f"Result truncated at {limit} items ({pages} page(s)). "
+                f"Result truncated at {len(items[:limit])} items ({pages} page(s), "
+                f"limit {limit}, max_pages {self.config.max_pages}). "
                 "More items are available."
             )
         return result

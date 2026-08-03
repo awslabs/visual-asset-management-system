@@ -62,6 +62,44 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+def test_search_assets_passes_geo_search(mock_client):
+    mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+
+    geo = {"point": {"lat": 47.6, "lon": -122.3, "radiusMeters": 500}, "relation": "within"}
+    server.search_assets(query="bridge", geo_search=geo)
+
+    request = mock_client.api.search_query.call_args.args[0]
+    assert request["geoSearch"] == geo
+
+
+def test_list_assets_without_database_lists_all(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_assets()
+    fetch = mock_client.paginate.call_args.args[0]
+    mock_client.get_json.return_value = {"Items": []}
+    fetch({"pageSize": 10})
+    assert mock_client.get_json.call_args.args[0] == "/assets"
+
+
+def test_list_asset_versions_uses_versions_key(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_asset_versions("db1", "a1")
+    assert mock_client.paginate.call_args.kwargs["items_key"] == "versions"
+
+
+def test_list_asset_files_uses_lowercase_items_key(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_asset_files("db1", "a1")
+    assert mock_client.paginate.call_args.kwargs["items_key"] == "items"
+
+
+def test_list_workflow_executions_caps_page_size(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_workflow_executions("db1", "a1")
+    assert mock_client.paginate.call_args.kwargs["page_size"] <= 50
+
+
 @pytest.mark.asyncio
 async def test_read_tools_registered():
     tools = await server.mcp.list_tools()
@@ -71,8 +109,19 @@ async def test_read_tools_registered():
         "get_asset",
         "search_assets",
         "find_and_summarize",
+        "list_allowed_api_routes",
+        "get_asset_history",
     ):
         assert expected in names
+
+
+@pytest.mark.asyncio
+async def test_write_tools_gated_off_by_default():
+    # The test environment sets no VAMS_ENABLE_* vars, so mutating tools must
+    # not be registered at all.
+    names = {t.name for t in await server.mcp.list_tools()}
+    for gated in ("create_asset", "execute_workflow", "delete_asset", "archive_asset"):
+        assert gated not in names
 
 
 def test_generate_download_url_is_non_mutating(mock_client):
