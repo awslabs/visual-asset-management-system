@@ -326,6 +326,11 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "externalSfnTaskToken.$": "$.openResult.Payload.externalSfnTaskToken",
                 "outputS3AssetFilesPath.$": "$.openResult.Payload.outputS3AssetFilesPath",
                 "inputS3AssetFilePath.$": "$.openResult.Payload.inputS3AssetFilePath",
+                // Read from the ORIGINAL state machine input, not from openResult: the open lambda
+                // does not echo this field. These parameters REPLACE the state, so a field omitted
+                // here is unreachable downstream — and the batch task references it by path, which
+                // makes an omission a States.Runtime failure rather than a skipped registration.
+                "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             },
         });
 

@@ -84,8 +84,16 @@ export class IsaacLabTrainingFunctions extends Construct {
             environment: {
                 BATCH_JOB_QUEUE: props.batchJobQueue.jobQueueName,
                 BATCH_JOB_DEFINITION: props.batchJobDefinition.jobDefinitionName,
+                // Orchestration bus for registering the submitted Batch job as an abortable
+                // sub-process
+                ORCHESTRATION_BUS_NAME:
+                    props.storageResources.eventBridge.orchestrationBus.eventBusName,
             },
         });
+
+        props.storageResources.eventBridge.orchestrationBus.grantPutEventsTo(
+            this.executeBatchJobFunction
+        );
 
         // Grant Batch permissions
         this.executeBatchJobFunction.addToRolePolicy(

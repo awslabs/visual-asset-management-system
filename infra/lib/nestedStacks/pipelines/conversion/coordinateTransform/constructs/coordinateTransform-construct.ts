@@ -211,6 +211,7 @@ export class CoordinateTransformConstruct extends Construct {
             props.lambdaCommonBaseLayer,
             batchPipeline.batchJobQueue,
             batchPipeline.batchJobDefinition,
+            props.storageResources.eventBridge.orchestrationBus,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -265,6 +266,10 @@ export class CoordinateTransformConstruct extends Construct {
                 taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",
                 "definition.$": "$.definition",
+                // Lets the Lambda register the submitted Batch job as abortable. Stopping this
+                // sub-state-machine does not stop the job, because WAIT_FOR_TASK_TOKEN leaves the
+                // job's lifecycle with nobody.
+                "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(4)),

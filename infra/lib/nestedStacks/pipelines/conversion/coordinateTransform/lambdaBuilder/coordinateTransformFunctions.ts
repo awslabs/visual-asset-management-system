@@ -243,6 +243,7 @@ export function buildExecuteBatchJobFunction(
     lambdaCommonBaseLayer: LayerVersion,
     batchJobQueue: batch.JobQueue,
     batchJobDefinition: batch.IJobDefinition,
+    orchestrationBus: events.IEventBus,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -275,8 +276,12 @@ export function buildExecuteBatchJobFunction(
         environment: {
             BATCH_JOB_QUEUE: batchJobQueue.jobQueueName,
             BATCH_JOB_DEFINITION: batchJobDefinition.jobDefinitionName,
+            // Orchestration bus for registering the submitted Batch job as an abortable sub-process
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
         },
     });
+
+    orchestrationBus.grantPutEventsTo(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
