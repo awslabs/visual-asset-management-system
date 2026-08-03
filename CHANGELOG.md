@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.5.3] (2026-08-03)
+
+### Bug Fixes
+
+-   **Web** Fixed `npm install` failing in `web/` with `npm error code EOVERRIDE / Override for fast-xml-parser@5.10.1 conflicts with direct dependency` ([#297](https://github.com/awslabs/visual-asset-management-system/issues/297)). `fast-xml-parser` was declared twice in `web/package.json` — once as a direct dependency and once in `overrides` — which could deadlock resolution against a stale lockfile. Both entries were removed: VAMS does not import `fast-xml-parser` directly, the AWS SDK no longer depends on it, and `@aws-amplify/storage` now requires `^5.7.2`, so the v4 pin was holding the package below its dependents' supported range.
+
+### Chores
+
+-   Updated package dependencies across all 11 npm packages (root, `web`, `infra`, documentation site, and the seven `web/customInstalls` viewer packages) to resolve npm audit findings. Root, `infra`, documentation site, and six of seven viewer packages are now clean; `web` went from 17 findings to 8 and no longer reports any high-severity findings.
+-   **Web** Upgraded `jodit-react` to `^5.3.21`, resolving high-severity mutation XSS and prototype pollution findings in the `jodit` editor used by the asset comments feature. The direct `jodit` pin was dropped in favor of the transitive version supplied by `jodit-react`.
+-   **Infra** Bumped the `aws-cdk` CLI floor to `^2.1134.0` to match `aws-cdk-lib` 2.263.0. The dependency update raised the cloud assembly schema to version 54, which the previously pinned CLI (`^2.1111.0`) could not read, causing `cdk synth` to fail.
+-   **Documentation** Aligned all `@docusaurus/*` packages to 3.10.2 so the core, preset, theme, and type packages remain on a single matching version.
+-   Bumped the base `package.json` version to 2.5.3 — it had remained at 2.1.0 across several releases and now tracks the VAMS release version.
+-   Bumped `VAMS_VERSION` (`infra/config/config.ts`) and VamsCLI version (`tools/VamsCLI/vamscli/version.py`) to 2.5.3 — these were not updated during the 2.5.2 hotfix and remained at 2.5.1
+-   Added the missing 2.5.2 entry to the documentation revision history
+
+### Known Issues
+
+-   Pipelines that rely on the Amazon Linux 2 (AL2) image type for Amazon ECS/AWS Batch containers may not work, as AL2 reached end of support on July 31st. This will be fixed in v2.6.0.
+
 ## [2.5.2] (2026-06-19)
 
 ### Bug Fixes
