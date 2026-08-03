@@ -166,11 +166,19 @@ The **Pipelines** page lists all registered processing pipelines. Pipelines defi
 
 Each pipeline entry shows its name, description, execution type (AWS Lambda, Amazon SQS, or Amazon EventBridge), and configuration details. Administrators can create, edit, and delete pipeline definitions from this page.
 
+![Pipelines page listing registered pipelines grouped by category](/img/pipelines_page_20260803_v2.6.png)
+
 ### Workflows Page
 
 The **Workflows** page lets you create and manage workflows that chain multiple pipelines into automated processing sequences. Workflows are triggered by asset uploads or executed manually from the asset detail page.
 
-![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260323_v2.5.png)
+![Workflows page listing workflows with pipeline, execution, and trigger counts](/img/workflows_page_20260803_v2.6.png)
+
+Each entry shows how many pipelines the workflow runs, how many executions it has, and how many triggers it defines — with the number currently enabled called out when some are off. The **Triggers** filter narrows the list to workflows that do or do not have an enabled trigger.
+
+Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** step lists the steps in order alongside a graph of the resulting sequence.
+
+![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260803_v2.6.png)
 
 From this page you can:
 
@@ -178,6 +186,12 @@ From this page you can:
 -   Create new workflows with the workflow builder
 -   Edit existing workflow configurations
 -   View workflow execution history
+
+### Executions Page
+
+The **Executions** page lists workflow executions across every workflow and database the user may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to.
+
+![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
 ---
 

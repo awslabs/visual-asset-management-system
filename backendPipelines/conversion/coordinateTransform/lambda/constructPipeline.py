@@ -171,5 +171,9 @@ def lambda_handler(event, context):
         "inputMetadata": resolved_metadata,
         "inputParameters": input_parameters,
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+        # Re-emitted because this task's outputPath is $.Payload, which REPLACES the state — a value
+        # only present in the state machine's original input would be dropped here. The batch task
+        # reads it to register the Batch job as abortable.
+        "orchestrationEventPrefix": event.get("orchestrationEventPrefix", ""),
         "status": "STARTING",
     }

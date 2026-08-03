@@ -26,7 +26,16 @@ GROOT_REPO_DIR = "/workspace"
 EVAL_SCRIPT = "/workspace/scripts/eval_policy.py"
 
 # "MSE: 0.0123" per trajectory, then "Average MSE across all trajs: 0.0119".
-_TRAJ_MSE = re.compile(r"^MSE:\s*([0-9.eE+-]+)\s*$", re.MULTILINE)
+_TRAJ_MSE = re.compile(
+    # ONE spelling only. eval_policy.py prints BOTH forms for the SAME trajectory —
+    #   Unnormalized Action MSE across single traj: 2.1068...
+    #   MSE: 2.1068...
+    # — so matching both counted every value twice: a 5-trajectory run reported 10 per-trajectory
+    # entries, each duplicated. Verified against a real run's log. The bare "MSE:" form is the one
+    # matched because it is the stable label; the descriptive line is the same number restated.
+    r"^MSE:\s*([0-9.eE+-]+)\s*$",
+    re.MULTILINE)
+# Upstream DOES print this summary; it is preferred over averaging locally.
 _AVG_MSE = re.compile(r"Average MSE across all trajs:\s*([0-9.eE+-]+)")
 
 # Emitted on every run regardless of outcome, so it crowds out the failure when tailing the log.
@@ -41,6 +50,14 @@ _NOISE = re.compile(
     r"|^\s*warnings\.warn\("
     r"|`use_fast` is set to `True`"
 )
+
+
+# The language modality every data config requests, mapped to the column a LeRobot export always
+# carries. experiment_cfg/metadata.json records no annotation group, so a modality.json derived from
+# a checkpoint alone omits it and the dataset fails integrity before a single trajectory is replayed.
+# This is the same mapping the fine-tuning path writes (finetune_gr00t.py), which is what makes the
+# evaluation read the dataset the way training did.
+ANNOTATION_MODALITY_DEFAULT = {"human.task_description": {"original_key": "task_index"}}
 
 
 def _as_float(text: str) -> Optional[float]:
@@ -114,6 +131,15 @@ def _to_lerobot_modality_schema(modalities: Dict[str, Any]) -> Dict[str, Any]:
     instead of a silently wrong column mapping.
 
     `video` groups are passed through untouched: they are keyed by camera name and carry no ranges.
+
+    An `annotation` group is SYNTHESIZED when the checkpoint does not carry one. experiment_cfg
+    records only video/state/action, but every data config's modality_config() also asks for
+    `annotation.human.task_description` as its language modality — so a mapping derived purely from
+    the checkpoint loads without an annotation section and the dataset then fails integrity with
+    "Trying to get annotation metadata for a dataset with no annotations". A LeRobot export always
+    carries the task index (`meta/tasks.jsonl` plus a `task_index` column), which is the column the
+    fine-tuning path maps this key to, so the same mapping is written here. See
+    ANNOTATION_MODALITY_DEFAULT.
     """
     converted: Dict[str, Any] = {}
     for group_name, group in (modalities or {}).items():
@@ -148,6 +174,9 @@ def _to_lerobot_modality_schema(modalities: Dict[str, Any]) -> Dict[str, Any]:
                     entry[passthrough] = spec[passthrough]
             entries[key] = entry
         converted[group_name] = entries
+
+    if not converted.get("annotation"):
+        converted["annotation"] = dict(ANNOTATION_MODALITY_DEFAULT)
     return converted
 
 
@@ -291,7 +320,11 @@ def _run_streaming(cmd, env, cwd=GROOT_REPO_DIR, echo=None):
     matter here: the metric is parsed by line pattern, not by stream.
     """
     emit = echo or (lambda line: logger.info(f"  {line}"))
-    chunks = []
+    # The NORMALIZED lines — the same text that was logged, one entry per real line. Returning these
+    # rather than the raw bytes means what gets parsed is what the operator sees in CloudWatch, and it
+    # also recovers a metric printed as the final redraw of a progress line: in the raw stream that
+    # value sits after a \r and a line-anchored regex never sees it.
+    lines: List[str] = []
     # Read BYTES, not text. In text mode Python's universal newlines translate a lone \r into \n
     # before the reader sees it, so a tqdm bar arrives as one indistinguishable "line" per redraw and
     # no amount of post-processing can collapse it — the information needed to tell a redraw from a
@@ -306,23 +339,58 @@ def _run_streaming(cmd, env, cwd=GROOT_REPO_DIR, echo=None):
             # errors="replace": container output can carry non-UTF-8 bytes, and a decode error must
             # not abort a run whose real work already succeeded.
             text = raw.decode("utf-8", "replace")
-            chunks.append(text)
             buffer += text
             # A \n terminates a real line; everything before the last \r WITHIN it is redraw history.
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
                 out = _last_redraw(line)
-                if out and not _NOISE.search(out):
+                if not out:
+                    continue
+                # Kept even when it is noise: the returned text has to be complete enough to parse
+                # and to tail, and only the LOG is filtered.
+                lines.append(out)
+                if not _NOISE.search(out):
                     emit(out)
         # Trailing output with no final newline (a bar the child exited on).
         tail = _last_redraw(buffer)
-        if tail and not _NOISE.search(tail):
-            emit(tail)
+        if tail:
+            lines.append(tail)
+            if not _NOISE.search(tail):
+                emit(tail)
     finally:
         if proc.stdout:
             proc.stdout.close()
         proc.wait()
-    return proc.returncode, "".join(chunks)
+    return proc.returncode, "\n".join(lines)
+
+
+def action_modality_keys(dataset_path: str) -> List[str]:
+    """The dataset's own action group names, in declaration order.
+
+    `eval_policy.py` defaults `--modality-keys` to `["right_arm"]`, which is a different robot's
+    layout. Against an so100/so101 dataset — whose action groups are `single_arm` and `gripper` — that
+    default fails deep inside the metric computation with:
+
+        KeyError: 'action.right_arm'
+
+    and it fails only AFTER the model is loaded and the first inference step has run, so it looks like
+    an inference bug rather than a wrong argument.
+
+    Reading the groups from the dataset's `meta/modality.json` makes the evaluation self-configuring
+    for whatever robot the dataset describes, instead of correct for exactly one. Returns [] when the
+    file is unreadable or declares no action groups, so the caller falls back to the upstream default
+    rather than passing something invalid.
+    """
+    try:
+        payload = json.loads(
+            (Path(dataset_path) / "meta" / "modality.json").read_text(encoding="utf-8"))
+    except Exception as e:  # nosec B110 - best effort; caller falls back to the upstream default
+        logger.warning(f"Could not read the dataset's modality mapping ({e})")
+        return []
+    action = payload.get("action")
+    if not isinstance(action, dict):
+        return []
+    return [str(k) for k in action]
 
 
 def run_evaluation(
@@ -364,15 +432,28 @@ def run_evaluation(
         "--start-traj", str(config.get("evalStartTrajectory", 0)),
         # Without --model-path the script expects an inference SERVER on --host/--port; it is always
         # passed above, so the local-policy path is taken.
-        "--plot",
-        "--save_plot_path", str(plot_dir),
     ]
+    # Plots are OFF by default because upstream's plot_trajectory() raises
+    #   TypeError: 'Axes' object is not iterable
+    # whenever a plotted group has a single dimension — plt.subplots(1) returns a bare Axes rather
+    # than an array, and it iterates unconditionally. That happens AFTER the metric is computed and
+    # printed, so the run had done all of its real work and still exited 1 with no metrics recorded.
+    # The plots are a diagnostic extra; the MSE is the deliverable. Opt back in with plots: true once
+    # the upstream helper handles the single-axis case.
+    if str(config.get("plots", "")).strip().lower() in ("1", "true", "yes"):
+        cmd += ["--plot", "--save_plot_path", str(plot_dir)]
+    # An explicit template value wins; otherwise derive the keys from the dataset. Falling through to
+    # the upstream default is wrong for any robot other than the one it was written for.
     modality_keys = config.get("evalModalityKeys")
     if modality_keys:
         keys: List[str] = (modality_keys if isinstance(modality_keys, list)
                            else [k.strip() for k in str(modality_keys).split(",") if k.strip()])
-        for key in keys:
-            cmd += ["--modality-keys", key]
+    else:
+        keys = action_modality_keys(dataset_path)
+        if keys:
+            logger.info(f"Using the dataset's own action modality keys: {keys}")
+    for key in keys:
+        cmd += ["--modality-keys", key]
 
     # Recorded BEFORE the child loads the model: a kernel/driver kill leaves no traceback, so this is
     # the only place the run's actual GPU and RAM can be captured.

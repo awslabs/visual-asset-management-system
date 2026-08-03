@@ -5,7 +5,7 @@
     "configFormat": "json",
     "configBody": "{\"DISABLE_GUARDRAILS\": \"true\", \"CONTROL_WEIGHT\": \"1.0\", \"PROMPT\": \"{{PROMPT}}\", \"CONTROL_TYPE\": \"{{CONTROL_TYPE}}\", \"CONTROL_PATH\": \"{{CONTROL_PATH}}\"}",
     "allowCustomEdit": true,
-    "inputInstructions": "Enter the prompt below. Leaving it blank falls back to the COSMOS_TRANSFER_PROMPT key on the asset's metadata.",
+    "inputInstructions": "Transforms an existing video under the guidance of a control signal (edge detection for this template). Select the source video as the input file.\n\nAsset metadata this pipeline reads (optional):\n  COSMOS_TRANSFER_PROMPT        Describes the transformation to apply.\n  COSMOS_TRANSFER_CONTROL_TYPE  Control-signal type used to condition the transfer.\n  COSMOS_TRANSFER_CONTROL_PATH  Asset-relative path to the control input.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Asset metadata is used only where the field is left blank, so a standing value on the asset acts as a per-asset default.",
     "isDefault": true,
     "tagSchema": [
         {

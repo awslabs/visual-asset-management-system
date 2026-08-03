@@ -4,5 +4,6 @@
     "description": "Convert a 3D mesh to STL format using the Trimesh library.",
     "configFormat": "json",
     "configBody": "{\"outputType\":\".stl\"}",
-    "allowCustomEdit": false
+    "allowCustomEdit": false,
+    "inputInstructions": "Converts a 3D model to STL (.stl). Select the source model as the input file; the converted file is written back to the asset.\n\nThis pipeline reads no asset or file metadata — everything it needs comes from the selected file and this template."
 }

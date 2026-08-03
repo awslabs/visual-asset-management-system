@@ -129,6 +129,10 @@ def lambda_handler(event, context):
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
+        # Carried through the state machine so executeBatchJob can register the Batch job itself as
+        # abortable. Stopping this sub-state-machine does not stop the job — it is submitted from a
+        # Lambda under WAIT_FOR_TASK_TOKEN, so Step Functions does not own its lifecycle.
+        "orchestrationEventPrefix": orchestration_event_prefix,
     }
 
     try:

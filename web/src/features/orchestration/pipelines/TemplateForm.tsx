@@ -17,6 +17,7 @@ import InfoTooltip from "../components/InfoTooltip";
 import Breadcrumb from "../components/Breadcrumb";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import InstructionsPanel from "../components/InstructionsPanel";
 
 interface TemplateFormProps {
     mode: "create" | "edit";
@@ -234,10 +235,35 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                             <textarea
                                 value={inputInstructions}
                                 onChange={(e) => setInputInstructions(e.target.value)}
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                rows={2}
-                                placeholder="Instructions shown to the person running an execution with this template"
+                                // Monospace and tall enough to author a metadata-key list: these
+                                // instructions are where a pipeline documents every metadata field
+                                // it reads, so line breaks and alignment are load-bearing and a
+                                // 2-row proportional box made that effectively unwritable.
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary font-mono text-xs"
+                                rows={10}
+                                placeholder={
+                                    "Instructions shown to the person running an execution with this template.\n\n" +
+                                    "Line breaks and indentation are preserved. For a pipeline that reads metadata, " +
+                                    "list each key, whether it is asset- or file-level, and whether it is required."
+                                }
                             />
+                            <p className="mt-1 text-xs text-text-secondary">
+                                Line breaks are preserved. Long instructions collapse into a hover
+                                panel on the execute screen so they do not crowd out the form.
+                            </p>
+                            {inputInstructions.trim() && (
+                                <div className="mt-2">
+                                    <div className="text-xs font-medium text-text-secondary mb-1">
+                                        Preview (as shown when running)
+                                    </div>
+                                    {/* Live preview: the inline/tooltip choice is length-based, so an
+                                        author cannot otherwise tell which one their text will get. */}
+                                    <InstructionsPanel
+                                        text={inputInstructions}
+                                        title="Instructions for this template"
+                                    />
+                                </div>
+                            )}
                         </div>
                         <div>
                             <label className="flex items-center space-x-2">

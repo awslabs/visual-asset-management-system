@@ -12,6 +12,7 @@ container.
 import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ sys.path.insert(
 import evaluation  # noqa: E402
 from evaluation import (  # noqa: E402
     _run_streaming,
+    action_modality_keys,
     log_hardware_context,
     diagnostic_tail,
     _to_lerobot_modality_schema,
@@ -225,6 +227,75 @@ class TestModalitySchemaConversion:
     @pytest.mark.parametrize("modalities", [None, {}, {"state": "not-a-dict"}])
     def test_tolerates_junk(self, modalities):
         _to_lerobot_modality_schema(modalities)
+
+
+@pytest.mark.unit
+class TestAnnotationModalityIsSynthesized:
+    """The checkpoint records no annotation group, but every data config asks for one.
+
+    experiment_cfg/metadata.json carries video/state/action only. Each data config's
+    modality_config() additionally requests `annotation.human.task_description` as its language
+    modality, so a modality.json derived purely from the checkpoint is accepted by pydantic and then
+    fails the dataset integrity check:
+
+        AssertionError: Trying to get annotation metadata for a dataset with no annotations
+        ValueError: Unable to find key annotation.human.task_description in modality metadata
+
+    That is a hard failure before a single trajectory is replayed, and it is what a real evaluation
+    hit after the earlier conversion bugs were cleared. A LeRobot export always carries the task
+    index, and the fine-tuning path maps this key to the `task_index` column — so the same mapping is
+    written here, which is also what makes evaluation read the dataset the way training did.
+    """
+
+    def test_annotation_group_is_added_when_the_checkpoint_omits_it(self):
+        out = _to_lerobot_modality_schema({
+            "state": {"single_arm": {"shape": [5]}},
+            "action": {"single_arm": {"shape": [5]}},
+            "video": {"front": {"resolution": [640, 480]}},
+        })
+        assert out["annotation"] == {"human.task_description": {"original_key": "task_index"}}
+
+    def test_an_explicit_annotation_group_is_preserved(self):
+        # A checkpoint that DOES record annotations is authoritative; overwriting it would change how
+        # the dataset is read.
+        out = _to_lerobot_modality_schema({
+            "state": {"single_arm": {"shape": [5]}},
+            "annotation": {"human.validity": {"original_key": "valid"}},
+        })
+        assert out["annotation"] == {"human.validity": {"original_key": "valid"}}
+
+    def test_the_written_file_carries_the_annotation_mapping(self, tmp_path):
+        # End-to-end through the writer: the file the eval script actually reads must contain it.
+        dataset = tmp_path / "dataset"
+        dataset.mkdir()
+        ckpt = tmp_path / "ckpt"
+        (ckpt / "experiment_cfg").mkdir(parents=True)
+        (ckpt / "experiment_cfg" / "metadata.json").write_text(json.dumps({
+            "new_embodiment": {"modalities": {
+                "state": {"single_arm": {"shape": [5]}, "gripper": {"shape": [1]}},
+                "action": {"single_arm": {"shape": [5]}, "gripper": {"shape": [1]}},
+                "video": {"front": {"resolution": [640, 480]},
+                          "wrist": {"resolution": [640, 480]}},
+            }}}), encoding="utf-8")
+
+        ensure_dataset_modality_file(str(dataset), str(ckpt))
+        written = json.loads((dataset / "meta" / "modality.json").read_text(encoding="utf-8"))
+        assert written["annotation"]["human.task_description"]["original_key"] == "task_index"
+
+    def test_matches_the_mapping_the_fine_tuning_path_writes(self):
+        # Training and evaluation must agree on this key. If finetune_gr00t.py's mapping changes and
+        # this does not, the two paths read the same dataset differently and the MSE is meaningless.
+        source = (Path(__file__).resolve().parents[2] / "container" / "finetune_gr00t.py")
+        text = source.read_text(encoding="utf-8")
+        assert '"human.task_description": {"original_key": "task_index"}' in text
+
+    def test_the_default_is_not_shared_mutable_state(self):
+        # Returned by reference, a caller mutating one run's mapping would corrupt every later run in
+        # the same process.
+        first = _to_lerobot_modality_schema({"state": {"a": {"shape": [1]}}})
+        first["annotation"]["injected"] = True
+        second = _to_lerobot_modality_schema({"state": {"a": {"shape": [1]}}})
+        assert "injected" not in second["annotation"]
 
 
 @pytest.mark.unit
@@ -439,3 +510,291 @@ class TestLogHardwareContext:
         with patch.object(evaluation.subprocess, "run", return_value=completed):
             ctx = log_hardware_context()
         assert ctx["cpuCount"] == os.cpu_count()
+
+
+@pytest.mark.unit
+class TestActionModalityKeys:
+    """`--modality-keys` must describe THIS dataset's robot, not the upstream default.
+
+    eval_policy.py defaults the flag to ["right_arm"]. Against an so100/so101 dataset — whose action
+    groups are single_arm and gripper — that default fails with:
+
+        KeyError: 'action.right_arm'
+
+    and it fails only AFTER the model has loaded and the first inference step has run, roughly nine
+    minutes into a GPU job, which makes a wrong argument look like an inference bug. A real evaluation
+    hit exactly this once the annotation-modality blocker was cleared.
+    """
+
+    def _dataset(self, tmp_path, payload):
+        dataset = tmp_path / "dataset"
+        (dataset / "meta").mkdir(parents=True)
+        (dataset / "meta" / "modality.json").write_text(
+            json.dumps(payload), encoding="utf-8")
+        return dataset
+
+    def test_reads_the_action_groups_in_declaration_order(self, tmp_path):
+        # Order matters: the flag is repeated once per key and the metric is computed per group.
+        dataset = self._dataset(tmp_path, {
+            "action": {"single_arm": {"start": 0, "end": 5}, "gripper": {"start": 5, "end": 6}},
+            "state": {"single_arm": {"start": 0, "end": 5}},
+        })
+        assert action_modality_keys(str(dataset)) == ["single_arm", "gripper"]
+
+    def test_ignores_state_and_video_groups(self, tmp_path):
+        # Only ACTION groups are valid values for --modality-keys.
+        dataset = self._dataset(tmp_path, {
+            "action": {"single_arm": {"start": 0, "end": 5}},
+            "state": {"gripper": {"start": 0, "end": 1}},
+            "video": {"front": {"original_key": "observation.images.front"}},
+        })
+        assert action_modality_keys(str(dataset)) == ["single_arm"]
+
+    def test_returns_empty_when_the_file_is_missing(self, tmp_path):
+        # Empty means "fall back to the upstream default" — better than passing something invalid.
+        dataset = tmp_path / "dataset"
+        dataset.mkdir()
+        assert action_modality_keys(str(dataset)) == []
+
+    def test_returns_empty_on_malformed_json_rather_than_raising(self, tmp_path):
+        # Diagnostics must never abort a run whose real work could still succeed.
+        dataset = tmp_path / "dataset"
+        (dataset / "meta").mkdir(parents=True)
+        (dataset / "meta" / "modality.json").write_text("{not json", encoding="utf-8")
+        assert action_modality_keys(str(dataset)) == []
+
+    @pytest.mark.parametrize("payload", [{}, {"action": None}, {"action": "single_arm"},
+                                         {"action": []}])
+    def test_returns_empty_for_a_missing_or_non_mapping_action_group(self, tmp_path, payload):
+        dataset = self._dataset(tmp_path, payload)
+        assert action_modality_keys(str(dataset)) == []
+
+    def test_derives_from_the_file_the_pipeline_itself_wrote(self, tmp_path):
+        # The mapping is usually SYNTHESIZED from the checkpoint moments earlier, so the derivation
+        # has to work off that generated file — not only off a dataset that shipped one.
+        dataset = tmp_path / "dataset"
+        dataset.mkdir()
+        ckpt = tmp_path / "ckpt"
+        (ckpt / "experiment_cfg").mkdir(parents=True)
+        (ckpt / "experiment_cfg" / "metadata.json").write_text(json.dumps({
+            "new_embodiment": {"modalities": {
+                "action": {"single_arm": {"shape": [5]}, "gripper": {"shape": [1]}},
+                "state": {"single_arm": {"shape": [5]}},
+            }}}), encoding="utf-8")
+
+        ensure_dataset_modality_file(str(dataset), str(ckpt))
+        assert action_modality_keys(str(dataset)) == ["single_arm", "gripper"]
+
+    def test_never_returns_the_upstream_default_for_this_dataset(self, tmp_path):
+        # The specific regression: right_arm must not appear for an so100-style dataset.
+        dataset = self._dataset(tmp_path, {
+            "action": {"single_arm": {"start": 0, "end": 5}, "gripper": {"start": 5, "end": 6}}})
+        assert "right_arm" not in action_modality_keys(str(dataset))
+
+
+@pytest.mark.unit
+class TestModalityKeysReachTheCommand:
+    """Deriving the keys is useless unless they are actually passed to eval_policy.py.
+
+    Isolated tests of action_modality_keys() cannot catch a broken hand-off: with the derivation
+    correct but the flag never appended, the child still falls back to ["right_arm"] and the run still
+    dies with KeyError: 'action.right_arm' nine minutes in. These tests assert the argv the child is
+    invoked with.
+    """
+
+    def _run(self, tmp_path, config, action_groups=("single_arm", "gripper")):
+        dataset = tmp_path / "dataset"
+        (dataset / "meta").mkdir(parents=True)
+        cursor = 0
+        action = {}
+        for g in action_groups:
+            action[g] = {"start": cursor, "end": cursor + 1}
+            cursor += 1
+        (dataset / "meta" / "modality.json").write_text(
+            json.dumps({"action": action}), encoding="utf-8")
+
+        captured = {}
+
+        def _fake_streaming(cmd, env, cwd=None, echo=None):
+            captured["cmd"] = cmd
+            return 0, "Average MSE across all trajs: 0.01\n"
+
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch.object(evaluation, "_run_streaming", side_effect=_fake_streaming), \
+             patch.object(evaluation, "log_hardware_context", return_value={}):
+            evaluation.run_evaluation(
+                config, str(tmp_path / "ckpt"), str(dataset), str(out), str(tmp_path / "hf"))
+        return captured["cmd"]
+
+    def _flag_values(self, cmd, flag):
+        return [cmd[i + 1] for i, a in enumerate(cmd) if a == flag and i + 1 < len(cmd)]
+
+    def test_the_derived_keys_are_passed_to_the_eval_script(self, tmp_path):
+        cmd = self._run(tmp_path, {"mode": "evaluate"})
+        assert self._flag_values(cmd, "--modality-keys") == ["single_arm", "gripper"]
+
+    def test_the_flag_is_repeated_once_per_key(self, tmp_path):
+        # The upstream parser accumulates; a single comma-joined value would be read as one key name.
+        cmd = self._run(tmp_path, {"mode": "evaluate"})
+        assert cmd.count("--modality-keys") == 2
+        assert not any("," in v for v in self._flag_values(cmd, "--modality-keys"))
+
+    def test_an_explicit_template_value_overrides_the_derivation(self, tmp_path):
+        cmd = self._run(tmp_path, {"evalModalityKeys": "left_arm, gripper"})
+        assert self._flag_values(cmd, "--modality-keys") == ["left_arm", "gripper"]
+
+    def test_an_explicit_list_is_accepted(self, tmp_path):
+        cmd = self._run(tmp_path, {"evalModalityKeys": ["arm_a", "arm_b"]})
+        assert self._flag_values(cmd, "--modality-keys") == ["arm_a", "arm_b"]
+
+    def test_the_upstream_default_is_never_relied_on_when_the_dataset_declares_groups(self, tmp_path):
+        # The regression in one line: the flag must be present, so ["right_arm"] is never used.
+        cmd = self._run(tmp_path, {"mode": "evaluate"})
+        assert "--modality-keys" in cmd
+
+    def test_no_flag_is_passed_when_the_dataset_declares_nothing(self, tmp_path):
+        # Passing an empty value would be worse than deferring to upstream.
+        dataset = tmp_path / "dataset"
+        (dataset / "meta").mkdir(parents=True)
+        (dataset / "meta" / "modality.json").write_text(json.dumps({"state": {}}), encoding="utf-8")
+
+        captured = {}
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch.object(evaluation, "_run_streaming",
+                          side_effect=lambda cmd, env, cwd=None, echo=None: (
+                              captured.setdefault("cmd", cmd),
+                              (0, "Average MSE across all trajs: 0.01\n"))[1]), \
+             patch.object(evaluation, "log_hardware_context", return_value={}):
+            evaluation.run_evaluation(
+                {"mode": "evaluate"}, str(tmp_path / "ckpt"), str(dataset), str(out),
+                str(tmp_path / "hf"))
+        assert "--modality-keys" not in captured["cmd"]
+
+
+@pytest.mark.unit
+class TestUpstreamPrintsEachMetricTwice:
+    """eval_policy.py prints the SAME per-trajectory value under two labels.
+
+    Verified against a real successful run's log -- for every trajectory it emits both:
+
+        Unnormalized Action MSE across single traj: 2.106872322806477
+        MSE: 2.106872322806477
+
+    plus one "Average MSE across all trajs" summary at the end. Matching both per-trajectory spellings
+    therefore DOUBLE-COUNTS: a 5-trajectory run recorded 10 entries, each value twice. The average was
+    right (taken from upstream's own summary), so the defect showed up only in perTrajectoryMse --
+    a plausible-looking but wrong artifact.
+
+    Only the bare "MSE:" label is matched; the descriptive line restates the same number.
+    """
+
+    REAL_PAIR = (
+        "Unnormalized Action MSE across single traj: 2.106872322806477\n"
+        "MSE: 2.106872322806477\n"
+    )
+
+    def test_a_trajectory_printed_under_both_labels_counts_once(self):
+        metrics = parse_mse(self.REAL_PAIR)
+        assert metrics["perTrajectoryMse"] == [pytest.approx(2.106872322806477)]
+
+    def test_five_trajectories_yield_five_values_not_ten(self):
+        # The exact shape of the real run that produced the doubled artifact.
+        values = [2.106872322806477, 4.0467412044308055, 5.335834263783416,
+                  3.9668699862870973, 4.732371085913413]
+        log = "".join(
+            f"Running trajectory: {i}\n"
+            f"Unnormalized Action MSE across single traj: {v}\n"
+            f"MSE: {v}\n"
+            for i, v in enumerate(values))
+        log += "Average MSE across all trajs: 4.037737772644242\n"
+
+        metrics = parse_mse(log)
+        assert len(metrics["perTrajectoryMse"]) == 5
+        assert metrics["perTrajectoryMse"] == [pytest.approx(v) for v in values]
+
+    def test_prefers_upstreams_own_average_over_recomputing(self):
+        # Upstream DOES print the summary; using it avoids disagreeing with the tool's own number.
+        log = "MSE: 1.0\nMSE: 3.0\nAverage MSE across all trajs: 4.037737772644242\n"
+        assert parse_mse(log)["averageMse"] == pytest.approx(4.037737772644242)
+
+    def test_falls_back_to_computing_the_average_when_the_summary_is_absent(self):
+        # A run cut short before the summary still reports something from the per-trajectory lines.
+        metrics = parse_mse("MSE: 1.0\nMSE: 3.0\n")
+        assert metrics["averageMse"] == pytest.approx(2.0)
+
+    def test_parses_a_log_with_surrounding_noise(self):
+        log = ("inferencing at step:  128\n"
+               "Unnormalized Action MSE across single traj: 3.8767073315924865\n"
+               "MSE: 3.8767073315924865\n"
+               "Running trajectory: 1\n")
+        metrics = parse_mse(log)
+        assert metrics["perTrajectoryMse"] == [pytest.approx(3.8767073315924865)]
+
+    def test_the_descriptive_line_alone_is_not_counted(self):
+        # If upstream ever drops the bare label, a missing metric is the correct outcome: it surfaces
+        # the format change instead of silently reporting a different set of numbers.
+        metrics = parse_mse("Unnormalized Action MSE across single traj: 2.5\n")
+        assert metrics["perTrajectoryMse"] == []
+
+
+@pytest.mark.unit
+class TestPlotsAreOptional:
+    """`--plot` is off unless asked for, because upstream's plotting helper crashes.
+
+    plot_trajectory() does `for i, ax in enumerate(axes)`, but plt.subplots(1) returns a bare Axes
+    rather than an array, so a single-dimension group raises:
+
+        TypeError: 'Axes' object is not iterable
+
+    That happens AFTER the MSE is computed and printed, so the job had finished its real work and
+    still exited 1 with no metrics recorded — the most expensive possible way to fail.
+    """
+
+    def _cmd(self, tmp_path, config):
+        dataset = tmp_path / "dataset"
+        (dataset / "meta").mkdir(parents=True)
+        (dataset / "meta" / "modality.json").write_text(
+            json.dumps({"action": {"single_arm": {"start": 0, "end": 5}}}), encoding="utf-8")
+        captured = {}
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch.object(evaluation, "_run_streaming",
+                          side_effect=lambda cmd, env, cwd=None, echo=None: (
+                              captured.setdefault("cmd", cmd),
+                              (0, "MSE: 0.5\n"))[1]), \
+             patch.object(evaluation, "log_hardware_context", return_value={}):
+            evaluation.run_evaluation(
+                config, str(tmp_path / "ckpt"), str(dataset), str(out), str(tmp_path / "hf"))
+        return captured["cmd"]
+
+    @pytest.mark.parametrize("config", [{}, {"mode": "evaluate"}, {"plots": False},
+                                        {"plots": "false"}, {"plots": "no"}])
+    def test_no_plot_flags_unless_requested(self, tmp_path, config):
+        cmd = self._cmd(tmp_path, config)
+        assert "--plot" not in cmd
+        assert "--save_plot_path" not in cmd
+
+    @pytest.mark.parametrize("value", [True, "true", "True", "yes", "1"])
+    def test_plots_can_be_opted_into(self, tmp_path, value):
+        cmd = self._cmd(tmp_path, {"plots": value})
+        assert "--plot" in cmd
+        # The path must accompany the flag, or upstream writes into its own working directory.
+        assert "--save_plot_path" in cmd
+
+    def test_the_metric_is_still_returned_with_plotting_off(self, tmp_path):
+        # The point of disabling plots: the deliverable is the MSE, and it must survive.
+        dataset = tmp_path / "dataset"
+        (dataset / "meta").mkdir(parents=True)
+        (dataset / "meta" / "modality.json").write_text(
+            json.dumps({"action": {"single_arm": {"start": 0, "end": 5}}}), encoding="utf-8")
+        out = tmp_path / "out"
+        out.mkdir()
+        with patch.object(evaluation, "_run_streaming",
+                          return_value=(0, "MSE: 0.5\n")), \
+             patch.object(evaluation, "log_hardware_context", return_value={}):
+            metrics = evaluation.run_evaluation(
+                {"mode": "evaluate"}, str(tmp_path / "ckpt"), str(dataset), str(out),
+                str(tmp_path / "hf"))
+        assert metrics["averageMse"] == pytest.approx(0.5)

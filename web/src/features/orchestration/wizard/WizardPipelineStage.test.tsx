@@ -86,3 +86,67 @@ describe("WizardPipelineStage", () => {
         expect(reported.mode).toBe(4);
     });
 });
+
+/**
+ * The selected template's guidance must reach the person RUNNING the pipeline.
+ *
+ * `inputInstructions` was authored per template (and now documents every metadata key each pipeline
+ * reads) but was only ever rendered in the template EDITOR — the execute wizard never displayed it,
+ * so the audience it was written for never saw it.
+ */
+describe("WizardPipelineStage template instructions", () => {
+    const template = (over: any = {}) => ({
+        templateId: "t1",
+        templateName: "Template One",
+        configFormat: "json",
+        configBody: "{}",
+        isDefault: true,
+        ...over,
+    });
+
+    const renderWith = (tpl: any) => {
+        const { useTemplates, useTemplate } = require("../api/queries");
+        useTemplates.mockReturnValue({ data: [tpl], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({ data: tpl, isLoading: false, isSuccess: true });
+        render(
+            <WizardPipelineStage
+                workflow={workflow}
+                pipeline={makePipeline({ requireTemplate: false })}
+                pipelineRef={pipelineRef}
+                onChange={jest.fn()}
+            />
+        );
+    };
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("shows short instructions inline on the run screen", () => {
+        renderWith(template({ inputInstructions: "Select the source model as the input file." }));
+        expect(screen.getByText("Select the source model as the input file.")).toBeInTheDocument();
+    });
+
+    it("collapses long instructions so they do not bury the form", () => {
+        // A metadata-documenting template runs to ~20 lines; inline would push the tag fields and the
+        // configuration section off screen.
+        const long = Array.from({ length: 18 }, (_, i) => `COSMOS3_KEY_${i}  what it does`).join(
+            "\n"
+        );
+        renderWith(template({ inputInstructions: long }));
+        expect(screen.getByTestId("instructions-tooltip-trigger")).toBeInTheDocument();
+        expect(screen.queryByTestId("instructions-inline")).not.toBeInTheDocument();
+    });
+
+    it("shows the template description alongside the instructions", () => {
+        renderWith(
+            template({ description: "Converts to GLB.", inputInstructions: "Pick a model file." })
+        );
+        expect(screen.getByText("Converts to GLB.")).toBeInTheDocument();
+        expect(screen.getByText("Pick a model file.")).toBeInTheDocument();
+    });
+
+    it("renders no instructions block when the template has none", () => {
+        renderWith(template({}));
+        expect(screen.queryByTestId("instructions-inline")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("instructions-tooltip-trigger")).not.toBeInTheDocument();
+    });
+});

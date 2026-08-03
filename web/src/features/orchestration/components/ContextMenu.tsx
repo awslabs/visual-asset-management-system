@@ -5,6 +5,7 @@
 
 import React from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { Z } from "./zLayers";
 
 export interface ContextMenuItem {
     label: string;
@@ -38,7 +39,10 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, trigger }) => {
                     // of as a floating layer. surface-secondary is the category-header grey, and
                     // resolves per theme through the same Cloudscape token (light #f6f6f9 / dark
                     // #1b232d), so no dark: variant is needed.
-                    className="orch-outline min-w-[200px] bg-surface-secondary rounded-md shadow-lg border border-border-default p-1 z-50"
+                    // Portalled to body, so a menu opened from inside a dialog or drawer is its
+                    // SIBLING, not its child — z-index alone decides the order.
+                    style={{ zIndex: Z.tooltip }}
+                    className="orch-outline min-w-[200px] bg-surface-secondary rounded-md shadow-lg border border-border-default p-1"
                 >
                     {visibleItems.map((item, idx) => (
                         <DropdownMenu.Item

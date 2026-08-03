@@ -5,6 +5,7 @@
 
 import React from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
+import { Z } from "./zLayers";
 
 interface InfoTooltipProps {
     /** The explanatory text shown on hover/focus. */
@@ -34,7 +35,11 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ text, label = "More informati
                     side="top"
                     align="start"
                     sideOffset={4}
-                    className="max-w-xs z-50 rounded bg-gray-900 dark:bg-gray-700 px-3 py-2 text-xs text-white shadow-lg"
+                    // Portalled to body, so it is a SIBLING of any dialog it was opened from rather
+                    // than a child — z-index alone decides the order, and Tailwind's z-50 painted
+                    // this underneath the execute modal.
+                    style={{ zIndex: Z.tooltip }}
+                    className="max-w-xs rounded bg-gray-900 dark:bg-gray-700 px-3 py-2 text-xs text-white shadow-lg"
                 >
                     {text}
                     <Tooltip.Arrow className="fill-gray-900 dark:fill-gray-700" />

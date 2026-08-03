@@ -424,7 +424,7 @@ Comments are tied to the asset, not to a specific version. All comments remain v
 
 The **Executions** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
 
-![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260323_v2.5.png)
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
 
 ### Viewing Execution History
 

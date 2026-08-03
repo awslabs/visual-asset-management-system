@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import CollapsibleSection from "../components/CollapsibleSection";
+import InstructionsPanel from "../components/InstructionsPanel";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm, { formDataToTags } from "../components/DynamicTagForm";
 import SystemTagHelp from "../components/SystemTagHelp";
@@ -191,6 +192,22 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                             </option>
                         ))}
                     </select>
+                    {/* The template's own description, then its instructions. Both were previously
+                        only visible in the template EDITOR, so the person actually running the
+                        pipeline never saw the guidance written for them. */}
+                    {selectedTemplate?.description && (
+                        <p className="mt-2 text-xs text-text-secondary">
+                            {selectedTemplate.description}
+                        </p>
+                    )}
+                    {selectedTemplate?.inputInstructions && (
+                        <div className="mt-2">
+                            <InstructionsPanel
+                                text={selectedTemplate.inputInstructions}
+                                title="Instructions for this template"
+                            />
+                        </div>
+                    )}
                 </div>
             )}
 

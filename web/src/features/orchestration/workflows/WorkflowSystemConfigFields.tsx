@@ -170,6 +170,33 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
             )}
 
             <div>
+                <div className="flex items-center gap-1.5 text-sm font-medium mb-2 text-text-primary">
+                    Metadata provided to pipelines
+                    <InfoTooltip text="Which metadata is gathered from the input assets/files and passed to the pipelines in the shared metadata envelope." />
+                </div>
+                <div className="space-y-1">
+                    <ToggleRow
+                        checked={metadataInputs.assetMetadata || false}
+                        onChange={(v) => setMeta("assetMetadata", v)}
+                        label="Asset metadata"
+                        info="Include each input asset's asset-level metadata."
+                    />
+                    <ToggleRow
+                        checked={metadataInputs.fileMetadata || false}
+                        onChange={(v) => setMeta("fileMetadata", v)}
+                        label="File metadata"
+                        info="Include per-file metadata for each input file."
+                    />
+                    <ToggleRow
+                        checked={metadataInputs.fileAttributes || false}
+                        onChange={(v) => setMeta("fileAttributes", v)}
+                        label="File attributes"
+                        info="Include per-file attributes (the string-typed file attribute fields)."
+                    />
+                </div>
+            </div>
+
+            <div>
                 <FieldLabel
                     htmlFor="locationType"
                     text="Output destination"
@@ -247,33 +274,6 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                         input-file filters of every workflow in the chain before enabling this.
                     </div>
                 )}
-            </div>
-
-            <div>
-                <div className="flex items-center gap-1.5 text-sm font-medium mb-2 text-text-primary">
-                    Metadata provided to pipelines
-                    <InfoTooltip text="Which metadata is gathered from the input assets/files and passed to the pipelines in the shared metadata envelope." />
-                </div>
-                <div className="space-y-1">
-                    <ToggleRow
-                        checked={metadataInputs.assetMetadata || false}
-                        onChange={(v) => setMeta("assetMetadata", v)}
-                        label="Asset metadata"
-                        info="Include each input asset's asset-level metadata."
-                    />
-                    <ToggleRow
-                        checked={metadataInputs.fileMetadata || false}
-                        onChange={(v) => setMeta("fileMetadata", v)}
-                        label="File metadata"
-                        info="Include per-file metadata for each input file."
-                    />
-                    <ToggleRow
-                        checked={metadataInputs.fileAttributes || false}
-                        onChange={(v) => setMeta("fileAttributes", v)}
-                        label="File attributes"
-                        info="Include per-file attributes (the string-typed file attribute fields)."
-                    />
-                </div>
             </div>
 
             <div>

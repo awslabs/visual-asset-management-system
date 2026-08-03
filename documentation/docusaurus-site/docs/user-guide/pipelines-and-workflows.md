@@ -36,13 +36,15 @@ Workflows can be:
 2. Select a database from the database selector, or view all pipelines across databases.
 3. The pipeline list displays all pipelines you have permission to access, showing the pipeline name, its owning database, execution type, status, template count, and the actions available on it. The list can be grouped by category.
 
-![Pipelines page showing registered pipelines with properties](/img/pipelines_page_20260323_v2.5.png)
+![Pipelines page showing registered pipelines with properties](/img/pipelines_page_20260803_v2.6.png)
 
 To view details of a specific pipeline, click its name in the list. The detail view shows its full configuration — execution settings, the admin settings that govern how it may be run, and its configuration templates.
 
 ## Creating a custom pipeline
 
 Navigate to **Pipelines** and click **Create Pipeline**. The form is a three-step wizard — **Basic**, **Execution**, then **Settings** — and the pipeline is created when you finish the last step.
+
+![Pipeline wizard showing the Basic step and the three-step progress indicator](/img/pipeline_wizard_20260803_v2.6.png)
 
 ### Basic
 
@@ -108,7 +110,7 @@ When you update an existing pipeline, VAMS prompts you to choose whether to also
 2. Select a database or view all workflows across databases.
 3. The workflow list displays workflow names, databases, descriptions, and associated actions.
 
-![Workflows page showing available workflows](/img/workflows_page_20260323_v2.5.png)
+![Workflows page showing available workflows](/img/workflows_page_20260803_v2.6.png)
 
 ## Creating a workflow
 
@@ -178,11 +180,11 @@ A **Validation** panel reports what it found before and after saving, split by c
     Warnings are worth resolving before anyone tries to run the workflow: a mismatch here becomes a
     rejected execution later, when the reason is less obvious.
 
-![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20260323_v2.5.png)
+![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20260803_v2.6.png)
 
 ## Executing workflows
 
-![Workflow executions tab showing execution history on asset detail page](/img/view_asset_workflow_executions_tab_20260323_v2.5.png)
+![Workflow executions tab showing execution history on asset detail page](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
 
 Workflows can be executed in two ways:
 
@@ -245,6 +247,10 @@ Execution progress can be monitored from the **Executions** page or from the ass
 -   Current status (running, succeeded, failed)
 -   Start and end timestamps
 -   Error details for failed executions
+
+The **Executions** page lists every execution the user may see, across all workflows and databases. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
+
+![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
 :::note
 Workflow execution is asynchronous. Results (output files, previews, metadata) appear on the asset after all pipeline steps complete. Changes may take a few minutes to propagate through the system, including search results.

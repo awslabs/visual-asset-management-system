@@ -698,6 +698,30 @@ class TestBuiltInSchemasValidate:
         assert not offenders, (
             "these bundles exclude every file, so nothing could ever run: " f"{offenders}")
 
+    def test_every_built_in_template_carries_input_instructions(self):
+        """A built-in template must tell the operator what it takes in.
+
+        The execute wizard renders inputInstructions as the only in-product description of a
+        template's metadata keys, accepted inputs, and precedence rules. A template shipping with an
+        empty string is not a validation error anywhere — it simply renders nothing, and the operator
+        has to read the pipeline source to learn which metadata keys it reads. The 4096 cap is
+        asserted too: the registration path invokes the real template service as a lambdaCrossCall,
+        so the request models DO enforce it — but only at deploy time, where it surfaces as a failed
+        import of an otherwise-successful stack. Checking it here fails at commit time instead."""
+        missing, too_long = [], []
+        for pf in self._pipeline_files():
+            for tf in self._template_files(pf):
+                template = json.load(open(tf, encoding="utf-8"))
+                instructions = template.get("inputInstructions") or ""
+                name = template.get("templateId") or os.path.basename(tf)
+                if not instructions.strip():
+                    missing.append(name)
+                if len(instructions) > 4096:
+                    too_long.append(f"{name} ({len(instructions)})")
+
+        assert not missing, f"built-in templates with no input instructions: {missing}"
+        assert not too_long, f"input instructions exceed the 4096 model cap: {too_long}"
+
     def test_declared_tags_are_referenced_by_the_config_body(self):
         """A declared tag whose {{key}} appears nowhere in the configBody is silently dropped.
 

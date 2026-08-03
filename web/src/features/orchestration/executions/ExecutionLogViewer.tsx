@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getExecutionLogs } from "../api/executions";
 import ConfigEditor from "../components/ConfigEditor";
+import { findMatches, filterToMatches, stepIndex } from "./logSearch";
 
 interface ExecutionLogViewerProps {
     executionId: string;
@@ -40,6 +41,27 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
     // Where the returned text actually came from ("stored" | "live" | "sfnHistory"); Stored mode
     // falls back to live CloudWatch and the Step Functions history server-side.
     const [logsSource, setLogsSource] = useState<string | null>(null);
+    // Find-in-log. Entirely local over the already-fetched text, so stepping through matches costs
+    // no further CloudWatch reads.
+    const [query, setQuery] = useState("");
+    const [caseSensitive, setCaseSensitive] = useState(false);
+    const [matchIndex, setMatchIndex] = useState(0);
+    // "Only matching lines" reduces a multi-thousand-line log to its hits, which is usually faster
+    // than stepping when the question is "did X happen at all, and how often".
+    const [onlyMatches, setOnlyMatches] = useState(false);
+
+    const matches = useMemo(
+        () => findMatches(logText, query, caseSensitive),
+        [logText, query, caseSensitive]
+    );
+    // A new search invalidates the cursor; without this a narrowing query keeps a stale index and
+    // the "n of m" counter reads past the end.
+    useEffect(() => setMatchIndex(0), [query, caseSensitive, logText]);
+
+    const current = matches[matchIndex];
+    // The editor stays mounted; it is told which line/column to reveal and select.
+    const displayText =
+        onlyMatches && query ? filterToMatches(logText, query, caseSensitive) : logText;
 
     // Steps that carry a pipelineExecutionId can be scoped individually.
     const scopedPipelines = (pipelines || []).filter((p) => p && p.pipelineExecutionId);
@@ -131,6 +153,73 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 )}
             </div>
 
+            {/* Find in log — local over the fetched text, so no extra CloudWatch reads. */}
+            {logText && (
+                <div className="flex flex-wrap items-center gap-2">
+                    <input
+                        type="search"
+                        aria-label="Find in log"
+                        placeholder="Find in log…"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                            // Enter / Shift+Enter steps matches, matching find-in-page muscle memory.
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                setMatchIndex((i) =>
+                                    stepIndex(i, matches.length, e.shiftKey ? -1 : 1)
+                                );
+                            }
+                        }}
+                        className="orch-outline px-2 py-1 text-sm border border-border-input rounded bg-surface-input text-text-primary"
+                    />
+                    <span className="text-sm text-text-secondary" data-testid="log-match-count">
+                        {query
+                            ? matches.length
+                                ? `${matchIndex + 1} of ${matches.length}`
+                                : "No matches"
+                            : ""}
+                    </span>
+                    <button
+                        type="button"
+                        aria-label="Previous match"
+                        disabled={!matches.length}
+                        onClick={() => setMatchIndex((i) => stepIndex(i, matches.length, -1))}
+                        className="orch-outline px-2 py-1 text-sm border border-border-default rounded text-text-primary hover:bg-surface-hover disabled:opacity-50"
+                    >
+                        ↑
+                    </button>
+                    <button
+                        type="button"
+                        aria-label="Next match"
+                        disabled={!matches.length}
+                        onClick={() => setMatchIndex((i) => stepIndex(i, matches.length, 1))}
+                        className="orch-outline px-2 py-1 text-sm border border-border-default rounded text-text-primary hover:bg-surface-hover disabled:opacity-50"
+                    >
+                        ↓
+                    </button>
+                    <label className="flex items-center gap-1.5 text-sm text-text-primary">
+                        <input
+                            type="checkbox"
+                            checked={caseSensitive}
+                            onChange={(e) => setCaseSensitive(e.target.checked)}
+                        />
+                        Match case
+                    </label>
+                    <label className="flex items-center gap-1.5 text-sm text-text-primary">
+                        <input
+                            type="checkbox"
+                            checked={onlyMatches}
+                            onChange={(e) => setOnlyMatches(e.target.checked)}
+                        />
+                        Only matching lines
+                    </label>
+                    {current && !onlyMatches && (
+                        <span className="text-sm text-text-secondary">line {current.line}</span>
+                    )}
+                </div>
+            )}
+
             {loading ? (
                 <div className="flex items-center gap-2">
                     <div className="orch-outline inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 dark:border-blue-400" />
@@ -140,7 +229,19 @@ const ExecutionLogViewer: React.FC<ExecutionLogViewerProps> = ({ executionId, pi
                 <p className="text-vams-error text-sm">{errorMsg}</p>
             ) : logText ? (
                 <div className="orch-outline border border-border-default rounded overflow-hidden">
-                    <ConfigEditor value={logText} language="plaintext" readOnly height="500px" />
+                    <ConfigEditor
+                        // NOT keyed on the match: the editor stays mounted and is told where to go,
+                        // so stepping scrolls and re-selects in place. Remounting per step lost the
+                        // selection, which made stepping look like it did nothing.
+                        value={displayText}
+                        language="plaintext"
+                        readOnly
+                        height="500px"
+                        startLine={onlyMatches ? undefined : current?.line}
+                        startColumn={onlyMatches ? undefined : current?.column}
+                        // Selecting the matched text is what makes the hit visible on the line.
+                        selectionLength={onlyMatches ? undefined : query.length || undefined}
+                    />
                 </div>
             ) : (
                 <p className="text-text-secondary text-sm">{emptyReason || "No logs available"}</p>
