@@ -8,6 +8,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 | Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                      |
 | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [2.5.3](#253) | 2026-08-03 | Fixed web `npm install` dependency override conflict; npm dependency updates across all packages, rich text editor security upgrade, AWS CDK CLI version alignment                                                                                                                               |
+| [2.5.2](#252) | 2026-06-19 | Security fixes: Casbin authorization expression injection, createAsset S3 key location validation; backend test framework updates, authorization documentation clarifications, dependency updates                                                                                                |
 | [2.5.1](#251) | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                             |
 | [2.5.0](#250) | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates |
 | [2.4.1](#241) | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                      |
@@ -20,6 +22,43 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 ---
 
 ## Version Details
+
+### 2.5.3
+
+**Release date:** 2026-08-03
+
+**Key fixes:**
+
+-   Fixed `npm install` failing in the `web/` directory with an `EOVERRIDE` error reporting that an override for `fast-xml-parser` conflicted with the direct dependency. The package was declared both as a direct dependency and as an override, which could prevent dependency resolution from completing when an existing lock file was present. Both declarations were removed, because the web application does not use the package directly and its dependents now supply a compatible version.
+
+**Other changes:**
+
+-   Updated package dependencies across all npm packages in the repository to resolve reported npm audit findings.
+-   Upgraded the rich text editor used by the asset comments feature to address high-severity cross-site scripting and prototype pollution findings.
+-   Raised the minimum AWS CDK command line interface version to match the AWS CDK library version, which is required for AWS CloudFormation template synthesis to succeed.
+-   Aligned all Docusaurus documentation packages to a single matching version.
+
+**Known issues:**
+
+-   Pipelines that rely on the Amazon Linux 2 image type for Amazon Elastic Container Service and AWS Batch containers may not function correctly, because Amazon Linux 2 reached end of support on July 31, 2026. A fix is planned for version 2.6.0.
+-   Eight npm audit findings remain in the web application (six low severity and two moderate severity) that cannot be resolved without breaking changes. The available fixes for the routing library require React version 18 or later, and the web application currently targets React 17. These are development and build-time dependencies and will be revisited in version 2.6.0.
+-   Five npm audit findings remain in the VEERUM viewer installation package. Remediation requires authentication to the private package registry that hosts the viewer, and two findings have no fix available from the upstream maintainers. The VEERUM viewer is disabled by default.
+
+### 2.5.2
+
+**Release date:** 2026-06-19
+
+**Key fixes:**
+
+-   Fixed a Casbin authorization implementation defect that allowed additional policies to be injected through field values that were evaluated as regular expressions. Impact is low because Casbin policies can only be set by administrators by default. Additional backend tests were added to cover this case.
+-   Fixed a `createAsset` API defect that allowed an optional Amazon S3 bucket key location to be specified without validating that the location belonged to the provided database identifier's default S3 bucket and prefix path, that no asset already existed at that S3 key path, and that the supplied path met validation requirements.
+-   Fixed a latent defect in which the backend test framework had not been updated for changes introduced in version 2.5, which caused test failures.
+
+**Other changes:**
+
+-   Added default GitHub issue and pull request templates.
+-   Updated the authorization documentation to reflect the preceding fixes and to clarify existing behavior.
+-   Updated several package dependency versions to address npm audit findings.
 
 ### 2.5.1
 
