@@ -681,3 +681,112 @@ describe("ExecutionsBoard", () => {
         expect(fetchNextPage).toHaveBeenCalled();
     });
 });
+
+/**
+ * Re-run must always report its outcome.
+ *
+ * Re-run creates a NEW execution while the row the user clicked is the OLD one, so without a toast
+ * naming the new id there is no signal that anything happened — and a failure would be silent
+ * entirely. The mutation's response passes the execute handler's body through, which is where the new
+ * id and any non-fatal warnings come from.
+ */
+jest.mock("../components/ToastProvider", () => ({
+    ...jest.requireActual("../components/ToastProvider"),
+    useToast: () => mockToast,
+}));
+const mockToast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
+
+describe("ExecutionsBoard re-run feedback", () => {
+    let queryClient: QueryClient;
+    const ROW: Execution = {
+        workflowExecutionId: "exec-old",
+        workflowId: "wf-1",
+        workflowDatabaseId: "db-1",
+        executionStatus: "FAILED",
+        triggeredByUserId: "u1",
+        triggerType: "manual",
+        executionStartDate: "2026-08-01T10:00:00Z",
+    };
+
+    const setup = (rerunImpl: jest.Mock) => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const { useExecutions, useExecutionActions } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        useExecutionActions.mockReturnValue({
+            abortExecution: { mutateAsync: jest.fn() },
+            rerunExecution: { mutateAsync: rerunImpl },
+            permanentDeleteExecution: { mutateAsync: jest.fn() },
+        });
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: [ROW] }], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    const clickRerun = async () => {
+        // The row's "⋯" menu (aria-label "Execution actions"), then the Re-run item. The column
+        // HEADER is also called "Actions", so the label has to be exact.
+        await userEvent.click(screen.getByRole("button", { name: "Execution actions" }));
+        await userEvent.click(await screen.findByText("Rerun"));
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockToast.success.mockClear();
+        mockToast.error.mockClear();
+        mockToast.warning.mockClear();
+    });
+
+    it("reports success and names the NEW execution", async () => {
+        setup(jest.fn().mockResolvedValue({ executionId: "exec-new" }));
+        await clickRerun();
+        await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
+        const [title, opts] = mockToast.success.mock.calls[0];
+        expect(title).toBe("Re-run started");
+        // The clicked row is exec-old; without the new id the user cannot tell what to watch.
+        expect(opts.description).toContain("exec-new");
+    });
+
+    it("reports a failure rather than failing silently", async () => {
+        setup(jest.fn().mockRejectedValue(new Error("workflow archived")));
+        await clickRerun();
+        await waitFor(() => expect(mockToast.error).toHaveBeenCalled());
+        const [title, opts] = mockToast.error.mock.calls[0];
+        expect(title).toBe("Re-run failed");
+        expect(opts.description).toContain("workflow archived");
+    });
+
+    it("distinguishes a launch that carried warnings", async () => {
+        // "Started" and "started, but read this" are different outcomes.
+        setup(
+            jest.fn().mockResolvedValue({
+                executionId: "exec-new",
+                warnings: ["one input file no longer exists"],
+            })
+        );
+        await clickRerun();
+        await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+        expect(mockToast.success).not.toHaveBeenCalled();
+        expect(mockToast.warning.mock.calls[0][1].description).toContain("no longer exists");
+    });
+
+    it("still reports success when the response carries no id", async () => {
+        // A thin response must not produce an empty or broken message.
+        setup(jest.fn().mockResolvedValue({}));
+        await clickRerun();
+        await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
+        expect(mockToast.success.mock.calls[0][1].description).toMatch(/new execution/i);
+    });
+});

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { useEffect, useRef } from "react";
 import {
     useQuery,
     useInfiniteQuery,
@@ -295,6 +296,115 @@ export function useTemplate(databaseId: string, pipelineId: string, templateId: 
     });
 }
 
+/**
+ * Freshness window for a wizard session's prefetched templates.
+ *
+ * Long enough that stepping around inside one wizard session never re-fetches, while the unmount
+ * cleanup — not expiry — is what prevents a later opening from reusing this session's data.
+ */
+const WIZARD_SESSION_STALE_TIME = 5 * 60 * 1000;
+
+/**
+ * Warm the template caches for a set of pipelines before their wizard step is reached, for the
+ * lifetime of ONE wizard session.
+ *
+ * A wizard's per-step queries only mount when that step renders, so each step paid its own network
+ * latency at the moment the user arrived — the pipeline step sat empty for seconds while its template
+ * list loaded, with no indication anything was happening. The pipeline list is known as soon as the
+ * workflow resolves, so the lists are fetched while the user is still on the Input step.
+ *
+ * Deliberately NOT a durable cache. On unmount every entry this hook created is removed, so a later
+ * opening of the wizard re-reads the templates rather than showing a snapshot from an earlier session.
+ * Templates are editable, and a stale body silently becomes the config a run is launched with — worth
+ * one fetch per open. Only keys this hook actually created are removed, so a template being viewed
+ * elsewhere in the app is left alone.
+ *
+ * `prefetchQuery` (not `fetchQuery`) so an in-flight or freshly-written entry is not duplicated, and
+ * it never throws into the caller: a prefetch is an optimization, and a failure must degrade to the
+ * step's own query reporting the error rather than breaking the wizard.
+ *
+ * Writes the SAME query keys `useTemplates` / `useTemplate` read, so the step finds the data already
+ * there instead of issuing a second request.
+ *
+ * `defaultTemplateId` additionally warms the single-template detail (tagSchema + rehydrated
+ * configBody), which is what the step renders its form from. That matters most in an edit or re-run
+ * flow, where the template is already chosen and would otherwise be a second serial fetch after the
+ * list arrives.
+ */
+export function usePrefetchPipelineTemplates(
+    targets: Array<{ databaseId: string; pipelineId: string; defaultTemplateId?: string }>
+) {
+    const queryClient = useQueryClient();
+    // Serialized so the effect re-runs when the actual set changes, not on every render — the array
+    // is rebuilt by the caller's useMemo and would otherwise be a new reference each time.
+    const signature = JSON.stringify(
+        targets.map((t) => [t.databaseId, t.pipelineId, t.defaultTemplateId || ""])
+    );
+    // Every key this hook created, so unmount removes exactly those and nothing else. A ref rather
+    // than state: it must survive re-renders without causing one, and the cleanup reads the
+    // accumulated set from every effect run, not just the last.
+    const createdKeys = useRef<Array<readonly unknown[]>>([]);
+
+    useEffect(() => {
+        const list: typeof targets = JSON.parse(signature).map(
+            ([databaseId, pipelineId, defaultTemplateId]: string[]) => ({
+                databaseId,
+                pipelineId,
+                defaultTemplateId,
+            })
+        );
+        for (const { databaseId, pipelineId, defaultTemplateId } of list) {
+            if (!databaseId || !pipelineId) continue;
+            const listKey = qk.templates(databaseId, pipelineId);
+            createdKeys.current.push(listKey);
+            queryClient
+                .prefetchQuery({
+                    queryKey: listKey,
+                    queryFn: () =>
+                        callService<Template[]>(() =>
+                            pipelineService.listTemplates(databaseId, pipelineId)
+                        ),
+                    // Fresh for this session: without it, prefetchQuery treats the entry it just
+                    // wrote as stale and re-requests on every wizard render, so stepping back and
+                    // forth would re-fetch every pipeline's templates each time.
+                    staleTime: WIZARD_SESSION_STALE_TIME,
+                })
+                .catch(() => undefined);
+            if (defaultTemplateId) {
+                const detailKey = qk.template(databaseId, pipelineId, defaultTemplateId);
+                createdKeys.current.push(detailKey);
+                queryClient
+                    .prefetchQuery({
+                        queryKey: detailKey,
+                        queryFn: () =>
+                            callService<Template>(() =>
+                                pipelineService.getTemplate(
+                                    databaseId,
+                                    pipelineId,
+                                    defaultTemplateId
+                                )
+                            ),
+                        staleTime: WIZARD_SESSION_STALE_TIME,
+                    })
+                    .catch(() => undefined);
+            }
+        }
+    }, [signature, queryClient]);
+
+    // Drop this session's entries when the wizard closes. Without this the next opening would render
+    // from the previous session's snapshot, which for an edited template means launching a run with a
+    // config body the user is no longer looking at.
+    useEffect(() => {
+        const keys = createdKeys.current;
+        return () => {
+            for (const queryKey of keys) {
+                queryClient.removeQueries({ queryKey, exact: true });
+            }
+            keys.length = 0;
+        };
+    }, [queryClient]);
+}
+
 export function useTemplateMutations() {
     const queryClient = useQueryClient();
 
@@ -392,13 +502,16 @@ export function useWorkflows(databaseId?: string, includeArchived?: boolean, pag
 }
 
 /** Complete workflow set (drains all server pages). For pickers / ref resolution, not the list view. */
-export function useAllWorkflows(databaseId?: string, includeArchived?: boolean) {
+export function useAllWorkflows(databaseId?: string, includeArchived?: boolean, enabled = true) {
     return useQuery({
         queryKey: [...qk.workflows(databaseId, { includeArchived }), "all"],
         queryFn: () =>
             callService<Workflow[]>(() =>
                 workflowService.listAllWorkflows(databaseId, includeArchived)
             ),
+        // `enabled` lets a caller skip a redundant scope — e.g. the GLOBAL catalog when the unscoped
+        // list already includes it.
+        enabled,
     });
 }
 
@@ -525,6 +638,13 @@ export function useExecutionDetails(executionId: string) {
         queryFn: () =>
             callService<ExecutionDetail>(() => executionService.getExecutionDetails(executionId)),
         enabled: !!executionId,
+        // Poll while the run is still going, on the same 5s cadence as the lists. The list views
+        // auto-advanced but this page did not, so opening a RUNNING execution to watch it finish
+        // showed a frozen status until the user reloaded — the one place someone is most likely to be
+        // waiting. Stops on its own once the status is terminal, so a finished execution is not polled
+        // forever.
+        refetchInterval: (query: any) =>
+            computeRefetchInterval(query.state.data ? [query.state.data] : []),
     });
 }
 

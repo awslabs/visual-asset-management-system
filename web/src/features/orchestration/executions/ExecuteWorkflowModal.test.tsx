@@ -195,3 +195,85 @@ describe("ExecuteWorkflowModal", () => {
         expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
     });
 });
+
+/**
+ * Workflow options must never contain duplicates.
+ *
+ * The unscoped list (`/workflows`, used by the global Executions page) already returns every workflow
+ * the caller can see, GLOBAL included. Fetching the GLOBAL catalog again and concatenating produced
+ * each GLOBAL workflow twice, and duplicate keys break the picker's list reconciliation — typing in
+ * its search box appeared to do nothing at all.
+ */
+describe("ExecuteWorkflowModal workflow options", () => {
+    const GLOBAL_WF = {
+        databaseId: "GLOBAL",
+        workflowId: "wf-global",
+        workflowName: "Shared Convert",
+        enabled: true,
+        archived: false,
+        specifiedPipelines: [],
+        systemConfig: { inputFileArity: "one" },
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        queries().useAllPipelines.mockReturnValue({ data: [] });
+    });
+
+    it("lists a GLOBAL workflow once when both scopes return it", async () => {
+        // The worst case: every call returns the same GLOBAL workflow.
+        queries().useAllWorkflows.mockReturnValue({ data: [GLOBAL_WF] });
+
+        render(<ExecuteWorkflowModal open onClose={() => undefined} />);
+        await userEvent.click(screen.getByLabelText("Workflow"));
+
+        expect(
+            screen.getAllByRole("option").filter((o) => /Shared Convert/.test(o.textContent || ""))
+        ).toHaveLength(1);
+    });
+
+    it("skips the redundant GLOBAL fetch when unscoped", () => {
+        // Unscoped already includes GLOBAL, so the second query is disabled rather than merged.
+        queries().useAllWorkflows.mockReturnValue({ data: [] });
+        render(<ExecuteWorkflowModal open onClose={() => undefined} />);
+
+        const globalCall = queries().useAllWorkflows.mock.calls.find(
+            (c: any[]) => c[0] === "GLOBAL"
+        );
+        expect(globalCall).toBeDefined();
+        // Third arg is `enabled`; false when there is no scoping database.
+        expect(globalCall[2]).toBe(false);
+    });
+
+    it("still fetches GLOBAL when scoped to a database", () => {
+        queries().useAllWorkflows.mockReturnValue({ data: [] });
+        render(
+            <ExecuteWorkflowModal open onClose={() => undefined} databaseId="db1" assetId="a1" />
+        );
+        const globalCall = queries().useAllWorkflows.mock.calls.find(
+            (c: any[]) => c[0] === "GLOBAL"
+        );
+        expect(globalCall[2]).toBe(true);
+    });
+
+    it("keeps the search box filtering the option list", async () => {
+        // The user-visible symptom of the duplication.
+        queries().useAllWorkflows.mockImplementation((db?: string) => ({
+            data:
+                db === "GLOBAL"
+                    ? []
+                    : [
+                          GLOBAL_WF,
+                          { ...GLOBAL_WF, workflowId: "wf-other", workflowName: "Thumbnails" },
+                      ],
+        }));
+
+        render(<ExecuteWorkflowModal open onClose={() => undefined} />);
+        await userEvent.click(screen.getByLabelText("Workflow"));
+        await userEvent.type(screen.getByPlaceholderText(/Type to search/), "thumb");
+
+        const opts = screen.getAllByRole("option");
+        expect(opts).toHaveLength(1);
+        expect(opts[0].textContent).toContain("Thumbnails");
+    });
+});

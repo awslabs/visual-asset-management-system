@@ -197,6 +197,20 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
+        // TLS 1.3 (FIPS-compliant cipher suite) on the REST API itself. `securityPolicy` is a
+        // property of AWS::ApiGateway::RestApi — not only of a custom DomainName — so it applies to
+        // the default execute-api endpoint VAMS serves from, which has no custom domain to attach a
+        // policy to. The L2 SpecRestApi does not surface the property, so it is set on the L1.
+        //
+        // The FIPS variant is used because it is available in every partition VAMS targets, including
+        // GovCloud (where FIPS endpoints are required) and the isolated partitions — so one value is
+        // applied unconditionally rather than gating commercial-only policies per partition.
+        const cfnRestApi = this.restApi.node.defaultChild as apigw.CfnRestApi;
+        cfnRestApi.addPropertyOverride(
+            "SecurityPolicy",
+            apigw.SecurityPolicy.TLS13_1_3_FIPS_2025_09
+        );
+
         // CORS headers on gateway-level responses (authorizer denials and errors).
         // Responses produced by API Gateway itself — the custom authorizer returning
         // Unauthorized (401) or Access Denied (403), a missing authentication token, and 4XX/5XX

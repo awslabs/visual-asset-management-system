@@ -172,3 +172,76 @@ describe("useTemplateMutations", () => {
         );
     });
 });
+
+/**
+ * The DETAIL page must auto-advance too.
+ *
+ * The list views poll every 5s while any row is non-terminal, but the detail query had no
+ * refetchInterval — so opening a RUNNING execution to watch it finish showed a frozen status until the
+ * page was reloaded. That is the one place someone is most likely to be sitting and waiting, so the
+ * omission was the most visible.
+ */
+describe("useExecutionDetails polling", () => {
+    const client = () =>
+        new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+
+    // Named so the react/display-name lint rule is satisfied (an anonymous arrow component is
+    // undebuggable in a React tree).
+    const wrapper = (qc: QueryClient) => {
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return Wrapper;
+    };
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("polls while the execution is still running", async () => {
+        const { useExecutionDetails } = require("./queries");
+        (executionService.getExecutionDetails as jest.Mock).mockResolvedValue([
+            true,
+            { workflowExecutionId: "e1", executionStatus: "RUNNING" },
+        ]);
+        const qc = client();
+        const { result } = renderHook(() => useExecutionDetails("e1"), { wrapper: wrapper(qc) });
+        await waitFor(() => expect(result.current.data).toBeDefined());
+
+        // Read the resolved interval the same way React Query would.
+        const query: any = qc.getQueryCache().find({ queryKey: qk.execution("e1") });
+        const interval = query.options.refetchInterval;
+        expect(typeof interval === "function" ? interval(query) : interval).toBe(5000);
+    });
+
+    it("stops polling once the execution reaches a terminal status", async () => {
+        // Otherwise a finished execution would be re-requested every 5s for as long as the tab is open.
+        const { useExecutionDetails } = require("./queries");
+        (executionService.getExecutionDetails as jest.Mock).mockResolvedValue([
+            true,
+            { workflowExecutionId: "e2", executionStatus: "SUCCEEDED" },
+        ]);
+        const qc = client();
+        const { result } = renderHook(() => useExecutionDetails("e2"), { wrapper: wrapper(qc) });
+        await waitFor(() => expect(result.current.data).toBeDefined());
+
+        const query: any = qc.getQueryCache().find({ queryKey: qk.execution("e2") });
+        const interval = query.options.refetchInterval;
+        expect(typeof interval === "function" ? interval(query) : interval).toBe(false);
+    });
+
+    it("does not poll before any data has arrived", async () => {
+        const { useExecutionDetails } = require("./queries");
+        (executionService.getExecutionDetails as jest.Mock).mockReturnValue(new Promise(() => {}));
+        const qc = client();
+        renderHook(() => useExecutionDetails("e3"), { wrapper: wrapper(qc) });
+
+        const query: any = qc.getQueryCache().find({ queryKey: qk.execution("e3") });
+        const interval = query.options.refetchInterval;
+        expect(typeof interval === "function" ? interval(query) : interval).toBe(false);
+    });
+
+    it("uses the same cadence as the list views", () => {
+        // One number, one helper — the detail page and the lists must not drift apart.
+        expect(computeRefetchInterval([{ executionStatus: "RUNNING" }])).toBe(5000);
+    });
+});

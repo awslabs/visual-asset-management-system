@@ -17,6 +17,9 @@ jest.mock("../api/queries", () => ({
     useWorkflowMutations: jest.fn(),
     useTriggers: jest.fn(),
     useTemplates: jest.fn(),
+    // A no-op: prefetching is a latency optimization with no rendered output, so the builder's
+    // behaviour must not depend on it. Its own contract is covered in prefetchTemplates.test.tsx.
+    usePrefetchPipelineTemplates: jest.fn(),
 }));
 
 jest.mock("./PipelineOrderList", () => ({

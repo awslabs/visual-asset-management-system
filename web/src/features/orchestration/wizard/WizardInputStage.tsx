@@ -7,6 +7,7 @@ import React from "react";
 import type { Workflow, ExecuteInputFile } from "../types";
 import { useDatabases, useAssetSearch } from "../api/queries";
 import InputFileSelector from "./InputFileSelector";
+import InfoTooltip from "../components/InfoTooltip";
 import SearchableSelect from "../components/SearchableSelect";
 import RestrictionSummary from "./RestrictionSummary";
 import { resolveRestrictions } from "./resolveRestrictions";
@@ -29,6 +30,34 @@ interface WizardInputStageProps {
      *  restriction summary reflects the templates actually selected. */
     pipelineConstraints?: PipelineInputConstraints[];
 }
+
+/**
+ * What the output path prefix does. Held as a constant so the tooltip has one source of wording.
+ *
+ * Written as an element rather than a string so the examples can be code-formatted — a path fragment
+ * or a {{tag}} is unreadable in prose.
+ */
+const OUTPUT_PATH_PREFIX_HELP = (
+    <span className="block space-y-1.5">
+        <span className="block">
+            Inserted immediately before each output file&apos;s name, so the folders a pipeline
+            creates are preserved — <code>/path/file.txt</code> with <code>/run/</code> becomes{" "}
+            <code>/path/run/file.txt</code>.
+        </span>
+        <span className="block">
+            A trailing <code>/</code> makes it a folder; without one it joins onto the file name (
+            <code>run</code> gives <code>/path/runfile.txt</code>).
+        </span>
+        <span className="block">
+            Supports system and dynamic tags, resolved per execution. The date and execution id are
+            the common choices for separating runs — e.g. <code>{"/{{jobStartDate}}/"}</code>,{" "}
+            <code>{"/{{executionId}}/"}</code>, or both:{" "}
+            <code>{"/{{jobStartDate}}/{{executionId}}/"}</code>. Also useful:{" "}
+            <code>{"{{firstAssetFileFileNameNoExt}}"}</code>.
+        </span>
+        <span className="block">Clear it to add no prefix to the final output paths.</span>
+    </span>
+);
 
 const WizardInputStage: React.FC<WizardInputStageProps> = ({
     workflow,
@@ -334,8 +363,15 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
 
                     {/* Output path prefix applies to any asset output, override or not. */}
                     <label className="block">
-                        <span className="block text-xs text-text-secondary mb-1">
+                        <span className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
                             Output path prefix (optional)
+                            {/* The full explanation is a tooltip rather than a paragraph: it is
+                                reference material for a single optional field, and inline it dominated
+                                the Output section. */}
+                            <InfoTooltip
+                                label="Output path prefix help"
+                                text={OUTPUT_PATH_PREFIX_HELP}
+                            />
                         </span>
                         <input
                             type="text"
@@ -348,20 +384,6 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                             onChange={(e) => onOutputPathPrefixChange(e.target.value)}
                             className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         />
-                        {/* Inserted just above each output file's own name, so a pipeline's output
-                            folders are kept. System + dynamic tags are resolved at launch. Must not
-                            contain ".." or backslashes. Pre-filled from the workflow's default. */}
-                        <span className="block text-xs text-text-secondary mt-1">
-                            Inserted immediately before each output file's name, so the folders a
-                            pipeline creates are preserved — <code>/path/file.txt</code> with{" "}
-                            <code>/run/</code> becomes <code>/path/run/file.txt</code>. A trailing{" "}
-                            <code>/</code> makes it a folder; without one it joins onto the file
-                            name (<code>run</code> gives <code>/path/runfile.txt</code>). Supports
-                            system and dynamic tags, resolved per execution — e.g.{" "}
-                            <code>{"{{executionId}}"}</code> or{" "}
-                            <code>{"{{firstAssetFileFileNameNoExt}}"}</code>. Clear it to add no
-                            prefix to the final output paths.
-                        </span>
                     </label>
                 </div>
             )}

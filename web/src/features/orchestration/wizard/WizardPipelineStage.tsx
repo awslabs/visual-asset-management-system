@@ -29,7 +29,10 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     data,
     onChange,
 }) => {
-    const { data: templates } = useTemplates(pipeline.databaseId, pipeline.pipelineId);
+    const { data: templates, isLoading: templatesLoading } = useTemplates(
+        pipeline.databaseId,
+        pipeline.pipelineId
+    );
 
     // Initial template selection precedence: the run's already-chosen template (revisiting the
     // step), then the workflow ref's default, then the pipeline's own default template (isDefault).
@@ -50,6 +53,9 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     const [customBody, setCustomBody] = useState<string>(
         data?.customTemplateOverride || data?.customEditedBody || ""
     );
+    // Opens the tag catalog from the icon next to the resolve-time note, independently of the
+    // customize toggle.
+    const [tagHelpOpen, setTagHelpOpen] = useState(false);
 
     // The templates LIST omits tagSchema and blanks S3-offloaded bodies, so the selected template
     // is fetched individually to obtain the tag schema (which drives the tag form) and the full
@@ -170,9 +176,32 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
     // The unified "Customize configuration" toggle is available when either grant is present.
     const canCustomize = allowOverride || allowCustomEdit;
 
+    // Every block below is conditional, so a pipeline with no templates, no tag schema, and no
+    // customize grant rendered nothing but the heading — a blank step that reads as still loading or
+    // broken rather than as "this pipeline takes no configuration". `templatesLoading` is excluded
+    // deliberately: saying "nothing to configure" while the list is still in flight would be wrong.
+    const hasTemplates = !!templates && templates.length > 0;
+    const hasTagFields = !!selectedTemplate?.tagSchema && selectedTemplate.tagSchema.length > 0;
+    const showsConfigBody = !!selectedTemplate || customize;
+    const nothingToConfigure =
+        !templatesLoading && !hasTemplates && !hasTagFields && !showsConfigBody && !canCustomize;
+
     return (
         <div className="space-y-4">
             <h3 className="text-lg font-semibold text-text-primary">{pipeline.pipelineName}</h3>
+
+            {nothingToConfigure && (
+                <div className="orch-outline p-3 border border-border-default rounded bg-surface-secondary">
+                    <p className="text-sm text-text-primary">
+                        This pipeline takes no run-time configuration.
+                    </p>
+                    <p className="mt-1 text-xs text-text-secondary">
+                        It defines no configuration templates, and it does not allow a custom
+                        configuration for a single run. Continue to the next step — it will run with
+                        its built-in settings.
+                    </p>
+                </div>
+            )}
 
             {/* Template selection */}
             {templates && templates.length > 0 && (
@@ -278,12 +307,31 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
                         }}
                         height="300px"
                     />
-                    <p className="text-xs text-text-secondary mt-1">
-                        System tag placeholders shown here are resolved per pipeline task at launch.
-                    </p>
-                    {customize && (
+                    <div className="mt-1 flex items-start gap-1.5">
+                        <p className="text-xs text-text-secondary">
+                            Dynamic and system tag placeholders are resolved per pipeline task at
+                            launch.
+                        </p>
+                        {/* The full catalog is reachable from an icon as well as the panel below:
+                            while editing a config body the question is "what can I write here?", and
+                            an icon next to the note answers it without scrolling past the editor. */}
+                        {canCustomize && (
+                            <button
+                                type="button"
+                                aria-label="Show available template tags"
+                                aria-expanded={tagHelpOpen}
+                                onClick={() => setTagHelpOpen((o) => !o)}
+                                className="orch-outline inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-text-secondary text-[10px] leading-none text-text-secondary hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                                i
+                            </button>
+                        )}
+                    </div>
+                    {/* Expanded either by the icon or because the run is customizing — that is when
+                        the placeholders are actually actionable. */}
+                    {(customize || tagHelpOpen) && (
                         <div className="mt-2">
-                            <SystemTagHelp />
+                            <SystemTagHelp defaultOpen={tagHelpOpen} />
                         </div>
                     )}
                 </CollapsibleSection>

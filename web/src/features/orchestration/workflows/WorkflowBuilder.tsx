@@ -5,7 +5,13 @@
 
 import React, { useReducer, useEffect, useCallback, useState, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAllPipelines, useWorkflow, useWorkflowMutations, useTemplates } from "../api/queries";
+import {
+    useAllPipelines,
+    useWorkflow,
+    useWorkflowMutations,
+    useTemplates,
+    usePrefetchPipelineTemplates,
+} from "../api/queries";
 import PipelineOrderList from "./PipelineOrderList";
 import WorkflowSystemConfigFields from "./WorkflowSystemConfigFields";
 import WorkflowValidationPanel from "./WorkflowValidationPanel";
@@ -204,6 +210,23 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const handleTemplatesLoaded = useCallback((key: string, templates: Template[]) => {
         dispatch({ type: "SET_TEMPLATES", key, templates });
     }, []);
+
+    // Warm each referenced pipeline's template list before the Pipelines step is reached. The
+    // TemplatesFetcher rows only mount on that step, so in edit mode — where the pipelines are already
+    // chosen — arriving there previously meant waiting on a fetch per pipeline with nothing rendered.
+    // Session-scoped: the entries are dropped when the builder unmounts.
+    const templatePrefetchTargets = React.useMemo(
+        () =>
+            state.specifiedPipelines
+                .filter((ref) => ref.pipelineId && ref.pipelineDatabaseId)
+                .map((ref) => ({
+                    databaseId: ref.pipelineDatabaseId as string,
+                    pipelineId: ref.pipelineId,
+                    defaultTemplateId: ref.defaultTemplateId || undefined,
+                })),
+        [state.specifiedPipelines]
+    );
+    usePrefetchPipelineTemplates(templatePrefetchTargets);
 
     // The route reuses one element for every /databases/:databaseId/workflows/:workflowId, so an
     // edit-to-edit navigation changes the props without remounting: clear the previous workflow's

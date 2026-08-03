@@ -278,7 +278,7 @@ class TestContainerReadsFromS3:
         import importlib.util
         path = os.path.normpath(os.path.join(
             _LAMBDA_DIR, "..", "container", "__main__.py"))
-        # The container imports `from utils import manifest_io`; put the container root on path.
+        # The container imports `from vams_utils import manifest_io`; put the container root on path.
         container_root = os.path.dirname(path)
         if container_root not in sys.path:
             sys.path.insert(0, container_root)
@@ -317,7 +317,7 @@ class TestContainerReadsFromS3:
     def test_container_manifest_io_reads_and_unwraps(self):
         _mod, container_root = self._container_main()
         import importlib
-        mio = importlib.import_module("utils.manifest_io")
+        mio = importlib.import_module("vams_utils.manifest_io")
         envelope = {"schemaVersion": 1, "metadata": {"VAMS": {"assetMetadata": {"MODEL": "x"}}}}
         cfg = {"MAX_NUM_IMAGES": 500}
         s3_resp = {"Body": MagicMock(read=lambda: json.dumps(envelope).encode("utf-8"))}

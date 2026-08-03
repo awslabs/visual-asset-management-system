@@ -244,3 +244,63 @@ describe("WizardInputStage multi-file arity", () => {
         expect(screen.queryByRole("option", { name: "/a-two.glb" })).not.toBeInTheDocument();
     });
 });
+
+/**
+ * The output path prefix's explanation belongs behind an info icon.
+ *
+ * It is four sentences of reference material for one optional field; inline it dominated the Output
+ * section of the step. The examples matter as much as the prose — the date and execution id are the
+ * common way to separate one run's output from another's, so both must be shown.
+ */
+describe("WizardInputStage output path prefix help", () => {
+    // Output controls only render when the workflow writes to an asset and allows an override.
+    const outputWorkflow = () =>
+        multiWorkflow({
+            outputTarget: { locationType: "asset", allowOverride: true },
+        });
+
+    it("offers the explanation from an info icon, not as a paragraph", async () => {
+        renderStage([], outputWorkflow());
+        expect(await screen.findByLabelText("Output path prefix help")).toBeInTheDocument();
+    });
+
+    it("keeps the field itself present and labelled", async () => {
+        renderStage([], outputWorkflow());
+        expect(await screen.findByLabelText("Output path prefix")).toBeInTheDocument();
+    });
+
+    it("does not print the long explanation inline", async () => {
+        // The regression this guards: reverting to a paragraph under the input.
+        renderStage([], outputWorkflow());
+        await screen.findByLabelText("Output path prefix");
+        expect(
+            screen.queryByText(/Inserted immediately before each output file/i)
+        ).not.toBeInTheDocument();
+    });
+
+    it("shows the date and execution-id examples when opened", async () => {
+        renderStage([], outputWorkflow());
+        await userEvent.hover(await screen.findByLabelText("Output path prefix help"));
+
+        // getAllBy: Radix renders the tooltip content plus a visually-hidden a11y copy, so each
+        // example legitimately appears more than once.
+        //
+        // Asserted as the STANDALONE date example (`/{{jobStartDate}}/`), not merely the tag appearing
+        // somewhere: it also occurs inside the combined `/{{jobStartDate}}/{{executionId}}/` form, so
+        // a loose match still passed when the standalone example was removed.
+        await waitFor(() =>
+            expect(screen.getAllByText("/{{jobStartDate}}/").length).toBeGreaterThan(0)
+        );
+        expect(screen.getAllByText("/{{executionId}}/").length).toBeGreaterThan(0);
+        expect(screen.getAllByText("/{{jobStartDate}}/{{executionId}}/").length).toBeGreaterThan(0);
+    });
+
+    it("still explains the trailing-slash behaviour", async () => {
+        // The subtlest part of the field: without a trailing / the prefix joins onto the FILE NAME.
+        renderStage([], outputWorkflow());
+        await userEvent.hover(await screen.findByLabelText("Output path prefix help"));
+        await waitFor(() =>
+            expect(screen.getAllByText(/joins onto the file name/i).length).toBeGreaterThan(0)
+        );
+    });
+});

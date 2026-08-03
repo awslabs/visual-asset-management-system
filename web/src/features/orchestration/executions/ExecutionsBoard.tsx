@@ -204,10 +204,28 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const handleRerun = async (executionId: string, groupId?: string) => {
         setActionError(null);
         try {
-            await rerunExecution.mutateAsync({ executionId, executionGroupId: groupId });
-            toast.success("Re-run started", {
-                description: "A new execution was launched from the stored inputs.",
+            const result: any = await rerunExecution.mutateAsync({
+                executionId,
+                executionGroupId: groupId,
             });
+            // The re-run response passes the execute handler's body through, so it carries the NEW
+            // execution's id and any non-fatal warnings. Naming the new id matters because the row the
+            // user acted on is the OLD execution — without it there is no way to tell which run to
+            // watch. Warnings are surfaced rather than dropped: a run that launched with caveats
+            // (skipped inputs, say) is not the same as a clean one.
+            const newId: string | undefined = result?.executionId || result?.workflowExecutionId;
+            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            const parts = [
+                newId ? `New execution ${newId}.` : "A new execution was launched.",
+                groupId ? "Re-ran every execution in the group." : "",
+                warnings.length ? `Warnings: ${warnings.join("; ")}` : "",
+            ].filter(Boolean);
+            if (warnings.length) {
+                // Not a plain success: it started, but with something the operator should read.
+                toast.warning("Re-run started with warnings", { description: parts.join(" ") });
+            } else {
+                toast.success("Re-run started", { description: parts.join(" ") });
+            }
         } catch (err) {
             const message = toastErrorMessage(err, "Failed to rerun execution");
             setActionError(message);

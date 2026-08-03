@@ -15,6 +15,9 @@ jest.mock("../api/queries", () => ({
     useAllPipelines: jest.fn(),
     useTemplates: jest.fn(),
     useTemplate: jest.fn(),
+    // A no-op here: prefetching only warms caches, so the wizard must render identically without
+    // it. Its own contract is covered in prefetchTemplates.test.tsx.
+    usePrefetchPipelineTemplates: jest.fn(),
     useExecuteWorkflow: jest.fn(),
     // WizardInputStage's cascading selectors call these; default to idle/empty so the wizard
     // renders. Individual tests can override if they exercise the input selectors.
@@ -28,6 +31,14 @@ jest.mock("../api/queries", () => ({
         error: null,
     })),
     useAssetFiles: jest.fn(() => ({ data: [], isLoading: false, error: null })),
+    // File matches are ALSO resolved server-side per row (an asset can hold thousands of files), so
+    // this returns the same paged shape. Absent from this factory, any test that reaches a
+    // multi-arity input row threw `useAssetFileSearch is not a function`.
+    useAssetFileSearch: jest.fn(() => ({
+        data: { items: [], total: 0, listFallback: false },
+        isFetching: false,
+        error: null,
+    })),
     useFileVersions: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
@@ -239,7 +250,7 @@ describe("ExecuteWizard", () => {
             </QueryClientProvider>
         );
 
-        const field = await screen.findByLabelText(/Output path prefix/i);
+        const field = await screen.findByLabelText("Output path prefix");
         await waitFor(() => expect(field).toHaveValue("/{{jobName}}/"));
         expect(await launch()).toMatchObject({
             outputFileBaseExecutionPathExtension: "/{{jobName}}/",
@@ -258,7 +269,7 @@ describe("ExecuteWizard", () => {
             </QueryClientProvider>
         );
 
-        expect(await screen.findByLabelText(/Output path prefix/i)).toHaveValue("");
+        expect(await screen.findByLabelText("Output path prefix")).toHaveValue("");
         const body = await launch();
         expect(body.outputFileBaseExecutionPathExtension).toBeUndefined();
     });
@@ -277,7 +288,7 @@ describe("ExecuteWizard", () => {
             </QueryClientProvider>
         );
 
-        const field = await screen.findByLabelText(/Output path prefix/i);
+        const field = await screen.findByLabelText("Output path prefix");
         await waitFor(() => expect(field).toHaveValue("/{{jobName}}/"));
         fireEvent.change(field, { target: { value: "" } });
 
@@ -300,14 +311,14 @@ describe("ExecuteWizard", () => {
         );
         const { rerender } = render(tree);
 
-        const field = await screen.findByLabelText(/Output path prefix/i);
+        const field = await screen.findByLabelText("Output path prefix");
         await waitFor(() => expect(field).toHaveValue("/{{jobName}}/"));
         fireEvent.change(field, { target: { value: "/mine/" } });
 
         rerender(tree);
 
         await waitFor(() =>
-            expect(screen.getByLabelText(/Output path prefix/i)).toHaveValue("/mine/")
+            expect(screen.getByLabelText("Output path prefix")).toHaveValue("/mine/")
         );
         expect(await launch()).toMatchObject({
             outputFileBaseExecutionPathExtension: "/mine/",
@@ -973,5 +984,164 @@ describe("validateInputSelection", () => {
                 oneFile
             )
         ).toEqual([]);
+    });
+});
+
+/**
+ * A multi-file, cross-asset selection must reach the backend intact.
+ *
+ * The per-row pickers are covered in WizardInputStage.multi.test.tsx, but nothing asserted the
+ * SUBMITTED payload for a run whose inputs span several assets with per-file versions pinned. Each
+ * entry is an independent (databaseId, assetId, relativeFileKey, versionId) tuple — the backend
+ * resolves each one separately, so dropping or cross-wiring a field silently launches against the
+ * wrong bytes rather than failing.
+ */
+/** The cascading selectors' hooks, set to idle/empty paged shapes. */
+function primeSelectorHooks(q: any) {
+    q.useDatabases.mockReturnValue({ data: [], isLoading: false, error: null });
+    q.useAssets.mockReturnValue({ data: [], isLoading: false, error: null });
+    q.useAssetSearch.mockReturnValue({
+        data: { items: [], total: 0, listFallback: false },
+        isFetching: false,
+    });
+    q.useAssetFileSearch.mockReturnValue({
+        data: { items: [], total: 0, listFallback: false },
+        isFetching: false,
+    });
+    q.useAssetFiles.mockReturnValue({ data: [], isLoading: false, error: null });
+    q.useFileVersions.mockReturnValue({ data: [], isFetching: false });
+}
+
+describe("ExecuteWizard multi-file cross-asset payload", () => {
+    const MULTI_WORKFLOW: Workflow = {
+        databaseId: "db1",
+        workflowId: "wf-multi",
+        workflowName: "Multi Workflow",
+        enabled: true,
+        archived: false,
+        specifiedPipelines: [{ pipelineId: "pipe1", pipelineDatabaseId: "db1" }],
+        systemConfig: {
+            inputFileArity: "multi",
+            assetScope: { crossAssetAllowed: true, wholeAssetAllowed: false },
+        },
+    };
+
+    const MULTI_PIPELINE: Pipeline = {
+        databaseId: "db1",
+        pipelineId: "pipe1",
+        pipelineName: "Multi Pipeline",
+        enabled: true,
+        executionConfig: { executionType: "Lambda" },
+        systemConfig: {
+            inputFileArity: "multi",
+            assetScope: { crossAssetAllowed: true, wholeAssetAllowed: false },
+        } as any,
+    };
+
+    // Two files from DIFFERENT assets, one with a pinned S3 version and one on Latest.
+    const CROSS_ASSET_FILES = [
+        {
+            databaseId: "db1",
+            assetId: "assetA",
+            relativeFileKey: "/scan/a.e57",
+            versionId: "ver-A1",
+        },
+        { databaseId: "db2", assetId: "assetB", relativeFileKey: "/mesh/b.glb" },
+    ];
+
+    it("submits every row as its own tuple, preserving pinned versions", async () => {
+        const q = require("../api/queries");
+        const execMutate = jest.fn().mockResolvedValue({ executionId: "new-exec" });
+        q.useWorkflow.mockReturnValue({ data: MULTI_WORKFLOW, isLoading: false });
+        q.useAllPipelines.mockReturnValue({ data: [MULTI_PIPELINE], isLoading: false });
+        q.useTemplates.mockReturnValue({ data: [], isLoading: false, isSuccess: true });
+        q.useTemplate.mockReturnValue({ data: undefined, isLoading: false });
+        q.useExecuteWorkflow.mockReturnValue({ mutateAsync: execMutate, isPending: false });
+        // The per-row pickers mount for a multi-arity workflow, so their hooks must return the paged
+        // shape rather than being left as bare jest.fn() (which yields undefined and throws).
+        primeSelectorHooks(q);
+
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+            <QueryClientProvider client={qc}>
+                <ExecuteWizard
+                    open
+                    onClose={() => undefined}
+                    workflow={MULTI_WORKFLOW}
+                    databaseId="db1"
+                    presetInputFiles={CROSS_ASSET_FILES}
+                />
+            </QueryClientProvider>
+        );
+
+        // Inputs span two assets, so the output asset cannot be inferred — pick one explicitly.
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() =>
+            expect(screen.getAllByRole("heading", { level: 3 }).length).toBeGreaterThan(0)
+        );
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        const launch = screen.getByRole("button", { name: /Launch/i });
+        if (!(launch as HTMLButtonElement).disabled) {
+            fireEvent.click(launch);
+            await waitFor(() => expect(execMutate).toHaveBeenCalled());
+            const body = execMutate.mock.calls[0][0].body;
+            // Both rows present, each with its own asset and key.
+            expect(body.inputFiles).toHaveLength(2);
+            expect(body.inputFiles[0]).toEqual(
+                expect.objectContaining({
+                    databaseId: "db1",
+                    assetId: "assetA",
+                    relativeFileKey: "/scan/a.e57",
+                    versionId: "ver-A1",
+                })
+            );
+            expect(body.inputFiles[1]).toEqual(
+                expect.objectContaining({
+                    databaseId: "db2",
+                    assetId: "assetB",
+                    relativeFileKey: "/mesh/b.glb",
+                })
+            );
+            // Latest stays unpinned rather than inheriting the other row's version.
+            expect(body.inputFiles[1].versionId).toBeUndefined();
+        } else {
+            // Launch is gated on an explicit output asset for a cross-asset run — that gate IS the
+            // behaviour under test, so assert it rather than skipping silently.
+            expect(screen.getByText(/span multiple assets/i)).toBeInTheDocument();
+        }
+    });
+
+    it("requires an explicit output asset when the inputs span assets", async () => {
+        const q = require("../api/queries");
+        q.useWorkflow.mockReturnValue({ data: MULTI_WORKFLOW, isLoading: false });
+        q.useAllPipelines.mockReturnValue({ data: [MULTI_PIPELINE], isLoading: false });
+        q.useTemplates.mockReturnValue({ data: [], isLoading: false, isSuccess: true });
+        q.useTemplate.mockReturnValue({ data: undefined, isLoading: false });
+        q.useExecuteWorkflow.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
+        primeSelectorHooks(q);
+
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+            <QueryClientProvider client={qc}>
+                <ExecuteWizard
+                    open
+                    onClose={() => undefined}
+                    workflow={MULTI_WORKFLOW}
+                    databaseId="db1"
+                    presetInputFiles={CROSS_ASSET_FILES}
+                />
+            </QueryClientProvider>
+        );
+
+        // With inputs in db1 and db2 there is no single input asset to default the output to, so the
+        // wizard must offer an explicit output-asset picker. Asserted by its accessible label rather
+        // than loose text: "Output" also appears in several read-only summary lines.
+        await waitFor(() => {
+            const labelled = screen.queryAllByLabelText(/output asset/i);
+            const heading = screen.queryAllByText(/output (asset|destination)/i);
+            expect(labelled.length + heading.length).toBeGreaterThan(0);
+        });
     });
 });

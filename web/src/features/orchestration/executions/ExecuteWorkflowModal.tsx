@@ -47,11 +47,22 @@ const ExecuteWorkflowModal: React.FC<ExecuteWorkflowModalProps> = ({
     const [wizardOpen, setWizardOpen] = useState(false);
 
     const { data: dbWorkflows = [] } = useAllWorkflows(databaseId);
-    const { data: globalWorkflows = [] } = useAllWorkflows("GLOBAL");
-    const allWorkflows = useMemo(
-        () => [...dbWorkflows, ...globalWorkflows],
-        [dbWorkflows, globalWorkflows]
-    );
+    // The GLOBAL catalog is fetched separately ONLY when scoped to a database: the unscoped list
+    // (`/workflows`) already returns every workflow the caller can see, GLOBAL included. Fetching it
+    // again there produced a list with each GLOBAL workflow twice — and duplicate option keys break
+    // the picker's list reconciliation, which is why typing in its search appeared to do nothing.
+    const { data: globalWorkflows = [] } = useAllWorkflows("GLOBAL", undefined, !!databaseId);
+    const allWorkflows = useMemo(() => {
+        // Deduplicated defensively as well: a workflow must never appear twice even if both scopes
+        // return it.
+        const seen = new Set<string>();
+        return [...dbWorkflows, ...globalWorkflows].filter((wf) => {
+            const key = `${wf.databaseId}:${wf.workflowId}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }, [dbWorkflows, globalWorkflows]);
 
     // Referenced pipelines' systemConfig, needed to resolve what each workflow accepts. Both scopes
     // load because a database workflow may reference GLOBAL pipelines as well as its own.

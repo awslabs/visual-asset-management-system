@@ -123,3 +123,87 @@ describe("searchAssetFilesPaged", () => {
         expect(typeof err).toBe("string");
     });
 });
+
+/**
+ * Asset AND database scoping must both be exact matches.
+ *
+ * Same analyzed-field hazard as the asset picker: a quoted phrase on `str_databaseid` matches any
+ * database whose tokens start with the same sequence, so a file search "scoped" to smoke-db returned
+ * a file belonging to a smoke-db-2 asset. Verified against the deployed index — the old filter
+ * returned `smoke-db-2 /scan/a.e57` for a smoke-db + <smoke-db-2 asset> pair that should match
+ * nothing; the .keyword filters return zero rows.
+ */
+describe("searchAssetFilesPaged scoping", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        cache().getItem.mockReturnValue({ featuresEnabled: [] });
+        api().searchAssets.mockResolvedValue([true, fileHits([], 0)]);
+    });
+
+    const sentFilters = () => api().searchAssets.mock.calls[0][0].filters;
+
+    it("scopes both ids to their .keyword subfields", async () => {
+        await searchAssetFilesPaged("", "smoke-db", "a1");
+        expect(sentFilters()).toEqual([
+            { query_string: { query: 'str_databaseid.keyword:"smoke-db"' } },
+            { query_string: { query: 'str_assetid.keyword:"a1"' } },
+        ]);
+    });
+
+    it("uses only the query_string key the backend model requires", async () => {
+        // A bare `term` filter is rejected with `filters -> N -> query_string: field required` (400).
+        await searchAssetFilesPaged("", "smoke-db", "a1");
+        for (const f of sentFilters()) {
+            expect(Object.keys(f)).toEqual(["query_string"]);
+        }
+    });
+
+    it("does not target the analyzed fields", async () => {
+        await searchAssetFilesPaged("", "smoke-db", "a1");
+        const serialized = JSON.stringify(sentFilters());
+        expect(serialized).not.toContain('str_databaseid:("');
+        expect(serialized).not.toContain('str_assetid:("');
+    });
+
+    it("keeps the two ids in separate clauses so both must hold", async () => {
+        await searchAssetFilesPaged("", "smoke-db", "a1");
+        expect(sentFilters()).toHaveLength(2);
+    });
+});
+
+/**
+ * The file picker must degrade the same way when NOOPENSEARCH is set.
+ *
+ * `POST /search` is unavailable in those deployments, so the file list has to come from the direct
+ * S3 listing endpoint and be filtered in the browser.
+ */
+describe("NOOPENSEARCH file fallback", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        cache().getItem.mockReturnValue({ featuresEnabled: ["NOOPENSEARCH"] });
+        api().fetchAssetS3Files.mockResolvedValue([
+            true,
+            [
+                { fileName: "pump.glb", key: "a1/pump.glb", relativePath: "/pump.glb" },
+                { fileName: "valve.stl", key: "a1/valve.stl", relativePath: "/valve.stl" },
+            ],
+        ]);
+    });
+
+    it("never calls the search API", async () => {
+        await searchAssetFilesPaged("pump", "db1", "a1");
+        expect(api().searchAssets).not.toHaveBeenCalled();
+    });
+
+    it("lists the asset's files and filters locally", async () => {
+        const [ok, page] = await searchAssetFilesPaged("pump", "db1", "a1");
+        expect(ok).toBe(true);
+        expect(api().fetchAssetS3Files).toHaveBeenCalled();
+        expect((page as any).listFallback).toBe(true);
+    });
+
+    it("returns every file for an empty term", async () => {
+        const [, page] = await searchAssetFilesPaged("", "db1", "a1");
+        expect((page as any).items.length).toBeGreaterThan(0);
+    });
+});

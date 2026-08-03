@@ -11,7 +11,12 @@ import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import WizardInputStage from "./WizardInputStage";
 import WizardPipelineStage from "./WizardPipelineStage";
 import WizardReviewStage from "./WizardReviewStage";
-import { useWorkflow, useAllPipelines, useExecuteWorkflow } from "../api/queries";
+import {
+    useWorkflow,
+    useAllPipelines,
+    useExecuteWorkflow,
+    usePrefetchPipelineTemplates,
+} from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
 import type {
     Workflow,
@@ -452,6 +457,32 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
 
         return errors;
     }, [effectiveWorkflow.specifiedPipelines, pipelineData, databaseId]);
+
+    // Warm every pipeline's template list (and its already-chosen template's detail) as soon as the
+    // pipeline list is known, which is while the user is still on the Input step. Each pipeline step
+    // otherwise started its own fetch on arrival and rendered empty for seconds with no indication it
+    // was loading. The default template id is included because a step renders its form from the
+    // single-template detail, not the list — without it, arriving at an already-configured step still
+    // waited on a second serial request.
+    const templatePrefetchTargets = useMemo(
+        () =>
+            effectiveWorkflow.specifiedPipelines.map((ref) => {
+                const pipelineDatabaseId = ref.pipelineDatabaseId || databaseId;
+                const compositeKey = `${pipelineDatabaseId}:${ref.pipelineId}`;
+                return {
+                    databaseId: pipelineDatabaseId,
+                    pipelineId: ref.pipelineId,
+                    // Whatever the step would preselect: the run's own choice when revisiting,
+                    // otherwise the workflow ref's default.
+                    defaultTemplateId:
+                        pipelineData[compositeKey]?.templateId ||
+                        ref.defaultTemplateId ||
+                        undefined,
+                };
+            }),
+        [effectiveWorkflow.specifiedPipelines, pipelineData, databaseId]
+    );
+    usePrefetchPipelineTemplates(templatePrefetchTargets);
 
     // When the workflow allows output override and the selected inputs span more than one asset,
     // the output asset cannot be inferred from a single input asset, so it must be chosen explicitly

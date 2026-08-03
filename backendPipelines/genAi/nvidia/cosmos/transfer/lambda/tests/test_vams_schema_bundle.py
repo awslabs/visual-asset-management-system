@@ -16,9 +16,23 @@ import pytest
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SCHEMA_ROOT = os.path.normpath(os.path.join(_LAMBDA_DIR, "..", "vamsSchema"))
 
-# Keys read from the fetched input configuration: DISABLE_GUARDRAILS / CONTROL_WEIGHT by the
-# container, PROMPT / prompt by the vamsExecute lambda.
-_CONSUMED_CONFIG_KEYS = {"DISABLE_GUARDRAILS", "CONTROL_WEIGHT", "PROMPT", "prompt"}
+# Keys read from the fetched input configuration. Kept in step with the two consumers:
+#   container/inference.py            — DISABLE_GUARDRAILS, CONTROL_WEIGHT
+#   lambda/vamsExecuteCosmosTransferPipeline.py — PROMPT/prompt, CONTROL_TYPE/controlType,
+#                                                 CONTROL_PATH/controlPath (each with a
+#                                                 COSMOS_TRANSFER_* asset-metadata fallback)
+# A key in the shipped configBody that no consumer reads is silently ignored at run time, which is
+# what this set exists to catch — so it must list every key that IS read, or it reports false alarms.
+_CONSUMED_CONFIG_KEYS = {
+    "DISABLE_GUARDRAILS",
+    "CONTROL_WEIGHT",
+    "PROMPT",
+    "prompt",
+    "CONTROL_TYPE",
+    "controlType",
+    "CONTROL_PATH",
+    "controlPath",
+}
 
 # The container's output filename shape: {stem}_CosmosTransfer_{controlType}_{timestamp}.mp4
 _PRODUCED_OUTPUT_NAME = "clip_CosmosTransfer_edge_20260101-000000.mp4"

@@ -19,6 +19,43 @@ import { appCache } from "../../../services/appCache";
  * `[ok, data]` tuple.
  */
 
+/**
+ * An EXACT-match filter on an id field.
+ *
+ * Two constraints have to hold at once:
+ *
+ * 1. The backend's `SearchFilterModel` REQUIRES a `query_string` key (models/search.py) — a bare
+ *    `term` filter is rejected with `filters -> 0 -> query_string: field required` (400).
+ * 2. These id fields are analyzed, so the standard analyzer splits on hyphens. A quoted phrase on the
+ *    ANALYZED field searches for adjacent tokens: `str_databaseid:("smoke-db")` matches [smoke, db],
+ *    which `smoke-db-2` ([smoke, db, 2]) also contains. Verified against the deployed index — that
+ *    filter returned 24 smoke-db assets PLUS 1 from smoke-db-2.
+ *
+ * Targeting the `.keyword` subfield THROUGH a query_string satisfies both: exact match, accepted shape.
+ * Verified live: `str_databaseid.keyword:"smoke-db"` returns exactly the 24.
+ */
+function exactTermFilter(field: string, value: string): object {
+    // Quote the value so a hyphenated id is one term rather than several, and escape any embedded
+    // quote or backslash so the query_string stays parseable.
+    const escaped = value.replace(/[\\"]/g, (c) => "\\" + c);
+    return { query_string: { query: `${field}.keyword:"${escaped}"` } };
+}
+
+/**
+ * Whether a databaseId means "all databases" rather than one specific database.
+ *
+ * "GLOBAL" is the shared PIPELINE/WORKFLOW catalog, not an asset database: passing it to an
+ * asset/file endpoint is a 400. Treating it as unscoped is what the user means by it here.
+ */
+export function isAllDatabases(databaseId?: string): boolean {
+    return !databaseId || databaseId === "GLOBAL";
+}
+
+/** Exact-match filter for the database id — see {@link exactTermFilter}. */
+function databaseIdFilter(databaseId: string): object {
+    return exactTermFilter("str_databaseid", databaseId);
+}
+
 export interface AssetSummary {
     databaseId: string;
     assetId: string;
@@ -87,8 +124,10 @@ export async function searchAssetsPaged(
     if (!openSearchDisabled()) {
         try {
             const filters: object[] = [];
-            if (databaseId) {
-                filters.push({ query_string: { query: `(str_databaseid:("${databaseId}"))` } });
+            // Not filtered when the id means "all databases": GLOBAL is the pipeline/workflow catalog,
+            // never a value of str_databaseid, so filtering on it would return nothing at all.
+            if (!isAllDatabases(databaseId)) {
+                filters.push(databaseIdFilter(databaseId as string));
             }
             const [ok, result] = (await searchAssets({
                 query: term,
@@ -138,11 +177,20 @@ export async function searchAssetsPaged(
     return [true, { items: matches.slice(0, pageSize), total: matches.length, listFallback: true }];
 }
 
-/** Assets in one database, or (when databaseId is empty) across all databases the caller can see. */
+/**
+ * Assets in one database, or across every database the caller can see.
+ *
+ * "Every database" is expressed as an empty databaseId OR the literal "GLOBAL". GLOBAL is a real
+ * database id for PIPELINES and WORKFLOWS (the shared catalog), but there is no GLOBAL asset
+ * database — the assets endpoint rejects it outright with
+ * `databaseId is invalid. GLOBAL is not allowed for this field.` (400). A workflow-scoped caller
+ * naturally holds "GLOBAL" as its database, so the coercion lives here rather than in each caller.
+ */
 export async function listAssets(databaseId?: string): Promise<[boolean, AssetSummary[] | string]> {
     try {
-        const result = databaseId
-            ? await fetchDatabaseAssets({ databaseId })
+        const scoped = databaseId && !isAllDatabases(databaseId) ? databaseId : undefined;
+        const result = scoped
+            ? await fetchDatabaseAssets({ databaseId: scoped })
             : await fetchAllAssets({});
         if (Array.isArray(result)) return [true, result as AssetSummary[]];
         return [false, "Failed to load assets."];
@@ -203,13 +251,7 @@ export async function searchAssetFilesPaged(
                 size: pageSize,
                 entityTypes: ["file"],
                 includeMetadataInSearch: false,
-                filters: [
-                    {
-                        query_string: {
-                            query: `(str_databaseid:("${databaseId}") AND str_assetid:("${assetId}"))`,
-                        },
-                    },
-                ],
+                filters: [databaseIdFilter(databaseId), exactTermFilter("str_assetid", assetId)],
                 aggregations: false,
                 includeHighlights: false,
                 explainResults: false,
