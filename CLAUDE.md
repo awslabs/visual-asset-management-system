@@ -38,8 +38,14 @@ root/
 ├── infra/                     # CDK TypeScript infrastructure
 │   └── CLAUDE.md              # CDK development guide
 ├── tools/
-│   └── VamsCLI/               # Python CLI tool
-│       └── CLAUDE.md          # CLI development guide
+│   ├── VamsCLI/               # Python CLI tool
+│   │   └── CLAUDE.md          # CLI development guide
+│   ├── VamsMCP/               # MCP server exposing the VAMS API as agent tools (reuses vamscli)
+│   │   └── CLAUDE.md          # MCP development guide
+│   ├── VamsAgentSkill/        # Portable agent skill that operates VAMS via vamscli
+│   │   └── SKILL.md           # Canonical skill definition (see /vams-agent)
+│   ├── ExternalIntegrations/  # ArcGIS Pro connector, Isaac Sim integration
+│   └── permissionsSetup/      # Permission bootstrap scripts
 ├── backendPipelines/          # Processing pipeline definitions (containers + Lambdas)
 │   ├── CLAUDE.md              # Pipeline development guide (S3 output paths, assetId threading, new-pipeline checklist)
 │   ├── genAi/
@@ -131,11 +137,34 @@ Adding a new API endpoint requires coordinated changes across multiple component
 | 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                              |
 | 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; `apiBuilder` is near the CFN per-stack resource limit) |
 | 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                              |
-| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable)                                                                                  |
-| 8. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                    |
-| 9. API reference (docs)   | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                              |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable) — also add the endpoint path to `vamscli/constants.py` (Rule 7)                  |
+| 8. MCP server             | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it (see Pattern 7)                                                  |
+| 9. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                    |
+| 10. API reference (docs)  | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                              |
 
 **Never** add an endpoint without updating all required files. A handler without a route is dead code; a route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a missing entry is invisible to constraint authoring and the CLI. **API documentation lives in two places — the OpenAPI `VAMS_API.yaml` AND the Docusaurus `api/{domain}.md` reference page — and both must be updated together.**
+
+### **Pattern 7: Backend → CLI → MCP Propagation Chain**
+
+The VAMS CLI and the VAMS MCP server sit downstream of the backend API, and the MCP server sits downstream of the CLI — it imports `vamscli`'s `APIClient` and `ProfileManager` directly rather than calling the API itself. Changes therefore propagate in one direction and **each hop must be updated in the same change**:
+
+```
+backend API (apiRoutes.py + handler + model)
+  → tools/VamsCLI (constants.py → utils/api_client.py → commands/{group}.py)
+    → tools/VamsMCP (vams_mcp/server.py tools, reusing the CLI APIClient method)
+      → tools/VamsAgentSkill/SKILL.md (only if an order-of-operations rule changes)
+```
+
+**Rules:**
+
+1. **Any change to a `vamscli` command or `APIClient` method requires reviewing the MCP server in the same change.** Renamed methods, changed parameters, new required arguments, and changed response shapes all break MCP tools silently — the MCP tool calls the CLI method directly, so a signature change surfaces only at agent runtime.
+2. **New `APIClient` methods that agents should be able to use get a matching MCP tool** in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section (read / `enable_writes` / `enable_destructive`), plus a unit test and a README tool-list entry. See `tools/VamsMCP/CLAUDE.md`.
+3. **Response-shape changes must be checked against MCP pagination.** `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. A handler that changes either one breaks the corresponding MCP tool without any error.
+4. **The agent skill (`tools/VamsAgentSkill/SKILL.md`) does not list commands** — it self-discovers them via `vamscli --help`, so ordinary command additions need no skill edit. Update it only when a _structural_ rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating category.
+5. **Roll the CLI version and MCP version together** when the MCP server's contract with the CLI changes (`tools/VamsCLI/vamscli/version.py`, `tools/VamsMCP/pyproject.toml`).
+6. **A change to these rules lands in both steering families** (Rule 11). This pattern is restated for Claude Code in `tools/VamsCLI/CLAUDE.md` and `tools/VamsMCP/CLAUDE.md`, and for Kiro in the MCP propagation section of `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`. Editing the chain here without updating those leaves one agent scaffolding the old workflow.
+
+Reverse direction applies too: a change to the MCP server that reveals a missing or wrong `APIClient` method should be fixed in the CLI rather than worked around with raw requests in the MCP server.
 
 ### **Pattern 2: Two-Tier Authorization**
 
@@ -301,6 +330,8 @@ Structural changes to the codebase require updating the relevant `CLAUDE.md` fil
 | New CDK nested stack or lambda builder                         | `infra/CLAUDE.md` (directory structure, stack list)                                                                                                                                                                                                                                                                                                                |
 | New frontend component/page/service                            | `web/CLAUDE.md` (directory structure, key files)                                                                                                                                                                                                                                                                                                                   |
 | New CLI command group                                          | `tools/VamsCLI/CLAUDE.md` (command list, directory structure)                                                                                                                                                                                                                                                                                                      |
+| New/changed CLI command or `APIClient` method                  | `tools/VamsMCP/vams_mcp/server.py` + `tools/VamsMCP/README.md` tool list (Pattern 7 propagation chain); `tools/VamsAgentSkill/SKILL.md` only if an order-of-operations rule changed                                                                                                                                                                                |
+| New MCP tool or MCP module                                     | `tools/VamsMCP/CLAUDE.md` (directory structure, tool sections), `tools/VamsMCP/README.md` (tool list, `autoApprove` sample)                                                                                                                                                                                                                                        |
 | Configuration system (new field, switch, changed default)      | `infra/CLAUDE.md`, `documentation/docusaurus-site/docs/deployment/configuration-reference.md`, and the **ConfigBuilder** component; then run `infra/test/configBuilderSync.test.ts`. The test guards only `schema.ts` fields + `defaults.ts` presets — new/changed `getConfig()` validation logic must be hand-ported into `validation.ts` (not test-covered)      |
 | New/changed S3 bucket, DynamoDB table, or CloudWatch log group | `documentation/docusaurus-site/docs/architecture/aws-resources.md` and `documentation/docusaurus-site/docs/deployment/uninstall.md` — record removal policy (RETAIN vs DESTROY) and whether the resource has a custom/explicit name (custom-named resources can collide on redeploy). See `infra/CLAUDE.md` "Documentation Rule: Storage Resources and Log Groups" |
 | New pipeline                                                   | `backendPipelines/CLAUDE.md`, root `CLAUDE.md` (pipeline list), `documentation/docusaurus-site/docs/deployment/configuration-reference.md`                                                                                                                                                                                                                         |
@@ -318,6 +349,7 @@ Update the directory structure tree, key files tables, and any affected rules or
 | `backend/CLAUDE.md`       | `.kiro/steering/BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`                                               |
 | `web/CLAUDE.md`           | `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md`, `.kiro/steering/WEB_FRONTEND.md`                     |
 | `tools/VamsCLI/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`                                                       |
+| `tools/VamsMCP/CLAUDE.md` | `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md` (MCP propagation section)                             |
 | `documentation/CLAUDE.md` | `.kiro/steering/DOCUMENTATION_WORKFLOW.md`                                                         |
 
 ### **Rule 12: Keep Claude Code Skills in Sync with Steering Documents**
@@ -335,6 +367,7 @@ The skills in `.claude/commands/` scaffold work by restating steering-document r
 | `/update-docs`, `/verify-docs` | `documentation/CLAUDE.md` (writing style, source-to-doc mappings, dual API doc sources)                                                       |
 | `/update-changelog`            | Root git workflow / changelog format                                                                                                          |
 | `/refresh-steering-docs`       | Root Rules 11–12                                                                                                                              |
+| `/vams-agent`                  | `tools/VamsAgentSkill/SKILL.md` (canonical definition), VAMS entity/order-of-operations rules, `tools/VamsCLI` auth and permission commands   |
 
 ---
 
@@ -360,6 +393,10 @@ cd infra && npx cdk deploy --all --require-approval never  # Deploy to dev
 cd tools/VamsCLI && pip install -e .                       # Install in dev mode
 cd tools/VamsCLI && python -m pytest                       # Run CLI tests
 
+# MCP server (tools/VamsMCP/) — requires vamscli installed in the same environment
+cd tools/VamsMCP && pip install -e ../VamsCLI && pip install -e '.[dev]'
+cd tools/VamsMCP && python -m pytest                       # Run MCP tests (no live deployment needed)
+
 # Project-wide (run from repo root — targets web/src, infra/lib, infra/bin, infra/test)
 npm run lint
 npm run lint-fix
@@ -382,6 +419,7 @@ When implementing new features, follow the patterns in these files:
 | Lambda builder      | `infra/lib/lambdaBuilder/assetFunctions.ts`                  | Env vars, permissions, VPC config, KMS, CDK Nag                |
 | CDK nested stack    | `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` | Route attachment, function integration, API Gateway setup      |
 | CLI command         | `tools/VamsCLI/vamscli/commands/roleUserConstraints.py`      | Click decorators, profile support, JSON output, error handling |
+| MCP tool            | `tools/VamsMCP/vams_mcp/server.py`                           | Tool decorators, gated write/destructive sections, pagination  |
 | API service         | `web/src/services/APIService.ts`                             | apiClient calls, request/response patterns                     |
 | Pipeline model      | `backend/backend/models/pipelines.py`                        | Pipeline Pydantic models, execution type enum, validation      |
 | Workflow model      | `backend/backend/models/workflows.py`                        | Workflow Pydantic models, Step Functions ASL generation        |
@@ -400,16 +438,17 @@ When implementing new features, follow the patterns in these files:
 
 ## 🔌 **Available Claude Code Skills**
 
-| Skill                    | Description                                                   |
-| ------------------------ | ------------------------------------------------------------- |
-| `/generate-permissions`  | Generate VAMS permission constraint JSON templates            |
-| `/add-api-endpoint`      | Scaffold a new backend API endpoint across all required files |
-| `/add-pipeline`          | Scaffold a new processing pipeline                            |
-| `/update-changelog`      | Generate changelog entries from git commits                   |
-| `/deploy-check`          | Pre-deployment validation checklist                           |
-| `/refresh-steering-docs` | Update CLAUDE.md directory structures and key file references |
-| `/update-docs`           | Update documentation pages based on recent code changes       |
-| `/verify-docs`           | Cross-check documentation accuracy against source code        |
+| Skill                    | Description                                                                                                                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/generate-permissions`  | Generate VAMS permission constraint JSON templates                                                                                                                                                       |
+| `/add-api-endpoint`      | Scaffold a new backend API endpoint across all required files                                                                                                                                            |
+| `/add-pipeline`          | Scaffold a new processing pipeline                                                                                                                                                                       |
+| `/update-changelog`      | Generate changelog entries from git commits                                                                                                                                                              |
+| `/deploy-check`          | Pre-deployment validation checklist                                                                                                                                                                      |
+| `/refresh-steering-docs` | Update CLAUDE.md directory structures and key file references                                                                                                                                            |
+| `/update-docs`           | Update documentation pages based on recent code changes                                                                                                                                                  |
+| `/verify-docs`           | Cross-check documentation accuracy against source code                                                                                                                                                   |
+| `/vams-agent`            | Operate a live VAMS deployment at runtime via `vamscli` (search, inspect, bulk-update, cross-link); self-discovers commands, read-only by default. Canonical definition: `tools/VamsAgentSkill/SKILL.md` |
 
 ---
 
@@ -438,6 +477,8 @@ Runtime versions are in the Project Overview version table.
 -   **Backend (`backend/`)**: Casbin ABAC/RBAC, boto3, AWS Lambda Powertools (logging, tracing). Pydantic v1 only.
 -   **Infrastructure (`infra/`)**: AWS CDK (TypeScript), 11 nested stacks, CDK Nag security checks, REST API (v1), custom Lambda authorizer (unified JWT + IP).
 -   **CLI (`tools/VamsCLI/`)**: Click command framework, profile-based multi-environment config, `--json-output` for machine-readable output.
+-   **MCP server (`tools/VamsMCP/`)**: Model Context Protocol server (`mcp` SDK) exposing the VAMS API as agent tools over stdio. Stores no credentials — reuses the `vamscli` profile and `APIClient`. Write and destructive tools are gated off by default via `VAMS_ENABLE_WRITES` / `VAMS_ENABLE_DESTRUCTIVE`.
+-   **Agent skill (`tools/VamsAgentSkill/`)**: Portable skill for operating a live deployment through `vamscli`; self-discovers commands, read-only by default. Surfaced in Claude Code as `/vams-agent`.
 
 ---
 

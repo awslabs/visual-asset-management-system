@@ -129,6 +129,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   Database creation now rejects a `databaseId` that matches a reserved S3 keyword (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces`), matched case-insensitively, in addition to the existing `GLOBAL` restriction. The identifier can become a path segment inside the asset or aux buckets, so a reserved name would collide with the folders VAMS reserves for system use.
 -   **CDK** Gaussian Splat Toolbox container images can be built in the cloud with AWS CodeBuild instead of locally during a CDK deploy, matching the option already available for other pipelines
 -   **Pipelines** Gaussian Splat Toolbox upgraded to the upstream Open Source 3D Reconstruction Toolbox for Gaussian Splats on AWS **v1.0.0** release (pinned commit `73133959c04fb0f9f002e95b4d2a722de2d18722`), bringing that release's reconstruction and export capabilities into VAMS. Output now includes mesh and interchange formats alongside the splat formats — `.usdz` for USD pipelines and a collision mesh (`.ply`) suitable for simulation and physics use — in addition to `.ply`, `.spz`, and `.sog` splats, plus `.mp4`/`.png` renders.
+-   New **VAMS agent skill** (`tools/VamsAgentSkill/SKILL.md`) — A portable agent skill for operating a live VAMS deployment at runtime through the installed `vamscli` tool (research, inventory/audit, locating files, bulk metadata updates, cross-linking, and running processing workflows). The skill hardcodes no commands: it self-discovers the deployment's current commands via `vamscli --help` and caches a per-session command map, so it stays correct as VAMS evolves. It authenticates per session, pulls the user's allowed API routes (`GET /auth/routes/api/allowed`) to scope what it will attempt, and operates **read-only by default** — mutating commands (create, delete, edit, execute, upload) require explicit user authorization, with confirmation for destructive and bulk operations. Surfaced in Claude Code as the `/vams-agent` slash command; the skill itself is host-agnostic and can also be deployed to Amazon Bedrock AgentCore or another managed runtime.
+-   New **VAMS MCP server** (`tools/VamsMCP/`) — A [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes the VAMS API as agent-callable tools, so any MCP-capable host (Kiro, Claude Desktop, Amazon Bedrock agents, internal orchestrators) can search, inspect, and manage VAMS databases, assets, files, metadata, versions, tags, asset links, and workflows through natural language. It stores **no credentials, keys, or URLs**: it reuses the `vamscli` profile the user already configured on their own machine, so each user runs it against their own VAMS account under their own login and effective permissions are exactly that user's two-tier (RBAC/ABAC) VAMS permissions. See [Agentic Development](documentation/docusaurus-site/docs/developer/agentic-development.md) and `tools/VamsMCP/README.md`.
 
 ### Deprecations
 
@@ -193,6 +195,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Asset comment rendering sanitization hardened — the comment HTML sanitizer now enforces an explicit URL scheme allowlist (`http`, `https`, `mailto`) on links and forces `rel="noopener noreferrer"` on all anchor tags, preventing `javascript:`-style URLs and reverse-tabnabbing from links in user-authored comments.
 -   **Web** Asset and file search now properly update preview thumbnail caches when files/assets change their preview images on a new search without a full page refresh
 -   Previous Cognito MFA checks were erroring, defaulting MFA validation to false. Cognito MFA checks now use the AdminGetUser to cognito to properly fetch MFA status for when cognito is enabled.
+-   Fixed FIPS configuration endpoints using the FIPS endpoints for AWS data plane operations instead of just the control plane.
 
 ### Chores
 
@@ -229,6 +232,26 @@ All notable changes to this project will be documented in this file. See [standa
 -   The Amazon Cognito MFA check requires the API Gateway authorizer to run outside the VPC. VAMS does not create Amazon Cognito VPC interface endpoints, so when Lambda functions run in the VPC (`useForAllLambdas`) the authorizer has no path to Amazon Cognito; the Cognito MFA check is disabled (`COGNITO_AUTH_ENABLED = FALSE`) and `mfaRequired` on a role has no effect. The MFA check and MFA-aware role enforcement apply only when the authorizer runs outside the VPC.
 
 ### Troubleshooting
+
+## [2.5.3] (2026-08-03)
+
+### Bug Fixes
+
+-   **Web** Fixed `npm install` failing in `web/` with `npm error code EOVERRIDE / Override for fast-xml-parser@5.10.1 conflicts with direct dependency` ([#297](https://github.com/awslabs/visual-asset-management-system/issues/297)). `fast-xml-parser` was declared twice in `web/package.json` — once as a direct dependency and once in `overrides` — which could deadlock resolution against a stale lockfile. Both entries were removed: VAMS does not import `fast-xml-parser` directly, the AWS SDK no longer depends on it, and `@aws-amplify/storage` now requires `^5.7.2`, so the v4 pin was holding the package below its dependents' supported range.
+
+### Chores
+
+-   Updated package dependencies across all 11 npm packages (root, `web`, `infra`, documentation site, and the seven `web/customInstalls` viewer packages) to resolve npm audit findings. Root, `infra`, documentation site, and six of seven viewer packages are now clean; `web` went from 17 findings to 8 and no longer reports any high-severity findings.
+-   **Web** Upgraded `jodit-react` to `^5.3.21`, resolving high-severity mutation XSS and prototype pollution findings in the `jodit` editor used by the asset comments feature. The direct `jodit` pin was dropped in favor of the transitive version supplied by `jodit-react`.
+-   **Infra** Bumped the `aws-cdk` CLI floor to `^2.1134.0` to match `aws-cdk-lib` 2.263.0. The dependency update raised the cloud assembly schema to version 54, which the previously pinned CLI (`^2.1111.0`) could not read, causing `cdk synth` to fail.
+-   **Documentation** Aligned all `@docusaurus/*` packages to 3.10.2 so the core, preset, theme, and type packages remain on a single matching version.
+-   Bumped the base `package.json` version to 2.5.3 — it had remained at 2.1.0 across several releases and now tracks the VAMS release version.
+-   Bumped `VAMS_VERSION` (`infra/config/config.ts`) and VamsCLI version (`tools/VamsCLI/vamscli/version.py`) to 2.5.3 — these were not updated during the 2.5.2 hotfix and remained at 2.5.1
+-   Added the missing 2.5.2 entry to the documentation revision history
+
+### Known Issues
+
+-   Pipelines that rely on the Amazon Linux 2 (AL2) image type for Amazon ECS/AWS Batch containers may not work, as AL2 reached end of support on July 31st. This will be fixed in v2.6.0.
 
 ## [2.5.2] (2026-06-19)
 

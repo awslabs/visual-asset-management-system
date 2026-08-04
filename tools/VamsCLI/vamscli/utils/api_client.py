@@ -3496,9 +3496,10 @@ class APIClient:
     # ------------------------------------------------------------------
     # Pipeline / Workflow / Execution V2 API Methods
     # ------------------------------------------------------------------
-    # Shared helpers keep the per-endpoint methods small: _pwe_body unwraps the
-    # {"message": ...} envelope every V2 handler returns; _pwe_raise maps an HTTPError
-    # to the right BusinessLogicError for the domain.
+    # Shared helpers keep the per-endpoint methods small: _pwe_body returns the body
+    # with the {"message": ...} envelope every V2 handler emits left intact, so callers
+    # decide whether to unwrap; _pwe_raise maps an HTTPError to the right
+    # BusinessLogicError for the domain.
 
     @staticmethod
     def _pwe_body(response: "requests.Response") -> Dict[str, Any]:

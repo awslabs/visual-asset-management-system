@@ -131,6 +131,20 @@ Industry has nested sub-command groups:
 -   [ ] **Check Imports**: Ensure all imports are properly organized
 -   [ ] **Review Error Messages**: Ensure user-friendly error messages
 
+#### **Step 9: MCP Propagation**
+
+The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `ProfileManager` directly, so it sits **downstream of the CLI**. Every CLI change must be carried through in the same change.
+
+-   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
+-   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`).
+-   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. Confirm the `items_key` still matches the endpoint's response.
+-   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this; keep those checks passing.
+-   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list (and `autoApprove` sample if it is a safe read).
+-   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection.
+-   [ ] **Review the Agent Skill**: `tools/VamsAgentSkill/SKILL.md` self-discovers commands via `vamscli --help`, so ordinary command additions need no edit. Update it only when a **structural** rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating command category.
+
+Reverse direction applies too: if working on the MCP server reveals a missing or incorrect `APIClient` method, fix it in the CLI rather than hand-rolling raw requests in the MCP server.
+
 ## 🔧 **Implementation Standards**
 
 ### **API Endpoint Management**
@@ -738,6 +752,7 @@ The official Docusaurus documentation site (`documentation/docusaurus-site/docs/
 -   **CLI development process** → Update `documentation/docusaurus-site/docs/cli/development.md` (CLI-specific contributor guide); update `documentation/docusaurus-site/docs/developer/setup.md` only for changes to the full-stack/local-development setup
 -   **Basic install / quick start** → Update `tools/VamsCLI/README.md` (which then points to the official site)
 -   **System-wide rule changes** → Update `CLI_DEVELOPMENT_WORKFLOW.md` (this file) and the mirrored `tools/VamsCLI/CLAUDE.md`
+-   **MCP propagation rule changes** → This file is the Kiro counterpart for **both** `tools/VamsCLI/CLAUDE.md` and `tools/VamsMCP/CLAUDE.md`. A change to the Backend → CLI → MCP chain must land in root `CLAUDE.md` Pattern 7, both of those `CLAUDE.md` files, and the Step 9 checklist in this document — synchronization is bidirectional, so a rule authored here must be carried back into the `CLAUDE.md` files (root `CLAUDE.md` Rule 11)
 
 #### **Documentation Organization:**
 

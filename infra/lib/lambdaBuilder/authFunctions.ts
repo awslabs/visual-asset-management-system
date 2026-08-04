@@ -370,7 +370,7 @@ export function buildApiGatewayAuthorizerRestFunction(
     if (config.app.authProvider.useCognito.enabled) {
         environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
         environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
-        environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP").Endpoint}`;
+        environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP", false).Endpoint}`;
     }
 
     // MFA-preference check reachability (partition/VPC-aware; the authorizer resolves the
