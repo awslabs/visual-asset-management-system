@@ -80,7 +80,20 @@ The authorizer caches three separate things, each with its own lifetime, so that
 | API key records   | `API_KEY_CACHE_TTL`    | 15 seconds | Per key  | A not-found key is cached as `None`, preventing repeated lookups from invalid keys           |
 | JWKS signing keys | `CACHE_TTL`            | 1 hour     | Per pool | Applies to Amazon Cognito keys, external IDP keys, and resolved OpenID Connect JWKS URIs     |
 
-API Gateway additionally caches the authorizer result itself: 30 seconds for authenticated routes, 900 seconds for the anonymous/ignored-path authorizer.
+API Gateway caches the authorizer result itself on top of these, set through `authorizerResultTtlInSeconds` on each security scheme in `buildOpenApiSpec.ts`:
+
+| Security scheme           | Identity source (cache key)           | Constant                      | Value       |
+| ------------------------- | ------------------------------------- | ----------------------------- | ----------- |
+| `VamsAuthorizer`          | `method.request.header.Authorization` | `AUTH_CACHE_TTL_SECONDS`      | 30 seconds  |
+| `VamsAnonymousAuthorizer` | `context.identity.sourceIp`           | `ANON_AUTH_CACHE_TTL_SECONDS` | 900 seconds |
+
+For a REQUEST authorizer the identity sources form the cache key, so authenticated results are cached per token and anonymous results per source IP. The cached entry holds the returned IAM policy **and** the context values, so `vams:roles`, `vams:tokens`, and `vams:mfaEnabled` are cached with the decision. Redeploying the API discards cached policy documents.
+
+Because the two layers compose, the worst-case staleness for a role change on an authenticated route is `USER_ROLES_CACHE_TTL` plus the authorizer result TTL (60 + 30 seconds) for the **logged** role names. The authorization decision is not affected by either cache — Casbin re-reads roles when it compiles policy, bounded by `CASBIN_REFRESH_POLICY_SECONDS`.
+:::
+
+:::warning[Identity sources must always be present when caching is on]
+With authorization caching enabled, API Gateway returns `401 Unauthorized` **without invoking the authorizer Lambda function** if a declared identity source is missing, null, or empty. This is why the anonymous scheme keys on `context.identity.sourceIp` (always present) rather than the `Authorization` header: an anonymous request to `/api/version` carries no `Authorization` header, and keying on it would produce a hard 401 before the authorizer could run the IP check and allow the ignored path.
 :::
 
 ### Stage 3: The handler converts context into claims
