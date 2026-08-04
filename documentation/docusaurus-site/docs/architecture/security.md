@@ -65,7 +65,7 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 ### API Keys
 
-VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes.
+VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
 ## Custom Lambda Authorizer
 
@@ -78,7 +78,9 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **IP Range Restrictions**: Optional IP-based access control with configurable IP range pairs (validated before JWT verification for performance)
 -   **Payload Format Version 2.0**: Simple boolean responses (`isAuthorized: true/false`)
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
--   **Public Key Caching**: One-hour TTL for JWKS public keys to reduce external API calls
+-   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
+-   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names
+-   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
 ### Authorizer Configuration
@@ -136,6 +138,14 @@ elif 'lambdaCrossCall' in event:
 | Amazon Cognito     | `sub`, `cognito:username`, `email`, `token_use`, `aud`, `iss`, `exp` |
 | External OAuth IDP | `sub`, `preferred_username`, `email`, `upn`, `username`              |
 | VAMS custom        | `vams:tokens`, `vams:roles`, `vams:externalAttributes`               |
+
+#### Role Resolution
+
+The `vams:roles` context value is resolved by the custom Lambda authorizer, which reads the caller's assigned roles from the user roles table after verifying the presented credential and passes them to handler Lambda functions through the authorizer context. Resolved roles are cached per user for `USER_ROLES_CACHE_TTL` (60 seconds); an empty role list is cached as well, so a user with no roles does not re-query the table on every request. Resolving roles at authorization time applies to every authentication mechanism — Amazon Cognito, an external OAuth identity provider, and API keys — and means a role assignment or revocation takes effect within that cache lifetime rather than persisting for the lifetime of an issued token. The Amazon Cognito pre-token-generation trigger therefore populates only `vams:tokens` and `email`, leaving `vams:roles` empty in the token itself.
+
+Authorization decisions do not depend on this context value: `CasbinEnforcer` independently reads the caller's roles from the user roles table when it builds policy. The context value carries the resolved roles for handler-side use and records them in the audit logs.
+
+For the full request path from the identity provider through the authorizer to both Casbin tiers, see [Authentication and Authorization Flow](../developer/security.md#authentication-and-authorization-flow) in the developer guide.
 
 The Lambda cross-call format is used for internal Lambda-to-Lambda invocations that carry no API Gateway request context (for example, workflow execution processing and bucket-sync ingestion). The `lambdaCrossCall` object supplies a `userName` claim identifying the acting user; when no user context applies, the reserved system user ID `SYSTEM_USER` is used. Because cross-call events bypass JWT verification, access to direct Lambda invocation is controlled through AWS IAM permissions.
 
@@ -239,7 +249,7 @@ VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer ru
 
 ### Policy Caching
 
-The Casbin enforcer caches user policies with a 60-second TTL per user. This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute.
+The Casbin enforcer caches compiled user policies per user for `CASBIN_REFRESH_POLICY_SECONDS` (60 seconds). This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute. Because a user's MFA state changes which of their roles are active, the cache is also keyed on that state and is invalidated when it changes.
 
 ### Pipeline Lambda invocation scope
 

@@ -78,6 +78,9 @@ except json.JSONDecodeError:
 API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
 
+# User Roles Configuration
+USER_ROLES_CACHE_TTL = 60  # seconds before a cached entry expires
+
 # DynamoDB client for API key lookups (only initialized if table configured)
 _dynamodb_resource = None
 _api_key_table = None
@@ -89,6 +92,11 @@ _user_roles_table = None
 # - On cache miss (expired entry): query GSI once, update cache
 # - None record means "we looked and it doesn't exist" — prevents repeated lookups for bad keys
 _api_key_cache = {}
+
+# Per-user cache: maps userId -> { "roles": [roleName, ...], "expiry": timestamp }
+# An empty role list is cached like any other result, so a user with no roles does not
+# re-query the table on every request.
+_user_roles_cache = {}
 
 def _get_api_key_table():
     global _dynamodb_resource, _api_key_table
@@ -154,6 +162,51 @@ def _lookup_api_key_by_hash(key_hash: str):
         logger.error(f"Failed to query API key by hash: {str(e)}")
         # On error, return cached record if available (even if expired), else None
         return cached['record'] if cached else None
+
+def _lookup_user_roles(user_id: str) -> List[str]:
+    """
+    Look up the role names assigned to a user, using a per-user cache.
+
+    Cache behavior mirrors the API key cache:
+    - Fresh cache hit: return immediately (no DynamoDB call)
+    - Expired or missing: query the user roles table once, cache for USER_ROLES_CACHE_TTL
+    - An empty list is cached like any other result, so users with no roles do not re-query
+
+    Returns an empty list when the table is unavailable or the query fails. Roles are
+    informational in the authorizer context (Casbin re-reads a user's roles from DynamoDB
+    when building policy), so a lookup failure degrades the context rather than denying a
+    request that authorization would otherwise allow.
+    """
+    if not user_id:
+        return []
+
+    current_time = time.time()
+    cached = _user_roles_cache.get(user_id)
+
+    if cached and current_time < cached['expiry']:
+        return cached['roles']
+
+    user_roles_table = _get_user_roles_table()
+    if not user_roles_table:
+        logger.warning("User roles table not available; authorizer context roles will be empty")
+        return cached['roles'] if cached else []
+
+    try:
+        response = user_roles_table.query(
+            KeyConditionExpression=DDBKey('userId').eq(user_id)
+        )
+        roles = [r.get('roleName', '') for r in response.get('Items', []) if r.get('roleName')]
+
+        _user_roles_cache[user_id] = {
+            'roles': roles,
+            'expiry': current_time + USER_ROLES_CACHE_TTL
+        }
+        return roles
+    except Exception as e:
+        logger.error(f"Failed to query roles for user: {str(e)}")
+        # On error, fall back to the cached roles if present (even if expired), else empty
+        return cached['roles'] if cached else []
+
 
 # MFA sign-in check hook (customConfigCommon is a customer-customizable module: Cognito
 # MFA-preference check by default, external OAuth IDP logic slot for external mode)
@@ -785,15 +838,23 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         if value is not None:
             context[key] = str(value)
 
-    # MFA sign-in check: resolved once at authorization time via the customizable hook
-    # (Cognito MFA preference by default; external IDP logic slot for external mode) and
-    # passed to handlers through the authorizer context, so handler Lambdas make no IDP
-    # calls of their own.
     username = (
         claims.get('cognito:username')
         or claims.get('username')
         or claims.get('sub')
     )
+
+    # Role resolution: read the user's roles from the user roles table at authorization time
+    # so every JWT auth mode carries them, and assign unconditionally so the freshly-read
+    # value replaces any vams:roles claim copied out of the token above. Resolving here
+    # rather than at token issuance means a role assignment or revocation takes effect
+    # within USER_ROLES_CACHE_TTL instead of lasting for the lifetime of an issued token.
+    context['vams:roles'] = json.dumps(_lookup_user_roles(username))
+
+    # MFA sign-in check: resolved once at authorization time via the customizable hook
+    # (Cognito MFA preference by default; external IDP logic slot for external mode) and
+    # passed to handlers through the authorizer context, so handler Lambdas make no IDP
+    # calls of their own.
     mfa_enabled = resolve_mfa_enabled(username, claims, event)
     context['vams:mfaEnabled'] = 'true' if mfa_enabled else 'false'
 

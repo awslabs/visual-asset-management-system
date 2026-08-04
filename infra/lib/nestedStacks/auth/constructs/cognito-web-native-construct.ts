@@ -67,10 +67,6 @@ export class CognitoWebNativeConstructStack extends Construct {
             memorySize: Config.LAMBDA_MEMORY_SIZE,
             environment: {},
         });
-        props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-        props.storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-        props.storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-        props.storageResources.dynamo.rolesStorageTable.grantReadData(fun);
         kmsKeyLambdaPermissionAddToResourcePolicy(fun, props.storageResources.encryption.kmsKey);
         setupSecurityAndLoggingEnvironmentAndPermissions(fun, props.storageResources);
         globalLambdaEnvironmentsAndPermissions(fun, props.config);

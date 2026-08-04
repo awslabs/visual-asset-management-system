@@ -486,6 +486,14 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     `KeyError`/`TypeError` → 500 on a real REST request — a failure invisible to CDK synth and
     to unit tests that hand-build a v2-shaped event, so cover the REST-shaped event (including
     `null` params) in tests.
+-   **`claims_and_roles["roles"]` comes from the `vams:roles` authorizer context value**, which
+    the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a
+    60-second per-user cache. Resolving it there — rather than in the Cognito
+    pre-token-generation trigger, which only runs for Cognito — is what makes roles available
+    for every auth mode (Cognito, external OAuth IDP, API key) and lets a role change take
+    effect without re-issuing a token. The value is informational for handlers and audit logs:
+    `CasbinEnforcer` re-reads a user's roles from DynamoDB when it builds policy, so
+    authorization does not depend on it. Do not reintroduce a role lookup in `preTokenGen`.
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 
