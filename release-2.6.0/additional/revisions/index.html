@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Document Revision History | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/revisions"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Document Revision History | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page tracks the version history of the Visual Asset Management System (VAMS). Each release includes a summary of key changes, new features, and important upgrade notes."><meta data-rh="true" property="og:description" content="This page tracks the version history of the Visual Asset Management System (VAMS). Each release includes a summary of key changes, new features, and important upgrade notes."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/revisions"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/revisions" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/revisions" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Document Revision History","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/revisions"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.5182af54.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.6aa42304.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.d997a598.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.62133664.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -15,72 +15,19 @@
 <p>This page tracks the version history of the Visual Asset Management System (VAMS). Each release includes a summary of key changes, new features, and important upgrade notes.</p>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="revision-history">Revision History<a href="#revision-history" class="hash-link" aria-label="Direct link to Revision History" title="Direct link to Revision History" translate="no">​</a></h2>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>Version</th><th>Date</th><th>Key Changes</th></tr></thead><tbody><tr><td><a href="#260" class="">2.6.0</a></td><td>2026-05-08</td><td>API Gateway migrated from HTTP API (v2) to REST API (v1) — <strong>breaking</strong>: clients registered directly against the old API endpoint must be re-setup (re-run <code>vamscli setup</code>); supports REGIONAL and PRIVATE endpoint types. Physna Sync add-on (Phase 1): one-way synchronization of supported VAMS files and metadata to a Physna tenant; geospatial search and map view across assets and files (new <code>geo_MD_location</code> field); OpenSearch index v3 + provisioned engine upgrade to 3.5 (OpenSearch 2.x in the AWS European Sovereign Cloud); next-generation OpenSearch Serverless upgrade (scale-to-zero, higher performance, better cost pricing); provisioned <code>r7g.large.search</code> default + automatic OpenSearch service-linked role creation; advanced IAM role customization for restricted environments; VAMS MCP server and agent skill for operating a deployment with AI agents</td></tr><tr><td><a href="#253" class="">2.5.3</a></td><td>2026-08-03</td><td>Fixed web <code>npm install</code> dependency override conflict; npm dependency updates across all packages, rich text editor security upgrade, AWS CDK CLI version alignment</td></tr><tr><td><a href="#252" class="">2.5.2</a></td><td>2026-06-19</td><td>Security fixes: Casbin authorization expression injection, createAsset S3 key location validation; backend test framework updates, authorization documentation clarifications, dependency updates</td></tr><tr><td><a href="#251" class="">2.5.1</a></td><td>2026-04-29</td><td>Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display</td></tr><tr><td><a href="#250" class="">2.5.0</a></td><td>2026-04-21</td><td>Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates</td></tr><tr><td><a href="#241" class="">2.4.1</a></td><td>2026-01-30</td><td>GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements</td></tr><tr><td><a href="#240" class="">2.4.0</a></td><td>2026-01-16</td><td>Veerum viewer, NVIDIA Isaac Lab pipeline, Garnet Framework addon, metadata schema overhaul, metadata system overhaul, asset unarchiving, CloudFront custom domains, audit logging, EKS pipeline option</td></tr><tr><td><a href="#232" class="">2.3.2</a></td><td>2026-01-12</td><td>CLI documentation fixes, NPM dependency updates</td></tr><tr><td><a href="#231" class="">2.3.1</a></td><td>2025-11-21</td><td>CLI bug fixes, viewer install optimizations</td></tr><tr><td><a href="#230" class="">2.3.0</a></td><td>2025-11-13</td><td>VamsCLI tool, overhauled search system, plugin-based viewer architecture, CesiumJS/BabylonJS/PlayCanvas viewers, CAD metadata pipeline, Gaussian Splat Toolbox, IP restrictions, asset link enhancements</td></tr><tr><td><a href="#220" class="">2.2.0</a></td><td>2025-09-31</td><td>Asset/file separation, multi-file assets, S3 presigned uploads, external OAuth IDP, asset versioning, new pipelines, global workflows, VPC improvements</td></tr></tbody></table>
+<p>| Version       | Date       | Key Changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| <a href="#260" class="">2.6.0</a> | 2026-05-08 | API Gateway migrated from HTTP API (v2) to REST API (v1) — <strong>breaking</strong>: clients registered directly against the old API endpoint must be re-setup (re-run <code>vamscli setup</code>); supports REGIONAL and PRIVATE endpoint types. Physna Sync add-on (Phase 1): one-way synchronization of supported VAMS files and metadata to a Physna tenant; geospatial search and map view across assets and files (new <code>geo_MD_location</code> field); OpenSearch index v3 + provisioned engine upgrade to 3.5 (OpenSearch 2.x in the AWS European Sovereign Cloud); next-generation OpenSearch Serverless upgrade (scale-to-zero, higher performance, better cost pricing); provisioned <code>r7g.large.search</code> default + automatic OpenSearch service-linked role creation; advanced IAM role customization for restricted environments; VAMS MCP server and agent skill for operating a deployment with AI agents |
+| <a href="#253" class="">2.5.3</a> | 2026-08-03 | Fixed web <code>npm install</code> dependency override conflict; npm dependency updates across all packages, rich text editor security upgrade, AWS CDK CLI version alignment                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| <a href="#252" class="">2.5.2</a> | 2026-06-19 | Security fixes: Casbin authorization expression injection, createAsset S3 key location validation; backend test framework updates, authorization documentation clarifications, dependency updates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |     |
+| <a href="#251" class="">2.5.1</a> | 2026-04-29 | Bug fixes: upload subfolder paths, file version history cleanup on delete, S3 version pagination, authorization error handling, image viewer version switching, CLI download pagination, CLI upload progress display                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| <a href="#250" class="">2.5.0</a> | 2026-04-21 | Website overhaul (Vite, Amplify V6, dark/light theme), Needle USD viewer, Three.js CAD viewer, SQS/EventBridge pipeline support, 3D preview thumbnail pipeline, database metadata with location maps, enhanced asset versions, Cognito user management, API key management, permission templates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| <a href="#241" class="">2.4.1</a> | 2026-01-30 | GovCloud deployment fixes, CloudFront KMS fix, metadata schema navigation fix, file manager UX improvements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| <a href="#240" class="">2.4.0</a> | 2026-01-16 | Veerum viewer, NVIDIA Isaac Lab pipeline, Garnet Framework addon, metadata schema overhaul, metadata system overhaul, asset unarchiving, CloudFront custom domains, audit logging, EKS pipeline option                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| <a href="#232" class="">2.3.2</a> | 2026-01-12 | CLI documentation fixes, NPM dependency updates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| <a href="#231" class="">2.3.1</a> | 2025-11-21 | CLI bug fixes, viewer install optimizations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| <a href="#230" class="">2.3.0</a> | 2025-11-13 | VamsCLI tool, overhauled search system, plugin-based viewer architecture, CesiumJS/BabylonJS/PlayCanvas viewers, CAD metadata pipeline, Gaussian Splat Toolbox, IP restrictions, asset link enhancements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| <a href="#220" class="">2.2.0</a> | 2025-09-31 | Asset/file separation, multi-file assets, S3 presigned uploads, external OAuth IDP, asset versioning, new pipelines, global workflows, VPC improvements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |</p>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="version-details">Version Details<a href="#version-details" class="hash-link" aria-label="Direct link to Version Details" title="Direct link to Version Details" translate="no">​</a></h2>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="260">2.6.0<a href="#260" class="hash-link" aria-label="Direct link to 2.6.0" title="Direct link to 2.6.0" translate="no">​</a></h3>
@@ -108,6 +55,7 @@
 <p><strong>Documentation:</strong></p>
 <ul>
 <li class=""><strong>CLI documentation consolidated into the official site.</strong> The complete VamsCLI reference — every command and option, authentication and profile flows, installation, automation, and a new CLI-specific troubleshooting section — now lives under the CLI section of the documentation site (<code>cli/</code>). The legacy in-repo docs under <code>tools/VamsCLI/docs/</code> are deprecated; <code>tools/VamsCLI/README.md</code> retains basic installation and quick start and points to the official site. See <a class="" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Getting Started</a>.</li>
+<li class=""><strong>New developer security reference.</strong> A new <a class="" href="/visual-asset-management-system/release-2.6.0/developer/security">Security: Developer Reference</a> page traces a request from the identity provider through the custom Lambda authorizer to both Casbin authorization tiers, documenting where claims and roles are produced and consumed at each hop, the authorizer&#x27;s cache lifetimes, and the customizable authentication override hooks.</li>
 </ul>
 <p><strong>Breaking changes:</strong></p>
 <ul>
