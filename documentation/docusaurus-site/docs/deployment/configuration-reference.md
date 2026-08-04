@@ -466,6 +466,21 @@ Changing `app.api.apiGatewayRest.endpointType` on a deployment that already exis
 Amazon API Gateway itself does **not** remove a previously-set resource policy when an update simply stops supplying one, which is why VAMS always writes an explicit policy: switching `PRIVATE` → `REGIONAL` overwrites the `aws:SourceVpce`-restricted policy with the public allow-all policy, and `REGIONAL` → `PRIVATE` re-applies the VPC-endpoint restriction. If a resource policy left over from an out-of-band change ever remains in place after a switch (for example, a `PRIVATE` policy on a now-public endpoint), every request — including the CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial precedes the CORS response, a browser reports it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization error. Re-running the VAMS deployment restores the correct policy for the configured `endpointType`.
 :::
 
+:::note[REST API TLS security policy]
+VAMS sets the minimum TLS version and cipher suite on the REST API itself, so it applies to the default `execute-api` endpoint. The policy is derived from the deployment configuration and is not a separate configuration option.
+
+| Deployment                                               | Security policy                          | TLS versions accepted |
+| -------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| Commercial                                               | `SecurityPolicy_TLS13_1_2_2021_06`       | TLS 1.3, TLS 1.2      |
+| GovCloud and EU Sovereign Cloud (`app.govCloud.enabled`) | Partition and Region default (unchanged) | TLS 1.3, TLS 1.2      |
+
+In the commercial partition, a Regional REST API would otherwise default to the `TLS_1_0` policy, which accepts TLS 1.0 and TLS 1.1. VAMS raises the floor to `SecurityPolicy_TLS13_1_2_2021_06` and sets the required endpoint access mode to `BASIC`, so the Amazon CloudFront origin request, the ALB redirect to `execute-api`, and direct `execute-api` access all continue to work. A TLS 1.3-only policy is not used because CloudFront negotiates at most TLS 1.2 to a custom origin.
+
+The GovCloud mode, which AWS European Sovereign Cloud deployments also enable, leaves the policy unset so the API keeps its partition and Region default. Those partitions do not offer the `TLS_1_0` policy for Regional APIs and their APIs are FIPS-compliant by default, so the minimum version is already TLS 1.2.
+
+A security policy change takes about 15 minutes to propagate, and the API stays invocable while its status is `UPDATING`. See [Security](../architecture/security.md) for the full description.
+:::
+
 ## Web UI (`app.webUi`)
 
 :::note[Implemented by]

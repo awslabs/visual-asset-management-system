@@ -301,8 +301,25 @@ All data in transit is encrypted using TLS:
 -   **Amazon S3 bucket policies** enforce TLS by denying all `s3:*` actions when `aws:SecureTransport=false`
 -   **Amazon SNS topics** enforce SSL with the `enforceSSL` property
 -   **Amazon SQS queues** enforce SSL with the `enforceSSL` property
--   **Amazon API Gateway** uses HTTPS endpoints exclusively
+-   **Amazon API Gateway** uses HTTPS endpoints exclusively, with a security policy that sets the minimum TLS version
 -   **Amazon CloudFront / Application Load Balancer** terminates TLS at the edge
+
+#### REST API TLS Security Policy
+
+A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name.
+
+| Deployment                                               | Security policy                          | TLS versions accepted |
+| -------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| Commercial                                               | `SecurityPolicy_TLS13_1_2_2021_06`       | TLS 1.3, TLS 1.2      |
+| GovCloud and EU Sovereign Cloud (`app.govCloud.enabled`) | Partition and Region default (unchanged) | TLS 1.3, TLS 1.2      |
+
+In the commercial partition, a Regional REST API would otherwise default to the `TLS_1_0` policy, which accepts TLS 1.0 and TLS 1.1. VAMS raises the floor to `SecurityPolicy_TLS13_1_2_2021_06`, which accepts TLS 1.3 and TLS 1.2 and rejects TLS 1.1 and TLS 1.0. That policy stays compatible with every supported fronting mode: Amazon CloudFront negotiates at most TLS 1.2 to a custom origin, so a TLS 1.3-only policy would fail every `/api/*` origin handshake.
+
+This policy is an enhanced policy, identified by the `SecurityPolicy_` prefix, and requires an endpoint access mode. VAMS sets `BASIC` rather than `STRICT`: the CloudFront `/api/*` origin request, the ALB redirect to `execute-api`, and direct `execute-api` access are cross-host or cross-endpoint-type by design, and `STRICT` rejects requests that do not originate from the same endpoint type with a matching SNI host.
+
+The GovCloud mode, which AWS European Sovereign Cloud deployments also enable for their partition guardrails, leaves the security policy unset so the API keeps the default its partition and Region apply. Those partitions do not offer the `TLS_1_0` policy for Regional APIs, and APIs created there are FIPS-compliant by default, so the minimum version is already TLS 1.2 without VAMS asserting a specific policy.
+
+Changing a security policy takes about 15 minutes to propagate. The API remains invocable while its status is `UPDATING`. To see which TLS version and cipher a client negotiated, use the `$context.tlsVersion` and `$context.cipherSuite` variables in the API access logs.
 
 The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:
 
