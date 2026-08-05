@@ -171,6 +171,17 @@ Three customer-customizable hook functions live under `backend/backend/customCon
 
 Because these files are edited in place, they are the intended extension point for identity-provider-specific behavior; treat them as configuration you own rather than as VAMS source to be re-synced on upgrade.
 
+:::warning[Read claims through `request_to_claims`, not the raw authorizer context]
+The REST API (v1) REQUEST authorizer delivers claims as a **flat map of string values** directly under `requestContext.authorizer`, alongside a `principalId` key. Custom logic that indexes the nested `requestContext.authorizer.jwt.claims` or `requestContext.authorizer.lambda` locations finds neither and, if it falls through to an empty dict, silently reads no claims rather than raising — a quiet behavior change instead of an error.
+
+Two consequences when writing hook logic:
+
+-   Prefer `request_to_claims(event)`, which handles every event shape (nested JWT authorizer, nested Lambda authorizer, flat REST map, and internal cross-call) and normalizes the event as a side effect.
+-   If you must read the context directly, remember every value is a **string**. JSON-valued claims such as `vams:tokens` and `vams:roles` need `json.loads`, and `vams:mfaEnabled` is the string `"true"` or `"false"`, not a boolean.
+
+The shipped `customAuthProfileLoginWriteOverride` default still carries the older nested-shape branches, so its email-from-claims override is inert under the REST API. This is harmless as shipped — the handler persists the correct `userId` regardless, and a profile email set at creation is unaffected — but update the extraction to the flat shape if your deployment populates profile fields from token claims there.
+:::
+
 | Hook                                  | File                        | Called from                                             | Purpose                                                            |
 | ------------------------------------- | --------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
 | `customMFATokenScopeCheckOverride`    | `customAuthClaimsCheck.py`  | Custom Lambda authorizer, after credential verification | Decide whether the caller signed in with MFA                       |
@@ -179,7 +190,7 @@ Because these files are edited in place, they are the intended extension point f
 
 ### MFA check — `customMFATokenScopeCheckOverride`
 
-Called by the authorizer with the resolved username, the verified JWT claims, and the raw authorizer event (whose headers still carry the presented bearer token, which is what makes an outbound userinfo call possible). It returns a boolean that becomes the `vams:mfaEnabled` authorizer context value.
+Called by the authorizer as `customMFATokenScopeCheckOverride(user, authorizerJwtClaims, lambdaRequest)` — the resolved username, the verified JWT claims, and the raw authorizer event (whose headers still carry the presented bearer token, which is what makes an outbound userinfo call possible). It returns a boolean that becomes the `vams:mfaEnabled` authorizer context value. The claims are passed in directly, so the hook does not extract them from the event itself.
 
 The default implementation covers Amazon Cognito: it calls `AdminGetUser` and treats a non-empty `UserMFASettingList` as an MFA sign-in, caching the result per user per sign-in session keyed on the token's `auth_time`. The `else` branch is the slot for external OAuth IDP logic and currently returns `False` — an external IDP deployment that uses `mfaRequired` on any role **must** implement this branch, otherwise MFA-gated roles never activate. The hook is wrapped so that an exception logs and defaults to `False` rather than failing the request.
 
