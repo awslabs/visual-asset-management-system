@@ -125,18 +125,31 @@ Industry has nested sub-command groups:
 -   [ ] **Check Imports**: Ensure all imports are properly organized
 -   [ ] **Review Error Messages**: Ensure user-friendly error messages
 
-#### **Step 9: MCP Propagation**
+#### **Step 9: MCP and Connector Propagation**
 
-The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `ProfileManager` directly, so it sits **downstream of the CLI**. Every CLI change must be carried through in the same change.
+Three consumers sit **downstream of the CLI** and must be carried through in the same change. The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `ProfileManager` directly. The external connectors (`tools/ExternalIntegrations/`) instead shell out to the `vamscli` **executable** and parse its `--json-output`, so they are coupled to the command surface itself — command names, subcommands, flags, and response JSON keys.
+
+**MCP server:**
 
 -   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
 -   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`).
 -   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. Confirm the `items_key` still matches the endpoint's response.
 -   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list (and `autoApprove` sample if it is a safe read).
 -   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest` (tests mock the client; no live deployment needed).
+
+**External connectors** — required whenever a command name, subcommand, option/flag, or `--json-output` response shape changes. Nothing catches connector drift at build or import time: a renamed flag fails at connector runtime with a non-zero CLI exit, and a renamed or removed JSON key silently yields a blank field, which is worse.
+
+-   [ ] **Isaac Sim** (`isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`): verify the argument lists passed to `subprocess.run` still match the CLI, and that each `@dataclass` field's `item.get("jsonKey", ...)` maps a key the command actually returns.
+-   [ ] **ArcGIS Pro** (`arcgispro-connector-for-vams/Services/VamsCliService.cs`): verify the interpolated argument strings, plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
+-   [ ] **Map keys to the right command**: `file list` items and the `file info` response are **different shapes**. A listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`; `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. Mapping a key onto the wrong command yields a permanently empty value with no error.
+-   [ ] **Guard ArcGIS computed properties**: a computed convenience property whose name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`) **must** carry `[JsonIgnore]`. Deserialization runs with `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata and fails the entire response, not just that field.
+-   [ ] **Validate the command surface**: confirm every group/subcommand/flag the connectors pass still resolves (walk `cli.commands[group].commands[cmd].params`), then spot-check a live `--json-output` response for the keys each connector parses.
+
+**Agent skill:**
+
 -   [ ] **Review the Agent Skill**: `tools/VamsAgentSkill/SKILL.md` self-discovers commands via `vamscli --help`, so ordinary command additions need no edit. Update it only when a **structural** rule changes: entity creation/deletion ordering, identifier semantics, permission scoping, or a new mutating command category.
 
-Reverse direction applies too: if working on the MCP server reveals a missing or incorrect `APIClient` method, fix it in the CLI rather than hand-rolling raw requests in the MCP server.
+Reverse direction applies too: if working on the MCP server or a connector reveals a missing or incorrect `APIClient` method, fix it in the CLI rather than hand-rolling raw requests in the consumer.
 
 ## 🔧 **Implementation Standards**
 
@@ -682,7 +695,7 @@ All CLI documentation lives in the Docusaurus documentation site at `documentati
 -   [ ] **Build verification**: Run `cd documentation/docusaurus-site && npm run build` to verify
 -   [ ] **Cross-Reference Check**: Verify all internal documentation links work
 -   [ ] **Accuracy Check**: Ensure all documented features actually exist in code
--   [ ] **External Tool Integrations**: If CLI commands, parameters, output formats, or authentication flows changed, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI (Isaac Sim Python wrapper in `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py`, ArcGIS Pro C# wrapper in `arcgispro-connector-for-vams/Services/VamsCliService.cs`)
+-   [ ] **External Tool Integrations**: Connector **code** validation is a propagation step, not a documentation step — see [Step 9](#step-9-mcp-and-connector-propagation). Here, only confirm that any connector-facing documentation (each connector's own `README.md` / `CHANGELOG.md`) reflects a changed command surface.
 
 #### **Documentation Structure (Docusaurus — single source of truth):**
 

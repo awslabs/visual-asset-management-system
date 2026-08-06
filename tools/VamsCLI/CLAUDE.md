@@ -553,9 +553,17 @@ Follow this checklist:
 
     See root `CLAUDE.md` Pattern 7 for the full propagation chain. If MCP work reveals a missing or wrong `APIClient` method, fix it here rather than hand-rolling raw requests in the MCP server.
 
-10. **Evaluate external tool integrations** for required updates. When CLI commands, parameters, output formats, or authentication flows change, review and update the external connectors at `tools/ExternalIntegrations/` that wrap the CLI:
-    - `isaacsim_vams_integration/` -- Python subprocess wrapper (`vams_cli_service.py`)
-    - `arcgispro-connector-for-vams/` -- C# subprocess wrapper (`Services/VamsCliService.cs`)
+10. **Validate the external tool integrations.** Whenever a command name, subcommand, option/flag, or `--json-output` response shape changes, the external connectors at `tools/ExternalIntegrations/` must be checked in the same change. Unlike the MCP server, they do not import `APIClient` — they build CLI argument strings and parse JSON keys, so **nothing catches drift at build or import time**. A renamed flag fails at connector runtime with a non-zero CLI exit; a renamed or removed JSON key silently produces a blank field, which is worse.
+
+    - `isaacsim_vams_integration/vams/connector/isaacsim/vams_cli_service.py` -- Python subprocess wrapper. Check the argument lists passed to `subprocess.run` and each `@dataclass` field's `item.get("jsonKey", ...)` mapping.
+    - `arcgispro-connector-for-vams/Services/VamsCliService.cs` -- C# subprocess wrapper. Check the interpolated argument strings plus the `[JsonPropertyName("jsonKey")]` attributes in `Models/VamsModels.cs`.
+
+    Two failure modes to watch for:
+
+    - **Map each key to the command that actually returns it.** `file list` items and the `file info` response are different shapes: a listing item carries `dateCreatedCurrentVersion` and no `contentType`/`lastModified`, while `file info` carries `contentType`/`lastModified` and no `dateCreatedCurrentVersion`. A key mapped onto the wrong command is permanently empty with no error.
+    - **ArcGIS computed properties need `[JsonIgnore]`** when their name matches a mapped JSON field (for example `Key` alongside `[JsonPropertyName("key")]`). Deserialization uses `PropertyNameCaseInsensitive`, so the collision throws `InvalidOperationException` while building type metadata and fails the whole response.
+
+    To validate the command surface, walk `cli.commands[group].commands[cmd].params` for every group/subcommand/flag the connectors pass, then spot-check a live `--json-output` response for the keys each connector parses.
 
 ### Adding a New Exception Class
 
