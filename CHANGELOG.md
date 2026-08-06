@@ -185,6 +185,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Asset and file search now properly update preview thumbnail caches when files/assets change their preview images on a new search without a full page refresh
 -   Previous Cognito MFA checks were erroring, defaulting MFA validation to false. Cognito MFA checks now use the AdminGetUser to cognito to properly fetch MFA status for when cognito is enabled.
 -   Fixed FIPS configuration endpoints using the FIPS endpoints for AWS data plane operations instead of just the control plane.
+-   Updated the GenAI Metadata Labeling Use-case Pipeline primary lambda to timeout after `15` minutes instead of `5`. This should give more breathing room for larger 3D models that take more time to process.
 
 ### Chores
 
