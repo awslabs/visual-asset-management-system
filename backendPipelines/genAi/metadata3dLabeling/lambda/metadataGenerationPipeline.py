@@ -39,11 +39,12 @@ def get_all_image_files_in_path(bucket, path):
         "Items": []
     }
 
-    response = s3_client.list_objects(Bucket=bucket, Prefix=path)
-    if 'Contents' in response:
+    # Paginate: a single page caps at 1,000 keys, so a render set larger than that
+    # would be only partially labeled.
+    paginator = s3_client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=path):
         # map object from object list
-        keys = []
-        for o in response["Contents"]:
+        for o in page.get("Contents", []):
             if o['Key'].endswith('.png'):
                 result["Items"].append({
                     'key': o['Key'],

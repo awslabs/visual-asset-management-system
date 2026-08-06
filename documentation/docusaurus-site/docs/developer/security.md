@@ -176,10 +176,10 @@ The REST API (v1) REQUEST authorizer delivers claims as a **flat map of string v
 
 Two consequences when writing hook logic:
 
--   Prefer `request_to_claims(event)`, which handles every event shape (nested JWT authorizer, nested Lambda authorizer, flat REST map, and internal cross-call) and normalizes the event as a side effect.
--   If you must read the context directly, remember every value is a **string**. JSON-valued claims such as `vams:tokens` and `vams:roles` need `json.loads`, and `vams:mfaEnabled` is the string `"true"` or `"false"`, not a boolean.
+-   Prefer `request_to_claims(event)` where it suffices — it handles every event shape (nested JWT authorizer, nested Lambda authorizer, flat REST map, and internal cross-call) and normalizes the event as a side effect. It returns only the resolved identity, roles, external attributes, and MFA state, so a hook that needs another claim (for example `email`) must read the authorizer context itself.
+-   When reading the context directly, handle all four shapes and remember every value is a **string**. JSON-valued claims such as `vams:tokens` and `vams:roles` need `json.loads`, and `vams:mfaEnabled` is the string `"true"` or `"false"`, not a boolean. Guard the lookup (`event.get("requestContext", {}) or {}`) rather than indexing, so a cross-call event or an absent authorizer context does not raise.
 
-The shipped `customAuthProfileLoginWriteOverride` default still carries the older nested-shape branches, so its email-from-claims override is inert under the REST API. This is harmless as shipped — the handler persists the correct `userId` regardless, and a profile email set at creation is unaffected — but update the extraction to the flat shape if your deployment populates profile fields from token claims there.
+The shipped `customAuthProfileLoginWriteOverride` default reads all four shapes and strips the `principalId` key, so its email-from-claims override applies under the REST API. `customAuthLoginProfile.py` is the reference to copy when writing claims extraction into a hook of your own.
 :::
 
 | Hook                                  | File                        | Called from                                             | Purpose                                                            |
@@ -204,9 +204,11 @@ MFA state is already resolved before this hook runs, so read `claims_and_roles["
 
 ### Login profile — `customAuthProfileLoginWriteOverride`
 
-Called by the `authLoginProfile` handler when a user's profile is written at login, receiving the profile being stored (`userId`, `email`) and the request event, and returning the profile to persist. `userId` is fixed and must not be changed — it is the lookup key.
+Called by the `authLoginProfile` handler when a user's profile is written at login, receiving the profile being stored (`userId`, `email`) and the request event, and returning the profile to persist. `userId` is fixed and must not be changed — it is the lookup key. The handler re-stamps `userId` after the hook returns and falls back to the unmodified profile if the hook returns anything other than a dictionary, so a faulty override cannot corrupt the stored identity.
 
-The default implementation overrides the incoming email with the `email` claim when one is present. The file also carries a commented-out example that calls an external IDP's `/idp/userinfo.openid` endpoint with the caller's access token to fetch fields such as email and name, using the `EXTERNAL_OATH_IDP_URL` environment variable — the intended pattern when an external IDP does not put the needed attributes in the token itself.
+The default implementation resolves the caller's claims across all four event shapes and overrides the incoming email with the `email` claim when one is present and non-empty. Because this hook needs a claim that `request_to_claims` does not surface, it reads the authorizer context directly — the flat REST map with `principalId` stripped, plus the nested and cross-call forms — which makes it the reference implementation for claims extraction inside a hook.
+
+The file also carries a commented-out example that calls an external IDP's `/idp/userinfo.openid` endpoint with the caller's access token to fetch fields such as email and name, using the `EXTERNAL_OATH_IDP_URL` environment variable — the intended pattern when an external IDP does not put the needed attributes in the token itself.
 
 ### Implementation files
 

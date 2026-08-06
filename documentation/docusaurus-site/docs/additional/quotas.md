@@ -10,15 +10,19 @@ This page documents the service quotas, default limits, and configurable thresho
 
 VAMS uses Amazon API Gateway REST API with configurable rate limiting.
 
-| Parameter            | Default            | Configurable | Configuration Key                         |
-| -------------------- | ------------------ | ------------ | ----------------------------------------- |
-| Global rate limit    | 50 requests/second | Yes          | `app.api.apiGatewayRest.globalRateLimit`  |
-| Global burst limit   | 100 requests       | Yes          | `app.api.apiGatewayRest.globalBurstLimit` |
-| Request timeout      | 29 seconds         | No           | Amazon API Gateway hard limit             |
-| Authorizer cache TTL | 30 seconds         | No           | Set in CDK authorizer construct           |
+| Parameter            | Default            | Configurable | Configuration Key                              |
+| -------------------- | ------------------ | ------------ | ---------------------------------------------- |
+| Global rate limit    | 50 requests/second | Yes          | `app.api.apiGatewayRest.globalRateLimit`       |
+| Global burst limit   | 100 requests       | Yes          | `app.api.apiGatewayRest.globalBurstLimit`      |
+| Integration timeout  | 29 seconds         | Yes (29–300) | `app.api.apiGatewayRest.apiGatewayTimeoutTime` |
+| Authorizer cache TTL | 30 seconds         | No           | Set in CDK authorizer construct                |
 
 :::tip
 The burst limit must be greater than or equal to the rate limit. Adjust both values in `infra/config/config.json` and redeploy to apply changes.
+:::
+
+:::warning[Integration timeout above 29 seconds needs an AWS quota increase]
+The integration timeout is how long Amazon API Gateway waits for a backend AWS Lambda function before returning a `504`. Raising `app.api.apiGatewayRest.apiGatewayTimeoutTime` above the `29`-second default requires an approved increase to the account-level **Integration timeout** quota (`L-E5AE38E3`) in the deployment Region, requested through the AWS Service Quotas console or AWS Support. Request the increase before deploying a higher value, or the deployment fails. The increase applies to both the `REGIONAL` and `PRIVATE` endpoint types VAMS supports, and may require a compensating reduction in the account's Region-level request throttle quota.
 :::
 
 ### AWS Lambda Function Limits

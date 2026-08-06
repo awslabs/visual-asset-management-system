@@ -21,7 +21,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import success, validation_error, authorization_error, internal_error
-from common.s3 import validateS3AssetExtensionsAndContentType
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects
 from models.assetsV3 import AssetUploadTableModel
 
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
@@ -105,17 +105,15 @@ def verify_get_path_objects(bucketName: str, pathPrefix: str):
     if(not validateS3AssetExtensionsAndContentType(bucketName, pathPrefix)):
         raise Exception("Pipeline uploaded objects contains a potentially malicious executable type object. Unable to process asset upload.")
 
-    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.list_objects_v2
-    all_outputs = s3c.list_objects_v2(Bucket=bucketName, Prefix=pathPrefix)
-    if 'IsTruncated' in all_outputs and all_outputs['IsTruncated']:
-        logger.warning(
-            "WARN: s3 object listing exceeds 1,000 objects,"+
-            "this is unexpected for this operation with the bucket and prefix"+
-            bucketName+" "+pathPrefix
-        )
-    logger.info(all_outputs)
+    # Page to exhaustion. A pipeline can emit any number of output objects (a point cloud
+    # octree or photogrammetry run routinely exceeds 1,000), and every object under the
+    # prefix has to be ingested — reading a single page would silently drop the remainder.
+    contents = list_all_objects(bucketName, pathPrefix, client=s3c)
+    logger.info(f"Found {len(contents)} objects under {bucketName}/{pathPrefix}")
 
-    return all_outputs
+    # Mirror the list_objects_v2 response shape callers branch on: 'Contents' is present
+    # only when the prefix holds objects (the key is absent, not empty, for no results).
+    return {'Contents': contents} if contents else {}
 
 def lookup_existing_asset(database_id, asset_id):
     asset_table = dynamodb.Table(asset_Database)

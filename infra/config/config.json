@@ -325,7 +325,8 @@
                 "globalRateLimit": 50,
                 "globalBurstLimit": 100,
                 "endpointType": "REGIONAL",
-                "optionalExternalPrivateApigVPCEId": ""
+                "optionalExternalPrivateApigVPCEId": "",
+                "apiGatewayTimeoutTime": 29
             }
         },
         "metadataSchema": {

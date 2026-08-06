@@ -1548,6 +1548,15 @@ export const FIELDS: FieldMeta[] = [
         help: "PRIVATE requires a VPC with an execute-api endpoint and must be fronted by an ALB (not CloudFront).",
     },
     {
+        path: "app.api.apiGatewayRest.apiGatewayTimeoutTime",
+        label: "API integration timeout (seconds)",
+        input: "number",
+        section: "api-webui",
+        advanced: true,
+        min: 29,
+        help: "How long API Gateway waits for a handler before returning 504. Maximum 300. Values above 29 require an approved account-level increase to the API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region first.",
+    },
+    {
         path: "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId",
         label: "External private API VPC endpoint ID",
         input: "text",

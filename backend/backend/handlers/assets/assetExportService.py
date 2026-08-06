@@ -20,6 +20,7 @@ from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
+from common.dynamodb import query_all_items
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -501,15 +502,16 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         # Create composite key for the table PK query (no IndexName needed)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
 
-        response = asset_file_versions_table.query(
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial list would drop files from the export.
+        items = query_all_items(
+            asset_file_versions_table,
             KeyConditionExpression=Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
         )
-        
-        items = response.get('Items', [])
-        
+
         if not items:
             return None
-        
+
         files = []
         for item in items:
             file_info = {

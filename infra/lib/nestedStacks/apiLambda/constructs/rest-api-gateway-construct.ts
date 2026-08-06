@@ -179,6 +179,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             endpointType: apiGatewayRest.endpointType,
             vpcEndpointIds: apiGatewayVpcEndpointId ? [apiGatewayVpcEndpointId] : undefined,
             title: `${config.env.coreStackName}Api`,
+            timeoutSeconds: apiGatewayRest.apiGatewayTimeoutTime,
         });
 
         // 4) SpecRestApi with explicit deployment control
