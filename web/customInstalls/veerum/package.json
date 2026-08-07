@@ -13,10 +13,10 @@
         "@veerum/viewer": "^2.0.12"
     },
     "devDependencies": {
-        "@babel/core": "^7.23.0",
-        "@babel/preset-env": "^7.23.0",
-        "@babel/preset-react": "^7.22.0",
-        "babel-loader": "^9.1.3",
+        "@babel/core": "^8.0.1",
+        "@babel/preset-env": "^8.0.1",
+        "@babel/preset-react": "^8.0.1",
+        "babel-loader": "^10.1.1",
         "copy-webpack-plugin": "^14.0.0",
         "terser-webpack-plugin": "^5.3.9",
         "webpack": "^5.89.0",
