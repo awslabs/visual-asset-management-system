@@ -103,7 +103,7 @@
         "prettier": "^2.4.1",
         "react-test-renderer": "^17.0.2",
         "sass": "^1.43.4",
-        "simple-git": "^3.19.0",
+        "simple-git": "^3.36.0",
         "ts-node": "^10.9.1",
         "vite": "^6.0.0",
         "vite-plugin-node-polyfills": "^0.23.0"
