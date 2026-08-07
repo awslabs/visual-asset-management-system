@@ -5,7 +5,7 @@ cffi==2.0.0 ; python_version >= "3.12" and python_version < "4.0" and platform_p
 charset-normalizer==3.4.6 ; python_version >= "3.12" and python_version < "4.0"
 cryptography==46.0.6 ; python_version >= "3.12" and python_version < "4.0"
 google-auth==2.49.1 ; python_version >= "3.12" and python_version < "4.0"
-idna==3.11 ; python_version >= "3.12" and python_version < "4.0"
+idna==3.15 ; python_version >= "3.12" and python_version < "4.0"
 jmespath==1.1.0 ; python_version >= "3.12" and python_version < "4.0"
 kubernetes==26.1.0 ; python_version >= "3.12" and python_version < "4.0"
 oauthlib==3.3.1 ; python_version >= "3.12" and python_version < "4.0"
