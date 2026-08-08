@@ -70,22 +70,22 @@ class TestManifestEnvelopeAndHelpers:
         assert env["systemConfig"]["orchestrationEventPrefix"] == "vams.p.execution.E.pipeline.P"
 
     def test_orchestration_event_prefix_format(self):
-        assert er.orchestration_event_prefix("vams.prod", "E1", "P1") == \
-            "vams.prod.execution.E1.pipeline.P1"
+        assert er.orchestration_event_prefix("vams.prod", "e1000000000000000000000000000001", "P1") == \
+            "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"
 
     def test_metadata_schema_version_constant(self):
         assert er.METADATA_SCHEMA_VERSION >= 1
 
     def test_pipeline_record_has_registered_arn_fields(self):
         rec = er.build_pipeline_execution_record(
-            pipeline_execution_id="P1", workflow_execution_id="E1",
+            pipeline_execution_id="P1", workflow_execution_id="e1000000000000000000000000000001",
             pipeline_database_id="db", pipeline_id="p", end_state_pipeline=False,
             s3_asset_bucket="bkt", s3_aux_bucket="aux", output_prefixes={},
             input_metadata_file_prefix="", input_config_file_prefix="",
             aux_temp_prefix="", aux_preview_prefix="", pipeline_execution_type="Lambda",
             wait_for_callback="Disabled", pipeline_resource_arn="",
-            orchestration_bus_event_prefix="vams.prod.execution.E1.pipeline.P1")
-        assert rec["orchestrationBusEventPrefix"] == "vams.prod.execution.E1.pipeline.P1"
+            orchestration_bus_event_prefix="vams.prod.execution.e1000000000000000000000000000001.pipeline.P1")
+        assert rec["orchestrationBusEventPrefix"] == "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"
         assert rec["registeredSubExecutions"] == []
         assert rec["registeredLogs"] == []
         # The removed legacy single-ARN fields are gone (brand-new table, no real legacy).
@@ -99,7 +99,7 @@ class TestManifestEnvelopeAndHelpers:
 class TestRegisterPipelineExecution:
     def _event(self, detail):
         return {"detail": detail, "detail-type": "pipeline.execution.register",
-                "source": "vams.prod.execution.E1.pipeline.P1"}
+                "source": "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"}
 
     # Valid, partition-correct ARNs so these assertions hold whether validation is stubbed
     # (conftest) or real (full-suite ordering) — the lambda validates ARN formats before storing.
@@ -108,7 +108,7 @@ class TestRegisterPipelineExecution:
     _LG_ARN = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lg:*"
 
     def test_appends_sub_execution_and_logs(self):
-        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
+        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "e1000000000000000000000000000001",
                "registeredSubExecutions": [], "registeredLogs": []}
         table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
         with patch.object(reg.dynamodb, "Table", return_value=table):
@@ -132,7 +132,7 @@ class TestRegisterPipelineExecution:
     def test_append_is_atomic_carrying_only_new_entries(self):
         # An existing list is NOT read into the expression: the update is an atomic
         # list_append so concurrent reports cannot clobber each other.
-        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "E1",
+        row = {"pipelineExecutionId": "P1", "workflowExecutionId": "e1000000000000000000000000000001",
                "registeredSubExecutions": [{"resourceType": "stepFunctionsExecution",
                                             "stateMachineArn": self._SM_ARN, "executionArn": self._EX_ARN}],
                "registeredLogs": []}
@@ -198,10 +198,10 @@ class TestRegistrationInputValidation:
 
     def _event(self, detail):
         return {"detail": detail, "detail-type": "pipeline.execution.register",
-                "source": "vams.prod.execution.E1.pipeline.P1"}
+                "source": "vams.prod.execution.e1000000000000000000000000000001.pipeline.P1"}
 
     def test_invalid_arns_are_dropped_valid_kept(self):
-        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "E1",
+        row = {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001",
                "registeredSubExecutions": [], "registeredLogs": []}
         table = MagicMock(query=MagicMock(return_value={"Items": [row]}), update_item=MagicMock())
         with patch.object(reg, "validate", _REAL_VALIDATE), \
@@ -233,7 +233,7 @@ class TestRegistrationInputValidation:
         # resourceType valid but every locator malformed -> the whole sub entry is dropped, and
         # with no logs either there is nothing to write.
         table = MagicMock(query=MagicMock(return_value={"Items": [
-            {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "E1"}]}),
+            {"pipelineExecutionId": "Pvalid123", "workflowExecutionId": "e1000000000000000000000000000001"}]}),
             update_item=MagicMock())
         with patch.object(reg, "validate", _REAL_VALIDATE), \
              patch.object(reg.dynamodb, "Table", return_value=table):
@@ -266,16 +266,16 @@ class TestAbortRegisteredSubExecutions:
 
     def _event(self):
         ev = {"requestContext": {"http": {"method": "DELETE", "path": "/x"}, "authorizer": {}},
-              "pathParameters": {"executionId": "EabcId"}, "queryStringParameters": {}}
+              "pathParameters": {"executionId": "abc00000000000000000000000000001"}, "queryStringParameters": {}}
         return ev
 
     def _main_row(self):
-        return {"executionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
+        return {"executionId": "abc00000000000000000000000000001", "workflowId": "wfx", "workflowDatabaseId": "dbx",
                 "workflow_execution_arn": "arn:ex:main", "executionStatus": "RUNNING",
                 "executionStopDate": ""}
 
     def test_abort_stops_registered_sub_executions_and_warns_on_failure(self):
-        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001",
                 "executionStatus": "RUNNING", "executionStopDate": "",
                 "registeredSubExecutions": [
                     {"resourceType": "stepFunctionsExecution",
@@ -320,7 +320,7 @@ class TestAbortRegisteredSubExecutions:
         # A pipeline that submits its OWN Batch job registers it as resourceType batchJob.
         # Nothing else stops that job (Step Functions owns only jobs submitted through the
         # `.sync` integration), so abort must call TerminateJob or the job keeps running.
-        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001",
                 "executionStatus": "RUNNING", "executionStopDate": "",
                 "registeredSubExecutions": [
                     {"resourceType": "batchJob", "jobId": "batch-job-777"}]}

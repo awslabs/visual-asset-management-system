@@ -790,3 +790,209 @@ describe("ExecutionsBoard re-run feedback", () => {
         expect(mockToast.success.mock.calls[0][1].description).toMatch(/new execution/i);
     });
 });
+
+/**
+ * The asset tab's Workflow filter.
+ *
+ * It is a separate control from the global board's pair of dropdowns: it carries the whole composite
+ * "databaseId:workflowId" in one value, because a workflowId is unique only within its database and
+ * the asset tab has no database dropdown to pair with. Its options come from the loaded rows (the
+ * workflows this asset has actually run) rather than from the full workflow catalog.
+ */
+describe("ExecutionsBoard asset-scope workflow filter", () => {
+    let queryClient: QueryClient;
+    const ASSET_SCOPE = { kind: "asset", databaseId: "db-1", assetId: "a-1" } as any;
+
+    /** Two executions on the asset, from two different workflows in two different databases. */
+    const TWO_WORKFLOW_ROWS: any[] = [
+        {
+            workflowExecutionId: "E1",
+            workflowId: "wf-alpha",
+            workflowDatabaseId: "wdb-one",
+            executionStatus: "SUCCEEDED",
+        },
+        {
+            workflowExecutionId: "E2",
+            workflowId: "wf-beta",
+            workflowDatabaseId: "wdb-two",
+            executionStatus: "SUCCEEDED",
+        },
+    ];
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+        const {
+            useExecutions,
+            useExecutionActions,
+            useAllWorkflows,
+            useDatabases,
+            useAllPipelines,
+            useWorkflow,
+        } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionActions.mockReturnValue({
+            abortExecution: { mutateAsync: jest.fn() },
+            rerunExecution: { mutateAsync: jest.fn() },
+            permanentDeleteExecution: { mutateAsync: jest.fn() },
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        useAllWorkflows.mockReturnValue({ data: [] });
+        useDatabases.mockReturnValue({ data: [] });
+        useAllPipelines.mockReturnValue({ data: [] });
+        useWorkflow.mockReturnValue({ data: undefined });
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: [] }], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+    });
+
+    afterEach(() => cleanup());
+
+    const renderAssetBoard = (rows: any[], scope: any = ASSET_SCOPE) => {
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: rows }], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={scope} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    const lastFilters = () => {
+        const { useExecutions } = require("../api/queries");
+        return useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+    };
+
+    it("offers the workflow filter on the asset tab", () => {
+        renderAssetBoard(TWO_WORKFLOW_ROWS);
+        expect(screen.getByLabelText("Filter by workflow")).toBeInTheDocument();
+    });
+
+    it("does not offer the WORKFLOW DATABASE dropdown on the asset tab", () => {
+        // One composite-valued control replaces the global board's pair here; a lone database
+        // dropdown would let a user select a database with no workflow, filtering per field to
+        // something they did not ask for.
+        renderAssetBoard(TWO_WORKFLOW_ROWS);
+        expect(screen.queryByLabelText("Filter by workflow database")).not.toBeInTheDocument();
+    });
+
+    it("sends BOTH halves of the composite key to the server", async () => {
+        // The backend matches workflowId and workflowDatabaseId per field. Sending only the id would
+        // fail to narrow when two databases share a workflow id.
+        renderAssetBoard(TWO_WORKFLOW_ROWS);
+        await userEvent.selectOptions(
+            screen.getByLabelText("Filter by workflow"),
+            screen.getByRole("option", { name: "wf-beta" })
+        );
+        await waitFor(() => {
+            expect(lastFilters().workflowId).toBe("wf-beta");
+            expect(lastFilters().workflowDatabaseId).toBe("wdb-two");
+        });
+    });
+
+    it("labels an option with the workflow NAME when the catalog knows it", async () => {
+        // Rows carry ids only; without the catalog join the dropdown shows opaque ids.
+        const { useAllWorkflows } = require("../api/queries");
+        useAllWorkflows.mockReturnValue({
+            data: [{ workflowId: "wf-alpha", databaseId: "wdb-one", workflowName: "Thumbnails" }],
+        });
+        renderAssetBoard(TWO_WORKFLOW_ROWS);
+        expect(screen.getByRole("option", { name: "Thumbnails" })).toBeInTheDocument();
+        // The workflow with no catalog entry still appears, under its id.
+        expect(screen.getByRole("option", { name: "wf-beta" })).toBeInTheDocument();
+    });
+
+    it("keeps every seen workflow selectable after the server narrows the rows", async () => {
+        // THE REGRESSION THIS GUARDS: the filter is applied server-side, so once a workflow is
+        // chosen the response contains only that workflow's rows. Options recomputed from the
+        // visible rows would collapse to the single selected entry, leaving no way to switch to
+        // another workflow without first clearing the filter.
+        const { rerender } = renderAssetBoard(TWO_WORKFLOW_ROWS);
+        await userEvent.selectOptions(
+            screen.getByLabelText("Filter by workflow"),
+            screen.getByRole("option", { name: "wf-alpha" })
+        );
+
+        // The server now returns only wf-alpha's execution.
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            data: { pages: [{ Items: [TWO_WORKFLOW_ROWS[0]] }], pageParams: [] },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+        rerender(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={ASSET_SCOPE} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole("option", { name: "wf-beta" })).toBeInTheDocument();
+        });
+    });
+
+    it("hides the control when the asset has only one workflow to choose between", () => {
+        // With a single workflow in an asset's history the filter can only reproduce the list
+        // already on screen.
+        renderAssetBoard([TWO_WORKFLOW_ROWS[0]]);
+        expect(screen.queryByLabelText("Filter by workflow")).not.toBeInTheDocument();
+    });
+
+    it("hides the control when the asset has no executions at all", () => {
+        renderAssetBoard([]);
+        expect(screen.queryByLabelText("Filter by workflow")).not.toBeInTheDocument();
+    });
+
+    it("clears the workflow filter with Clear", async () => {
+        renderAssetBoard(TWO_WORKFLOW_ROWS);
+        await userEvent.selectOptions(
+            screen.getByLabelText("Filter by workflow"),
+            screen.getByRole("option", { name: "wf-alpha" })
+        );
+        await waitFor(() => expect(lastFilters().workflowId).toBe("wf-alpha"));
+
+        await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+        await waitFor(() => {
+            expect(lastFilters().workflowId).toBeUndefined();
+            expect(lastFilters().workflowDatabaseId).toBeUndefined();
+        });
+    });
+
+    it("sends no workflow filter until one is chosen", () => {
+        // An always-present empty filter would be sent as "" and, if the backend ever compared it
+        // literally, would match nothing.
+        renderAssetBoard(TWO_WORKFLOW_ROWS);
+        expect(lastFilters().workflowId).toBeUndefined();
+        expect(lastFilters().workflowDatabaseId).toBeUndefined();
+    });
+
+    it("does not offer the filter on a WORKFLOW-scoped board", () => {
+        // That board is already pinned to one workflow by its scope, so the control could only
+        // re-select what is already in force.
+        renderAssetBoard(TWO_WORKFLOW_ROWS, {
+            kind: "workflow",
+            databaseId: "db-1",
+            workflowId: "wf-alpha",
+        });
+        expect(screen.queryByLabelText("Filter by workflow")).not.toBeInTheDocument();
+    });
+});

@@ -37,20 +37,20 @@ When `waitForCallback` is `Enabled`, AWS Step Functions sends a task token along
 
 A pipeline's `systemConfig` governs how the pipeline consumes input and whether it uses templates.
 
-| Field                         | Description                                                                                                                                               |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                       |
-| `assetScope`                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted selections.                                |
-| `metadataInputs`              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is gathered and passed to the pipeline.                                   |
-| `inputFileFilters`            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard (`*.previewFile.*`). See [Input-file filters](#input-file-filters). |
-| `requireTemplate`             | When `true`, every execution of this pipeline must select one of its configuration templates.                                                             |
-| `allowCustomTemplateOverride` | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                         |
+| Field                         | Description                                                                                                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `inputFileArity`              | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                  |
+| `assetScope`                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted selections.                                                           |
+| `metadataInputs`              | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipeline. See [Metadata inputs](#metadata-inputs). |
+| `inputFileFilters`            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard (`*.previewFile.*`). See [Input-file filters](#input-file-filters).                            |
+| `requireTemplate`             | When `true`, every execution of this pipeline must select one of its configuration templates.                                                                                        |
+| `allowCustomTemplateOverride` | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                                                    |
 
 ### Templates and tag schemas
 
 A pipeline can carry one or more **templates** -- reusable configuration bodies (JSON, YAML, OpenJD, XML, or raw text) that supply the parameters an execution passes to the pipeline. A template body may contain `{{tagName}}` placeholders. These are either the template's own schema tags (filled in at execution time) or **system tags** that the engine resolves automatically per pipeline task — execution identity, input files, output/auxiliary locations, and resolved metadata. See [System template tags](../api/pipelines.md#system-template-tags) for the full catalog.
 
-Each template can define a **tag schema** describing the typed tags (`string`, `integer`, `number`, `boolean`, `string-list`, or `enum`) that fill those placeholders, including labels, defaults, and whether each is required. A pipeline may designate one template as its **default** (`isDefault`); the default is pre-selected on the execute form and is used automatically when a pipeline that requires a template is run without one specified.
+Each template can define a **tag schema** describing the typed tags (`string`, `integer`, `number`, `boolean`, `string-list`, or `enum`) that fill those placeholders, including labels, defaults, and whether each is required. In a `json` config body the declared type also fixes where the placeholder sits: a tag that renders a JSON number, boolean, or array is the whole value and takes no quotes (`"steps": \{\{STEPS\}\}`), while a `string` or `enum` tag goes inside the string it fills (`"prompt": "\{\{PROMPT\}\}"`). The body is checked against its own tag schema when it is saved, so a placeholder in the wrong position is reported then rather than delivering the wrong type to the pipeline at run time. A pipeline may designate one template as its **default** (`isDefault`); the default is pre-selected on the execute form and is used automatically when a pipeline that requires a template is run without one specified.
 
 A template may also carry `overrides` that replace parts of the pipeline's `systemConfig` (`inputFileArity`, `assetScope`, `metadataInputs`, and `inputFileFilters`) for executions that choose that template.
 
@@ -131,7 +131,7 @@ A workflow's `systemConfig` governs how the workflow consumes input, which asset
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inputFileArity`                              | Number of input files the workflow consumes: `none`, `one`, or `multi`. Authored, not derived — set it to the MAXIMUM any pipeline/template combination in the workflow can require, since a template may raise a pipeline's own arity at execute time. |
 | `assetScope`                                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling selections.                                                                                                                                       |
-| `metadataInputs`                              | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is passed to the pipelines.                                                                                                                                             |
+| `metadataInputs`                              | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is passed to the pipelines. See [Metadata inputs](#metadata-inputs).                                                                                |
 | `inputFileFilters`                            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard. An omitted or `*` allow list defers to the pipelines; see [Input-file filters](#input-file-filters).                                                             |
 | `concurrencyRestriction`                      | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                           |
 | `outputTarget`                                | Where the workflow writes its output: `locationType` (`asset` or `none`) and `allowOverride`.                                                                                                                                                           |
@@ -143,6 +143,8 @@ The `outputTarget.locationType` is `asset` to write output files and metadata to
 ### Triggers
 
 Triggers auto-launch a workflow in response to an event. A `fileUpload` trigger runs the workflow when files matching its `inputFileFilters` are uploaded. Filters match by extension (`*.e57`), exact path, file name, or wildcard. A trigger's `defaultTemplateIds` map supplies the template each included pipeline uses when the trigger launches the workflow, keyed by the composite `<pipelineDatabaseId>:<pipelineId>`.
+
+A workflow may carry several triggers of one type, each with its own filters and default templates, and an upload launches the workflow once per matching trigger — so one workflow can process different uploads with different templates. Each trigger is addressed by its key: the bare type for a workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one. A workflow that restricts concurrency per asset supports only one trigger of a type, and two triggers of one type may not name the same default templates.
 
 :::note[Filter format]
 Input-file filters accept extension patterns such as `*.jpg` (or the `.jpg` shorthand), exact paths, file names, and wildcards. Matching is case-insensitive. A non-empty `allow` list restricts eligibility to matching files; `exclude` removes matches and takes precedence. The same rules described in [Input-file filters](#input-file-filters) apply to a trigger's filters.
@@ -208,10 +210,22 @@ POST /workflows/{workflowDatabaseId}/{workflowId}/execute
 
 The request carries an `inputFiles` array, where each entry has a `databaseId`, `assetId`, and `relativeFileKey` (asset-relative, beginning with `/`; `/` selects the whole asset and `/folder/` a folder). When the workflow's `outputTarget` allows override, the request may set `outputAssetId` and `outputDatabaseId` to redirect the output. Per-pipeline parameters (`templateId`, template tag values, or a custom template override) are supplied in `pipelineExecutionParameters`, keyed by pipeline.
 
+### Metadata inputs
+
+Alongside its input files, an execution gathers the stored metadata its pipelines declared through `metadataInputs` and writes it into a metadata file each pipeline step reads. Four kinds of metadata are gathered independently: each involved asset's own metadata (`assetMetadata`), each input file's metadata (`fileMetadata`) and attributes (`fileAttributes`), and each involved database's own metadata (`databaseMetadata`). The workflow's booleans are the outer gate and each pipeline's own decide what that step receives, so a type reaches a pipeline only when both have it on.
+
+Which entities a run gathers from follows from its selection: every asset an input file belongs to, every asset the request named purely as a metadata source, and every distinct database of those assets. A run with no input files has nothing to derive from, so it gathers the single database the request named.
+
+Database metadata is read-only. It is supplied to a pipeline as input, and a pipeline never writes metadata back to a database — metadata write-back targets assets and files.
+
+Naming metadata sources is optional at every arity, and nothing makes it mandatory. A pipeline that needs particular metadata to run checks for it itself and fails its own step when it is absent, rather than the execution being rejected for omitting a source.
+
+The metadata gathered for one entity is bounded independently of every other, so a run over many entities leaves each entity its own budget: at most 1,000 metadata entries and 300 KB for each database, each asset, each file's metadata, and each file's attributes. A run over three databases holding five assets and ten files therefore gathers up to 1,000 entries for each of the three databases, each of the five assets, and each of the ten files. An execution never truncates silently — a bounded entity is named in the warnings the execute response returns. An execution reads at most 1,000 input files and 1,000 metadata-source assets. For the full field reference, see [Metadata inputs](../api/workflows.md#metadata-inputs) in the Workflows API.
+
 ### Execution flow
 
 1. A user (or a trigger) submits input files to the workflow's execute endpoint.
-2. VAMS authorizes the workflow, every referenced pipeline, and each input and output asset; resolves per-pipeline templates and validates their tags; then cross-validates input-file arity, asset scope, and file filters.
+2. VAMS authorizes the workflow, every referenced pipeline, each input and output asset, and every asset and database the run gathers metadata from; resolves per-pipeline templates and validates their tags; then cross-validates input-file arity, asset scope, and file filters.
 3. VAMS starts the workflow's AWS Step Functions state machine.
 4. Each pipeline step runs in sequence, receiving the input files, gathered metadata, and its rendered configuration.
 5. An end-state step collects pipeline outputs and, for an asset output target, writes them back to the output asset.
@@ -240,7 +254,7 @@ sequenceDiagram
 
 Each execution is identified by a workflow execution id and tracked in Amazon DynamoDB, independent of any single asset (an execution may span input files across multiple assets). The main execution record holds the workflow identity, status (`NEW`, `RUNNING`, `SUCCEEDED`, `FAILED`, `TIMED_OUT`, `ABORTED`), start and stop dates, trigger type, and the initiating user. Related records capture the input files (with the exact S3 version read), the gathered metadata, per-pipeline configuration snapshots, and the produced outputs.
 
-An output index keyed by `databaseId:assetId` records which execution wrote to each output asset, so a caller with access to an output asset can see the runs that produced it. Execution listings are permission-filtered: an execution is visible when the caller can view its workflow and any of its input assets or its output asset.
+An output index keyed by `databaseId:assetId` records which execution wrote to each output asset, so a caller with access to an output asset can see the runs that produced it. Execution listings are permission-filtered: an execution is visible when the caller can view its workflow and every asset the run read — each input file's asset plus each asset named as a metadata source. Every asset is required rather than any one of them because the listing and the details both return the metadata of all of them. A run with no inputs of either kind is associated only with the asset it wrote to, which carries the check in their place; a results-only run has neither, leaving the workflow as its whole gate. An asset that has been permanently deleted is authorized on the database it lived in, so deleting an asset leaves the history of the runs against it reachable by whoever can read that database rather than by nobody. Archiving an asset is not a deletion: its record is retained, so it stays authorized on its own attributes.
 
 :::note[Traceability and logs]
 The execution details endpoint returns full input/output traceability -- the underlying pipelines with their rendered configuration, the input files and metadata, the output target, and a listing of all output files, metadata, and results. The logs endpoint returns the stored execution log, falling back to a live Amazon CloudWatch Logs search, and can be narrowed to a single pipeline execution.

@@ -143,6 +143,7 @@ API_EXECUTE_WORKFLOW = "/workflows/{workflowDatabaseId}/{workflowId}/execute"
 API_WORKFLOW_EXECUTIONS_GLOBAL = "/workflows/executions"
 API_WORKFLOW_EXECUTION = "/workflows/executions/{executionId}"
 API_WORKFLOW_EXECUTION_DETAILS = "/workflows/executions/{executionId}/details"
+API_WORKFLOW_EXECUTION_DETAILS_METADATA = "/workflows/executions/{executionId}/details/metadata"
 API_WORKFLOW_EXECUTION_LOGS = "/workflows/executions/{executionId}/logs"
 API_WORKFLOW_EXECUTION_RERUN = "/workflows/executions/{executionId}/rerun"
 API_WORKFLOW_EXECUTION_PERMANENT = "/workflows/executions/{executionId}/permanent"
@@ -153,6 +154,10 @@ MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
 MAX_GLOBAL_EXECUTION_PAGE_SIZE = 100
 # Page ceiling for --auto-paginate on the execution list (rows are filtered after the page limit).
 MAX_EXECUTION_AUTO_PAGINATE_PAGES = 200
+# Paged execution-detail metadata: the collections the endpoint serves, and its page-size cap
+# (the handler clamps larger values rather than rejecting them).
+EXECUTION_DETAIL_METADATA_COLLECTIONS = ('input', 'inputDatabase', 'output')
+MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE = 500
 
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB

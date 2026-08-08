@@ -100,6 +100,36 @@ def test_list_workflow_executions_caps_page_size(mock_client):
     assert mock_client.paginate.call_args.kwargs["page_size"] <= 50
 
 
+def test_list_workflow_executions_forwards_the_workflow_filters(mock_client):
+    """Both halves of the composite must reach the APIClient by KEYWORD.
+
+    Its signature is (database_id, asset_id, workflow_database_id, workflow_id, params) -- database
+    BEFORE id -- so passing these positionally in the caller's own argument order silently swaps
+    them, and the filter then matches nothing.
+    """
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_workflow_executions(
+        "db1", "a1", workflow_id="wf-alpha", workflow_database_id="wdb-one")
+
+    # paginate() is handed a lambda; invoke it to observe the real APIClient call.
+    mock_client.paginate.call_args.args[0]({"pageSize": 50})
+    kwargs = mock_client.api.list_workflow_executions.call_args.kwargs
+    assert kwargs["workflow_id"] == "wf-alpha"
+    assert kwargs["workflow_database_id"] == "wdb-one"
+
+
+def test_list_workflow_executions_omits_absent_filters(mock_client):
+    """Unfiltered stays unfiltered: passing empty strings would filter on "" if the route ever
+    compared them literally."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_workflow_executions("db1", "a1")
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 50})
+    kwargs = mock_client.api.list_workflow_executions.call_args.kwargs
+    assert kwargs["workflow_id"] is None
+    assert kwargs["workflow_database_id"] is None
+
+
 @pytest.mark.asyncio
 async def test_read_tools_registered():
     tools = await server.mcp.list_tools()
@@ -192,7 +222,7 @@ def test_mutating_tools_live_inside_their_gate_block():
         assert writes < by_name[name] < destructive, f"{name} is outside the writes block"
     for name in ("archive_pipeline", "permanent_delete_execution", "delete_asset"):
         assert destructive < by_name[name] < main, f"{name} is outside the destructive block"
-    for name in ("list_pipelines", "get_execution_details"):
+    for name in ("list_pipelines", "get_execution_details", "page_execution_detail_metadata"):
         assert by_name[name] < writes, f"{name} is a read tool but sits in a gated block"
 
 
@@ -223,6 +253,7 @@ async def test_orchestration_read_tools_registered():
         "get_workflow_trigger",
         "list_executions",
         "get_execution_details",
+        "page_execution_detail_metadata",
         "get_execution_logs",
     ):
         assert expected in names
@@ -244,6 +275,145 @@ def test_list_executions_caps_page_size(mock_client):
     mock_client.paginate.return_value = {"Items": [], "count": 0}
     server.list_executions()
     assert mock_client.paginate.call_args.kwargs["page_size"] <= 50
+
+
+# --- page_execution_detail_metadata ---------------------------------------
+
+
+def test_page_execution_detail_metadata_defaults_to_the_input_collection(mock_client):
+    mock_client.paginate.return_value = {"Items": [{"assetId": "a1"}], "count": 1}
+    result = server.page_execution_detail_metadata("e1")
+
+    fetch = mock_client.paginate.call_args.args[0]
+    fetch({"pageSize": 100})
+    params = mock_client.api.get_execution_details_metadata.call_args.kwargs["params"]
+    assert params["collection"] == "input"
+    # The collection is echoed back so an agent reading the result knows which half it holds.
+    assert result["collection"] == "input"
+
+
+def test_page_execution_detail_metadata_forwards_collection_and_pipeline_filter(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.page_execution_detail_metadata("e1", collection="output", pipeline_id="p1")
+
+    fetch = mock_client.paginate.call_args.args[0]
+    fetch({"pageSize": 100, "startingToken": "tok"})
+    call = mock_client.api.get_execution_details_metadata.call_args
+    assert call.args[0] == "e1"
+    # Every page repeats the filters: the token is only valid alongside the collection and
+    # pipelineId it was issued with.
+    assert call.kwargs["params"] == {
+        "pageSize": 100,
+        "startingToken": "tok",
+        "collection": "output",
+        "pipelineId": "p1",
+    }
+
+
+def test_page_execution_detail_metadata_rejects_an_unknown_collection(mock_client):
+    result = server.page_execution_detail_metadata("e1", collection="bogus")
+    assert "collection must be one of" in result["error"]
+    assert not mock_client.paginate.called
+
+
+def test_page_execution_detail_metadata_caps_page_size(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.page_execution_detail_metadata("e1")
+    assert mock_client.paginate.call_args.kwargs["page_size"] <= 500
+
+
+def test_page_execution_detail_metadata_reads_the_items_field(mock_client):
+    """paginate() defaults items_key to "Items", which is the list field this endpoint returns —
+    a mismatch silently yields zero rows."""
+    real_paginate = server.VamsClient.paginate
+    mock_client.config = server.CONFIG
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_details_metadata.side_effect = [
+        {"message": {"Items": [{"assetId": "a1"}], "collection": "input", "NextToken": "t1"}},
+        {"message": {"Items": [{"assetId": "a2"}], "collection": "input"}},
+    ]
+    mock_client.paginate = lambda *args, **kwargs: real_paginate(mock_client, *args, **kwargs)
+
+    result = server.page_execution_detail_metadata("e1")
+
+    assert [row["assetId"] for row in result["Items"]] == ["a1", "a2"]
+    # NextToken absent on the second page ends the walk, and nothing is flagged truncated.
+    assert result.get("truncated") is None
+
+
+# --- Docstring contract checks -------------------------------------------
+#
+# A tool's docstring IS its agent-visible schema: `body`/`updates` params are opaque
+# dicts, so a field absent from the docstring is a field no agent ever emits, and a
+# response collection left undescribed is one no agent reads. Assert on the text.
+#
+# The gated tools are not registered at the default settings, so read their source
+# docstring rather than the registered tool metadata.
+
+SOURCE_TEXT = SOURCE_PATH.read_text(encoding="utf-8")
+
+
+def _docstring_of(name):
+    """The named function's docstring, collapsed to single-spaced text so an assertion is not
+    sensitive to where a sentence happens to wrap."""
+    import ast
+
+    for node in ast.walk(ast.parse(SOURCE_TEXT)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return " ".join((ast.get_docstring(node) or "").split())
+    raise AssertionError(f"no function named {name!r} in {SOURCE_PATH.name}")
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "metadataSourceAssets",
+        "metadataSourceDatabaseId",
+        # The constraints an agent cannot infer from the field names. Matched
+        # case-insensitively; the docstring capitalizes several for emphasis.
+        "rejected",
+        "no input files",
+        "optional",
+        "warnings",
+    ],
+)
+def test_execute_workflow_docstring_describes_the_metadata_source_fields(fragment):
+    assert fragment.lower() in _docstring_of("execute_workflow").lower()
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["inputMetadata", "inputDatabaseMetadata", "metadataSourceDatabases", "truncatedCollections",
+     # Where an agent goes when a metadata collection is flagged partial. Without this the
+     # truncation flag reads as a dead end and the agent reports the shortened count.
+     "page_execution_detail_metadata"],
+)
+def test_get_execution_details_docstring_describes_the_metadata_collections(fragment):
+    assert fragment in _docstring_of("get_execution_details")
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # The collection names an agent must pass verbatim, and the two row shapes it renders.
+    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue"],
+)
+def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
+    assert fragment in _docstring_of("page_execution_detail_metadata")
+
+
+@pytest.mark.parametrize(
+    "tool", ["create_pipeline", "create_workflow", "create_pipeline_template"]
+)
+def test_config_tool_docstrings_list_every_metadata_input_key(tool):
+    # A key missing here is a key an agent never sets; the backend rejects unknown ones,
+    # so the list must match the model's exactly.
+    docstring = _docstring_of(tool)
+    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
+        assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
+
+
+def test_rerun_execution_docstring_mentions_warnings():
+    assert "warnings" in _docstring_of("rerun_execution")
 
 
 # Every pipeline/workflow/execution APIClient method returns the handler's raw
@@ -290,3 +460,43 @@ def test_orchestration_reads_unwrap_the_message_envelope(mock_client, call):
     result = call()
     assert result == payload, "tool returned the raw envelope instead of the payload"
     assert mock_client.unwrap_message.called
+
+
+# Archiving a pipeline or workflow also sets enabled=False, so an unarchive that clears
+# only the archived flag restores a row that lists normally but cannot be executed.
+
+
+def _source_of(name):
+    """The named function's source, collapsed to single-spaced text."""
+    import ast
+
+    for node in ast.walk(ast.parse(SOURCE_TEXT)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return " ".join(ast.unparse(node).split())
+    raise AssertionError(f"no function named {name!r} in {SOURCE_PATH.name}")
+
+
+@pytest.mark.parametrize("tool", ["unarchive_pipeline", "unarchive_workflow"])
+def test_unarchive_re_enables_unless_kept_disabled(tool):
+    source = _source_of(tool)
+    assert "'archived': False" in source, f"{tool} does not clear the archived flag"
+    assert "'enabled'" in source, f"{tool} leaves the row disabled, so it stays unrunnable"
+    assert "keep_disabled" in source, f"{tool} offers no way to restore without re-enabling"
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "archive_pipeline",
+        "unarchive_pipeline",
+        "archive_workflow",
+        "unarchive_workflow",
+        "delete_pipeline_template",
+        "delete_workflow_trigger",
+        "permanent_delete_execution",
+    ],
+)
+def test_orchestration_destructive_tools_unwrap_the_message_envelope(tool):
+    assert "unwrap_message" in _source_of(tool), (
+        f"{tool} returns the raw {{'message': ...}} envelope, a nesting level no other tool has"
+    )

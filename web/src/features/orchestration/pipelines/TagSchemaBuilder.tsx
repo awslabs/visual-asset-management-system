@@ -15,6 +15,50 @@ interface TagSchemaBuilderProps {
     onValidityChange?: (valid: boolean) => void;
 }
 
+/**
+ * The comma-separated enum-values input.
+ *
+ * It keeps the typed TEXT in local state and reports the parsed array upward, because a fully
+ * controlled `value={values.join(", ")}` cannot be typed into: parsing on every keystroke drops the
+ * empty segment a just-typed comma creates, so the comma is erased as it is entered and the words
+ * run together ("dev," -> "dev" -> "devstaging"). Re-deriving the text only when the incoming array
+ * differs from what this draft parses to keeps an external reset (row removal, type change) working
+ * without fighting the user mid-word.
+ */
+const EnumValuesInput: React.FC<{
+    id: string;
+    values: string[];
+    onChange: (values: string[]) => void;
+    className: string;
+}> = ({ id, values, onChange, className }) => {
+    const parse = (text: string): string[] =>
+        text
+            .split(",")
+            .map((v) => v.trim())
+            .filter((v) => v);
+    const [text, setText] = useState(() => values.join(", "));
+    useEffect(() => {
+        const incoming = values.join(", ");
+        if (parse(text).join(", ") !== incoming) setText(incoming);
+        // Intentionally keyed on the committed values only: including `text` would overwrite the
+        // draft on every keystroke, which is the bug this component exists to fix.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [values]);
+    return (
+        <input
+            id={id}
+            type="text"
+            value={text}
+            onChange={(e) => {
+                setText(e.target.value);
+                onChange(parse(e.target.value));
+            }}
+            className={className}
+            placeholder="e.g., dev, staging, prod"
+        />
+    );
+};
+
 interface ValidationError {
     index: number;
     message: string;
@@ -385,15 +429,10 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
                                 >
                                     Enum Values (comma-separated)
                                 </label>
-                                <input
+                                <EnumValuesInput
                                     id={`enumValues-${index}`}
-                                    type="text"
-                                    value={field.enumValues?.join(", ") || ""}
-                                    onChange={(e) => {
-                                        const values = e.target.value
-                                            .split(",")
-                                            .map((v) => v.trim())
-                                            .filter((v) => v);
+                                    values={field.enumValues || []}
+                                    onChange={(values) => {
                                         // A default must be one of the declared values.
                                         const keepDefault =
                                             field.default !== undefined &&
@@ -404,7 +443,6 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
                                         });
                                     }}
                                     className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                                    placeholder="e.g., dev, staging, prod"
                                 />
                                 {getErrorForField(index, "enumValues") && (
                                     <p className="mt-1 text-sm text-vams-error">

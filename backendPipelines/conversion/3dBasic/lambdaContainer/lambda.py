@@ -71,9 +71,44 @@ def _fetch_json_from_s3(s3_location):
         return {}
 
 
+class InputConfigurationError(RuntimeError):
+    """Raised when an input-configuration file exists but cannot be parsed as a JSON object."""
+
+
 def fetch_input_configuration(input_configuration_s3_location):
-    """Fetch + parse the per-pipeline input configuration (inputParameters) from its S3 location."""
-    return _fetch_json_from_s3(input_configuration_s3_location)
+    """Fetch + parse the per-pipeline input configuration (inputParameters) from its S3 location.
+
+    ``{}`` when no configuration was supplied or it could not be fetched. Raises
+    ``InputConfigurationError`` when the file WAS fetched but its body is not a JSON object.
+
+    Parsed here rather than through ``_fetch_json_from_s3`` so the distinction can be made: that helper
+    is shared with the manifest read and answers every failure with ``{}``, which for a configuration
+    is indistinguishable from "none supplied" — the pipeline then runs on its defaults, reports SUCCESS,
+    and every parameter the caller set is silently gone.
+    """
+    if not input_configuration_s3_location:
+        return {}
+    if not input_configuration_s3_location.startswith("s3://"):
+        return {}
+    bucket, _, key = input_configuration_s3_location[len("s3://"):].partition("/")
+    if not bucket or not key:
+        return {}
+    try:
+        body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+    except Exception as e:
+        logger.warning(f"Could not read {input_configuration_s3_location}: {e}")
+        return {}
+    if not body or not body.strip():
+        return {}
+    try:
+        parsed = json.loads(body)
+    except ValueError as e:
+        raise InputConfigurationError(
+            f"The input configuration at {input_configuration_s3_location} is not valid JSON: {e}")
+    if not isinstance(parsed, dict):
+        raise InputConfigurationError(
+            f"The input configuration at {input_configuration_s3_location} is not a JSON object")
+    return parsed
 
 
 def relative_subdir_from_manifest_path(relative_path):

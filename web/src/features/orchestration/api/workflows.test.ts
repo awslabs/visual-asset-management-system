@@ -149,6 +149,22 @@ describe("workflows service", () => {
     });
 
     describe("setTrigger", () => {
+        it("percent-encodes a suffixed trigger key so it is not read as a URL fragment", async () => {
+            // A trigger key may be "type#triggerId". A raw '#' is a fragment delimiter, so an
+            // unencoded key would send only "fileUpload" and act on the WRONG trigger — a sibling.
+            (apiClient.put as jest.Mock).mockResolvedValue({});
+            await setTrigger("db1", "w1", "fileUpload#nightly", {} as any);
+            expect((apiClient.put as jest.Mock).mock.calls[0][0]).toBe(
+                "database/db1/workflows/w1/triggers/fileUpload%23nightly"
+            );
+
+            (apiClient.del as jest.Mock).mockResolvedValue({});
+            await deleteTrigger("db1", "w1", "fileUpload#nightly");
+            expect((apiClient.del as jest.Mock).mock.calls[0][0]).toBe(
+                "database/db1/workflows/w1/triggers/fileUpload%23nightly"
+            );
+        });
+
         it("puts to database/{db}/workflows/{wid}/triggers/{triggerType}", async () => {
             (apiClient.put as jest.Mock).mockResolvedValue({ message: "updated" });
             const r = await setTrigger("db1", "w1", "fileUpload", { enabled: true } as any);

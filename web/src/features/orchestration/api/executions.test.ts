@@ -18,6 +18,7 @@ import {
     listExecutionsGlobal,
     listExecutionsForAsset,
     getExecutionDetails,
+    getExecutionDetailsMetadata,
     getExecutionLogs,
     abortExecution,
     rerunExecution,
@@ -94,6 +95,59 @@ describe("executions service", () => {
             const r = await getExecutionDetails("e1");
             expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details");
             expect(r).toEqual([true, { workflowExecutionId: "e1" }]);
+        });
+    });
+
+    describe("getExecutionDetailsMetadata", () => {
+        it("hits workflows/executions/{id}/details/metadata and unwraps the page", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [{ assetId: "a1" }], collection: "input", NextToken: "t2" },
+            });
+            const r = await getExecutionDetailsMetadata("e1", {
+                collection: "input",
+                pageSize: "200",
+            });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/metadata", {
+                queryStringParameters: { collection: "input", pageSize: "200" },
+            });
+            expect(r).toEqual([
+                true,
+                { Items: [{ assetId: "a1" }], collection: "input", NextToken: "t2" },
+            ]);
+        });
+
+        it("carries the continuation token through verbatim", async () => {
+            // The token is opaque base64 the backend round-trips; it must reach the API unaltered.
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [], collection: "output" },
+            });
+            await getExecutionDetailsMetadata("e1", {
+                collection: "output",
+                startingToken: "eyJzdGVwSW5kZXgiOiAxfQ==",
+            });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/metadata", {
+                queryStringParameters: {
+                    collection: "output",
+                    startingToken: "eyJzdGVwSW5kZXgiOiAxfQ==",
+                },
+            });
+        });
+
+        it("reports a rejected read as [false, message]", async () => {
+            (apiClient.get as jest.Mock).mockRejectedValue(new Error("Forbidden"));
+            const r = await getExecutionDetailsMetadata("e1", { collection: "input" });
+            expect(r).toEqual([false, "Forbidden"]);
+        });
+
+        it("sends no query parameters when none are given", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [], collection: "input" },
+            });
+            await getExecutionDetailsMetadata("e1");
+            expect(apiClient.get).toHaveBeenCalledWith(
+                "workflows/executions/e1/details/metadata",
+                {}
+            );
         });
     });
 

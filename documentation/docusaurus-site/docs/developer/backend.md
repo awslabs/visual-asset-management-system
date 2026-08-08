@@ -254,11 +254,11 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
     databaseId: str = Field(
         min_length=4, max_length=256,
-        strip_whitespace=True, pattern=id_pattern
+        strip_whitespace=True, regex=id_pattern
     )
     itemName: str = Field(
         min_length=1, max_length=256,
-        strip_whitespace=True, pattern=object_name_pattern
+        strip_whitespace=True, regex=object_name_pattern
     )
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     tags: Optional[list[str]] = []
@@ -519,11 +519,14 @@ logger.exception(f"Unexpected error: {e}")   # Includes stack trace
 logger.warning(f"Potential issue: {details}")
 ```
 
-The logger automatically redacts sensitive fields at all nesting levels:
+The logger automatically redacts sensitive fields at all nesting levels, in both objects and arrays:
 
 -   `authorization`
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
+
+Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
 
 ### Audit Logging
 

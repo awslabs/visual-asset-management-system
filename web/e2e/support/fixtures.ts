@@ -82,6 +82,27 @@ export async function openCardMenu(page: Page, cardId: string): Promise<Locator>
     return page.getByRole("menuitem");
 }
 
+/**
+ * The floating surface a menu item belongs to, reached from the item rather than from `[role="menu"]`.
+ *
+ * A page carries a dozen or more zero-size Cloudscape `<ul role="menu">` option lists (every closed
+ * Select/ButtonDropdown keeps one in the DOM), and they precede the portalled Radix menu in document
+ * order — so `page.locator('[role="menu"]').first()` resolves to a hidden one with a transparent
+ * background. Walking up from a visible item picks the surface that is actually open.
+ */
+export function menuSurface(items: Locator): Locator {
+    return items.first().locator('xpath=ancestor::*[@role="menu"][1]');
+}
+
+/**
+ * The value cell of a label/value row in a detail or quick-view panel. Rows render the label and its
+ * value as adjacent spans, so the value is the label's next sibling — scoping to it keeps an assertion
+ * about one field from matching text anywhere else on the page.
+ */
+export function rowValue(page: Page, label: string): Locator {
+    return page.getByText(label, { exact: true }).first().locator("xpath=following-sibling::*[1]");
+}
+
 /** Collect uncaught page errors for the duration of a test (crash-regression assertions). */
 export function collectPageErrors(page: Page): string[] {
     const errors: string[] = [];

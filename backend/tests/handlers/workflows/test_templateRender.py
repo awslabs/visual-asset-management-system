@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from backend.backend.common.workflows import executionRecords as er
 from backend.backend.common.workflows import templateRender as tr
 
 
@@ -177,6 +178,36 @@ class TestMetadataTags:
             '{"m": {{assetMetadataObject}}}', _manifest(), _execution(),
             metadata_loader=lambda: {}))
         assert out["m"] == {}
+
+    def test_database_metadata_object_renders_database_section(self):
+        # The projected legacy view a metadata_loader hands the renderer carries the entry the grouped
+        # envelope's top-level 'databases' list holds for the projected databaseId as its
+        # databaseMetadata scope.
+        envelope = er.build_grouped_metadata_envelope(
+            [er.build_metadata_asset_group("db1", "xidA", {"assetName": "Pump"},
+                                           [er.build_metadata_file_record("/", {"MODEL": "x"})])],
+            databases=[er.build_metadata_database_group("db1", {"SITE": "plant-7"})])
+        out = json.loads(tr.render_config(
+            '{"d": {{databaseMetadataObject}}, "m": {{assetMetadataObject}}}',
+            _manifest(), _execution(),
+            metadata_loader=lambda: er.to_legacy_vams_view(envelope, "db1", "xidA", "/")))
+        assert out["d"] == {"SITE": "plant-7"}
+        assert out["m"] == {"MODEL": "x"}
+
+    def test_database_metadata_object_empty_without_database_source(self):
+        # No metadata-source database -> no envelope section -> the tag renders as an empty object
+        # rather than tripping the strict unknown-tag check.
+        envelope = er.build_grouped_metadata_envelope(
+            [er.build_metadata_asset_group("db1", "xidA", {}, [])])
+        out = json.loads(tr.render_config(
+            '{"d": {{databaseMetadataObject}}}', _manifest(), _execution(),
+            metadata_loader=lambda: er.to_legacy_vams_view(envelope, "db1", "xidA", "/")))
+        assert out["d"] == {}
+
+    def test_database_metadata_object_empty_without_metadata_read(self):
+        out = json.loads(tr.render_config(
+            '{"d": {{databaseMetadataObject}}}', _manifest(), _execution()))
+        assert out["d"] == {}
 
 
 @pytest.mark.unit

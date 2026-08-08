@@ -11,6 +11,19 @@ import AssetSpanControl, {
     scopeWithSpan,
 } from "../components/AssetSpanControl";
 import type { InputFileArity } from "../types";
+import { METADATA_LABELS, metadataEnabled } from "../wizard/resolveRestrictions";
+import type { MetadataKey } from "../wizard/resolveRestrictions";
+
+/**
+ * The metadata-input keys a template may override, in the order the editor shows them: widest entity
+ * first, so the rows read database -> asset -> file as the containment they describe.
+ */
+const METADATA_OVERRIDE_FIELDS: { key: MetadataKey; label: string }[] = [
+    { key: "databaseMetadata", label: METADATA_LABELS.databaseMetadata },
+    { key: "assetMetadata", label: METADATA_LABELS.assetMetadata },
+    { key: "fileMetadata", label: METADATA_LABELS.fileMetadata },
+    { key: "fileAttributes", label: METADATA_LABELS.fileAttributes },
+];
 
 /**
  * Structured editor for a template's `overrides` object. A template may override only these four
@@ -188,6 +201,7 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                                   assetMetadata: true,
                                   fileMetadata: true,
                                   fileAttributes: true,
+                                  databaseMetadata: true,
                               })
                             : removeKey("metadataInputs")
                     }
@@ -196,27 +210,20 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                 />
                 {has("metadataInputs") && (
                     <div className="space-y-1 pl-1">
-                        <MetaRow
-                            checked={metadata.assetMetadata || false}
-                            onChange={(v) =>
-                                setKey("metadataInputs", { ...metadata, assetMetadata: v })
-                            }
-                            label="Asset metadata"
-                        />
-                        <MetaRow
-                            checked={metadata.fileMetadata || false}
-                            onChange={(v) =>
-                                setKey("metadataInputs", { ...metadata, fileMetadata: v })
-                            }
-                            label="File metadata"
-                        />
-                        <MetaRow
-                            checked={metadata.fileAttributes || false}
-                            onChange={(v) =>
-                                setKey("metadataInputs", { ...metadata, fileAttributes: v })
-                            }
-                            label="File attributes"
-                        />
+                        {/* Every key reads through metadataEnabled, which defaults an omitted one ON
+                            to match the record builders — an override map that omits a key keeps
+                            providing that metadata, and binding the raw value would render it as
+                            opted out and then persist that opt-out on the next save. */}
+                        {METADATA_OVERRIDE_FIELDS.map(({ key, label }) => (
+                            <MetaRow
+                                key={key}
+                                checked={metadataEnabled(metadata, key)}
+                                onChange={(v) =>
+                                    setKey("metadataInputs", { ...metadata, [key]: v })
+                                }
+                                label={label}
+                            />
+                        ))}
                     </div>
                 )}
             </div>

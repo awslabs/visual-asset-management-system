@@ -18,7 +18,7 @@ Tables (see storageBuilder-nestedStack.ts):
 import json
 import uuid
 
-from common.workflows.executionRecords import iso_now, pipeline_composite_key
+from common.workflows.executionRecords import METADATA_INPUT_DEFAULTS, iso_now, pipeline_composite_key
 
 # Pipeline record schema version (record-shape version, distinct from a workflow's aslSchemaVersion).
 PIPELINE_SCHEMA_VERSION = 1
@@ -74,7 +74,7 @@ def build_pipeline_system_config(
 
     - input_file_arity: none | one | multi
     - asset_scope: {crossAssetAllowed, singleAssetOnly, wholeAssetAllowed, folderAllowed} booleans
-    - metadata_inputs: {assetMetadata, fileMetadata, fileAttributes} booleans
+    - metadata_inputs: {assetMetadata, fileMetadata, fileAttributes, databaseMetadata} booleans
     - input_file_filters: {allow: [...], exclude: [...]} of ext/path/name/wildcard
     """
     return {
@@ -85,11 +85,7 @@ def build_pipeline_system_config(
             "wholeAssetAllowed": False,
             "folderAllowed": False,
         },
-        "metadataInputs": metadata_inputs or {
-            "assetMetadata": True,
-            "fileMetadata": True,
-            "fileAttributes": True,
-        },
+        "metadataInputs": metadata_inputs or dict(METADATA_INPUT_DEFAULTS),
         "requireTemplate": bool(require_template),
         "allowCustomTemplateOverride": bool(allow_custom_template_override),
         "auxPreviewPipelineSuffix": aux_preview_pipeline_suffix or "",

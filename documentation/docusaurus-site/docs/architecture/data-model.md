@@ -318,6 +318,30 @@ Stores workflow definitions scoped to a database.
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
 
+### Workflow Triggers Storage Table
+
+Stores the triggers that auto-launch a workflow. A workflow may carry several triggers of one type, each
+with its own input-file filters and default templates.
+
+| Attribute                       | Type   | Key           | Notes                                                                                                                                      |
+| ------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `workflowDatabaseId:workflowId` | String | Partition Key | Composite key matching the workflow table                                                                                                  |
+| `triggerType`                   | String | Sort Key      | The trigger's key: the bare type (`fileUpload`) for a workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one |
+| `triggerBaseType`               | String |               | The bare type, always unsuffixed. The by-type index partitions on this                                                                     |
+| `triggerId`                     | String |               | Distinguishes several triggers of one type; empty for the first trigger of a type                                                          |
+| `triggerConfig`                 | Map    |               | For `fileUpload`: `inputFileFilters` plus `defaultTemplateIds` keyed by `<pipelineDatabaseId>:<pipelineId>`                                |
+| `enabled`                       | Bool   |               | A disabled trigger never fires                                                                                                             |
+
+**Global Secondary Indexes:**
+
+| GSI Name                | Partition Key     | Sort Key                        | Projection | Purpose                                                        |
+| ----------------------- | ----------------- | ------------------------------- | ---------- | -------------------------------------------------------------- |
+| `TriggersByBaseTypeGSI` | `triggerBaseType` | `workflowDatabaseId:workflowId` | ALL        | Find every workflow with a trigger of a type, without scanning |
+
+The index partitions on `triggerBaseType` rather than on the sort key because the upload dispatcher looks
+a type up by exact match: a suffixed value would place each additional trigger in its own partition, and
+that trigger would sit in the table without ever firing.
+
 ### Workflow Executions Storage Table (V2)
 
 Stores the main workflow execution record. Executions are workflow-keyed; asset and database linkage lives in the workflow/pipeline input tables.
@@ -355,14 +379,15 @@ them.
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
 
-| Attribute                                                                     | What it records                                                                                                                                       |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `specifiedPipelinesSnapshot`                                                  | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                 |
-| `inputMetadata` / `inputMetadataTruncated`                                    | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                         |
-| `outputLocationType`, `outputAssetId`, `outputDatabaseId`                     | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                     |
-| `outputFileBaseExecutionPathExtension`                                        | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags |
-| `inputMetadataAssetId` / `inputMetadataDatabaseId` / `inputMetadataFileS3Key` | Provenance of the metadata source                                                                                                                     |
-| `outputDatabaseId:outputAssetId`                                              | Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset                                                 |
+| Attribute                                                                     | What it records                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `specifiedPipelinesSnapshot`                                                  | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                                                                                  |
+| `inputMetadata` / `inputMetadataTruncated`                                    | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                                                                                          |
+| `outputLocationType`, `outputAssetId`, `outputDatabaseId`                     | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                                                                                      |
+| `outputFileBaseExecutionPathExtension`                                        | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags                                                                  |
+| `inputMetadataAssetId` / `inputMetadataDatabaseId` / `inputMetadataFileS3Key` | Provenance of the metadata source. `inputMetadataDatabaseId` is the single database the caller **named**, populated only for a run with no input files                                                                 |
+| `metadataSourceDatabases` / `metadataSourceAssets`                            | Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection |
+| `outputDatabaseId:outputAssetId`                                              | Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset                                                                                                                  |
 
 This row also carries the index that answers "which executions wrote to this asset?":
 

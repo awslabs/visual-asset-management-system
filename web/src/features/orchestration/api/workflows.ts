@@ -91,6 +91,17 @@ export async function listTriggers(
     });
 }
 
+/**
+ * A trigger key as a path segment.
+ *
+ * The key is the bare type for a workflow's first trigger of that type, or `type#triggerId` for an
+ * additional one. A raw `#` is a URL fragment delimiter, so interpolating the key directly would send
+ * only the bare type and act on the WRONG trigger — the request would silently target a sibling.
+ */
+function triggerSegment(triggerType: string): string {
+    return encodeURIComponent(triggerType);
+}
+
 export async function setTrigger(
     databaseId: string,
     workflowId: string,
@@ -98,9 +109,14 @@ export async function setTrigger(
     body: WorkflowTrigger
 ): Promise<[boolean, any]> {
     return toTuple(() =>
-        apiClient.put(`database/${databaseId}/workflows/${workflowId}/triggers/${triggerType}`, {
-            body,
-        })
+        apiClient.put(
+            `database/${databaseId}/workflows/${workflowId}/triggers/${triggerSegment(
+                triggerType
+            )}`,
+            {
+                body,
+            }
+        )
     );
 }
 
@@ -110,6 +126,11 @@ export async function deleteTrigger(
     triggerType: string
 ): Promise<[boolean, any]> {
     return toTuple(() =>
-        apiClient.del(`database/${databaseId}/workflows/${workflowId}/triggers/${triggerType}`, {})
+        apiClient.del(
+            `database/${databaseId}/workflows/${workflowId}/triggers/${triggerSegment(
+                triggerType
+            )}`,
+            {}
+        )
     );
 }

@@ -186,6 +186,12 @@ def main():
                     task_mode = params.get("TASK_MODE", "") or task_mode
                 if not variant or variant == "nano":
                     variant = params.get("MODEL_VARIANT", variant) or variant
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except manifest_io.InputConfigurationError:
+            raise
         except Exception:
             pass
 

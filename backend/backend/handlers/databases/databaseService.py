@@ -16,7 +16,7 @@ from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
@@ -456,7 +456,7 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
             request_model = parse(body, model=UpdateDatabaseRequestModel)
         except ValidationError as v:
             logger.exception(f"Validation error: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Update database
         result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)

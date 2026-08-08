@@ -51,7 +51,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered), `execution details|logs|abort|rerun|permanent-delete`
+-   `execution list` (global, permission-filtered), `execution details|details-metadata|logs|abort|rerun|permanent-delete`
 
 Industry has nested sub-command groups:
 
@@ -138,6 +138,7 @@ The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `Prof
 -   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
 -   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`).
 -   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name (`Items`, `items`, `versions`) and unwraps the legacy `message` envelope. Confirm the `items_key` still matches the endpoint's response.
+-   [ ] **Repeat Filter-Pinned Query Parameters on Every Page**: Some continuation tokens are only valid alongside the filters that produced them — the paged execution-detail metadata read pins its token to the request's `collection` and `pipelineId`, and the handler answers a mismatch with a 400. `paginate()` sends only `pageSize` and `startingToken`, so merge those filters into the params inside the `fetch_page` callable rather than on the first request alone.
 -   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this; keep those checks passing.
 -   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list (and `autoApprove` sample if it is a safe read).
 -   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection.
@@ -1265,12 +1266,36 @@ A caveat is for core logic unit tests or unit tests where the existing fixtures 
 
 The following fixtures are available in `tools/VamsCLI/tests/conftest.py`:
 
+-   `isolate_logging_globals` (autouse): Restores `vamscli.utils.logging._verbose_mode` and `._logger` after every test
+-   `mock_logging` (autouse): Prevents log-directory and log-file creation during tests
 -   `cli_runner`: Pre-configured CliRunner instance
 -   `mock_profile_manager`: Standard ProfileManager mock with valid configuration
 -   `mock_api_client`: Standard APIClient mock with API availability
 -   `no_setup_profile_manager`: ProfileManager mock for no-setup scenarios
 -   `generic_command_mocks`: Factory for creating comprehensive command mocks
 -   `no_setup_command_mocks`: Factory for creating no-setup command mocks
+
+#### **Patching a Command's asyncio.run**
+
+Commands call `asyncio.run(some_coro())`. Python evaluates the argument before the call, so the coroutine object is always constructed — and a plain `MagicMock` then discards it un-awaited. Python emits "coroutine ... was never awaited" when that object is garbage collected, which happens inside whatever unrelated test is running at the time.
+
+Patch with the `CoroutineClosingMock` class from `tests/conftest.py`, which closes any coroutine argument and otherwise behaves as a normal `MagicMock`:
+
+```python
+@patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
+def test_download(self, mock_asyncio_run, cli_runner, assets_command_mocks):
+    mock_asyncio_run.return_value = {...}
+```
+
+`new_callable=` rather than `side_effect=` is deliberate: a `side_effect` that returns a value makes a later `mock.return_value = ...` silently ineffective. Do **not** use `AsyncMock` — it returns a coroutine instead of the canned value and leaks two coroutines rather than one.
+
+#### **Logging State Must Not Leak Between Tests**
+
+`vamscli.utils.logging` keeps `_verbose_mode` and `_logger` as module globals, and `main.py` binds `initialize_logging` at import time — so `mock_logging`'s patch of the module attribute does not intercept the call the CLI group makes. Every `cli_runner.invoke` runs the real initializer and writes those globals for the remainder of the session.
+
+A leaked `_verbose_mode = True` is not cosmetic: in verbose mode every `log_*` call also writes to stderr, `CliRunner` merges stderr into `result.output`, and any later test doing `json.loads(result.output)` fails on text wrapped around its JSON document — in a test that never touched logging. The autouse `isolate_logging_globals` fixture restores both globals, and `tests/test_logging_isolation.py` guards it in ordered `test_a_` / `test_b_` pairs (the setter half doubles as the positive control).
+
+`tests/conftest.py` removes `--verbose` from `sys.argv` at import time, before collection. `_is_verbose_mode()` treats that literal string anywhere in `sys.argv` as a request for verbose output, including pytest's own argv, which would enable stderr logging session-wide and break ~113 tests that parse `result.output` as JSON. No fixture can prevent it — the helper is consulted per call, not per test — so the argument has to be gone before anything runs. Stripping it in the test harness rather than changing the reader is deliberate: click already registers `--verbose` in `main.py` and hands it to `initialize_logging`, which sets the module global, so the argv fallback is redundant for the real CLI and no production behaviour needs to change. Keep the strip; `pytest --verbose` is green only because of it. The one visible cost is that pytest reads the same flag for its own per-test display, so `pytest --verbose` renders as dots — use `pytest tests/ -v`, a different string that never triggered the sniff.
 
 #### **Fixture Usage Patterns:**
 

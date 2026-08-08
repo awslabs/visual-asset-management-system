@@ -66,6 +66,29 @@ def _value_text(value):
     return value if isinstance(value, str) else json.dumps(value)
 
 
+def _json_override_errors(body, config_format, tag_schema_fields):
+    """Structural check for a caller-supplied override body. Returns a list of errors ([] when fine).
+
+    Only json-format bodies are checked: yaml/openjd/xml/raw are passed through as text, exactly as at
+    save time. This applies the same two-pass placeholder parse the template save path uses, so a body
+    that would be refused when STORED is also refused when supplied at LAUNCH — the stored body has
+    passed that gate and an override never had to.
+
+    Returns errors rather than raising because every other failure in this module is reported that way,
+    and the caller turns the list into a 400 naming the pipeline.
+    """
+    if config_format != "json" or not body:
+        return []
+    # Imported here rather than at module scope: models.pipelines imports this module's sibling
+    # templateRender, and a module-level import would close the cycle back through models.
+    from models.pipelines import _validate_json_config_body
+    try:
+        _validate_json_config_body(body, tag_schema_fields)
+    except ValueError as e:
+        return [f"customTemplateOverride is not valid: {e}"]
+    return []
+
+
 def _substitute_user_tags(text, filled_tags, config_format="json"):
     """Replace {{tag}} occurrences of the provided/declared USER tags in text, leaving reserved
     system tags in place. Returns (rendered_text, errors). A {{tag}} that is neither a filled user
@@ -133,6 +156,22 @@ def resolve_pipeline_config(pipeline_system_config, template_row, tag_schema_fie
     Returns (errors, result_dict) where result_dict is
       {templateId, renderedConfig, templateTags(filled), customTemplateOverrideUsed, configFormat}.
     Errors is a list (empty = resolved).
+
+    `renderedConfig` is HALF-rendered by design — do not "finish" the render here. Substitution runs in
+    two stages:
+      1. HERE: the USER tags (a template's declared tagSchema values, supplied per execution) are
+         substituted; reserved SYSTEM tags are deliberately LEFT IN PLACE (_substitute_user_tags).
+      2. LATER, per step, against that step's manifest + execution context, writing the fully rendered
+         body to pipeline{N}/config.json — which is what the pipeline actually reads:
+           - step 1  : executeWorkflow._launch_workflow, via templateRender.render_config
+           - steps 2+: sfn/interimPipelineTracking._render_next_pipeline_config, mid-run
+    Resolving system tags at this stage would break that: their values (manifest paths, per-step
+    metadata, job timestamps) do not exist until launch, and for steps 2+ not until the prior step has
+    finished. A literal {{assetMetadataObject}} surviving into this return value is therefore CORRECT.
+
+    Consequence for readers: the value persisted as the details response's `renderedConfig` is this
+    stage-1 body, while its sibling `renderedConfigLocation` points at the stage-2 object. The two
+    describe different things on purpose; see the field notes in api/workflows.md.
     """
     psc = pipeline_system_config or {}
     params = params or {}
@@ -159,6 +198,16 @@ def resolve_pipeline_config(pipeline_system_config, template_row, tag_schema_fie
                 return ["this pipeline does not allow a custom template override"], None
             body = override
             override_used = True
+            # An override is a caller-supplied body arriving at LAUNCH, so it never passed the
+            # save-time gate the stored body did. Without this check a json-format override could be
+            # structurally broken, or could quote a typed tag's placeholder and deliver "150" where the
+            # schema promised 150 — and every pipeline-side config reader treats an unparseable
+            # configuration as "absent" and falls back to its defaults, so the run SUCCEEDS with the
+            # caller's parameters silently dropped. Checked against the same tag schema the tags are
+            # validated against, so a typed placeholder is judged by its declaration.
+            body_errors = _json_override_errors(body, config_format, tag_schema_fields)
+            if body_errors:
+                return body_errors, None
         else:
             body = template_row.get("configBody", "")
             override_used = False
@@ -179,7 +228,13 @@ def resolve_pipeline_config(pipeline_system_config, template_row, tag_schema_fie
             return ["this pipeline does not allow a custom template override"], None
         if require_template:
             return ["this pipeline requires a template; a template-less override is not allowed"], None
-        # No schema: take provided tags AS-IS (reserved keys still rejected). Every {{tag}} in the
+        # Deliberately NOT structurally checked, unlike the template-backed override above. This case
+        # has no template and therefore no declared configFormat: the body is resolved and reported as
+        # `raw`, so it makes no claim to be JSON and there is nothing to hold it to. A pipeline that
+        # needs a checked json body declares a template (requireTemplate), which routes to the case
+        # above.
+        #
+        # No schema either: take provided tags AS-IS (reserved keys still rejected). Every {{tag}} in the
         # override must have a provided value (or be a system tag) — enforced by _substitute_user_tags.
         errors, filled = _filled_from_raw_tags(provided_tags)
         if errors:

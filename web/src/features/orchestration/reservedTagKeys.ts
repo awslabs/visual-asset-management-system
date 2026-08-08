@@ -20,6 +20,7 @@ export const RESERVED_TAG_KEYS = new Set<string>([
     "auxPreviewPipelineSuffix",
     "auxTempPrefix",
     "auxTempS3Uri",
+    "databaseMetadataObject",
     "deadlineFarmId",
     "deadlineQueueId",
     "deadlineStorageProfileId",

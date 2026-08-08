@@ -140,6 +140,8 @@ Archived pipelines are hidden by default. Set `includeArchived=true` to retrieve
 
 The response includes the pipeline's `executionConfig` and `systemConfig`, the optional `category` label, the `archived` flag, a `templateCount` of saved templates, and a `templates` array of lightweight descriptors for the templates that belong to the pipeline. `templateCount` is also present on each entry of the list responses.
 
+The inline `templates` array holds at most the first 10 descriptors, while `templateCount` always reports the pipeline's true total. A pipeline with more templates than that shows fewer entries than `templateCount` — read the full set from [List templates](#list-templates), which pages with a `NextToken` and is the only response that returns template bodies.
+
 ### Response
 
 ```json
@@ -168,7 +170,8 @@ The response includes the pipeline's `executionConfig` and `systemConfig`, the o
             "metadataInputs": {
                 "assetMetadata": true,
                 "fileMetadata": false,
-                "fileAttributes": false
+                "fileAttributes": false,
+                "databaseMetadata": true
             },
             "requireTemplate": false,
             "allowCustomTemplateOverride": true,
@@ -442,19 +445,19 @@ POST /database/{databaseId}/pipelines/{pipelineId}/templates
 
 #### Request body
 
-| Field               | Type    | Required | Description                                                                                                                                                                                   |
-| ------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `templateId`        | string  | No       | Template identifier (GUID). Generated when omitted.                                                                                                                                           |
-| `templateName`      | string  | Yes      | Human-readable template name.                                                                                                                                                                 |
-| `description`       | string  | No       | Template description.                                                                                                                                                                         |
-| `configFormat`      | string  | No       | Format of `configBody`: `json` (default), `yaml`, `openjd`, `xml`, or `raw`.                                                                                                                  |
-| `configBody`        | string  | No       | The template text. May contain `{{tagName}}` placeholders resolved from tags at execution time. When `configFormat` is `json`, it must be valid JSON (validated at save).                     |
-| `webFormJson`       | string  | No       | Serialized web-form definition used to render the template's input form. When present, must be valid JSON (validated at save).                                                                |
-| `allowCustomEdit`   | boolean | No       | Whether the template config may be edited inline at execution time.                                                                                                                           |
-| `isDefault`         | boolean | No       | Marks this template as the pipeline's default. At most one template per pipeline is the default; setting it clears the flag on any other template. See [Default template](#default-template). |
-| `inputInstructions` | string  | No       | Guidance shown to the user when supplying template inputs.                                                                                                                                    |
-| `overrides`         | object  | No       | Per-template overrides of the pipeline's `systemConfig`. See [Template overrides](#template-overrides).                                                                                       |
-| `tagSchema`         | array   | No       | Tag field definitions for the template. See [Tag schema fields](#tag-schema-fields).                                                                                                          |
+| Field               | Type    | Required | Description                                                                                                                                                                                                                                             |
+| ------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `templateId`        | string  | No       | Template identifier (GUID). Generated when omitted.                                                                                                                                                                                                     |
+| `templateName`      | string  | Yes      | Human-readable template name.                                                                                                                                                                                                                           |
+| `description`       | string  | No       | Template description.                                                                                                                                                                                                                                   |
+| `configFormat`      | string  | No       | Format of `configBody`: `json` (default), `yaml`, `openjd`, `xml`, or `raw`.                                                                                                                                                                            |
+| `configBody`        | string  | No       | The template text. May contain `{{tagName}}` placeholders resolved from tags at execution time. When `configFormat` is `json`, it must be valid JSON around those placeholders (validated at save — see [System template tags](#system-template-tags)). |
+| `webFormJson`       | string  | No       | Serialized web-form definition used to render the template's input form. When present, must be valid JSON (validated at save).                                                                                                                          |
+| `allowCustomEdit`   | boolean | No       | Whether the template config may be edited inline at execution time.                                                                                                                                                                                     |
+| `isDefault`         | boolean | No       | Marks this template as the pipeline's default. At most one template per pipeline is the default; setting it clears the flag on any other template. See [Default template](#default-template).                                                           |
+| `inputInstructions` | string  | No       | Guidance shown to the user when supplying template inputs.                                                                                                                                                                                              |
+| `overrides`         | object  | No       | Per-template overrides of the pipeline's `systemConfig`. See [Template overrides](#template-overrides).                                                                                                                                                 |
+| `tagSchema`         | array   | No       | Tag field definitions for the template. See [Tag schema fields](#tag-schema-fields).                                                                                                                                                                    |
 
 #### Request body example
 
@@ -515,7 +518,7 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 | ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inputFileArity`   | string | `none`, `one`, or `multi`.                                                                                                                                                                                                                                                    |
 | `assetScope`       | object | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, `folderAllowed`.                                                                                                                                                                                        |
-| `metadataInputs`   | object | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`.                                                                                                                                                                                                                   |
+| `metadataInputs`   | object | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, `databaseMetadata`.                                                                                                                                                                                               |
 | `inputFileFilters` | object | `allow` and `exclude` arrays of strings. Each entry is an extension (`*.glb`), exact path, file name, or wildcard (`*.previewFile.*`); matching is case-insensitive. An omitted, empty, or `*` allow list accepts any file; a match-everything `exclude` is rejected on save. |
 
 ```json
@@ -523,7 +526,12 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
     "overrides": {
         "inputFileArity": "multi",
         "assetScope": { "crossAssetAllowed": true, "singleAssetOnly": false },
-        "metadataInputs": { "assetMetadata": true, "fileMetadata": false, "fileAttributes": false },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": true
+        },
         "inputFileFilters": { "allow": ["*.glb"], "exclude": [] }
     }
 }
@@ -572,10 +580,21 @@ The complete set of system tags, grouped by category:
 | Auxiliary locations                | `auxBucket`, `auxTempPrefix`, `auxTempS3Uri`, `auxPreviewPipelineSuffix`                                                                                                                                                                                                                                                                                                         |
 | Metadata / configuration locations | `inputMetadataS3Location`, `inputConfigurationS3Location`                                                                                                                                                                                                                                                                                                                        |
 | System / orchestration             | `orchestrationBusArn`, `orchestrationEventPrefix`                                                                                                                                                                                                                                                                                                                                |
-| Metadata content (JSON)            | `inputMetadataObject`, `assetMetadataObject`, `fileMetadataObject`, `fileAttributesObject`, `assetDataObject`                                                                                                                                                                                                                                                                    |
+| Metadata content (JSON)            | `inputMetadataObject`, `assetMetadataObject`, `fileMetadataObject`, `fileAttributesObject`, `assetDataObject`, `databaseMetadataObject`                                                                                                                                                                                                                                          |
 | AWS Deadline Cloud                 | `deadlineFarmId`, `deadlineQueueId`, `deadlineStorageProfileId` (empty until the pipeline's Deadline Cloud configuration supplies them)                                                                                                                                                                                                                                          |
 
 Dynamic metadata placeholders of the form `{{metadata_<key>}}` are also reserved for a metadata value keyed by `<key>`. The web template editor shows this same catalog inline beneath the config-body editor so authors can reference it without leaving the form.
+
+##### Placeholder quoting in a JSON config body
+
+Each tag renders one of two shapes, and where the placeholder sits in a `json` config body has to match:
+
+-   **Text tags** — every tag outside the two groups marked `(JSON)`, plus the template's own `tagSchema` fields. The tag renders an escaped text value that fills a JSON string, so the placeholder belongs **inside** the string's quotes: `"assetId": "{{firstAssetFileAssetId}}"`. It may also sit within a longer string: `"uri": "s3://{{outputBucket}}/{{outputFilesPrefix}}out.glb"`.
+-   **JSON tags** — the **Input-file collections (JSON)** and **Metadata content (JSON)** groups. The tag renders a JSON object, array, or number, which is the whole value and takes **no** quotes: `"files": {{assetFileKeyArray}}` or `"metadata": {{databaseMetadataObject}}`.
+
+A `json` config body is parse-checked at save with each placeholder stood in for the shape its tag renders, so a body carrying placeholders is validated for the JSON around them. Two forms are rejected with a 400: a text placeholder used as a bare value (`"prompt": {{PROMPT}}`), and an object- or array-valued placeholder written inside quotes (`"metadata": "{{databaseMetadataObject}}"`) — the latter would render an object literal inside the string's own quotes and hand the pipeline malformed JSON at run time.
+
+Bodies in the `yaml`, `openjd`, `xml`, and `raw` formats are passed through as text, so this check does not apply to them.
 
 ### Get a template
 
@@ -810,15 +829,30 @@ Returns the stored tag schema wrapped in `message`, alongside `pipelineDatabaseI
 
 Each entry in a template's tag schema defines one tag:
 
-| Field         | Type    | Required | Description                                                                                      |
-| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `tagKey`      | string  | Yes      | Tag key. Reserved system tag keys and the `metadata_` prefix are not allowed.                    |
-| `type`        | string  | No       | One of `string`, `integer`, `number`, `boolean`, `string-list`, or `enum`. Defaults to `string`. |
-| `required`    | boolean | No       | Whether a value must be supplied.                                                                |
-| `default`     | any     | No       | Default value (type matches `type`).                                                             |
-| `label`       | string  | No       | Human-readable label shown in forms.                                                             |
-| `description` | string  | No       | Field description.                                                                               |
-| `enumValues`  | array   | No       | Allowed values. Required when `type` is `enum`.                                                  |
+| Field         | Type    | Required | Description                                                                                           |
+| ------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `tagKey`      | string  | Yes      | Tag key, at most 128 characters. Reserved system tag keys and the `metadata_` prefix are not allowed. |
+| `type`        | string  | No       | One of `string`, `integer`, `number`, `boolean`, `string-list`, or `enum`. Defaults to `string`.      |
+| `required`    | boolean | No       | Whether a value must be supplied.                                                                     |
+| `default`     | any     | No       | Default value (type matches `type`), at most 4,096 characters when serialized.                        |
+| `label`       | string  | No       | Human-readable label shown in forms, at most 1,024 characters.                                        |
+| `description` | string  | No       | Field description, at most 1,024 characters.                                                          |
+| `enumValues`  | array   | No       | Allowed values, at most 250 entries of 256 characters each. Required when `type` is `enum`.           |
+
+A tag schema holds at most 250 entries. Exceeding any of these bounds rejects the request with a `400`. See [Service Quotas and Limits](../additional/quotas.md#pipeline-template-and-tag-schema-limits) for the full set.
+
+#### Placeholders in a json config body
+
+When `configFormat` is `json`, the declared `type` determines where a tag's `{{tagKey}}` placeholder may sit, because it determines what the tag renders.
+
+| Tag type                                      | Renders                          | Placement in the body                                    |
+| --------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
+| `integer`, `number`, `boolean`, `string-list` | A JSON number, boolean, or array | The whole value, unquoted: `"steps": \{\{STEPS\}\}`      |
+| `string`, `enum`                              | Text                             | Inside the string it fills: `"prompt": "\{\{PROMPT\}\}"` |
+
+A body is validated against its own `tagSchema` when it is saved, and the reverse of either placement is rejected. Quoting a typed placeholder is the case worth knowing: `"steps": "\{\{STEPS\}\}"` is valid JSON, so nothing downstream complains — the pipeline simply receives the string `"150"` where its schema promised the number `150`. A quoted `string-list` is worse, rendering a body that does not parse at all.
+
+The same check applies to a `customTemplateOverride` supplied at execute time, since that body reaches the pipeline without having passed through a template save.
 
 ---
 
@@ -845,11 +879,30 @@ The `systemConfig` object describes how a pipeline consumes input and whether it
 | ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `inputFileArity`              | string  | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `assetScope`                  | object  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted asset selections.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `metadataInputs`              | object  | Booleans `assetMetadata`, `fileMetadata`, and `fileAttributes` — which metadata is gathered from the input assets/files and passed to the pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `metadataInputs`              | object  | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipeline. See [Metadata inputs](#metadata-inputs).                                                                                                                                                                                                                                                                                                                                                                                           |
 | `requireTemplate`             | boolean | When `true`, every execution of this pipeline must select one of its configuration templates.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `allowCustomTemplateOverride` | boolean | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `auxPreviewPipelineSuffix`    | string  | Suffix used to associate an auxiliary preview pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `inputFileFilters`            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path, file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. A non-empty `allow` restricts inputs to matching files; `exclude` removes matches and takes precedence. An omitted, empty, or match-everything `allow` list accepts any file and defers the decision to the workflow/template chain; a match-everything `exclude` (`*`, `**`, `*.*`, `/*`, `/**`) is rejected on save because it would exclude everything. |
+
+### Metadata inputs
+
+`metadataInputs` is four independent booleans naming the metadata a pipeline is handed as input. Each is gathered from the execution's own entities and written into the metadata file the pipeline reads:
+
+| Key                | Metadata gathered                      |
+| ------------------ | -------------------------------------- |
+| `assetMetadata`    | Each involved asset's own metadata.    |
+| `fileMetadata`     | Each input file's metadata.            |
+| `fileAttributes`   | Each input file's attributes.          |
+| `databaseMetadata` | Each involved database's own metadata. |
+
+Every key defaults to `true`, so the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three on.
+
+A key a pipeline sets to `false` suppresses that metadata for the pipeline even when the execution captured it, and the workflow's own `metadataInputs` gate is the outer bound: a type reaches a pipeline only when both the workflow gate and the pipeline have it on. See [Metadata inputs](workflows.md#metadata-inputs) in the Workflows API for which entities an execution captures and the per-entity limits it applies.
+
+`databaseMetadata` is read-only. A database's metadata is supplied to a pipeline as input; a pipeline never writes metadata back to a database. Pipeline metadata write-back targets assets and files only.
+
+`fileMetadata` and `fileAttributes` describe an input file, so a pipeline with `inputFileArity: none` has nothing to gather them from and they are inert. Create and update accept the combination and return a warning naming it. `assetMetadata` and `databaseMetadata` describe an entity rather than a file and are gathered at every arity.
 
 ### Field rules and restrictions
 

@@ -4,13 +4,15 @@
  */
 
 import React from "react";
-import type { Workflow, ExecuteInputFile } from "../types";
+import type { Workflow, ExecuteInputFile, MetadataSourceAsset } from "../types";
 import { useDatabases, useAssetSearch } from "../api/queries";
 import InputFileSelector from "./InputFileSelector";
+import MetadataSourceSelector from "./MetadataSourceSelector";
 import InfoTooltip from "../components/InfoTooltip";
 import SearchableSelect from "../components/SearchableSelect";
 import RestrictionSummary from "./RestrictionSummary";
 import { resolveRestrictions } from "./resolveRestrictions";
+import { isAllDatabases } from "../api/assets";
 import type { PipelineInputConstraints } from "./ExecuteWizard";
 
 interface WizardInputStageProps {
@@ -18,10 +20,16 @@ interface WizardInputStageProps {
     databaseId: string;
     presetAsset?: { databaseId: string; assetId: string };
     inputFiles: ExecuteInputFile[];
+    /** Assets named purely as metadata sources (never input files). */
+    metadataSourceAssets?: MetadataSourceAsset[];
+    /** The ONE database whose own metadata the run reads. */
+    metadataSourceDatabaseId?: string;
     outputAssetId?: string;
     outputDatabaseId?: string;
     outputPathPrefix?: string;
     onInputFilesChange: (files: ExecuteInputFile[]) => void;
+    onMetadataSourceAssetsChange?: (sources: MetadataSourceAsset[]) => void;
+    onMetadataSourceDatabaseIdChange?: (dbId?: string) => void;
     onOutputAssetIdChange: (assetId?: string) => void;
     onOutputDatabaseIdChange: (dbId?: string) => void;
     onOutputPathPrefixChange: (prefix?: string) => void;
@@ -64,10 +72,14 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     databaseId,
     presetAsset,
     inputFiles,
+    metadataSourceAssets = [],
+    metadataSourceDatabaseId,
     outputAssetId,
     outputDatabaseId,
     outputPathPrefix,
     onInputFilesChange,
+    onMetadataSourceAssetsChange,
+    onMetadataSourceDatabaseIdChange,
     onOutputAssetIdChange,
     onOutputDatabaseIdChange,
     onOutputPathPrefixChange,
@@ -76,12 +88,6 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
 }) => {
     const inputFileArity = workflow.systemConfig?.inputFileArity || "one";
     const allowOutputOverride = workflow.systemConfig?.outputTarget?.allowOverride || false;
-    // Whether a whole-asset input ('/') is allowed. The assetScope uses either the shorthand
-    // `wholeAsset` or the canonical `wholeAssetAllowed` key (both accepted by the backend); a folder
-    // input also implies picking below the asset root. When neither is set, a whole-asset input is
-    // NOT allowed, so the file picker requires a specific file.
-    const scope = workflow.systemConfig?.assetScope || {};
-    const allowWholeAsset = !!(scope.wholeAssetAllowed || scope.wholeAsset);
     // Passed to every file picker so a file the workflow would reject is never offered.
     const workflowFileFilters = workflow.systemConfig?.inputFileFilters;
 
@@ -157,6 +163,34 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         [workflow.systemConfig, pipelineConstraints]
     );
 
+    // Whether a whole-asset ('/') input is offered, resolved across the workflow, every step, and each
+    // step's chosen template — not from the workflow alone. A workflow may permit a whole-asset
+    // selection while one of its pipelines does not, and the run is checked against every step, so
+    // offering it on the workflow's word alone let the user pick something that failed at validation
+    // for a reason the picker already knew. An omitted scope key is not a grant (matching the backend's
+    // _scope_errors), so a workflow that says nothing offers neither.
+    const allowWholeAsset = restrictions.wholeAssetAllowed;
+
+    // Metadata-source pickers, offered only for a run with no input files: with input files the
+    // sources are the files' own assets and databases, so there is nothing to name.
+    const wantsAssetMetadata = restrictions.metadataInputKeys.includes("assetMetadata");
+    const wantsDatabaseMetadata = restrictions.metadataInputKeys.includes("databaseMetadata");
+    const showMetadataSources =
+        inputFileArity === "none" && (wantsAssetMetadata || wantsDatabaseMetadata);
+    // Several source assets are only offerable when the workflow admits a cross-asset span — the same
+    // gate the backend applies to the source selection. Metadata sources are exempt from the STEPS'
+    // scope (they carry no file key and take no part in a step's input selection), so this reads the
+    // workflow's own span rather than the resolved chain.
+    const workflowScope = workflow.systemConfig?.assetScope || {};
+    const allowMultipleSourceAssets =
+        !!workflowScope.crossAssetAllowed && !workflowScope.singleAssetOnly;
+    // GLOBAL is dropped: databaseMetadata reads ONE concrete database's own metadata, and GLOBAL is
+    // the unscoped/all-databases keyword rather than an asset database, so the backend rejects it.
+    const metadataSourceDatabaseOptions = React.useMemo(
+        () => databaseOptions.filter((d) => !isAllDatabases(d.databaseId)),
+        [databaseOptions]
+    );
+
     // Requirements banner
     if (!workflow.enabled || workflow.archived) {
         return (
@@ -201,6 +235,23 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         onInputFilesChange(updated);
     };
 
+    const handleAddMetadataSourceAsset = () => {
+        onMetadataSourceAssetsChange?.([
+            ...metadataSourceAssets,
+            { databaseId: metadataSourceDatabaseId || "", assetId: "" },
+        ]);
+    };
+
+    const handleRemoveMetadataSourceAsset = (index: number) => {
+        onMetadataSourceAssetsChange?.(metadataSourceAssets.filter((_, i) => i !== index));
+    };
+
+    const handleMetadataSourceAsset = (index: number, source: MetadataSourceAsset) => {
+        const next = [...metadataSourceAssets];
+        next[index] = source;
+        onMetadataSourceAssetsChange?.(next);
+    };
+
     return (
         <div className="space-y-4">
             <h3 className="text-lg font-semibold text-text-primary">Input Files</h3>
@@ -210,6 +261,109 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
             {inputFileArity === "none" && (
                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-blue-900 dark:text-blue-200 text-sm">
                     This workflow does not require input files (results-only execution).
+                </div>
+            )}
+
+            {/* Metadata sources. A run with no input files has no assets or databases to derive the
+                metadata from, so the entities are named here — as METADATA sources, not as inputs:
+                they carry no file key and travel in their own request fields. */}
+            {showMetadataSources && (
+                <div className="space-y-3">
+                    <h4 className="text-md font-semibold text-text-primary">Metadata Sources</h4>
+
+                    {/* The wording the section exists for: a source is never required, and never an
+                        input file. Named as a status region so it is announced when the section
+                        appears, rather than only being found by someone reading down the step. */}
+                    <div
+                        role="status"
+                        aria-label="Metadata source selection is optional"
+                        className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-blue-900 dark:text-blue-200 text-sm"
+                    >
+                        The{" "}
+                        {wantsDatabaseMetadata && wantsAssetMetadata
+                            ? "database and asset(s) you select here are"
+                            : wantsDatabaseMetadata
+                            ? "database you select here is"
+                            : "asset(s) you select here are"}{" "}
+                        optional and only for metadata input. They are not input files, and this
+                        workflow runs whether or not you select any.
+                    </div>
+
+                    {wantsDatabaseMetadata && (
+                        <label className="block">
+                            <span className="flex items-center gap-1.5 text-xs text-text-secondary mb-1">
+                                Metadata source database (optional)
+                                <InfoTooltip
+                                    label="Metadata source database help"
+                                    text="The one database whose own metadata is read and passed to the steps. Only a concrete database can be named — there is no metadata to read for an all-databases selection."
+                                />
+                            </span>
+                            <select
+                                aria-label="Metadata source database"
+                                value={metadataSourceDatabaseId || ""}
+                                onChange={(e) =>
+                                    onMetadataSourceDatabaseIdChange?.(e.target.value || undefined)
+                                }
+                                className="w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                            >
+                                <option value="">No database metadata</option>
+                                {metadataSourceDatabaseOptions.map((d) => (
+                                    <option key={d.databaseId} value={d.databaseId}>
+                                        {d.databaseId}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    )}
+
+                    {wantsAssetMetadata && (
+                        <div>
+                            <span className="flex items-center gap-1.5 text-sm font-medium text-text-primary mb-2">
+                                {allowMultipleSourceAssets
+                                    ? "Metadata source assets (optional)"
+                                    : "Metadata source asset (optional)"}
+                                <InfoTooltip
+                                    label="Metadata source asset help"
+                                    text="Each asset named here contributes its asset-level metadata to the run. A source is an entity, not a file, so no file selection is involved."
+                                />
+                            </span>
+                            {metadataSourceAssets.length === 0 && (
+                                <p className="text-sm text-text-secondary mb-2">
+                                    No metadata source assets selected.
+                                </p>
+                            )}
+                            {metadataSourceAssets.map((source, index) => (
+                                <div
+                                    key={index}
+                                    className="mb-2 p-3 border border-border-default rounded"
+                                >
+                                    <MetadataSourceSelector
+                                        databaseOptions={databaseOptions}
+                                        value={source}
+                                        onChange={(updated) =>
+                                            handleMetadataSourceAsset(index, updated)
+                                        }
+                                    />
+                                    <button
+                                        onClick={() => handleRemoveMetadataSourceAsset(index)}
+                                        className="mt-2 text-sm text-red-600 dark:text-red-400 hover:underline"
+                                    >
+                                        Remove Metadata Source
+                                    </button>
+                                </div>
+                            ))}
+                            {/* A single-asset workflow offers the control only while nothing is
+                                selected, so a second source can never be added. */}
+                            {(allowMultipleSourceAssets || metadataSourceAssets.length === 0) && (
+                                <button
+                                    onClick={handleAddMetadataSourceAsset}
+                                    className="mt-2 px-3 py-2 text-sm text-blue-600 dark:text-blue-400 border border-blue-600 dark:border-blue-400 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                                >
+                                    Add Metadata Source Asset
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 

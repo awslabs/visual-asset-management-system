@@ -58,6 +58,12 @@ mcp = McpServer("vams")
 # The workflow-executions endpoint rejects a larger page size (Step Functions throttling).
 WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
 
+# The paged execution-detail metadata endpoint clamps a larger page size to this.
+EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
+# Its collections. 'input' is the asset/file rows, 'inputDatabase' the database-scope rows, 'output'
+# the per-pipeline output metadata; anything else is a 400.
+EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
+
 
 def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a tool so API/client errors are returned as data, not exceptions.
@@ -311,10 +317,27 @@ def list_workflows(database_id: Optional[str] = None, max_items: Optional[int] =
 
 @mcp.tool()
 @tool_result
-def list_workflow_executions(database_id: str, asset_id: str, max_items: Optional[int] = None) -> Dict[str, Any]:
-    """List workflow executions for an asset (auto-paginated)."""
+def list_workflow_executions(
+    database_id: str,
+    asset_id: str,
+    workflow_id: Optional[str] = None,
+    workflow_database_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List workflow executions for an asset (auto-paginated).
+
+    Optionally narrow to one workflow. A workflow id is unique only within its database, so pass
+    workflow_database_id as well when the same id exists in more than one; either filter also works
+    alone. Use "GLOBAL" as workflow_database_id for the shared workflow catalog.
+    """
     return CLIENT.paginate(
-        lambda params: CLIENT.api.list_workflow_executions(database_id, asset_id, params=params),
+        lambda params: CLIENT.api.list_workflow_executions(
+            database_id,
+            asset_id,
+            workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id,
+            params=params,
+        ),
         max_items=max_items,
         # The executions endpoint caps pageSize at 50 to avoid Step Functions throttling.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
@@ -432,7 +455,11 @@ def list_pipelines(
 def get_pipeline(
     database_id: str, pipeline_id: str, include_archived: bool = False
 ) -> Dict[str, Any]:
-    """Get one pipeline with its execution settings, admin settings, and config templates."""
+    """Get one pipeline with its execution settings, admin settings, and config templates.
+
+    The inline templates list is capped at the first 10; templateCount is the true total. When it
+    exceeds the inline count, use list_pipeline_templates() to page the full set.
+    """
     return CLIENT.unwrap_message(CLIENT.api.get_pipeline(database_id, pipeline_id, include_archived=include_archived))
 
 
@@ -473,14 +500,23 @@ def get_workflow(database_id: str, workflow_id: str, include_archived: bool = Fa
 @mcp.tool()
 @tool_result
 def list_workflow_triggers(database_id: str, workflow_id: str) -> Dict[str, Any]:
-    """List a workflow's triggers (e.g. fileUpload) and whether each is enabled."""
+    """List a workflow's triggers (e.g. fileUpload) and whether each is enabled.
+
+    A workflow may carry several triggers of one type, each with its own filters and default templates.
+    Each item's `triggerType` is its KEY — the bare type for the first trigger of a type, or
+    'type#triggerId' for an additional one — and is what the get/set/delete tools take.
+    """
     return CLIENT.unwrap_message(CLIENT.api.list_workflow_triggers(database_id, workflow_id))
 
 
 @mcp.tool()
 @tool_result
 def get_workflow_trigger(database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
-    """Get one workflow trigger by type, including its input-file filters."""
+    """Get one workflow trigger by its key, including its input-file filters.
+
+    `trigger_type` is the trigger KEY from list_workflow_triggers: the bare type (e.g. 'fileUpload') for
+    a workflow's first trigger of that type, or 'type#triggerId' for an additional one.
+    """
     return CLIENT.unwrap_message(CLIENT.api.get_workflow_trigger(database_id, workflow_id, trigger_type))
 
 
@@ -524,8 +560,85 @@ def get_execution_details(execution_id: str) -> Dict[str, Any]:
     """Get an execution's full detail: per-pipeline step status, inputs, outputs, and any error.
 
     This is the tool to reach for when asked why a run failed or what it produced.
+
+    Metadata the run read arrives in two SEPARATE collections: `inputMetadata` (asset- and
+    file-scope rows) and `inputDatabaseMetadata` (database-scope rows, which belong to no asset).
+    Reading only the first understates what the run saw.
+
+    Each row carries TWO content maps: `metadata` and `attributes` (that file's attributes). A pipeline
+    is granted fileMetadata and fileAttributes independently, so reading only `metadata` understates
+    what a step received — a row may hold attributes with an empty `metadata` map. Asset-level and
+    database-scope rows always report an empty `attributes` map.
+
+    The sources are reported alongside them:
+    `metadataSourceAssets` ([{databaseId, assetId}], assets read purely as sources),
+    `metadataSourceDatabases` (EVERY database whose metadata was captured — for a run with input
+    files these are derived from those files' assets), and `metadataSourceDatabaseId` (only the one
+    database the caller NAMED, which only a run with no input files has). Render the databases list,
+    not the named id, when reporting what a run actually read.
+
+    The response can be PARTIAL. Every collection is bounded server-side, and `truncatedCollections`
+    lists the names of any that were cut ("inputFiles", "inputMetadata", "inputDatabaseMetadata",
+    "outputs.files", "outputs.metadata", "outputs.results"). Check it before reporting a count or
+    concluding something is absent — a name in that list means more rows exist than are shown. For a
+    truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
+    FILE collection has no paged equivalent, so the flag is the only signal it is incomplete.
+
+    A pipeline entry's `renderedConfig` is the configuration body the step ran with, held inline only
+    up to a size limit. When `renderedConfigTruncated` is true the entry also carries
+    `renderedConfigLocation` ({"bucket", "key"}) — the Amazon S3 object holding the complete body.
     """
     return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id))
+
+
+@mcp.tool()
+@tool_result
+def page_execution_detail_metadata(
+    execution_id: str,
+    collection: str = "input",
+    pipeline_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Read one metadata collection of an execution's detail view in full (auto-paginated).
+
+    get_execution_details() bounds its metadata collections and names any it cut in
+    `truncatedCollections`. This tool reads a named collection past that bound, so reach for it when
+    `truncatedCollections` contains "inputMetadata", "inputDatabaseMetadata", or "outputs.metadata"
+    — reporting a count from the truncated details response instead understates what the run read.
+
+    `collection` is one of "input" (asset- and file-scope input metadata, the default),
+    "inputDatabase" (database-scope input metadata, which belongs to no asset), or "output"
+    (per-pipeline output metadata); any other value is rejected. The two input collections are
+    SEPARATE halves of what the run read, matching the details view's split — read both to see all of
+    it. Pass pipeline_id to narrow to a single workflow step's rows.
+
+    Rows carry the same fields the details view returns plus the producing `pipelineId`: the input
+    collections give {databaseId, assetId, filePath, scope, metadata}, and "output" gives
+    {targetFilePath, metadataKey, metadataValue}. `truncated` in the result means the row cap was
+    reached before the walk finished, not that the collection ends there.
+    """
+    if collection not in EXECUTION_DETAIL_METADATA_COLLECTIONS:
+        return {
+            "error": f"collection must be one of {list(EXECUTION_DETAIL_METADATA_COLLECTIONS)}",
+            "error_type": "ValueError",
+        }
+
+    extra: Dict[str, Any] = {"collection": collection}
+    if pipeline_id:
+        extra["pipelineId"] = pipeline_id
+
+    def _call(params: Dict[str, Any]) -> Dict[str, Any]:
+        # The continuation token is only valid alongside the collection and pipelineId it was issued
+        # with, so every page carries the same filters.
+        return CLIENT.api.get_execution_details_metadata(execution_id, params={**params, **extra})
+
+    result = CLIENT.paginate(
+        _call,
+        max_items=max_items,
+        page_size=min(CONFIG.page_size, EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE),
+    )
+    result["collection"] = collection
+    return result
 
 
 @mcp.tool()
@@ -646,8 +759,12 @@ if CONFIG.enable_writes:
 
         Pass the same shape the API takes: pipelineId, pipelineName, executionConfig
         (executionType plus the block for that type), and systemConfig (inputFileArity,
-        assetScope, requireTemplate, inputFileFilters, ...). Copy an existing pipeline via
-        get_pipeline() to see the expected shape before composing one.
+        assetScope, requireTemplate, inputFileFilters, metadataInputs, ...). Copy an existing
+        pipeline via get_pipeline() to see the expected shape before composing one.
+
+        systemConfig.metadataInputs is a boolean map with exactly four keys — assetMetadata,
+        fileMetadata, fileAttributes, databaseMetadata — each defaulting to true. Any other key is
+        rejected. It gates which metadata a run captures, not whether a caller must supply it.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline(database_id, body))
 
@@ -666,6 +783,11 @@ if CONFIG.enable_writes:
 
         `body` takes templateId, templateName, configFormat, configBody, and optionally
         inputInstructions (operator-facing guidance, max 4096 chars), tagSchema, and overrides.
+
+        `overrides` narrows the pipeline's systemConfig for runs using this template, over the keys
+        inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the
+        same four-key boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes,
+        databaseMetadata.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_pipeline_template(database_id, pipeline_id, body))
 
@@ -695,9 +817,13 @@ if CONFIG.enable_writes:
         """Create a workflow referencing one or more pipelines.
 
         `body` takes workflowId, workflowName, specifiedPipelines (ordered pipeline refs), and
-        systemConfig (inputFileArity, assetScope, outputTarget, inputFileFilters, ...). A workflow
-        may not list the same pipeline twice — per-step config is keyed by pipeline id, so a repeat
-        silently overwrites the earlier step.
+        systemConfig (inputFileArity, assetScope, outputTarget, inputFileFilters, metadataInputs,
+        ...). A workflow may not list the same pipeline twice — per-step config is keyed by pipeline
+        id, so a repeat silently overwrites the earlier step.
+
+        systemConfig.metadataInputs takes the same four-key boolean map as a pipeline's —
+        assetMetadata, fileMetadata, fileAttributes, databaseMetadata — and the workflow's gate
+        builds the one metadata envelope every step shares.
         """
         return CLIENT.unwrap_message(CLIENT.api.create_workflow(database_id, body))
 
@@ -714,9 +840,19 @@ if CONFIG.enable_writes:
     ) -> Dict[str, Any]:
         """Create or replace a workflow trigger (PUT-idempotent).
 
+        `trigger_type` is the trigger KEY: the bare type addresses a workflow's first trigger of that
+        type, and 'type#triggerId' addresses an additional one — a key with a NEW id creates another
+        trigger of that type, so one workflow can respond differently to different uploads. An upload
+        launches the workflow once per matching trigger.
+
         `body` takes enabled plus the trigger's own settings, e.g. inputFileFilters. A
         match-everything exclude pattern is rejected: exclude is applied last and would remove every
         file, leaving the trigger permanently unable to fire.
+
+        Two conditions are rejected with 400: an additional trigger of a type when the workflow's
+        concurrencyRestriction is perAsset (several would contend on the same asset), and an additional
+        trigger naming the same defaultTemplateIds as an existing one — including two that both name
+        none, which is a valid choice and therefore a comparable value.
         """
         return CLIENT.unwrap_message(CLIENT.api.set_workflow_trigger(database_id, workflow_id, trigger_type, body))
 
@@ -733,6 +869,23 @@ if CONFIG.enable_writes:
         outputFileBaseExecutionPathExtension prefix, and per-pipeline parameters keyed by
         pipelineId. A relativeFileKey of "/" selects the whole asset where the workflow allows it.
 
+        Two optional fields name entities the run reads stored METADATA from. They are not input
+        files — a metadata source carries no file key and takes no part in arity, input filters, or
+        output-target resolution — and naming them is always optional: a pipeline that genuinely
+        requires metadata validates and fails on its own, so omitting them is never an error here.
+
+        - metadataSourceAssets: [{"databaseId", "assetId"}]. No file key field exists.
+        - metadataSourceDatabaseId: ONE concrete database id, and only meaningful for a run with NO
+          input files. With input files the databases are DERIVED from the input files' assets (plus
+          any metadataSourceAssets' assets), so this field is ignored. "GLOBAL" is REJECTED — it is
+          the unscoped keyword, not a database whose metadata can be read. Database metadata is
+          read-only; a database is never an output target.
+
+        Captured metadata is capped per entity, so the response's `warnings` array can report a
+        truncated capture or a source database that could not be read. The run still succeeded —
+        relay those warnings rather than dropping them, because the inputs are then not what was
+        named.
+
         This starts real compute. Confirm with the user before calling it.
         """
         return CLIENT.unwrap_message(CLIENT.api.execute_workflow(workflow_database_id, workflow_id, body))
@@ -747,6 +900,10 @@ if CONFIG.enable_writes:
         Re-launches with the CALLER's permissions, not the original runner's. Pass
         execution_group_id to re-run every execution in the group. Returns the new execution's id —
         the id passed in still refers to the original run.
+
+        The re-run goes through the execute path, so the response carries the same `warnings` array
+        (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its
+        inputs may not match the original.
         """
         return CLIENT.unwrap_message(CLIENT.api.rerun_execution(execution_id, execution_group_id=execution_group_id))
 
@@ -813,21 +970,39 @@ if CONFIG.enable_destructive:
 
     @mcp.tool()
     @tool_result
-    def unarchive_pipeline(database_id: str, pipeline_id: str) -> Dict[str, Any]:
-        """Restore an archived pipeline."""
-        return CLIENT.unwrap_message(CLIENT.api.update_pipeline(database_id, pipeline_id, {"archived": False}))
+    def unarchive_pipeline(
+        database_id: str, pipeline_id: str, keep_disabled: bool = False
+    ) -> Dict[str, Any]:
+        """Restore an archived pipeline, re-enabling it so it is executable again.
+
+        Archiving also DISABLES, so clearing the archived flag alone leaves a pipeline that
+        is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+        """
+        body: Dict[str, Any] = {"archived": False}
+        if not keep_disabled:
+            body["enabled"] = True
+        return CLIENT.unwrap_message(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
     @mcp.tool()
     @tool_result
     def archive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
         """Archive (soft-delete) a workflow. Reversible via unarchive_workflow."""
-        return CLIENT.api.delete_workflow(database_id, workflow_id)
+        return CLIENT.unwrap_message(CLIENT.api.delete_workflow(database_id, workflow_id))
 
     @mcp.tool()
     @tool_result
-    def unarchive_workflow(database_id: str, workflow_id: str) -> Dict[str, Any]:
-        """Restore an archived workflow."""
-        return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, {"archived": False}))
+    def unarchive_workflow(
+        database_id: str, workflow_id: str, keep_disabled: bool = False
+    ) -> Dict[str, Any]:
+        """Restore an archived workflow, re-enabling it so it is executable again.
+
+        Archiving also DISABLES, so clearing the archived flag alone leaves a workflow that
+        is listed but silently unrunnable. Pass keep_disabled to restore it still disabled.
+        """
+        body: Dict[str, Any] = {"archived": False}
+        if not keep_disabled:
+            body["enabled"] = True
+        return CLIENT.unwrap_message(CLIENT.api.update_workflow(database_id, workflow_id, body))
 
     @mcp.tool()
     @tool_result

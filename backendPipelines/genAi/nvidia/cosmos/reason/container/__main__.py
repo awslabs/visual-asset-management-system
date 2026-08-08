@@ -220,6 +220,12 @@ def main():
             invalidate_models = str(params.get("INVALIDATE_COSMOS_MODELS", "")).lower() == "true"
             if invalidate_models:
                 logger.info("INVALIDATE_COSMOS_MODELS=true: will clear EFS/S3 cache")
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except manifest_io.InputConfigurationError:
+            raise
         except Exception:
             pass
 

@@ -65,7 +65,8 @@ class TestGroupedMetadataGate:
     def test_metadata_gate_off_skips_fetches(self):
         selected = [{"databaseId": "db", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": ""}]
         assets = {("db", "a1"): {"assetName": "A1", "description": "", "tags": []}}
-        gate = {"assetMetadata": False, "fileMetadata": False, "fileAttributes": False}
+        gate = {"assetMetadata": False, "fileMetadata": False, "fileAttributes": False,
+                "databaseMetadata": False}
         with patch(f"{MOD}._fetch_metadata") as mfetch, patch(f"{MOD}._fetch_file_metadata") as mfile:
             env = ewv2._build_grouped_metadata(selected, assets, gate, {"requestContext": {}})
         mfetch.assert_not_called()
@@ -88,6 +89,998 @@ class TestGroupedMetadataGate:
         file_record = next(f for f in env["assets"][0]["files"] if f["fileKey"] == "/f.glb")
         assert file_record["metadata"] == {"fk": "fv"}
         assert file_record["attributes"] == {"fk": "fv"}
+
+
+@pytest.mark.unit
+class TestMetadataSources:
+    """Metadata sources are entities (a database and/or assets, never a file) the run reads stored
+    metadata from. They are exempt from arity, so an arity-'none' run can name them, and they stay out
+    of selected_inputs — which drives output-target resolution, the S3 existence check, the concurrency
+    guard, and the input-FILE rows."""
+
+    _EVENT = {"requestContext": {}}
+    _GATE = {"assetMetadata": True, "fileMetadata": True, "fileAttributes": True,
+             "databaseMetadata": True}
+
+    def test_no_sources_builds_the_same_envelope_as_before(self):
+        selected = [{"databaseId": "db", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": ""}]
+        assets = {("db", "a1"): {"assetName": "A1"}}
+        with patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_file_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata") as m_db:
+            with_args = ewv2._build_grouped_metadata(
+                selected, assets, self._GATE, self._EVENT,
+                metadata_source_assets=[], metadata_source_databases=[])
+            without_args = ewv2._build_grouped_metadata(selected, assets, self._GATE, self._EVENT)
+        m_db.assert_not_called()
+        assert with_args == without_args
+        # HARD CONSTRAINT: byte-identical to the asset-only shape. No empty 'databases' key.
+        assert set(with_args) == {"schemaVersion", "assets"}
+        assert json.dumps(with_args) == json.dumps(
+            {"schemaVersion": 2, "assets": with_args["assets"]})
+
+    def test_arity_none_asset_source_yields_one_group_with_only_the_root_record(self):
+        # A metadata source contributes the asset-level ('/') record only: it is an entity, not a file,
+        # so no per-file record is emitted for it.
+        assets = {("db", "src"): {"assetName": "Source", "description": "d", "tags": ["t"]}}
+        with patch(f"{MOD}._fetch_metadata",
+                   return_value=[{"metadataKey": "k", "metadataValue": "v"}]), \
+             patch(f"{MOD}._fetch_file_metadata") as m_file:
+            env = ewv2._build_grouped_metadata(
+                [], assets, self._GATE, self._EVENT,
+                metadata_source_assets=[{"databaseId": "db", "assetId": "src"}])
+        m_file.assert_not_called()
+        assert len(env["assets"]) == 1
+        group = env["assets"][0]
+        assert group["assetId"] == "src"
+        assert group["assetData"]["assetName"] == "Source"
+        assert [f["fileKey"] for f in group["files"]] == ["/"]
+        assert group["files"][0]["metadata"] == {"k": "v"}
+
+    def test_database_source_becomes_its_own_top_level_section(self):
+        with patch(f"{MOD}._fetch_database_metadata",
+                   return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]) as m_db:
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT, metadata_source_databases=["src-db"])
+        m_db.assert_called_once()
+        assert env["schemaVersion"] == 2
+        assert env["assets"] == []
+        # A sibling of assets[], never inside it.
+        assert env["databases"] == [{"databaseId": "src-db", "metadata": {"owner": "eng"}}]
+
+    def test_every_captured_database_gets_its_own_entry(self):
+        # One read and one entry per database, in capture order — a run over input files spanning three
+        # databases carries all three, not the first or a merge.
+        with patch(f"{MOD}._fetch_database_metadata",
+                   side_effect=lambda d, e: [{"metadataKey": "site", "metadataValue": d}]) as m_db:
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT,
+                metadata_source_databases=["db1", "db2", "db3"])
+        assert m_db.call_count == 3
+        assert env["databases"] == [
+            {"databaseId": "db1", "metadata": {"site": "db1"}},
+            {"databaseId": "db2", "metadata": {"site": "db2"}},
+            {"databaseId": "db3", "metadata": {"site": "db3"}}]
+
+    def test_database_gate_off_reads_nothing_and_emits_no_section(self):
+        gate = dict(self._GATE, databaseMetadata=False)
+        with patch(f"{MOD}._fetch_database_metadata") as m_db:
+            env = ewv2._build_grouped_metadata(
+                [], {}, gate, self._EVENT, metadata_source_databases=["src-db"])
+        m_db.assert_not_called()
+        assert "databases" not in env
+
+    def test_a_captured_database_with_no_metadata_still_emits_its_entry(self):
+        # Distinguishes "the run captured this database and it carries nothing" from "no source".
+        with patch(f"{MOD}._fetch_database_metadata", return_value=[]):
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT, metadata_source_databases=["src-db"])
+        assert env["databases"] == [{"databaseId": "src-db", "metadata": {}}]
+
+    def test_a_source_asset_that_is_also_an_input_asset_appears_once(self):
+        selected = [{"databaseId": "db", "assetId": "a1", "relativeFileKey": "/f.glb", "versionId": ""}]
+        assets = {("db", "a1"): {"assetName": "A1"}}
+        with patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_file_metadata", return_value=[]):
+            env = ewv2._build_grouped_metadata(
+                selected, assets, self._GATE, self._EVENT,
+                metadata_source_assets=[{"databaseId": "db", "assetId": "a1"}])
+        assert [g["assetId"] for g in env["assets"]] == ["a1"]
+        # The input's file record survives — the source did not replace the group with a '/'-only one.
+        assert [f["fileKey"] for f in env["assets"][0]["files"]] == ["/", "/f.glb"]
+
+    def test_source_metadata_is_persisted_as_scope_tagged_rows(self):
+        # The captured VALUES are persisted so the details response can surface them, with scope saying
+        # what each row describes.
+        envelope = ewv2.er.build_grouped_metadata_envelope(
+            [ewv2.er.build_metadata_asset_group(
+                "db", "src", files=[ewv2.er.build_metadata_file_record("/", metadata={"k": "v"})])],
+            databases=[ewv2.er.build_metadata_database_group("src-db", {"owner": "eng"})])
+        rows = list(ewv2.er.metadata_envelope_rows(envelope))
+        by_scope = {r["scope"]: r for r in rows}
+        assert by_scope["database"]["databaseId"] == "src-db"
+        assert by_scope["database"]["assetId"] == "" and by_scope["database"]["filePath"] == "/"
+        assert by_scope["asset"]["assetId"] == "src"
+
+    def test_the_projection_subject_falls_back_to_the_first_source_asset(self):
+        # At arity none there is no input file to project metadata tags against, so the first
+        # metadata-source asset's asset-level record becomes the subject.
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": True, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [],
+                "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}],
+                "metadataSourceDatabaseId": "db1"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata",
+                   return_value=[{"metadataKey": "PROMPT", "metadataValue": "on the asset"}]), \
+             patch(f"{MOD}._fetch_database_metadata",
+                   return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]), \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        metadata_puts = [c for c in m_s3.put_object.call_args_list
+                         if c.kwargs.get("Key", "").endswith("metadata.json")]
+        assert metadata_puts, "the execution metadata file was not written"
+        envelope = json.loads(metadata_puts[0].kwargs["Body"].decode("utf-8"))
+        assert envelope["assets"][0]["assetId"] == "a1"
+        assert envelope["databases"] == [{"databaseId": "db1", "metadata": {"owner": "eng"}}]
+        # The renderer's legacy view resolves against the source asset, not an empty subject.
+        view = ewv2.er.to_legacy_vams_view(envelope, "db1", "a1", "/")
+        assert view["VAMS"]["assetMetadata"] == {"PROMPT": "on the asset"}
+        assert view["VAMS"]["databaseMetadata"] == {"owner": "eng"}
+
+    def test_source_assets_do_not_become_input_files(self):
+        # The whole point of separate request fields: an arity-'none' workflow rejects input files, so a
+        # source that leaked into inputFiles would fail its own validation (and would resolve an output
+        # target, be S3-checked, and be written as an input row).
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [], "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._input_exists_in_s3") as m_exists, \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        m_exists.assert_not_called()
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputLocationType"] == "none"
+        manifest_puts = [c for c in m_s3.put_object.call_args_list
+                         if c.kwargs.get("Key", "").endswith("pipeline1/manifest.json")]
+        manifest = json.loads(manifest_puts[0].kwargs["Body"].decode("utf-8"))
+        assert manifest["inputFiles"] == []
+
+    def test_multiple_source_assets_need_cross_asset_allowed(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [],
+                "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"},
+                                         {"databaseId": "db1", "assetId": "a2"}]}
+        with p["get_workflow"], p["get_pipeline"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}.sfn_client") as m_sfn:
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "metadata-source" in json.loads(resp["body"])["message"].lower()
+        m_sfn.start_execution.assert_not_called()
+
+    def test_multiple_source_assets_allowed_when_the_workflow_spans_assets(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["assetScope"] = {"crossAssetAllowed": True, "singleAssetOnly": False,
+                                            "wholeAssetAllowed": True, "folderAllowed": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [],
+                "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"},
+                                         {"databaseId": "db1", "assetId": "a2"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        metadata_puts = [c for c in m_s3.put_object.call_args_list
+                         if c.kwargs.get("Key", "").endswith("metadata.json")]
+        envelope = json.loads(metadata_puts[0].kwargs["Body"].decode("utf-8"))
+        assert [g["assetId"] for g in envelope["assets"]] == ["a1", "a2"]
+
+    def test_a_missing_source_asset_is_404_and_an_unauthorized_one_is_403(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [], "metadataSourceAssets": [{"databaseId": "db1", "assetId": "gone"}]}
+        with p["get_workflow"], p["get_pipeline"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._get_asset", return_value=None):
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 404
+
+        enforcer = MagicMock()
+        enforcer.enforceAPI.return_value = True
+        enforcer.enforce.side_effect = lambda obj, action, *a, **k: obj.get("object__type") != "asset"
+        with p["get_workflow"], p["get_pipeline"], p["claims"], \
+             patch(f"{MOD}._get_asset", return_value=dict(_ASSET)), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer):
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 403
+
+    def test_the_source_database_needs_a_database_get(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [], "metadataSourceDatabaseId": "src-db"}
+        enforcer = MagicMock()
+        enforcer.enforceAPI.return_value = True
+        enforcer.enforce.side_effect = lambda obj, action, *a, **k: obj.get("object__type") != "database"
+        with p["get_workflow"], p["get_pipeline"], p["claims"], \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}.sfn_client") as m_sfn:
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 403
+        m_sfn.start_execution.assert_not_called()
+        database_objects = [c.args[0] for c in enforcer.enforce.call_args_list
+                            if c.args[0].get("object__type") == "database"]
+        # Authorized on its ids alone — no database record is read to build the object.
+        assert database_objects == [{"databaseId": "src-db", "object__type": "database"}]
+
+    def test_the_selection_is_recorded_on_the_configuration_row(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [],
+                "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}],
+                "metadataSourceDatabaseId": "src-db"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata",
+                   return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            tables = {}
+            m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        cfg_rows = [c.kwargs["Item"] for c in tables["t-wf-cfg"].put_item.call_args_list]
+        assert len(cfg_rows) == 1
+        assert cfg_rows[0]["metadataSourceAssets"] == [{"databaseId": "db1", "assetId": "a1"}]
+        assert cfg_rows[0]["inputMetadataDatabaseId"] == "src-db"
+        # The captured set is recorded too — it is what the read paths gate on. The named database
+        # leads, then the source asset's own database.
+        assert cfg_rows[0]["metadataSourceDatabases"] == ["src-db", "db1"]
+        # No input-FILE row: a re-run would re-emit it as inputFiles and fail its own arity check.
+        assert tables["t-wf-inputs"].put_item.call_count == 0
+        # The captured values ARE persisted, scope-tagged. They go out through the table's batch writer,
+        # so the written items are on the context manager it yields.
+        md_rows = [c.kwargs["Item"] for c in
+                   tables["t-pin-md"].batch_writer.return_value.__enter__.return_value
+                   .put_item.call_args_list]
+        assert [r["scope"] for r in md_rows] == ["database", "database"]
+        assert [r["databaseId:assetId:filePath"] for r in md_rows] == ["src-db::/", "db1::/"]
+
+    def test_a_source_asset_alone_captures_its_database_on_a_file_less_run(self):
+        # A file-less run naming only a metadata-source asset: the asset's database is captured, reaches
+        # the envelope, and is recorded — no named metadataSourceDatabaseId is needed for the run to see
+        # database metadata, and the "captured no metadata-source database" warning does not fire.
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": True, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        pipe = dict(pipe)
+        pipe["systemConfig"] = dict(pipe["systemConfig"])
+        pipe["systemConfig"]["metadataInputs"] = {"assetMetadata": True, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [], "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata",
+                   return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]) as m_db, \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            tables = {}
+            m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        assert [c.args[0] for c in m_db.call_args_list] == ["db1"]
+        envelope = json.loads(next(
+            c for c in m_s3.put_object.call_args_list
+            if c.kwargs.get("Key", "").endswith("metadata.json")).kwargs["Body"].decode("utf-8"))
+        assert envelope["databases"] == [{"databaseId": "db1", "metadata": {"owner": "eng"}}]
+        cfg_row = tables["t-wf-cfg"].put_item.call_args_list[0].kwargs["Item"]
+        assert cfg_row["metadataSourceDatabases"] == ["db1"]
+        assert cfg_row["inputMetadataDatabaseId"] == ""
+        warnings = json.loads(resp["body"])["message"]["warnings"] or []
+        assert not any("database metadata" in w for w in warnings), warnings
+
+    def test_a_denied_source_assets_database_is_skipped_not_fatal_on_a_file_less_run(self):
+        # The derived-skip rule holds on the arity-'none' path: the caller may read the source asset but
+        # not its database, and the run still launches capturing no database metadata.
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": False, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [], "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}]}
+        enforcer = MagicMock()
+        enforcer.enforceAPI.return_value = True
+        enforcer.enforce.side_effect = lambda obj, action, *a, **k: (
+            obj.get("object__type") != "database")
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["claims"], \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata", return_value=[]) as m_db, \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            tables = {}
+            m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        m_db.assert_not_called()
+        cfg_row = tables["t-wf-cfg"].put_item.call_args_list[0].kwargs["Item"]
+        assert cfg_row["metadataSourceDatabases"] == []
+
+    def test_a_launch_warns_when_a_declared_source_was_not_named(self):
+        # Never blocks: a pipeline that truly requires the metadata performs its own check. The warning
+        # makes the otherwise-silent misconfiguration visible at launch.
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": True, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        pipe = dict(pipe)
+        pipe["systemConfig"] = dict(pipe["systemConfig"])
+        pipe["systemConfig"]["metadataInputs"] = {"assetMetadata": True, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body={"inputFiles": []}), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        warnings = json.loads(resp["body"])["message"]["warnings"]
+        assert len(warnings) == 2
+        assert any("asset metadata" in w for w in warnings)
+        assert any("database metadata" in w for w in warnings)
+
+    def test_no_warning_once_the_sources_are_named(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": True, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [],
+                "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}],
+                "metadataSourceDatabaseId": "src-db"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata", return_value=[]), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        assert json.loads(resp["body"])["message"]["warnings"] is None
+
+    def test_a_gated_off_metadata_type_is_not_reported_as_missing_a_source(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": False, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": False}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body={"inputFiles": []}), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        assert json.loads(resp["body"])["message"]["warnings"] is None
+
+
+@pytest.mark.unit
+class TestSourceDatabaseDerivation:
+    """The databases a run captures metadata from. Every entity the run names contributes its own
+    databaseId — each input file's asset and each metadata-source asset — because those are the databases
+    the run's data lives in. The caller's single metadataSourceDatabaseId joins them only on the
+    arity-'none' path, where there are no input files and it is the one database nameable directly."""
+
+    _GATE = {"databaseMetadata": True}
+
+    def _inputs(self, *pairs):
+        return [{"databaseId": d, "assetId": a, "relativeFileKey": "/f.glb", "versionId": ""}
+                for d, a in pairs]
+
+    def test_input_files_derive_every_distinct_database(self):
+        derived = ewv2._derive_metadata_source_databases(
+            self._inputs(("db1", "a1"), ("db2", "a2"), ("db3", "a3")), [], "", self._GATE)
+        assert derived == ["db1", "db2", "db3"]
+
+    def test_repeated_databases_are_deduped_in_first_seen_order(self):
+        derived = ewv2._derive_metadata_source_databases(
+            self._inputs(("db2", "a1"), ("db1", "a2"), ("db2", "a3"), ("db1", "a4")),
+            [], "", self._GATE)
+        assert derived == ["db2", "db1"]
+
+    def test_source_assets_contribute_their_databases_after_the_input_files(self):
+        derived = ewv2._derive_metadata_source_databases(
+            self._inputs(("db1", "a1")),
+            [{"databaseId": "db-src", "assetId": "s1"}, {"databaseId": "db1", "assetId": "s2"}],
+            "", self._GATE)
+        # db1 already came from the input file, so the source asset does not repeat it.
+        assert derived == ["db1", "db-src"]
+
+    def test_the_named_database_is_ignored_when_input_files_exist(self):
+        # It is the arity-'none' field: with input files the run's own databases are authoritative, so
+        # honoring it too would capture a database nothing in the run points at.
+        derived = ewv2._derive_metadata_source_databases(
+            self._inputs(("db1", "a1")), [], "unrelated-db", self._GATE)
+        assert derived == ["db1"]
+
+    def test_the_named_database_is_the_whole_set_without_input_files(self):
+        assert ewv2._derive_metadata_source_databases([], [], "src-db", self._GATE) == ["src-db"]
+
+    def test_a_source_asset_contributes_its_database_without_input_files(self):
+        # A metadata-source asset names a database the caller clearly intends, so it contributes it on
+        # the arity-'none' path too — the run reads the asset's own database, not nothing.
+        assert ewv2._derive_metadata_source_databases(
+            [], [{"databaseId": "db1", "assetId": "s1"}], "", self._GATE) == ["db1"]
+
+    def test_the_named_database_leads_the_source_assets_databases(self):
+        assert ewv2._derive_metadata_source_databases(
+            [], [{"databaseId": "db1", "assetId": "s1"}, {"databaseId": "src-db", "assetId": "s2"}],
+            "src-db", self._GATE) == ["src-db", "db1"]
+
+    def test_no_input_files_and_no_entities_captures_nothing(self):
+        assert ewv2._derive_metadata_source_databases([], [], "", self._GATE) == []
+
+    def test_the_gate_off_captures_nothing_from_either_shape(self):
+        off = {"databaseMetadata": False}
+        assert ewv2._derive_metadata_source_databases(
+            self._inputs(("db1", "a1")), [], "", off) == []
+        assert ewv2._derive_metadata_source_databases([], [], "src-db", off) == []
+
+    def test_the_gate_defaults_on(self):
+        assert ewv2._derive_metadata_source_databases([], [], "src-db", {}) == ["src-db"]
+        assert ewv2._derive_metadata_source_databases([], [], "src-db", None) == ["src-db"]
+
+
+@pytest.mark.unit
+class TestSourceDatabaseAuthorization:
+    """Every captured database needs its own database GET. A DERIVED database is skipped when denied
+    (an asset GET does not imply a database GET, and metadata is optional/best-effort), while the
+    caller's NAMED database fails the launch — they asked for something they may not read."""
+
+    def _enforcer(self, denied_databases=()):
+        enf = MagicMock()
+        enf.enforceAPI.return_value = True
+        enf.enforce.side_effect = lambda obj, action, *a, **k: not (
+            obj.get("object__type") == "database" and obj.get("databaseId") in denied_databases)
+        return enf
+
+    def test_one_get_per_derived_database(self):
+        enforcer = self._enforcer()
+        with patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}.claims_and_roles", {"tokens": ["u1"]}):
+            err, assets, databases = ewv2._resolve_and_authorize_metadata_sources(
+                [], ["db1", "db2", "db3"], {})
+        assert err is None and databases == ["db1", "db2", "db3"]
+        checked = [c.args[0]["databaseId"] for c in enforcer.enforce.call_args_list
+                   if c.args[0].get("object__type") == "database"]
+        assert checked == ["db1", "db2", "db3"]
+
+    def test_a_denied_derived_database_is_skipped_not_fatal(self):
+        # The caller can read the input files but not their database. The execution still launches; it
+        # simply captures no metadata for that database, and the resolved set says so, so no read path
+        # later gates on metadata this run never captured.
+        with patch(f"{MOD}.CasbinEnforcer", return_value=self._enforcer({"db2"})), \
+             patch(f"{MOD}.claims_and_roles", {"tokens": ["u1"]}):
+            err, assets, databases = ewv2._resolve_and_authorize_metadata_sources(
+                [], ["db1", "db2", "db3"], {})
+        assert err is None
+        assert databases == ["db1", "db3"]
+
+    def test_a_denied_named_database_fails_the_launch(self):
+        with patch(f"{MOD}.CasbinEnforcer", return_value=self._enforcer({"src-db"})), \
+             patch(f"{MOD}.claims_and_roles", {"tokens": ["u1"]}):
+            err, assets, databases = ewv2._resolve_and_authorize_metadata_sources(
+                [], ["src-db"], {}, named_database_ids=["src-db"])
+        assert err is not None and err["statusCode"] == 403
+        assert databases is None
+
+    def test_named_and_derived_databases_in_one_set_keep_their_own_denial_rule(self):
+        # A file-less run naming a database AND a metadata-source asset carries both categories at once:
+        # the named database still fails the launch when denied, while the asset's derived database is
+        # skipped, so lacking access to one source asset's database cannot fail an otherwise-valid run.
+        with patch(f"{MOD}.CasbinEnforcer", return_value=self._enforcer({"derived-db"})), \
+             patch(f"{MOD}.claims_and_roles", {"tokens": ["u1"]}):
+            err, assets, databases = ewv2._resolve_and_authorize_metadata_sources(
+                [], ["src-db", "derived-db"], {}, named_database_ids=["src-db"])
+        assert err is None
+        assert databases == ["src-db"]
+
+        with patch(f"{MOD}.CasbinEnforcer", return_value=self._enforcer({"src-db"})), \
+             patch(f"{MOD}.claims_and_roles", {"tokens": ["u1"]}):
+            err, assets, databases = ewv2._resolve_and_authorize_metadata_sources(
+                [], ["src-db", "derived-db"], {}, named_database_ids=["src-db"])
+        assert err is not None and err["statusCode"] == 403
+
+    def test_a_multi_database_launch_records_and_captures_the_derived_set(self):
+        # End to end: two input assets in two databases -> two database reads, two envelope entries, two
+        # scope-'database' metadata rows, and the derived set on the configuration row.
+        wf = dict(_WORKFLOW)
+        wf["systemConfig"] = dict(_WORKFLOW["systemConfig"])
+        wf["systemConfig"]["inputFileArity"] = "multi"
+        wf["systemConfig"]["assetScope"] = {"crossAssetAllowed": True, "singleAssetOnly": False,
+                                            "wholeAssetAllowed": True, "folderAllowed": True}
+        wf["systemConfig"]["metadataInputs"] = {"assetMetadata": False, "fileMetadata": False,
+                                                "fileAttributes": False, "databaseMetadata": True}
+        pipe = dict(_PIPELINE)
+        pipe["systemConfig"] = dict(_PIPELINE["systemConfig"])
+        pipe["systemConfig"]["inputFileArity"] = "multi"
+        pipe["systemConfig"]["assetScope"] = wf["systemConfig"]["assetScope"]
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+                               {"databaseId": "db2", "assetId": "a2", "relativeFileKey": "/g.glb"}],
+                "outputAssetId": "a1", "outputDatabaseId": "db1"}
+        with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["asset_bucket"], \
+             p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._get_asset",
+                   side_effect=lambda d, a: dict(_ASSET, databaseId=d, assetId=a,
+                                                 assetLocation={"Key": f"{a}/"})), \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_database_metadata",
+                   side_effect=lambda d, e: [{"metadataKey": "site", "metadataValue": d}]) as m_db, \
+             patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            tables = {}
+            m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        assert sorted(c.args[0] for c in m_db.call_args_list) == ["db1", "db2"]
+        envelope = json.loads(next(
+            c for c in m_s3.put_object.call_args_list
+            if c.kwargs.get("Key", "").endswith("metadata.json")).kwargs["Body"].decode("utf-8"))
+        assert envelope["databases"] == [{"databaseId": "db1", "metadata": {"site": "db1"}},
+                                         {"databaseId": "db2", "metadata": {"site": "db2"}}]
+        cfg_row = tables["t-wf-cfg"].put_item.call_args_list[0].kwargs["Item"]
+        assert cfg_row["metadataSourceDatabases"] == ["db1", "db2"]
+        # The caller named none, and a run with input files derives rather than naming.
+        assert cfg_row["inputMetadataDatabaseId"] == ""
+        db_rows = [c.kwargs["Item"] for c in
+                   tables["t-pin-md"].batch_writer.return_value.__enter__.return_value
+                   .put_item.call_args_list
+                   if c.kwargs["Item"]["scope"] == "database"]
+        assert [r["databaseId:assetId:filePath"] for r in db_rows] == ["db1::/", "db2::/"]
+
+    def test_an_input_file_run_does_not_record_the_named_database(self):
+        # The field is arity-'none' only; recording it for a run that derived its databases would make
+        # the read path gate on a database the run never read.
+        p = TestExecuteOrchestration()._patches()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "metadataSourceDatabaseId": "unrelated-db"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_database_metadata", return_value=[]) as m_db, \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            tables = {}
+            m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        assert [c.args[0] for c in m_db.call_args_list] == ["db1"]
+        cfg_row = tables["t-wf-cfg"].put_item.call_args_list[0].kwargs["Item"]
+        assert cfg_row["metadataSourceDatabases"] == ["db1"]
+        assert cfg_row["inputMetadataDatabaseId"] == ""
+
+
+@pytest.mark.unit
+class TestPerEntityMetadataCap:
+    """Metadata is bounded at MAX_METADATA_ENTRIES_PER_ENTITY entries PER ENTITY ROW — per database, per
+    asset, per file's metadata, per file's attributes — so a run over many entities keeps each entity's
+    full budget while no single row can grow without bound. Truncation is deterministic and logged."""
+
+    _EVENT = {"requestContext": {}}
+    _GATE = {"assetMetadata": True, "fileMetadata": True, "fileAttributes": True,
+             "databaseMetadata": True}
+
+    def _array(self, count):
+        # Zero-padded so sorted() order is the numeric order, making the retained subset legible.
+        return [{"metadataKey": f"k{i:05d}", "metadataValue": str(i)} for i in range(count)]
+
+    def test_under_the_cap_is_untouched(self):
+        out = ewv2._simplify_metadata_array(self._array(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY))
+        assert len(out) == ewv2.MAX_METADATA_ENTRIES_PER_ENTITY
+
+    def test_over_the_cap_retains_exactly_the_cap(self):
+        out = ewv2._simplify_metadata_array(self._array(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY + 250))
+        assert len(out) == ewv2.MAX_METADATA_ENTRIES_PER_ENTITY
+
+    def test_truncation_is_deterministic_by_key_order(self):
+        # NOT dict-insertion order: the metadata service's answer order is not guaranteed, so the same
+        # entity must yield the same subset on every run (and on a re-run).
+        forward = self._array(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY + 100)
+        assert (ewv2._simplify_metadata_array(forward)
+                == ewv2._simplify_metadata_array(list(reversed(forward))))
+        out = ewv2._simplify_metadata_array(forward)
+        assert sorted(out) == [f"k{i:05d}" for i in range(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY)]
+
+    def test_the_cap_is_logged_with_the_entity_named(self):
+        # No silent caps: a truncated row must be attributable from the logs.
+        with patch(f"{MOD}.logger") as m_logger:
+            ewv2._simplify_metadata_array(
+                self._array(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY + 1),
+                entity_label="database db-huge")
+        m_logger.warning.assert_called_once()
+        message = m_logger.warning.call_args.args[0]
+        assert "database db-huge" in message and str(
+            ewv2.MAX_METADATA_ENTRIES_PER_ENTITY) in message
+
+    def test_no_warning_below_the_cap(self):
+        with patch(f"{MOD}.logger") as m_logger:
+            ewv2._simplify_metadata_array(self._array(3), entity_label="asset db:a1")
+        m_logger.warning.assert_not_called()
+
+    @pytest.mark.parametrize("read_kind", ["database", "asset", "fileMetadata", "fileAttributes"])
+    def test_the_cap_applies_to_each_of_the_four_read_kinds(self, read_kind):
+        # Every read the envelope makes passes through the one choke point, so each entity row is
+        # bounded independently rather than the run as a whole.
+        oversized = self._array(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY + 10)
+        small = self._array(2)
+        selected = [{"databaseId": "db", "assetId": "a1", "relativeFileKey": "/f.glb",
+                     "versionId": ""}]
+        with patch(f"{MOD}._fetch_database_metadata",
+                   return_value=oversized if read_kind == "database" else small), \
+             patch(f"{MOD}._fetch_metadata",
+                   return_value=oversized if read_kind == "asset" else small), \
+             patch(f"{MOD}._fetch_file_metadata",
+                   side_effect=lambda d, a, r, t, e: oversized if (
+                       (t == "metadata" and read_kind == "fileMetadata")
+                       or (t == "attribute" and read_kind == "fileAttributes")) else small):
+            env = ewv2._build_grouped_metadata(
+                selected, {("db", "a1"): {"assetName": "A1"}}, self._GATE, self._EVENT,
+                metadata_source_databases=["db"])
+        files = {f["fileKey"]: f for f in env["assets"][0]["files"]}
+        sizes = {
+            "database": len(env["databases"][0]["metadata"]),
+            "asset": len(files["/"]["metadata"]),
+            "fileMetadata": len(files["/f.glb"]["metadata"]),
+            "fileAttributes": len(files["/f.glb"]["attributes"]),
+        }
+        assert sizes[read_kind] == ewv2.MAX_METADATA_ENTRIES_PER_ENTITY
+        # Only the oversized row is capped; its siblings keep their own (small) sizes.
+        assert [v for k, v in sizes.items() if k != read_kind] == [2, 2, 2]
+
+    def test_each_entity_row_gets_its_own_budget(self):
+        # Three databases at the cap yield 3 x cap entries in total — the bound is per row, not global.
+        with patch(f"{MOD}._fetch_database_metadata",
+                   return_value=self._array(ewv2.MAX_METADATA_ENTRIES_PER_ENTITY + 5)):
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT,
+                metadata_source_databases=["db1", "db2", "db3"])
+        assert [len(g["metadata"]) for g in env["databases"]] == (
+            [ewv2.MAX_METADATA_ENTRIES_PER_ENTITY] * 3)
+
+
+@pytest.mark.unit
+class TestPerEntityMetadataByteCap:
+    """The entry cap bounds how MANY keys a row carries; it cannot bound how LARGE it is, because a
+    metadata value has no length limit. A row is therefore also bounded by MAX_METADATA_BYTES_PER_ENTITY
+    so it stays inside the 400 KB DynamoDB item limit — without it, a few hundred long values (or one very
+    long one) fail the input-metadata write AFTER the state machine has started, killing a valid run."""
+
+    _EVENT = {"requestContext": {}}
+    _GATE = {"assetMetadata": True, "fileMetadata": True, "fileAttributes": True,
+             "databaseMetadata": True}
+
+    def _sized(self, count, key_length, value_length):
+        return [{"metadataKey": f"k{i:0{max(1, key_length - 1)}d}"[:key_length],
+                 "metadataValue": "v" * value_length} for i in range(count)]
+
+    def _row_bytes(self, metadata):
+        return len(json.dumps(ewv2.er.build_input_metadata_record(
+            "pe1", "db", "", "/", metadata, "", scope="database")).encode("utf-8"))
+
+    @pytest.mark.parametrize("count,key_length,value_length", [
+        (1000, 256, 400),   # 648 KB before the byte cap
+        (1000, 128, 512),   # 633 KB
+        (500, 128, 700),    # 408 KB — under the ENTRY cap, still over the item limit
+        (500, 64, 800),     # 426 KB
+        (5000, 256, 1000),
+    ])
+    def test_a_row_stays_within_the_dynamodb_item_limit(self, count, key_length, value_length):
+        out = ewv2._simplify_metadata_array(self._sized(count, key_length, value_length))
+        assert self._row_bytes(out) < 400 * 1024
+        assert len(out) <= ewv2.MAX_METADATA_ENTRIES_PER_ENTITY
+
+    def test_one_entry_larger_than_the_whole_budget_costs_only_itself(self):
+        # The oversized entry is skipped rather than ending the walk, so its siblings still travel.
+        array = ([{"metadataKey": "a_huge",
+                   "metadataValue": "x" * (ewv2.MAX_METADATA_BYTES_PER_ENTITY + 1)}]
+                 + [{"metadataKey": f"b_small{i}", "metadataValue": "v"} for i in range(5)])
+        out = ewv2._simplify_metadata_array(array)
+        assert sorted(out) == [f"b_small{i}" for i in range(5)]
+
+    def test_a_single_oversized_value_never_reaches_a_row(self):
+        # The entry cap alone never fires here (one entry), so only the byte bound can catch it.
+        out = ewv2._simplify_metadata_array(
+            [{"metadataKey": "k", "metadataValue": "v" * (500 * 1024)}])
+        assert out == {}
+
+    def test_byte_truncation_is_deterministic_regardless_of_answer_order(self):
+        array = self._sized(2000, 64, 400)
+        first = ewv2._simplify_metadata_array(list(array))
+        assert first == ewv2._simplify_metadata_array(list(reversed(array)))
+        # Retained by sorted key order, so the subset is reproducible on a re-run.
+        assert list(first) == sorted(first)
+        assert 0 < len(first) < 2000
+
+    def test_a_small_row_is_returned_untouched(self):
+        array = self._sized(100, 64, 64)
+        out = ewv2._simplify_metadata_array(array)
+        assert len(out) == 100
+
+    def test_the_byte_cap_is_logged_with_the_entity_named(self):
+        with patch(f"{MOD}.logger") as m_logger:
+            ewv2._simplify_metadata_array(self._sized(500, 64, 800),
+                                          entity_label="database db-fat")
+        m_logger.warning.assert_called_once()
+        assert "database db-fat" in m_logger.warning.call_args.args[0]
+
+    def test_a_truncated_row_is_reported_to_the_caller(self):
+        # No silent caps: the truncation reaches the execute response, not only the logs.
+        notices = []
+        with patch(f"{MOD}._fetch_database_metadata", return_value=self._sized(500, 64, 800)):
+            ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT, metadata_source_databases=["db1"],
+                notices=notices)
+        assert len(notices) == 1
+        assert "db1" in notices[0] and "per-entity metadata limits" in notices[0]
+
+    def test_the_notice_lists_a_bounded_number_of_entities(self):
+        # A run over hundreds of entities returns one bounded warning, not one per entity.
+        entities = [f"e{i}" for i in range(ewv2.MAX_METADATA_NOTICE_ENTITIES_LISTED + 4)]
+        (warning,) = ewv2._metadata_capture_warnings(entities, [])
+        assert f"e{ewv2.MAX_METADATA_NOTICE_ENTITIES_LISTED}" not in warning
+        assert "and 4 more" in warning
+        assert str(len(entities)) in warning
+
+    def test_no_notice_when_nothing_was_truncated(self):
+        notices = []
+        with patch(f"{MOD}._fetch_database_metadata", return_value=self._sized(3, 8, 8)):
+            ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT, metadata_source_databases=["db1"],
+                notices=notices)
+        assert notices == []
+
+
+@pytest.mark.unit
+class TestUnreadableSourceDatabase:
+    """A metadata read that FAILED and a database that genuinely carries no metadata both leave an entry
+    with empty metadata and persist no row, so with several databases a partial failure would otherwise be
+    invisible. The failed read is reported instead."""
+
+    _EVENT = {"requestContext": {}}
+    _GATE = {"databaseMetadata": True}
+
+    def test_a_failed_read_is_reported(self):
+        notices = []
+        with patch(f"{MOD}._fetch_database_metadata", return_value=None):
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT, metadata_source_databases=["dbX"],
+                notices=notices)
+        # The entry stays, so the run still records which databases it covered.
+        assert env["databases"] == [{"databaseId": "dbX", "metadata": {}}]
+        assert len(notices) == 1
+        assert "dbX" in notices[0] and "could not read" in notices[0]
+
+    def test_an_empty_database_is_not_reported(self):
+        notices = []
+        with patch(f"{MOD}._fetch_database_metadata", return_value=[]):
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT, metadata_source_databases=["dbEmpty"],
+                notices=notices)
+        assert env["databases"] == [{"databaseId": "dbEmpty", "metadata": {}}]
+        assert notices == []
+
+    def test_a_partial_failure_across_many_databases_is_reported(self):
+        # The case the multi-database capture makes invisible: most databases read fine, a few do not.
+        failing = {"db3", "db7"}
+        with patch(f"{MOD}._fetch_database_metadata",
+                   side_effect=lambda d, e: None if d in failing else [
+                       {"metadataKey": "site", "metadataValue": d}]):
+            notices = []
+            env = ewv2._build_grouped_metadata(
+                [], {}, self._GATE, self._EVENT,
+                metadata_source_databases=[f"db{i}" for i in range(10)], notices=notices)
+        assert len(env["databases"]) == 10
+        assert [g["databaseId"] for g in env["databases"] if not g["metadata"]] == ["db3", "db7"]
+        assert len(notices) == 1
+        assert "db3" in notices[0] and "db7" in notices[0]
+
+    def test_an_unreadable_database_surfaces_in_the_execute_response(self):
+        wf, pipe = TestExecuteOrchestration()._results_only_workflow()
+        wf = dict(wf)
+        wf["systemConfig"] = dict(wf["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": False, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
+        body = {"inputFiles": [], "metadataSourceDatabaseId": "src-db"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata", return_value=None), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        warnings = json.loads(resp["body"])["message"]["warnings"] or []
+        assert any("src-db" in w and "could not read" in w for w in warnings), warnings
+
+
+@pytest.mark.unit
+class TestGlobalIsNotAMetadataSourceDatabase:
+    """GLOBAL is the unscoped/all-databases keyword, not a database record whose metadata can be read —
+    metadataSourceDatabaseId rejects it at the model layer for that reason. An input file or a
+    metadata-source asset MAY live in GLOBAL, so the DERIVED set has to drop it: otherwise the launch
+    spends a metadata read resolving nothing, and records a database whose GET no permission template
+    grants, making the execution unreadable for every non-admin."""
+
+    _GATE = {"databaseMetadata": True}
+
+    def test_an_input_file_in_global_derives_no_database(self):
+        assert ewv2._derive_metadata_source_databases(
+            [{"databaseId": ewv2.GLOBAL_DATABASE, "assetId": "a1", "relativeFileKey": "/f.glb"}],
+            [], "", self._GATE) == []
+
+    def test_a_global_source_asset_is_dropped_and_real_databases_survive(self):
+        assert ewv2._derive_metadata_source_databases(
+            [{"databaseId": "dbZ", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+            [{"databaseId": ewv2.GLOBAL_DATABASE, "assetId": "g1"}], "", self._GATE) == ["dbZ"]
+
+    def test_global_is_dropped_without_disturbing_order_or_dedupe(self):
+        assert ewv2._derive_metadata_source_databases(
+            [{"databaseId": "dbZ"}, {"databaseId": ewv2.GLOBAL_DATABASE},
+             {"databaseId": "dbA"}, {"databaseId": "dbZ"}], [], "", self._GATE) == ["dbZ", "dbA"]
+
+    def test_a_global_only_run_reads_no_database_metadata(self):
+        wf = dict(_WORKFLOW)
+        wf["systemConfig"] = dict(_WORKFLOW["systemConfig"])
+        wf["systemConfig"]["metadataInputs"] = {
+            "assetMetadata": False, "fileMetadata": False,
+            "fileAttributes": False, "databaseMetadata": True}
+        p = TestExecuteOrchestration()._patches(workflow=wf)
+        # No output target: the run has one input asset, so the output locks to it. (Naming a
+        # different one would be refused — this case is about metadata sources, not the output.)
+        body = {"inputFiles": [{"databaseId": ewv2.GLOBAL_DATABASE, "assetId": "a1",
+                                "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["asset_bucket"], \
+             p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._get_asset",
+                   side_effect=lambda d, a: dict(_ASSET, databaseId=d, assetId=a,
+                                                 assetLocation={"Key": f"{a}/"})), \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}._fetch_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_file_metadata", return_value=[]), \
+             patch(f"{MOD}._fetch_database_metadata") as m_db, \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
+             patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            tables = {}
+            m_dynamo.Table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200, resp["body"]
+        m_db.assert_not_called()
+        cfg_row = tables["t-wf-cfg"].put_item.call_args_list[0].kwargs["Item"]
+        assert cfg_row["metadataSourceDatabases"] == []
+
+
+@pytest.mark.unit
+class TestMetadataServicePayloadIdentity:
+    """The metadata-service invoke must carry the identity THIS execute arrived with. A cross-call
+    (trigger dispatch, re-run) has no authorizer, and forwarding `authorizer: None` makes the metadata
+    service's claims extraction fail — so a trigger-fired run would silently get no metadata."""
+
+    def test_an_api_request_forwards_its_authorizer(self):
+        event = {"requestContext": {"authorizer": {"jwt": {"claims": {"sub": "u1"}}}}}
+        payload = ewv2._metadata_service_payload("/database/db1/metadata", {"databaseId": "db1"}, event)
+        assert payload["requestContext"]["authorizer"] == {"jwt": {"claims": {"sub": "u1"}}}
+        assert "lambdaCrossCall" not in payload
+        assert payload["pathParameters"] == {"databaseId": "db1"}
+        assert payload["requestContext"]["http"] == {"path": "/database/db1/metadata", "method": "GET"}
+
+    def test_a_cross_call_forwards_its_identity_instead_of_a_null_authorizer(self):
+        event = {"requestContext": {"http": {"method": "POST"}},
+                 "lambdaCrossCall": {"userName": "SYSTEM_USER"}}
+        payload = ewv2._metadata_service_payload("/database/db1/metadata", {"databaseId": "db1"}, event)
+        assert payload["lambdaCrossCall"] == {"userName": "SYSTEM_USER"}
+        assert "authorizer" not in payload["requestContext"]
+
+    def test_a_non_200_answer_is_logged_rather_than_silently_empty(self):
+        # None, not [] — a read that failed must not look like a database that carries no metadata.
+        stream = MagicMock()
+        stream.read.return_value = json.dumps({"statusCode": 403, "body": "{}"}).encode("utf-8")
+        with patch(f"{MOD}._metadata_service_lambda", return_value={"Payload": stream}), \
+             patch(f"{MOD}.logger") as m_logger:
+            assert ewv2._fetch_database_metadata("db1", {"requestContext": {}}) is None
+        assert m_logger.warning.called
+
+    def test_an_absent_payload_reports_a_failed_read(self):
+        with patch(f"{MOD}._metadata_service_lambda", return_value={"Payload": ""}), \
+             patch(f"{MOD}.logger") as m_logger:
+            assert ewv2._fetch_database_metadata("db1", {"requestContext": {}}) is None
+        assert m_logger.warning.called
+
+    def test_an_exception_reports_a_failed_read(self):
+        with patch(f"{MOD}._metadata_service_lambda", side_effect=RuntimeError("boom")), \
+             patch(f"{MOD}.logger") as m_logger:
+            assert ewv2._fetch_database_metadata("db1", {"requestContext": {}}) is None
+        assert m_logger.exception.called
+
+    def test_a_successful_answer_returns_the_metadata_list(self):
+        stream = MagicMock()
+        stream.read.return_value = json.dumps({
+            "statusCode": 200,
+            "body": json.dumps({"metadata": [{"metadataKey": "k", "metadataValue": "v"}]}),
+        }).encode("utf-8")
+        with patch(f"{MOD}._metadata_service_lambda", return_value={"Payload": stream}):
+            result = ewv2._fetch_database_metadata("db1", {"requestContext": {}})
+        assert result == [{"metadataKey": "k", "metadataValue": "v"}]
+
+    def test_a_successful_read_of_an_empty_database_returns_an_empty_list(self):
+        # [] is the distinct "read succeeded, this database carries nothing" answer, so an empty
+        # database is never reported as an unreadable one.
+        stream = MagicMock()
+        stream.read.return_value = json.dumps({
+            "statusCode": 200, "body": json.dumps({"metadata": []})}).encode("utf-8")
+        with patch(f"{MOD}._metadata_service_lambda", return_value={"Payload": stream}), \
+             patch(f"{MOD}.logger") as m_logger:
+            assert ewv2._fetch_database_metadata("db1", {"requestContext": {}}) == []
+        assert not m_logger.warning.called
 
 
 @pytest.mark.unit
@@ -304,8 +1297,10 @@ class TestExecuteOrchestration:
         assert resp["statusCode"] == 400
         assert "does not resolve to a single input asset" in json.loads(resp["body"])["message"].lower()
 
-    def test_single_input_override_gated_by_allow_override(self):
-        # One input asset, allowOverride False + explicit output -> override IGNORED, locked to input.
+    def test_single_input_override_refused_when_allow_override_false(self):
+        # One input asset, allowOverride False + a DIFFERENT explicit output -> refused. Silently
+        # relocking to the input asset would write the outputs somewhere the caller never named while
+        # reporting a successful launch, which is the same contradiction the results-only branch rejects.
         p = self._patches()
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
                 "outputAssetId": "otherAsset", "outputDatabaseId": "db1"}
@@ -316,9 +1311,88 @@ class TestExecuteOrchestration:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
             resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 400
+        assert "allowoverride" in json.loads(resp["body"])["message"].lower()
+        m_sfn.start_execution.assert_not_called()
+
+    def test_single_input_override_naming_the_input_asset_is_a_noop(self):
+        # The re-run replay path: _reconstruct_execute_request ALWAYS re-sends the recorded output
+        # target, and for a run that did not override, that target IS the single input asset. Naming it
+        # asks for nothing different, so it must launch even with allowOverride False — otherwise every
+        # re-run of a non-overridden single-asset run would 400.
+        p = self._patches()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "outputAssetId": "a1", "outputDatabaseId": "db1"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
         assert resp["statusCode"] == 200
         sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
-        assert sent["outputAssetId"] == "a1"  # locked to input asset, override ignored
+        assert sent["outputAssetId"] == "a1" and sent["outputDatabaseId"] == "db1"
+
+    def test_single_input_override_allowed_redirects(self):
+        # allowOverride True + a different explicit output -> honored (the behavior the refusal above
+        # must not have broken).
+        wf = dict(_WORKFLOW)
+        wf["systemConfig"] = dict(_WORKFLOW["systemConfig"])
+        wf["systemConfig"]["outputTarget"] = {"locationType": "asset", "allowOverride": True}
+        p = self._patches(workflow=wf)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "outputAssetId": "a2", "outputDatabaseId": "db1"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputAssetId"] == "a2"
+
+    def test_single_input_override_db_only_with_allow_override_errors(self):
+        # allowOverride True but only outputDatabaseId supplied: there is no target ASSET, so the
+        # override cannot be applied. Falling back to the input asset would silently ignore a named
+        # database, so this is refused and says which field is missing.
+        wf = dict(_WORKFLOW)
+        wf["systemConfig"] = dict(_WORKFLOW["systemConfig"])
+        wf["systemConfig"]["outputTarget"] = {"locationType": "asset", "allowOverride": True}
+        p = self._patches(workflow=wf)
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}],
+                "outputDatabaseId": "otherDb"}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 400
+        message = json.loads(resp["body"])["message"].lower()
+        # Must be the missing-field message, NOT the allowOverride-is-false one — this workflow DOES
+        # allow overriding. Both messages name outputAssetId, so assert on the discriminating clause.
+        assert "alone does not name a target asset" in message
+        assert "allowoverride is false" not in message
+        m_sfn.start_execution.assert_not_called()
+
+    def test_single_input_no_output_target_still_locks_to_input(self):
+        # The common case — no output ids supplied at all — is untouched: locked to the input asset.
+        p = self._patches()
+        body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
+        with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
+             p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
+             patch(f"{MOD}._running_execution_exists", return_value=False), \
+             patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
+            m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
+            m_dynamo.Table.return_value = MagicMock()
+            resp = ewv2.lambda_handler(_event(body=body), MagicMock())
+        assert resp["statusCode"] == 200
+        sent = json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["outputAssetId"] == "a1" and sent["outputDatabaseId"] == "db1"
 
     def _results_only_workflow(self):
         wf = dict(_WORKFLOW)
@@ -390,7 +1464,7 @@ class TestExecuteOrchestration:
         # A genuinely-missing input asset is a 404 (matches the rest of VAMS, which reports
         # not-found distinctly from unauthorized). Exists-but-no-access remains 403.
         p = self._patches()
-        body = {"inputFiles": [{"databaseId": "smoke-db", "assetId": "X", "relativeFileKey": "/f.glb"}]}
+        body = {"inputFiles": [{"databaseId": "smoke-db", "assetId": "missing-asset", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["enforcer"], p["claims"], \
              patch(f"{MOD}._get_asset", return_value=None):
             resp = ewv2.lambda_handler(_event(body=body), MagicMock())

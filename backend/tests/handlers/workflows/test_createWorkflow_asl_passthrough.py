@@ -98,3 +98,36 @@ def test_first_job_name_is_baked_into_output_uris():
     # manifest outputs), so the manifest and the ASL point at the same output folder.
     definition_text = json.dumps(definition)
     assert f"pipelines/p1/{job_names[0]}" in definition_text
+
+
+@pytest.mark.unit
+def test_interim_threads_the_next_steps_delivery_metadata_key():
+    # Per-step metadata DELIVERY for steps 2+: the interim state must thread the NEXT step's own
+    # narrowed metadata key so its manifest can point at it. The ASL is baked at workflow SAVE time
+    # while templates are chosen per EXECUTION, so only the array INDEX can be static here — the
+    # keys themselves ride in the SFN input as stepMetadataS3Keys, exactly as pipelineExecutionIds do.
+    pipelines = [
+        {"name": f"p{i}", "outputType": "assetFile", "pipelineExecutionType": "Lambda",
+         "pipelineType": "standardFile", "databaseId": "db", "waitForCallback": "Disabled",
+         "userProvidedResource": json.dumps({"resourceId": "arn:fn", "resourceType": "Lambda"})}
+        for i in (1, 2, 3)
+    ]
+    definition, _job_names = generate_workflow_asl(pipelines, "db", "wf")
+    interim = [v for k, v in definition["States"].items() if k.startswith("interim-")]
+    # Three pipelines -> two gaps, each pointing at the step it prepares (index 1, then 2).
+    assert len(interim) == 2
+    threaded = sorted(
+        s["Parameters"]["Payload"]["body"]["nextPipelineMetadataS3Key.$"] for s in interim)
+    assert threaded == ["$.stepMetadataS3Keys[1]", "$.stepMetadataS3Keys[2]"]
+
+
+@pytest.mark.unit
+def test_single_pipeline_workflow_has_no_interim_state_to_thread():
+    # A one-step workflow needs no threading: step 1's delivery is resolved at launch.
+    pipelines = [{
+        "name": "p1", "outputType": "assetFile", "pipelineExecutionType": "Lambda",
+        "pipelineType": "standardFile", "databaseId": "db", "waitForCallback": "Disabled",
+        "userProvidedResource": json.dumps({"resourceId": "arn:fn", "resourceType": "Lambda"}),
+    }]
+    definition, _job_names = generate_workflow_asl(pipelines, "db", "wf")
+    assert not [k for k in definition["States"] if k.startswith("interim-")]

@@ -4,23 +4,27 @@
 import base64
 import json
 import os
+import time
 import boto3
 import botocore
 from datetime import datetime, timedelta, timezone
+from weakref import WeakKeyDictionary
 from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
-from common.validators import validate
+from common.validators import validate, normalize_iso8601_utc
 from common.resourceNames import get_table_name, ResourceKeys
 from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_actions
 from common.dynamodb import validate_pagination_info
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA,
     API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_EXECUTION_PERMANENT,
@@ -36,6 +40,7 @@ from models.common import (
     VAMSGeneralErrorResponse
 )
 from models.executions import (
+    DetailMetadataPageRequestModel,
     ListExecutionsRequestModel,
     RerunExecutionRequestModel,
     PermanentDeleteRequestModel,
@@ -46,10 +51,42 @@ logger = safeLogger(service="ExecutionService")
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
 
+# Partition-key suffix an archived asset's row is moved under (assetService.archive_asset). Archiving
+# is reversible, so an archived asset is still authorized on its own row rather than on its database.
+ARCHIVED_DATABASE_SUFFIX = "#deleted"
+
 # Per-request memo of asset rows keyed by (databaseId, assetId), reset at each invocation. The global
 # execution list authorizes every row against its input/output assets; many executions reference the
 # same few assets, so caching collapses the repeated get_asset_details reads within one list request.
 _asset_details_cache = {}
+
+# Memo of Casbin decisions, held per ENFORCER rather than in one module-level dict. A list request
+# evaluates the same rule over the same few entities once per ROW, so the memo collapses that to one
+# evaluation per distinct entity.
+#
+# Scoping it to the enforcer is what makes the memo structurally incapable of crossing identities. An
+# enforcer is constructed per request — one per page on the list paths, one per call on the
+# single-execution paths — and carries the caller's policy snapshot, so a decision can only ever be
+# reused by the very enforcer that computed it. A plain module-level dict is instead only as safe as
+# every present and future caller remembering to clear it: one missed clear answers one caller's
+# request with another caller's decisions, which on an authorization path is a fail-open.
+#
+# Weak keys let an entry go when its enforcer is collected. Keying on id(enforcer) would NOT be
+# equivalent: CPython reuses id() values once an object is freed, so a new enforcer with different
+# permissions could inherit a freed one's cached allows — an invisible fail-open rather than a
+# test-visible one.
+_authz_decision_cache = WeakKeyDictionary()
+
+
+def _claims_identity_key(claims):
+    """The caller identity a Casbin decision depends on, as a hashable value.
+
+    CasbinEnforcer resolves policy from the user id (`tokens[0]`) and `mfaEnabled` — MFA-gated roles are
+    only active for an MFA session — and reads the roles themselves from DynamoDB. Both inputs are part
+    of the key so an entry can never be shared across users or across MFA states, independently of the
+    per-enforcer scoping above. `tokens` is sorted so an equal identity always yields an equal key."""
+    claims = claims or {}
+    return (tuple(sorted(claims.get("tokens", []) or [])), bool(claims.get("mfaEnabled", False)))
 
 
 def _get_asset_details_cached(database_id, asset_id):
@@ -58,6 +95,28 @@ def _get_asset_details_cached(database_id, asset_id):
     if key not in _asset_details_cache:
         _asset_details_cache[key] = get_asset_details(database_id, asset_id)
     return _asset_details_cache[key]
+
+
+def _enforce_cached(casbin_enforcer, obj, action):
+    """`casbin_enforcer.enforce(obj, action)` behind this enforcer's decision memo.
+
+    The caller identity leads the key, then the entity: workflowId sits alongside assetId because a
+    workflow object carries no assetId, so a key without it would give two workflows in the same
+    database one shared decision. Everything an ABAC rule can read about an entity is either one of
+    these ids or an attribute of the single row the entity resolves to within this request (an asset
+    resolves once through _asset_details_cache; a workflow or database object is built from its ids
+    alone), so two objects sharing a key are the same object and the memo answers with the decision the
+    enforcer would have computed — the rule enforced per row is unchanged."""
+    memo = _authz_decision_cache.get(casbin_enforcer)
+    if memo is None:
+        memo = {}
+        _authz_decision_cache[casbin_enforcer] = memo
+    key = (_claims_identity_key(claims_and_roles),
+           obj.get("object__type", ""), obj.get("databaseId", ""),
+           obj.get("assetId", ""), obj.get("workflowId", ""), action)
+    if key not in memo:
+        memo[key] = casbin_enforcer.enforce(obj, action)
+    return memo[key]
 
 
 def _clean_validation_message(v):
@@ -133,14 +192,90 @@ DEFAULT_EXECUTION_LOOKBACK_DAYS = 90
 # unbounded page. Excess is paged via NextToken.
 MAX_GLOBAL_LIST_PAGE_SIZE = 100
 
+# Keys per BatchGetItem request. 100 is the DynamoDB hard limit for a single BatchGetItem; a larger
+# key set is split across sequential requests.
+BATCH_GET_CHUNK_SIZE = 100
+
+# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
+# 16 MB size limit) before the remainder falls back to per-item reads.
+BATCH_GET_MAX_RETRIES = 3
+
+# Base seconds for the exponential backoff between UnprocessedKeys retries.
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
+# Upper bound on the DISTINCT assets one global-list page resolves for authorization. The page size is
+# already capped, but a page's cost is the number of assets its executions reference, not the number of
+# rows: 100 executions over 100 assets each is 10,000 entity resolutions and the Casbin evaluations that
+# follow. Beyond this bound the page stops resolving NEW assets, and a row whose assets are not all
+# resolved is withheld rather than admitted on a weaker check — the listed rows are exactly the ones
+# that passed the full rule. The bound is reported in the response `warnings`, so a shortened page is
+# visible to the caller and continues from the same NextToken.
+MAX_AUTHZ_ENTITIES_RESOLVED_PER_PAGE = 500
+
+# Per-page distinct-entity budget. Empty (disarmed) for the single-execution paths — details, logs,
+# abort and permanent delete each authorize ONE execution, so their cost is the run's own asset count
+# and bounding it would deny access to a legitimately wide run. Armed only around a list page, where the
+# cost is the whole page's.
+_authz_entity_budget = {}
+
+
+def _arm_authz_entity_budget(limit=MAX_AUTHZ_ENTITIES_RESOLVED_PER_PAGE):
+    """Start a fresh per-page entity-resolution budget."""
+    _authz_entity_budget.clear()
+    _authz_entity_budget.update({"limit": limit, "exceeded": False})
+
+
+def _disarm_authz_entity_budget():
+    """Remove the budget, so the single-execution authorization paths are unbounded."""
+    _authz_entity_budget.clear()
+
+
+def _authz_entity_budget_exceeded():
+    """True when the armed budget stopped a row from resolving its assets."""
+    return bool(_authz_entity_budget.get("exceeded"))
+
+
+def _authz_entities_within_budget(pairs):
+    """True when resolving `pairs` keeps the armed page budget; always True when disarmed.
+
+    Counted against the assets ALREADY resolved this request (`_asset_details_cache`), so a page over a
+    few shared assets is never bounded however many rows reference them — only the breadth of distinct
+    assets is. Flags the budget as exceeded when it refuses, so the caller reports the bound."""
+    if not _authz_entity_budget:
+        return True
+    new = {pair for pair in pairs if all(pair) and pair not in _asset_details_cache}
+    if len(_asset_details_cache) + len(new) > _authz_entity_budget["limit"]:
+        _authz_entity_budget["exceeded"] = True
+        return False
+    return True
+
+
+def _resolve_date_filter(query_params, param_name):
+    """Validate and canonicalize a caller-supplied listing date bound, or None when absent.
+
+    The value becomes a DynamoDB sort-key bound on executionStartDate, which is a lexicographic
+    string compare rather than a date compare — an unvalidated value silently widens the window
+    ('0' matches all history) or empties it ('9999' matches nothing) instead of erroring. Raises
+    VAMSGeneralErrorResponse so the caller gets a 400."""
+    raw = (query_params or {}).get(param_name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    candidate = str(raw).strip()
+    (valid, message) = validate({param_name: {'value': candidate, 'validator': 'ISO8601_UTC'}})
+    if not valid:
+        logger.info(f"Rejected {param_name}: {message}")
+        raise VAMSGeneralErrorResponse(
+            f"{param_name} must be a UTC timestamp of the form YYYY-MM-DDTHH:MM:SSZ.")
+    return normalize_iso8601_utc(candidate)
+
 
 def _resolve_filter_start_date(query_params):
     """ISO-8601 lower bound on executionStartDate for the listing. Uses the caller's
     `filterStartDate` query parameter when provided; otherwise defaults to 90 days before now.
     Always returns a non-empty ISO-8601 string (the effective filter applied)."""
-    raw = (query_params or {}).get('filterStartDate')
-    if raw is not None and str(raw).strip() != "":
-        return str(raw).strip()
+    supplied = _resolve_date_filter(query_params, 'filterStartDate')
+    if supplied:
+        return supplied
     cutoff = datetime.now(timezone.utc) - timedelta(days=DEFAULT_EXECUTION_LOOKBACK_DAYS)
     return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -243,21 +378,110 @@ def _decode_starting_token(starting_token):
 
 
 def get_asset_details(databaseId, assetId):
-    """Get asset details from DynamoDB"""
+    """Get asset details from DynamoDB, including an ARCHIVED asset's row.
+
+    Archiving an asset is reversible and moves its row to the `databaseId + '#deleted'` partition
+    (assetService.archive_asset), so a query of the active partition alone reports an archived asset as
+    absent. Authorization treats an asset it cannot resolve as permanently gone and falls back to the
+    asset's DATABASE, which is a weaker check — so resolving the archived row keeps an archived asset
+    authorized on its own attributes (assetName, assetType, tags) exactly as it was before archiving.
+    Only a genuinely deleted asset, whose row exists in neither partition, reaches the fallback.
+
+    Returns the row (active first, then archived) or None when the asset exists in neither."""
     try:
-        response = asset_table.query(
-            KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
-            ScanIndexForward=False
-        )
-
-        if not response.get('Items'):
-            return None
-
-        # Return the first (most recent) item
-        return response['Items'][0]
+        for database_id in (databaseId, f"{databaseId}{ARCHIVED_DATABASE_SUFFIX}"):
+            response = asset_table.query(
+                KeyConditionExpression=Key('databaseId').eq(database_id) & Key('assetId').eq(assetId),
+                ScanIndexForward=False
+            )
+            items = response.get('Items')
+            if items:
+                # The first (most recent) item.
+                return items[0]
+        return None
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise Exception(f"Error retrieving asset.")
+
+
+def _batch_get_rows(table_name, keys):
+    """BatchGetItem `keys` (a list of full primary-key dicts) from one table. Chunks at the DynamoDB
+    per-call key limit and re-requests UnprocessedKeys — throttling, or a response that reached the
+    16 MB size limit — with exponential backoff.
+
+    Returns the rows that came back. Never raises: a failed or incomplete batch simply yields fewer
+    rows, leaving the caller to resolve the remainder with its per-item read."""
+    items = []
+    for start in range(0, len(keys), BATCH_GET_CHUNK_SIZE):
+        pending = keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while pending:
+            try:
+                response = dynamodb.batch_get_item(RequestItems={table_name: {'Keys': pending}})
+            except Exception as e:
+                logger.warning(f"Batch read of {table_name} failed "
+                               f"(falling back to per-item reads): {e}")
+                break
+            items.extend(response.get('Responses', {}).get(table_name, []))
+            pending = (response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', []))
+            if not pending:
+                break
+            attempt += 1
+            if attempt > BATCH_GET_MAX_RETRIES:
+                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
+                            f"{BATCH_GET_MAX_RETRIES} retries; reading them individually")
+                break
+            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+    return items
+
+
+def prewarm_asset_details(pairs):
+    """Resolve many asset rows in batched reads and populate `_asset_details_cache`, so the per-asset
+    authorization loops that follow read from the memo instead of issuing one Query each.
+
+    `pairs` is an iterable of (databaseId, assetId), which is the asset table's complete primary key —
+    each pair addresses at most one item, so a batched read returns exactly what the per-item Query
+    would have.
+
+    Anything the batch does not resolve falls back to the single-row read, so the memo a caller sees is
+    identical to what the one-at-a-time path would have produced: an asset that does not exist memoizes
+    as None, which the authorization loops treat as a missing asset. The batch addresses the ACTIVE
+    partition only, so an archived asset is a batch miss that the fall-back read then resolves from the
+    archived partition — a miss must never be memoized as None here, or archiving an asset would
+    downgrade its authorization to its database. Already-cached pairs are skipped, so a pair is never
+    read twice. Returns every requested pair's row keyed by pair (None for an asset that exists in
+    neither partition)."""
+    requested = []
+    wanted = []
+    seen = set()
+    for pair in pairs:
+        database_id, asset_id = pair
+        if not database_id or not asset_id or pair in seen:
+            continue
+        seen.add(pair)
+        requested.append(pair)
+        if pair not in _asset_details_cache:
+            wanted.append(pair)
+
+    # A single unresolved asset — the common case — is already one round-trip, so it goes straight to
+    # the single-row read; batching starts to pay off from two.
+    if len(wanted) > 1:
+        wanted_keys = set(wanted)
+        rows = _batch_get_rows(
+            asset_storage_table_name,
+            [{'databaseId': database_id, 'assetId': asset_id} for database_id, asset_id in wanted])
+        for item in rows:
+            pair = (item.get('databaseId', ''), item.get('assetId', ''))
+            if pair in wanted_keys:
+                _asset_details_cache[pair] = item
+
+    # Single-row read for every pair the batch did not resolve, so a pair the caller asked for always
+    # ends up in the memo (as a row, or as None for an asset that does not exist).
+    for pair in wanted:
+        if pair not in _asset_details_cache:
+            _get_asset_details_cached(pair[0], pair[1])
+
+    return {pair: _asset_details_cache.get(pair) for pair in requested}
 
 
 def build_execution_items(input_items, fetch_main_row, describe_execution,
@@ -382,8 +606,10 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
 def get_executions(event, database_id, asset_id, workflow_database_id, workflow_id, query_params):
     """List an asset's workflow executions (V2). Returns an API response.
 
-    Enforces Tier 2 (asset GET) then per-execution (workflow GET), resolves
-    executions via the inputs GSI + V2 main rows, reconciles status, and returns
+    Enforces Tier 2 (GET on the requested asset) then, per execution, the same
+    _execution_access_check rule the details/logs paths use — so a row this listing shows never 403s
+    when it is opened. Resolves executions via the inputs GSI + V2 main rows, reconciles status, and
+    returns
     `success(body={'message': {Items, filterStartDate, [NextToken]}})`. The listing is
     lower-bounded by executionStartDate: the caller's `filterStartDate` query parameter, or 90
     days before now by default; the applied value is echoed back as `filterStartDate`.
@@ -508,13 +734,19 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 # un-migrated deployment must degrade the listing, not fail it.
                 logger.warning(f"Could not list executions by output asset (non-fatal): {e}")
 
+        # Memoized for the whole listing, so the authorization pass and the response builder below
+        # share one read of each execution's main row rather than issuing two.
+        main_row_memo = {}
+
         def _fetch_main_row(execution_id):
-            r = main_table.query(
-                KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
-                ScanIndexForward=False,
-            )
-            rows = r.get('Items', [])
-            return rows[0] if rows else None
+            if execution_id not in main_row_memo:
+                r = main_table.query(
+                    KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
+                    ScanIndexForward=False,
+                )
+                rows = r.get('Items', [])
+                main_row_memo[execution_id] = rows[0] if rows else None
+            return main_row_memo[execution_id]
 
         def _describe(arn):
             if not arn:
@@ -554,22 +786,32 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 [log_text, error_text], total_limit=er.MAX_LOG_FIELD_BYTES)
             return error_text, log_text
 
-        # Tier-2 Casbin enforce once per deduped execution (workflow object). The
-        # input row's workflowId/workflowDatabaseId are authoritative-by-construction
-        # (written at launch from the same workflow as the main row), so they drive
-        # the enforce here and avoid an extra main-row read just for authorization.
+        # Tier-2 once per deduped execution, evaluated by the same _execution_access_check rule the
+        # details/logs paths use, so a row this tab lists cannot 403 when it is opened. Enforcing GET on
+        # the REQUESTED asset alone (done above) is not enough: an execution that also read another asset
+        # exposes that asset's data too, and the details path requires GET on every one of them.
+        #
+        # The workflow ids come from the input row when it carries them — authoritative-by-construction,
+        # written at launch from the same workflow as the main row — and otherwise from the main row,
+        # which the output-direction placeholder rows need because they are synthesized from the
+        # configuration index and carry no workflow ids. Either way the read is the memoized one the
+        # response builder also uses. One enforcer for the whole listing, and the configuration row is
+        # read lazily per candidate, only after its workflow GET passes.
         authorized_inputs = []
         casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
         for input_item in deduped_inputs.values():
             if casbin_enforcer is None:
                 continue
-            enforce_obj = {
-                "object__type": "workflow",
-                "workflowId": input_item.get('workflowId', ''),
-                "databaseId": input_item.get('workflowDatabaseId', ''),
-            }
-            if casbin_enforcer.enforce(enforce_obj, "GET"):
+            candidate_id = input_item.get('workflowExecutionId', '')
+            authorization_item = input_item
+            if not input_item.get('workflowId', ''):
+                authorization_item = _fetch_main_row(candidate_id) or input_item
+            allowed, reason = _execution_access_check(
+                candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer)
+            if allowed:
                 authorized_inputs.append(input_item)
+            else:
+                logger.info(f"Execution {candidate_id} is not listed for asset {asset_id}: {reason}")
 
         # Each direction (input-side, then output-target) is read newest-first, but they are read as
         # two separate queries and concatenated — so without this the output-only executions all trail
@@ -588,10 +830,24 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
         )
 
-        # Apply the optional status/triggerType/groupId filters (same semantics as the global
-        # board) so the asset Workflows tab's filters work. workflowId/workflowDatabaseId are
-        # already applied inside build_execution_items via workflow_id_filter.
+        # Apply the optional equality filters (same semantics as the global board) so the asset
+        # Executions tab's filters work.
+        #
+        # workflowId / workflowDatabaseId are accepted as QUERY parameters here in addition to the
+        # `.../executions/{workflowId}` path form threaded through build_execution_items above. The
+        # path form cannot be driven from a browser: its companion `workflowDatabaseId` is read from
+        # a GET request BODY, which fetch/XHR cannot send. So a UI restricted to the path form could
+        # only ever supply half the composite key.
+        #
+        # These are matched per FIELD (via _global_list_matches_filters) rather than against the
+        # `workflowDatabaseId:workflowId` composite the path form builds. That difference is
+        # load-bearing: the composite comparison treats a missing database as the empty string, so
+        # `workflowId` alone yields the key ":wf1", which matches no row and returns an empty list
+        # with no indication the filter was the cause. Per-field equality makes a database-less
+        # workflow filter behave as asked instead.
         extra_filters = {
+            "workflowId": (query_params.get("workflowId") or "").strip(),
+            "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
             "status": (query_params.get("status") or "").strip(),
             "triggerType": (query_params.get("triggerType") or "").strip(),
             "groupId": (query_params.get("groupId") or "").strip(),
@@ -773,18 +1029,86 @@ def _abort_registered_sub_process(sub):
             f"abort for this resource type is not yet supported; it may still be running.")
 
 
-def authorize_execution_access(execution_id, main_item, asset_action):
-    """Tier-2 authorization for an execution operation: workflow GET + `asset_action`
-    on every distinct input-file asset tied to the execution.
+def _metadata_source_entities(config_row):
+    """The entities an execution captured metadata from, from its configuration row:
+    ([databaseId, ...], [(databaseId, assetId), ...]).
 
-    The workflow itself is never modified by these operations, so workflow access is
-    always GET. The per-asset action varies by operation: an abort changes the run's
-    effect on the assets (POST), while detail/log reads only require GET. Returns
-    (allowed: bool, denied_reason: str); denied_reason is for logging only."""
+    The databases are the ones the caller NAMED as a metadata source (`inputMetadataDatabaseId`), which
+    is the deliberate act that makes a database's own metadata part of the run. A database merely
+    DERIVED from an input file's asset is deliberately excluded: reading such an execution already
+    requires GET on that input asset, and gating additionally on its database would narrow every
+    ordinary execution to callers holding database-level GET — `databaseMetadata` defaults on, so every
+    run records its input databases. `metadataSourceDatabases` (all captured databases) drives the
+    detail view, not this gate. Metadata sources are not input FILES, so they appear only here — never
+    in the workflow-input rows — and a row written before metadata sources existed carries none of
+    these attributes, yielding empty values."""
+    row = config_row or {}
+    databases = []
+    seen_databases = set()
+    for database_id in [row.get('inputMetadataDatabaseId', '') or '']:
+        if database_id and database_id not in seen_databases:
+            seen_databases.add(database_id)
+            databases.append(database_id)
+    assets = []
+    seen = set()
+    for source in row.get('metadataSourceAssets') or []:
+        pair = ((source or {}).get('databaseId', ''), (source or {}).get('assetId', ''))
+        if all(pair) and pair not in seen:
+            seen.add(pair)
+            assets.append(pair)
+    return databases, assets
+
+
+def _read_assets_of_execution(input_assets, metadata_source_assets):
+    """The distinct assets an execution read: its input-file assets plus the assets named purely as
+    metadata sources. An asset that is both appears once, in input-file order."""
+    merged = list(input_assets)
+    seen = set(merged)
+    for pair in metadata_source_assets:
+        if pair not in seen:
+            seen.add(pair)
+            merged.append(pair)
+    return merged
+
+
+def _execution_access_check(execution_id, main_item, asset_action, config_row=None,
+                            config_row_loader=None, casbin_enforcer=None):
+    """The Tier-2 rule over the entities an execution actually read or wrote: workflow GET, GET on EVERY
+    database whose metadata was captured, `asset_action` on EVERY distinct asset the run read, and — for
+    a run with no inputs of either kind — `asset_action` on the asset it wrote to.
+
+    Every asset is required rather than any one of them: the read paths return the metadata of all of
+    them, so a caller who can reach only some must not reach the execution. The assets a run read are its
+    input-file assets plus the assets named purely as metadata sources. A run with no inputs at all is
+    associated with the asset it wrote to and nothing else, so that asset is its only data-level gate; a
+    results-only run with no inputs has none, leaving workflow GET as the sole control — which is what
+    makes such a run readable at all.
+
+    An asset that no longer resolves substitutes the DATABASE it lived in, under the same action, so a run
+    outlives the asset it ran against instead of becoming unreachable to everyone.
+
+    The workflow itself is never modified by these operations, so workflow access is always GET. The
+    per-asset action varies by operation: an abort changes the run's effect on the assets (POST), while
+    detail/log reads only require GET.
+
+    Every read path — authorize_execution_access (details/logs/abort), _execution_visible_to_caller (the
+    global list) and the per-asset listing (get_executions) — evaluates this one function, so a row any
+    list shows cannot 403 when its details are opened.
+
+    The configuration row is read LAZILY, only after workflow GET passes: a row the caller cannot see at
+    all must not pay for a read. Every remaining check needs it (the metadata sources, the output asset,
+    and the results-only fallback all live on it), so a candidate that clears workflow GET costs exactly
+    one read. `config_row` supplies an already-read item; `config_row_loader` is a zero-argument callable
+    used instead, so a caller that also needs the row for its own projection (the global list, which
+    reports the output target) memoizes the same single read. `casbin_enforcer` may be passed in so a
+    batch caller builds one enforcer for a whole page instead of one per row.
+
+    Returns (allowed: bool, denied_reason: str); denied_reason is for logging only."""
     if len(claims_and_roles["tokens"]) == 0:
         return False, "no tokens"
 
-    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if casbin_enforcer is None:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
 
     # Workflow-level GET (the run's workflow; not modifying the workflow itself).
     workflow_obj = {
@@ -792,27 +1116,95 @@ def authorize_execution_access(execution_id, main_item, asset_action):
         "workflowId": main_item.get('workflowId', ''),
         "databaseId": main_item.get('workflowDatabaseId', ''),
     }
-    if not casbin_enforcer.enforce(workflow_obj, "GET"):
+    if not _enforce_cached(casbin_enforcer, workflow_obj, "GET"):
         return False, "workflow GET denied"
 
-    # asset_action on every distinct input-file asset tied to the execution.
+    if config_row is None:
+        config_row = (config_row_loader() if config_row_loader is not None
+                      else get_workflow_execution_configuration_row(execution_id))
+    metadata_source_databases, metadata_source_assets = _metadata_source_entities(config_row)
+
+    # The captured database metadata is returned by the read paths, so reading the execution needs GET
+    # on every database it was captured from. A database is authorized on its ids alone, so no database
+    # record is resolved.
+    for database_id in metadata_source_databases:
+        if not _enforce_cached(
+                casbin_enforcer, {"object__type": "database", "databaseId": database_id}, "GET"):
+            return False, f"metadata-source database GET denied ({database_id})"
+
+    # asset_action on every distinct asset the run read (input files + metadata sources).
     input_assets = get_execution_input_assets(execution_id)
-    for database_id, asset_id in input_assets:
+    read_assets = _read_assets_of_execution(input_assets, metadata_source_assets)
+    output_database_id = config_row.get('outputDatabaseId', '')
+    output_asset_id = config_row.get('outputAssetId', '')
+    # The run's assets and its output asset resolve together in batched reads before any enforcement, so
+    # a run over many assets costs a few round-trips rather than one per asset and the output asset joins
+    # the same batch instead of trailing it with a read of its own. Every lookup below is then a memo hit,
+    # and the memo is shared across a whole list page, so an asset several rows reference is read once.
+    entity_pairs = read_assets + ([(output_database_id, output_asset_id)]
+                                  if output_database_id and output_asset_id else [])
+    # A list page resolves a bounded number of DISTINCT assets. Once that bound is reached the page stops
+    # resolving new ones, and this row is DENIED rather than authorized on assets it never resolved: the
+    # rule stays "every asset the run read must allow the action", so the rows the page does return are
+    # exactly the rows that satisfied it. The caller is told the bound applied (response `warnings`) and
+    # continues from the same NextToken.
+    if not _authz_entities_within_budget(entity_pairs):
+        return False, "per-page entity-resolution bound reached"
+    prewarm_asset_details(entity_pairs)
+    # An asset the run read may have been deleted since. Deleting an asset does not delete the
+    # executions that ran against it, and those runs stay the record of what happened to it, so a
+    # resolvable asset is authorized on the asset while a deleted one defers to its DATABASE. A database
+    # is never removed — deleting one rewrites the record under a '#deleted' id — so its permissions
+    # remain answerable for as long as the execution exists, which keeps the history of a deleted asset
+    # reachable by whoever can read the database it lived in rather than by nobody.
+    missing_asset_databases = set()
+    for database_id, asset_id in read_assets:
         asset = _get_asset_details_cached(database_id, asset_id)
         if not asset:
-            # An input asset that no longer exists cannot be authorized against; deny.
-            return False, f"input asset missing ({database_id}/{asset_id})"
+            missing_asset_databases.add(database_id)
+            continue
         asset.update({"object__type": "asset"})
-        if not casbin_enforcer.enforce(asset, asset_action):
+        if not _enforce_cached(casbin_enforcer, asset, asset_action):
             return False, f"asset {asset_action} denied ({database_id}/{asset_id})"
+
+    # No inputs of either kind: the output asset is the run's only data-level association, so it
+    # carries the gate. Without an asset output there is nothing to gate on and workflow GET stands
+    # alone. A deleted output asset defers to its database for the same reason an input asset does.
+    if not input_assets and not metadata_source_assets:
+        if output_database_id and output_asset_id:
+            output_asset = _get_asset_details_cached(output_database_id, output_asset_id)
+            if not output_asset:
+                missing_asset_databases.add(output_database_id)
+            else:
+                output_asset.update({"object__type": "asset"})
+                if not _enforce_cached(casbin_enforcer, output_asset, asset_action):
+                    return False, (f"output asset {asset_action} denied "
+                                   f"({output_database_id}/{output_asset_id})")
+
+    # Each database whose asset the run can no longer resolve. Reaching here means every asset that DOES
+    # resolve already authorized, so these are the run's only remaining data-level association.
+    for database_id in sorted(missing_asset_databases):
+        if not _enforce_cached(
+                casbin_enforcer, {"object__type": "database", "databaseId": database_id},
+                asset_action):
+            return False, f"deleted asset's database {asset_action} denied ({database_id})"
 
     return True, ""
 
 
-def authorize_abort(execution_id, main_item):
-    """Abort authorization: workflow GET + POST on every input asset (the abort
-    changes the run's effect on those assets, so write access is required)."""
-    return authorize_execution_access(execution_id, main_item, "POST")
+def authorize_execution_access(execution_id, main_item, asset_action, config_row=None):
+    """Tier-2 authorization for an execution operation (details, logs, abort). `config_row` supplies an
+    already-read configuration row so a caller that holds one does not pay for a second read.
+
+    Returns (allowed: bool, denied_reason: str); the rule itself is _execution_access_check."""
+    return _execution_access_check(execution_id, main_item, asset_action, config_row=config_row)
+
+
+def authorize_abort(execution_id, main_item, config_row=None):
+    """Abort authorization: workflow GET + POST on every asset the run read (and, for a run with no
+    inputs, the asset it wrote to) — the abort changes the run's effect on those assets, so write
+    access is required — plus GET on every captured metadata-source database."""
+    return authorize_execution_access(execution_id, main_item, "POST", config_row=config_row)
 
 
 def abort_execution(event, execution_id):
@@ -820,7 +1212,7 @@ def abort_execution(event, execution_id):
 
     Order of operations:
       1. Resolve the V2 main row (404 if unknown).
-      2. Authorize: workflow GET + POST on every input-file asset (403 if denied).
+      2. Authorize: workflow GET + POST on every asset the run read (403 if denied).
       3. Stop each still-running pipeline's registered sub-processes first (Step Functions
          executions are stopped; other resource types warn), then the main execution.
       4. Mark every non-terminal pipeline row ABORTED (with a stop date) and the main
@@ -873,6 +1265,13 @@ def abort_execution(event, execution_id):
         _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES)
 
     logger.info(f"Aborted execution {execution_id}")
+    # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
+    log_actions(event, "workflowExecutionAbort", {
+        "executionId": execution_id,
+        "workflowId": main_item.get('workflowId', ''),
+        "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
+        "operation": "abort",
+    })
     # Include a "warnings" list only when a best-effort sub-process abort failed.
     body = {'message': "Execution aborted"}
     if warnings:
@@ -898,9 +1297,96 @@ MAX_REGISTERED_LOGS_INSPECTED = 20
 MAX_REGISTERED_SUB_EXECUTIONS_INSPECTED = 20
 
 # Upper bound on rows collected per sub-collection (output files/metadata/results, input files/metadata)
-# in the execution-details view, so an output-heavy execution's assembled response cannot exceed the
-# Lambda synchronous-response limit. A collection hitting the cap is flagged truncated in the response.
+# in the execution-details view, so an output-heavy execution does not read without limit. This bounds
+# the READ; what bounds the assembled response is MAX_DETAIL_COLLECTION_BYTES_RETURNED below, since a
+# row count says nothing about how large each row is. A collection hitting the cap is flagged truncated.
 MAX_DETAIL_ROWS_PER_COLLECTION = 2000
+
+# Rows returned per input collection (inputFiles, inputMetadata, inputDatabaseMetadata) once the detail
+# view is assembled. These rows are the heaviest in the response — a metadata row carries an arbitrary
+# key/value map and an input-file row a full asset-relative path — so they are trimmed at this
+# watermark, below the read cap above, rather than only when the read cap itself is reached. A trimmed
+# collection is named in truncatedCollections, so a partial section is never returned unflagged.
+MAX_DETAIL_INPUT_ROWS_RETURNED = 1000
+
+# Byte budget for one returned metadata collection, measured over the serialized rows.
+#
+# A row count alone cannot bound the response: a metadata row carries an entity's whole captured map,
+# which is itself bounded only per entity (MAX_METADATA_ENTRIES_PER_ENTITY entries /
+# MAX_METADATA_BYTES_PER_ENTITY bytes in executeWorkflow), so the row cap admits wildly different
+# payloads. Measured on real serialization, 1000 rows of 200 entries is 11.9 MB — roughly twice the
+# 6 MB Lambda synchronous-response limit, which fails the whole request with a 502 instead of
+# returning the flagged partial view the caps exist to produce. At the scale VAMS targets (thousands
+# of files, hundreds of metadata entries each) that is reachable, not hypothetical.
+#
+# Per-collection ceiling, applied to whatever share of the response budget a collection is granted. It
+# bounds any single collection on its own; the whole-response arithmetic below is what decides how much
+# each one actually gets. Hitting it names the collection in truncatedCollections, the same signal the
+# row caps raise, so a client cannot mistake a bounded view for a complete one.
+MAX_DETAIL_COLLECTION_BYTES_RETURNED = 4 * 1024 * 1024
+
+# Whole-response byte ceiling the detail view assembles within, under the 6 MB Lambda synchronous
+# response limit. The remainder covers the envelope: the pipelines section (with each step's rendered
+# config body) and the JSON structure around all of it.
+#
+# Distinct from MAX_DETAIL_ROWS_PER_COLLECTION, which bounds the READ (how many rows are fetched from
+# DynamoDB) and says nothing about their size. This bounds what is RETURNED, in bytes.
+DETAIL_RESPONSE_BYTE_CEILING = 5 * 1024 * 1024
+
+# Order the response budget is allocated in: the file collections are served first and the metadata
+# collections divide what is left. Files answer "what did this run read and write", which nothing else
+# in the response supplies; a truncated metadata collection can be paged in full from the dedicated
+# metadata route, while a truncated file collection has no such fallback.
+#
+# Priority is not exemption. When the file collections alone would breach the ceiling they are trimmed
+# too and named in truncatedCollections: the 6 MB Lambda limit returns a 502 with no body at all, which
+# is strictly worse than a correctly flagged partial. Files first, metadata second, both bounded.
+DETAIL_FILE_BUDGET_COLLECTIONS = ("inputFiles", "outputs.files")
+
+# Floor the metadata collections are granted regardless of how large the file collections are, so a
+# file-heavy execution still shows some of the metadata it read rather than empty tables. The files are
+# capped at the ceiling less this floor, so granting it never pushes the response over the ceiling.
+MIN_DETAIL_METADATA_BYTES_RETURNED = 256 * 1024
+
+# Rows per page of the paged detail-metadata read, and the cap a caller's pageSize is clamped to. The
+# paged route returns ONE collection, so it has the whole response to itself and can carry far more
+# rows per call than the detail view grants a collection sharing with everything else.
+DEFAULT_DETAIL_METADATA_PAGE_SIZE = 100
+MAX_DETAIL_METADATA_PAGE_SIZE = 500
+
+# Scope discriminator on an input-metadata row (mirrors executionRecords.build_input_metadata_record).
+# 'asset' rows describe an asset or one of its files; a 'database' row describes a metadata-source
+# database's own metadata and carries no assetId, so it is reported as its own detail collection.
+INPUT_METADATA_SCOPE_ASSET = "asset"
+INPUT_METADATA_SCOPE_DATABASE = "database"
+
+# Byte budget for one page of the paged detail-metadata read, measured over the serialized rows. Rows
+# are added until the next one would cross it, and the page's NextToken then resumes at the first row
+# left out — so unlike the detail view's trim, nothing is dropped, it is deferred to the next page.
+MAX_DETAIL_METADATA_PAGE_BYTES = 4 * 1024 * 1024
+
+# Upper bound on rows SCANNED (as opposed to returned) by one paged detail-metadata request. The
+# collections are stored together and split by scope, so a request for the database-scope subset can
+# read past a large number of asset-scope rows before filling a page. Reaching the bound ends the page
+# early with a continuation token at the last row scanned, so the walk resumes without skipping rows.
+MAX_DETAIL_METADATA_ROWS_SCANNED = 20000
+
+# Rows requested per underlying DynamoDB query when the collection is a scope-filtered subset. `Limit`
+# applies BEFORE the scope split, so requesting only the rows still needed would take one query per
+# matching row when the subset is sparse.
+DETAIL_METADATA_QUERY_PAGE_SIZE = 200
+
+# The detail view's metadata collections, addressable individually by the paged read. 'input' and
+# 'inputDatabase' are the scope split of the one per-pipeline input-metadata table; 'output' is the
+# per-pipeline output-metadata table.
+DETAIL_METADATA_COLLECTION_INPUT = "input"
+DETAIL_METADATA_COLLECTION_INPUT_DATABASE = "inputDatabase"
+DETAIL_METADATA_COLLECTION_OUTPUT = "output"
+DETAIL_METADATA_COLLECTIONS = (
+    DETAIL_METADATA_COLLECTION_INPUT,
+    DETAIL_METADATA_COLLECTION_INPUT_DATABASE,
+    DETAIL_METADATA_COLLECTION_OUTPUT,
+)
 
 # Upper bound on the number of active executions abort_group aborts per request. Each abort is a
 # multi-round-trip synchronous operation (per-member auth + SFN StopExecution + row writes), so a
@@ -943,6 +1429,164 @@ def _query_capped(table_name, key_condition, max_items):
         resp = table.query(**kwargs)
 
 
+def _rows_serialized_bytes(rows):
+    """Serialized UTF-8 size of a collection's rows. Measured on the same shape the response returns,
+    so the budget arithmetic reflects what the caller actually receives. An unserializable row measures
+    as 0 rather than raising — the caller's serializer is where that failure belongs."""
+    total = 0
+    for row in rows:
+        try:
+            total += len(json.dumps(row, default=str).encode("utf-8"))
+        except Exception:
+            continue
+    return total
+
+
+def _allocate_detail_byte_budgets(file_bytes, ceiling=DETAIL_RESPONSE_BYTE_CEILING,
+                                  metadata_floor=MIN_DETAIL_METADATA_BYTES_RETURNED,
+                                  fixed_bytes=0):
+    """Split the response byte ceiling between the file collections and the metadata collections.
+
+    `fixed_bytes` is the part of the response no bound can trim — the per-step entries and their
+    rendered configuration bodies, which identify what ran and are the point of the view. It is charged
+    against the ceiling BEFORE the collections divide it, so a run with several large configuration
+    bodies trims its collections instead of overflowing: those bodies are echoed per step and each is
+    capped in the low hundreds of KB, so a few steps consume most of a megabyte on their own.
+
+    Files are served first out of what is left: they get what they need up to
+    `ceiling - fixed_bytes - metadata_floor`, and the metadata collections divide the remainder.
+    Returns (file_budget, metadata_budget).
+
+    Reserving the metadata floor out of the FILE allowance (rather than adding it on top afterwards) is
+    what keeps the total within the ceiling: a file-heavy execution is trimmed to the reduced allowance
+    and flagged, instead of the response overflowing by the floor's worth of bytes and relying on a log
+    line nobody reads. Both budgets are therefore real bounds, and their sum never exceeds the ceiling.
+
+    A ceiling smaller than the floor still yields a non-negative pair, so a misconfigured pair degrades
+    to "metadata only" rather than producing a negative budget that would drop every row. Fixed bytes
+    exceeding the ceiling on their own collapse both budgets to zero rather than going negative: the
+    collections are then empty and flagged, which is the most the bound can do about a part of the
+    response it cannot trim."""
+    collections_ceiling = max(0, ceiling - max(0, fixed_bytes))
+    metadata_floor = max(0, min(metadata_floor, collections_ceiling))
+    file_budget = max(0, collections_ceiling - metadata_floor)
+    if file_bytes < file_budget:
+        # Files fit inside their allowance, so the metadata collections take everything they leave.
+        return file_budget, max(metadata_floor, collections_ceiling - file_bytes)
+    # Files are at or over the allowance: they are trimmed to it (and flagged by the trim), and the
+    # metadata collections get exactly the reserved floor.
+    return file_budget, metadata_floor
+
+
+def _trim_rows_to_byte_budget(rows, name, truncated,
+                              max_bytes=MAX_DETAIL_COLLECTION_BYTES_RETURNED):
+    """Drop rows from the end of an already row-trimmed collection until it serializes within
+    max_bytes, naming it in `truncated` when anything is dropped.
+
+    The row caps cannot bound the response on their own: a metadata row carries a whole entity's
+    captured map, so a collection at the row cap ranges from a few hundred KB to several times the
+    Lambda synchronous-response limit. Exceeding that limit fails the request outright, which loses
+    even the truncation flags — strictly worse than returning fewer rows and saying so.
+
+    Rows are measured cumulatively in order and the first row that would cross the budget ends the
+    collection, so the retained prefix is deterministic and a caller sees whole rows rather than a
+    truncated map. A single row larger than the whole budget is still kept, since a collection that
+    silently came back empty would read as 'this run captured nothing'."""
+    kept = []
+    used = 0
+    for row in rows:
+        try:
+            row_bytes = len(json.dumps(row, default=str).encode("utf-8"))
+        except Exception:
+            # An unserializable row would fail the response anyway; let the caller's serializer raise
+            # rather than silently dropping it here.
+            row_bytes = 0
+        if kept and used + row_bytes > max_bytes:
+            truncated.add(name)
+            logger.info(f"Detail collection {name} trimmed to {len(kept)} of {len(rows)} rows to stay "
+                        f"within {max_bytes} bytes (would have been {used + row_bytes}).")
+            return kept
+        kept.append(row)
+        used += row_bytes
+    return kept
+
+
+def _trim_returned_rows(rows, name, truncated, max_rows=MAX_DETAIL_INPUT_ROWS_RETURNED,
+                        max_bytes=MAX_DETAIL_COLLECTION_BYTES_RETURNED):
+    """Trim an assembled detail collection to max_rows AND to a byte budget, naming it in the
+    `truncated` set when rows are dropped. Returns the trimmed list. Applied per collection after
+    the input-metadata split, so each collection's own flag reflects only its own trim."""
+    if len(rows) > max_rows:
+        truncated.add(name)
+        rows = rows[:max_rows]
+    return _trim_rows_to_byte_budget(rows, name, truncated, max_bytes=max_bytes)
+
+
+def _trim_returned_rows_per_pipeline(rows, name, truncated,
+                                     max_rows=MAX_DETAIL_INPUT_ROWS_RETURNED,
+                                     max_bytes=MAX_DETAIL_COLLECTION_BYTES_RETURNED):
+    """Trim a PER-PIPELINE detail collection to max_rows, taking an even share from each producing
+    pipeline rather than a prefix of the assembled list. Names the collection in `truncated` when rows
+    are dropped, and preserves both the pipeline order and each pipeline's own row order.
+
+    The rows arrive grouped by pipeline (the assembly walks the steps in order), so a prefix trim
+    spends the whole budget on the first pipelines and returns NONE of the later ones'. For a
+    collection whose purpose is to say which metadata each pipeline read, a pipeline with no rows reads
+    as "this step read nothing" — a claim about the step, not a visible consequence of the cap. Taking
+    a share from each keeps every pipeline represented, so the truncation flag is the only thing a
+    reader has to interpret.
+
+    The BYTE budget is spent by the same round-robin rather than applied to the assembled result: a
+    trailing byte trim would cut whole pipelines off the end, which is the prefix-trim problem the
+    round-robin exists to avoid. Both bounds therefore stop the walk together, and either one naming
+    the collection in `truncated` reports the same thing — the view is a subset."""
+    groups = {}
+    order = []
+    for row in rows:
+        pipeline_id = row.get("pipelineId", "")
+        if pipeline_id not in groups:
+            groups[pipeline_id] = []
+            order.append(pipeline_id)
+        groups[pipeline_id].append(row)
+    if len(rows) > max_rows:
+        truncated.add(name)
+    # Round-robin one row per pipeline per pass, so a pipeline with fewer rows than its even share
+    # leaves its remainder to the others instead of reserving it.
+    kept = {pipeline_id: [] for pipeline_id in order}
+    taken = 0
+    used = 0
+    depth = 0
+    stop = False
+    while taken < max_rows and not stop:
+        progressed = False
+        for pipeline_id in order:
+            if depth >= len(groups[pipeline_id]):
+                continue
+            row = groups[pipeline_id][depth]
+            try:
+                row_bytes = len(json.dumps(row, default=str).encode("utf-8"))
+            except Exception:
+                row_bytes = 0
+            # Keep at least one row overall, so a collection of individually huge rows is not reported
+            # as empty (which would read as "this run captured nothing").
+            if taken and used + row_bytes > max_bytes:
+                truncated.add(name)
+                logger.info(f"Detail collection {name} trimmed to {taken} of {len(rows)} rows to stay "
+                            f"within {max_bytes} bytes.")
+                stop = True
+                break
+            kept[pipeline_id].append(row)
+            used += row_bytes
+            taken += 1
+            progressed = True
+            if taken >= max_rows:
+                break
+        if not progressed:
+            break
+        depth += 1
+    return [row for pipeline_id in order for row in kept[pipeline_id]]
+
+
 def get_workflow_definition(workflow_database_id, workflow_id):
     """Fetch the workflow definition row (for description + pipeline name/description
     cross-fetch). Returns the item or {}."""
@@ -963,6 +1607,42 @@ def get_pipeline_definition(pipeline_database_id, pipeline_id):
     return resp.get('Item', {}) or {}
 
 
+def get_pipeline_definitions(pairs):
+    """Resolve many pipeline definition rows in batched reads, keyed by (databaseId, pipelineId).
+
+    (databaseId, pipelineId) is the pipeline table's complete primary key, so each pair addresses at
+    most one item. A pair the batch does not resolve falls back to the per-item
+    `get_pipeline_definition`, and a pipeline that no longer exists maps to {} — the same graceful
+    degradation the single-row read gives the detail view."""
+    wanted = []
+    seen = set()
+    for pair in pairs:
+        database_id, pipeline_id = pair
+        if not database_id or not pipeline_id or pair in seen:
+            continue
+        seen.add(pair)
+        wanted.append(pair)
+
+    definitions = {}
+    # A single-step workflow is already one round-trip, so it goes straight to the single-row read;
+    # batching starts to pay off from two steps.
+    if len(wanted) > 1:
+        rows = _batch_get_rows(
+            pipeline_database,
+            [{'databaseId': database_id, 'pipelineId': pipeline_id}
+             for database_id, pipeline_id in wanted])
+        for item in rows:
+            pair = (item.get('databaseId', ''), item.get('pipelineId', ''))
+            if pair in seen:
+                definitions[pair] = item
+
+    for pair in wanted:
+        if pair not in definitions:
+            definitions[pair] = get_pipeline_definition(pair[0], pair[1])
+
+    return definitions
+
+
 def _scrub_pipeline_detail(prow, pipeline_def, rendered_config="", rendered_config_truncated=False,
                            config_snapshot=None):
     """Public-facing per-pipeline detail. Cross-fetches a human-readable name/description
@@ -971,12 +1651,20 @@ def _scrub_pipeline_detail(prow, pipeline_def, rendered_config="", rendered_conf
     snapshot (which template/tags/override + config format the run used).
 
     Deliberately omitted as internal: every S3 bucket/prefix field (input/output/aux/temp),
-    all ARNs (pipelineResourceArn, sub-execution arns), and the STS/vended-role fields."""
+    all ARNs (pipelineResourceArn, sub-execution arns), and the STS/vended-role fields.
+
+    The one exception is renderedConfigLocation, emitted whenever the object exists. The config
+    body always goes to Amazon S3 for the pipeline to read, and it is the FULLY rendered body —
+    `renderedConfig` inline is post-user-tag / pre-system-tag, a different stage of the same body.
+    So a caller wanting what the step actually ran with needs this pointer even when the inline copy
+    is complete. It is scoped to that one object (bucket + key of this step's config.json), and a
+    caller reading this response has already cleared the execution-detail authorization gate.
+    `renderedConfigTruncated` is the truncation signal and is emitted unconditionally."""
     # V2 pipeline records carry a human-readable pipelineName; fall back to category, then the id.
     name = (pipeline_def.get('pipelineName', '') or pipeline_def.get('pipelineId', '')
             or prow.get('pipelineId', ''))
     snapshot = config_snapshot or {}
-    return {
+    detail = {
         "pipelineId": prow.get('pipelineId', ''),
         "pipelineDatabaseId": prow.get('pipelineDatabaseId', ''),
         # Per-pipeline-execution id: the log endpoint's pipelineExecutionId parameter, letting the
@@ -1006,6 +1694,27 @@ def _scrub_pipeline_detail(prow, pipeline_def, rendered_config="", rendered_conf
         "effectiveSystemConfig": snapshot.get('effectiveSystemConfig', {}) or {},
         "templateOverrides": snapshot.get('templateOverrides', {}) or {},
     }
+    # Location of the full config body, for a truncated inline copy only. bucket is the step's run
+    # bucket from the pipeline-execution row; key is the per-execution config.json the pipeline read.
+    # Emitted as a {bucket, key} pair — the shape the asset records use for an S3 object location —
+    # rather than a bare key, because a key alone does not identify the object across the run bucket
+    # and the auxiliary bucket.
+    #
+    # Emitted whenever the object exists, NOT only when the inline body was truncated. The two fields
+    # describe different STAGES of the same body: `renderedConfig` is post-user-tag / pre-system-tag
+    # (templateResolution defers the system tags — see its docstring), while this object is the fully
+    # rendered body the step actually ran with. So a caller wanting what ran needs this pointer even
+    # when the inline copy is complete, which is the common case. Withholding it there left the API
+    # with no route to the real config at all, short of the caller reconstructing an internal S3 key.
+    # `renderedConfigTruncated` remains the truncation signal on its own — it is emitted
+    # unconditionally above, so nothing depended on this field's absence to convey it.
+    config_s3_key = snapshot.get('inputConfigurationFileS3Key', '') or ''
+    if config_s3_key:
+        detail["renderedConfigLocation"] = {
+            "bucket": prow.get('S3AssetPipelineBucket', '') or '',
+            "key": config_s3_key,
+        }
+    return detail
 
 
 def _scrub_input_file(row):
@@ -1020,13 +1729,25 @@ def _scrub_input_file(row):
 
 
 def _scrub_input_metadata(row):
-    """Public-facing input-metadata record (asset-relative filePath + the metadata map;
-    the internal source S3 key is omitted)."""
+    """Public-facing input-metadata record (asset-relative filePath + the metadata and attributes
+    maps; the internal source S3 key is omitted).
+
+    scope says what the metadata describes: 'asset' for an asset/file row, 'database' for a
+    metadata-source database's own metadata (empty assetId, '/' filePath). Rows stored before the
+    discriminator existed carry none, so they read as asset metadata.
+
+    'attributes' is that file's ATTRIBUTES, reported separately from 'metadata' because the two are
+    independently gated by a pipeline's metadataInputs (fileMetadata vs fileAttributes). Reporting them
+    apart is what makes a per-step fileAttributes gate observable through the API: a step the gate
+    excluded shows an empty map while a step it allowed shows the values. A row is empty here when the
+    run captured no attributes for that file, and asset/database-scope rows always are."""
     return {
         "databaseId": row.get('databaseId', ''),
         "assetId": row.get('assetId', ''),
         "filePath": row.get('filePath', ''),
+        "scope": row.get('scope', '') or INPUT_METADATA_SCOPE_ASSET,
         "metadata": row.get('metadata', {}) or {},
+        "attributes": row.get('attributes', {}) or {},
     }
 
 
@@ -1072,16 +1793,25 @@ def _scrub_output_result(row):
 
 
 def get_workflow_execution_configuration_row(execution_id):
-    """Fetch the workflow-execution configuration row (PK workflowExecutionId,
-    SK 'configuration'), which records the output target. Returns the item or {}."""
-    try:
-        cfg_table = dynamodb.Table(workflow_execution_configuration_table)
-        resp = cfg_table.get_item(Key={'workflowExecutionId': execution_id,
-                                        'recordType': 'configuration'})
-        return resp.get('Item') or {}
-    except Exception as e:
-        logger.exception(f"Failed reading workflow execution configuration row: {e}")
-        return {}
+    """Fetch the workflow-execution configuration row (PK workflowExecutionId, SK 'configuration').
+
+    Returns the item, or {} when the row genuinely does not exist — a legacy run, or one whose row has
+    already been deleted by a permanent delete.
+
+    A FAILED read raises. This row is load-bearing for authorization, not just for projection: it
+    carries the metadata-source databases and assets the read gate checks and the output-target ids that
+    gate a run with no inputs. Answering a failed read with {} makes an execution look as though it read
+    and wrote nothing, which removes every data-level check and leaves workflow GET alone — so a
+    DynamoDB throttle would silently turn a denial into an approval. Failing the request is the only
+    safe answer: `lambda_handler` maps a throttle to its own response and anything else to a 500, and a
+    caller retries.
+
+    Callers that need "absent" to be distinguishable from "unreadable" get that for free — absent
+    returns {}, unreadable never returns."""
+    cfg_table = dynamodb.Table(workflow_execution_configuration_table)
+    resp = cfg_table.get_item(Key={'workflowExecutionId': execution_id,
+                                   'recordType': 'configuration'})
+    return resp.get('Item') or {}
 
 
 def get_produced_file_versions(execution_id):
@@ -1146,14 +1876,39 @@ def _enrich_output_files_with_asset_versions(output_files, execution_id, config_
     return output_files
 
 
-def assemble_execution_details(execution_id, main_item):
+def assemble_execution_details(execution_id, main_item, config_row=None):
     """Assemble the full, traceability-focused detail view for an execution.
 
     Cross-fetches workflow + per-pipeline definitions for human-readable names/descriptions,
     and gathers per-pipeline inputs (files/metadata/configuration) and outputs
-    (files/metadata/results). Tolerates partially-populated executions (still running) and
-    records the end-state lambda has not written yet. Scrubs all internal fields (ARNs,
-    S3 bucket/key/prefix locations, STS/vended-role fields)."""
+    (files/metadata/results). Input metadata is reported in two collections: asset/file metadata under
+    inputMetadata, and each metadata-source database's own metadata under inputDatabaseMetadata (it
+    belongs to no asset). Tolerates partially-populated executions (still running) and records the
+    end-state lambda has not written yet. Scrubs all internal fields (ARNs, S3 bucket/key/prefix
+    locations, STS/vended-role fields).
+
+    Collections are bounded three ways, and every bound that cuts a collection names it in
+    truncatedCollections, so a partial section is always flagged:
+
+      - READ: each read stops at MAX_DETAIL_ROWS_PER_COLLECTION rows.
+      - ROWS: the input collections are trimmed to MAX_DETAIL_INPUT_ROWS_RETURNED.
+      - BYTES: the whole response is assembled within DETAIL_RESPONSE_BYTE_CEILING. The file
+        collections are served first and the metadata collections divide the remainder, with
+        MIN_DETAIL_METADATA_BYTES_RETURNED reserved so a file-heavy run still shows some metadata.
+        Files are prioritized, not exempt: a run whose files alone exceed the allowance has them
+        trimmed and flagged too, because breaching the Lambda response limit returns no body at all.
+
+    The two input-metadata collections share one read, so a read-cap hit flags both; a row or byte trim
+    flags only the collection actually trimmed.
+
+    The input-metadata rows are per pipeline execution and describe the entities that step read, so
+    both their read and their trim are shared out across the steps rather than spent first-come: each
+    pipeline reads at most its own share of the collection budget, and the trim keeps a share of each
+    pipeline's rows. A pipeline's rows are therefore thinned by a cap, never dropped wholesale — which
+    would read as that step having read no metadata.
+
+    `config_row` supplies an already-read configuration row (the authorization pass reads the same one)
+    so assembling the view does not repeat that read."""
     workflow_def = get_workflow_definition(
         main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''))
 
@@ -1170,12 +1925,20 @@ def assemble_execution_details(execution_id, main_item):
     # Track which sub-collections were capped so the response can flag partial data (no silent cap).
     truncated = set()
 
-    def _collect(target, table_name, pexec, scrub, name, pipeline_id=""):
+    def _collect(target, table_name, pexec, scrub, name, pipeline_id="", per_pipeline_cap=0):
         """Append up to the per-collection cap (across all pipelines) from a pexec-keyed table,
         recording truncation. Stamps each scrubbed row with the producing pipelineId so the UI can
         attribute outputs/metadata to the pipeline that produced them. Bounds the assembled response
-        for output-heavy executions."""
+        for output-heavy executions.
+
+        per_pipeline_cap additionally bounds ONE pipeline's share of the collection budget. Without it
+        the budget is first-come across the steps, so one row-heavy early pipeline can consume the whole
+        collection and later pipelines contribute nothing — for a per-pipeline collection that reads as
+        those steps having no rows. Left at 0 (the shared first-come budget) for collections whose rows
+        are attributed to a pipeline but not compared across them."""
         remaining = MAX_DETAIL_ROWS_PER_COLLECTION - len(target)
+        if per_pipeline_cap > 0:
+            remaining = min(remaining, per_pipeline_cap)
         if remaining <= 0:
             truncated.add(name)
             return
@@ -1186,6 +1949,35 @@ def assemble_execution_details(execution_id, main_item):
             target.append(scrubbed)
         if was_truncated:
             truncated.add(name)
+
+    # A step may read up to what is left of the input-metadata budget, minus a floor reserved for each
+    # step still to be read — so a row-heavy step is not capped by an even share the other steps cannot
+    # use, and a step late in the order is still guaranteed rows.
+    #
+    # A fixed even share (budget // steps) was the wrong bound: four arity-none steps holding one
+    # database row each reserved four-fifths of the budget, so a 5-step run whose first step read 900
+    # files returned 399 of them and flagged the collection truncated, while the same run on one step
+    # returned all 900. Reserving only the floor means that run now returns all 900 and flags nothing.
+    #
+    # When the steps genuinely want more than the budget, the earlier ones fill first and the later ones
+    # fall back on their floor. That favors read order over evenness, which is the right trade here: the
+    # alternative needs each step's row count before reading any of them, and the collection is flagged
+    # truncated either way.
+    _input_metadata_remaining = [MAX_DETAIL_ROWS_PER_COLLECTION]
+    _input_metadata_steps_left = [max(1, len(pipeline_rows))]
+    # Half the budget spread across the steps, so the reserve cannot itself starve an early step.
+    _input_metadata_floor = max(1, MAX_DETAIL_ROWS_PER_COLLECTION // (2 * max(1, len(pipeline_rows))))
+
+    def _input_metadata_share():
+        """This step's read cap: what is left, less a floor for each step still to come."""
+        _input_metadata_steps_left[0] = max(0, _input_metadata_steps_left[0] - 1)
+        reserved = _input_metadata_floor * _input_metadata_steps_left[0]
+        return max(1, _input_metadata_remaining[0] - reserved)
+
+    # Every step's definition resolves in batched reads up front, so a multi-step workflow costs a few
+    # round-trips rather than one per step. Repeated pipelines collapse to a single key.
+    pipeline_def_cache.update(get_pipeline_definitions(
+        (prow.get('pipelineDatabaseId', ''), prow.get('pipelineId', '')) for prow in pipeline_rows))
 
     for prow in pipeline_rows:
         pexec_id = prow.get('pipelineExecutionId', '')
@@ -1222,9 +2014,15 @@ def assemble_execution_details(execution_id, main_item):
             continue
 
         _pid = prow.get('pipelineId', '')
-        # Input metadata is recorded once per execution; gather (capped) then dedupe below.
+        # Input metadata is recorded per pipeline execution, each pipeline's rows describing the
+        # entities IT read; gather (capped, with each pipeline bounded to its share of what the earlier
+        # steps left) then dedupe within a pipeline below.
+        _before = len(input_metadata)
         _collect(input_metadata, pipeline_execution_input_metadata_table, pexec_id,
-                 _scrub_input_metadata, "inputMetadata", _pid)
+                 _scrub_input_metadata, "inputMetadata", _pid,
+                 per_pipeline_cap=_input_metadata_share())
+        _input_metadata_remaining[0] = max(
+            0, _input_metadata_remaining[0] - (len(input_metadata) - _before))
         # Outputs per pipeline execution (files / metadata / results), each capped and tagged
         # with the producing pipelineId for per-pipeline attribution in the UI.
         _collect(output_files, pipeline_execution_output_files_table, pexec_id,
@@ -1241,18 +2039,99 @@ def assemble_execution_details(execution_id, main_item):
     input_files = [_scrub_input_file(row) for row in _input_rows]
     if _input_trunc:
         truncated.add("inputFiles")
+    input_files = _trim_returned_rows(input_files, "inputFiles", truncated)
 
-    # Dedupe input metadata by (assetId, filePath).
+
+    # Dedupe input metadata by (pipelineId, scope, databaseId, assetId, filePath) — the row's full
+    # identity. A database row carries an empty assetId and a '/' filePath, so dropping any of the
+    # entity keys would collapse it into an asset-level row (or into the legacy flat row, which has
+    # empty ids too). pipelineId is part of the identity because the rows are per-pipeline-execution
+    # and each pipeline reads a different set of entities: the collections answer which metadata went
+    # into which pipeline, so two pipelines' rows for the same entity are two distinct facts, not one
+    # row read twice. A key without it keeps whichever pipeline was collected last and reports that
+    # pipeline as the only reader.
     deduped_md = {}
     for md in input_metadata:
-        deduped_md[(md.get("assetId", ""), md.get("filePath", ""))] = md
+        deduped_md[(md.get("pipelineId", ""), md.get("scope", ""), md.get("databaseId", ""),
+                    md.get("assetId", ""), md.get("filePath", ""))] = md
     input_metadata = list(deduped_md.values())
+
+    # Database metadata is its own detail collection: it describes a metadata-source database rather
+    # than an asset, so a client rendering asset/file columns cannot present it in the same table.
+    input_database_metadata = [md for md in input_metadata
+                               if md.get("scope") == INPUT_METADATA_SCOPE_DATABASE]
+    input_metadata = [md for md in input_metadata
+                      if md.get("scope") != INPUT_METADATA_SCOPE_DATABASE]
+    # Both collections come from the one capped input-metadata read, and a dropped row's scope is not
+    # knowable, so a READ-cap hit flags both rather than only the one that happens to look short. This
+    # is the one coarse case: the two collections cannot be distinguished for rows that were never
+    # read. The per-collection trim below is exact, because it runs after the scope split.
+    if "inputMetadata" in truncated:
+        truncated.add("inputDatabaseMetadata")
 
     # For asset-output executions, join each output file to the authoritative S3 asset file
     # version it produced (via the version-history table). Best-effort: leaves entries
     # path-only when no history record exists (e.g. legacy runs).
-    config_row = get_workflow_execution_configuration_row(execution_id)
+    #
+    # Runs BEFORE the byte budget is measured: enrichment adds assetId/databaseId/assetFileVersionId to
+    # every output-file row, so measuring beforehand would under-count the collection and let the
+    # assembled response exceed the ceiling the budget exists to hold.
+    if config_row is None:
+        config_row = get_workflow_execution_configuration_row(execution_id)
     output_files = _enrich_output_files_with_asset_versions(output_files, execution_id, config_row)
+
+    # The file collections are served first (DETAIL_FILE_BUDGET_COLLECTIONS), sharing ONE allowance so
+    # the pair cannot breach the ceiling by each spending it: inputFiles is granted first and the output
+    # files take what it leaves. Either one trimmed is named in truncatedCollections — neither has a
+    # paged route to escalate to, so the flag is the caller's only signal.
+    # The per-step entries and their rendered configuration bodies are charged against the ceiling before
+    # the collections divide it. They are not trimmable — a step's identity and the configuration it ran
+    # with are what the view exists to report — and each body is echoed both on its pipeline entry and in
+    # inputConfigurations, so a few steps carrying large bodies would otherwise push the assembled
+    # response past the Lambda synchronous-response limit while only the collections showed a flag.
+    _fixed_bytes = (_rows_serialized_bytes(pipelines)
+                    + _rows_serialized_bytes(input_configurations))
+    _file_budget, _metadata_budget = _allocate_detail_byte_budgets(
+        _rows_serialized_bytes(input_files) + _rows_serialized_bytes(output_files),
+        fixed_bytes=_fixed_bytes)
+    input_files = _trim_rows_to_byte_budget(input_files, "inputFiles", truncated,
+                                            max_bytes=_file_budget)
+    output_files = _trim_returned_rows_per_pipeline(
+        output_files, "outputs.files", truncated,
+        max_rows=MAX_DETAIL_ROWS_PER_COLLECTION,
+        max_bytes=max(0, _file_budget - _rows_serialized_bytes(input_files)))
+
+    # Both metadata collections are per-pipeline, so the trim takes a share from each producing pipeline
+    # rather than a prefix — a prefix would return the first pipelines' rows and none of the later ones'.
+    #
+    # The metadata collections divide what the files left (_metadata_budget). They share it rather than
+    # each taking it, so the assembled response stays within DETAIL_RESPONSE_BYTE_CEILING: each is
+    # granted the remainder after the ones before it. A collection trimmed here is named in
+    # truncatedCollections and can be read in full from the paged metadata route, which is why metadata
+    # yields to files rather than the other way round.
+    _metadata_remaining = _metadata_budget
+
+    def _grant(rows, name):
+        """Trim `rows` to what the metadata allowance has left, then charge the retained bytes to it."""
+        nonlocal _metadata_remaining
+        kept = _trim_returned_rows_per_pipeline(rows, name, truncated,
+                                                max_bytes=max(0, _metadata_remaining))
+        _metadata_remaining -= _rows_serialized_bytes(kept)
+        return kept
+
+    # Granted in order of what a trimmed collection costs the caller, not in the order they are reported.
+    # outputs.results has no paged route, so a row trimmed from it is unreachable — and for a run with no
+    # input files those results ARE its output. It is therefore served first, and the three collections
+    # that DO have a paged route to escalate to divide what it leaves. This is the same reasoning that
+    # puts files ahead of metadata, applied one level down.
+    output_results = _grant(output_results, "outputs.results")
+    input_metadata = _grant(input_metadata, "inputMetadata")
+    input_database_metadata = _grant(input_database_metadata, "inputDatabaseMetadata")
+    output_metadata = _grant(output_metadata, "outputs.metadata")
+
+    # Reported from the same helper the authorization pass gates on, so the databases a client is told
+    # about are exactly the ones access to this view required.
+    metadata_source_databases, _metadata_source_assets = _metadata_source_entities(config_row)
 
     return {
         "workflowExecutionId": execution_id,
@@ -1280,17 +2159,38 @@ def assemble_execution_details(execution_id, main_item):
         # The (dynamic-tag-templated) output base path this run wrote under; '/' = asset root.
         "outputFileBaseExecutionPathExtension":
             (config_row or {}).get('outputFileBaseExecutionPathExtension', '') or '/',
+        # The metadata sources of the run (never input files): every database whose metadata was
+        # captured, and the assets named purely as sources, in selection order. metadataSourceDatabaseId
+        # is the single database the CALLER named, which only a run with no input files has — a run with
+        # input files derives its databases from them instead, so the databases list is what a client
+        # should render. It reports every captured database, including the ones derived from the input
+        # files that do not gate the read. All three are always sent, empty when none, so a client can
+        # tell "no source" from "a source that carries no metadata" — the latter yields a selection here
+        # with no metadata row.
+        "metadataSourceDatabaseId": (config_row or {}).get('inputMetadataDatabaseId', ''),
+        "metadataSourceDatabases": [
+            d for d in ((config_row or {}).get('metadataSourceDatabases') or []) if d
+        ],
+        "metadataSourceAssets": [
+            {"databaseId": s.get('databaseId', ''), "assetId": s.get('assetId', '')}
+            for s in ((config_row or {}).get('metadataSourceAssets') or [])
+        ],
         "pipelines": pipelines,
         "inputFiles": input_files,
         "inputMetadata": input_metadata,
+        # The metadata-source database's own metadata (read-only input), separate from inputMetadata
+        # because it belongs to no asset.
+        "inputDatabaseMetadata": input_database_metadata,
         "inputConfigurations": input_configurations,
         "outputs": {
             "files": output_files,
             "metadata": output_metadata,
             "results": output_results,
         },
-        # Names of any sub-collections capped at MAX_DETAIL_ROWS_PER_COLLECTION (empty when complete).
-        # A non-empty list signals the detail view is partial for this output-heavy execution.
+        # Names of any sub-collections that are partial (empty when the view is complete): read at the
+        # MAX_DETAIL_ROWS_PER_COLLECTION read cap, or trimmed to MAX_DETAIL_INPUT_ROWS_RETURNED for the
+        # input collections. Names are "inputFiles", "inputMetadata", "inputDatabaseMetadata",
+        # "outputs.files", "outputs.metadata", "outputs.results".
         "truncatedCollections": sorted(truncated),
     }
 
@@ -1298,13 +2198,16 @@ def assemble_execution_details(execution_id, main_item):
 def get_execution_details(event, execution_id):
     """Return the full detail/traceability view for an execution (404 if unknown).
 
-    Authorization mirrors list-executions reads: workflow GET + GET on every input-file
-    asset tied to the execution."""
+    Authorization mirrors list-executions reads: workflow GET, GET on a captured metadata-source
+    database, and GET on every asset the run read (or the asset it wrote to when it read none). The
+    configuration row both need is read once and threaded through."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
 
-    allowed, reason = authorize_execution_access(execution_id, main_item, "GET")
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    allowed, reason = authorize_execution_access(execution_id, main_item, "GET",
+                                                 config_row=config_row)
     if not allowed:
         logger.info(f"Details access not authorized for execution {execution_id}: {reason}")
         return authorization_error()
@@ -1313,8 +2216,245 @@ def get_execution_details(event, execution_id):
     # common path skips the poll) so an out-of-band abort never shows RUNNING forever.
     _reconcile_main_status(execution_id, main_item)
 
-    details = assemble_execution_details(execution_id, main_item)
+    details = assemble_execution_details(execution_id, main_item, config_row=config_row)
     return success(body={'message': details})
+
+
+# ---------------------------------------------------------------------------
+# Paged detail metadata (one collection at a time)
+# ---------------------------------------------------------------------------
+
+def _detail_metadata_step_order(execution_id, pipeline_id_filter=""):
+    """The execution's pipeline executions in a STABLE order, as (pipelineExecutionId, pipelineId).
+
+    Every metadata collection is keyed on pipelineExecutionId, so paging across a multi-step execution
+    walks the steps one after another and the continuation token names a POSITION in this order. The
+    order must therefore be the same on every request of the same execution, whatever order DynamoDB
+    returns the rows in — sorted by pipelineExecutionId, which is unique per step. Sorting on the start
+    date would be unstable (two steps of a parallel workflow can share one), and a step's position
+    shifting between requests is what makes a token skip or repeat rows.
+
+    `pipeline_id_filter` narrows to one step's rows; the order of what remains is unchanged, so a token
+    is only valid alongside the same filter it was issued with."""
+    steps = []
+    for prow in get_pipeline_execution_rows(execution_id):
+        pexec_id = prow.get('pipelineExecutionId', '')
+        pipeline_id = prow.get('pipelineId', '')
+        if not pexec_id:
+            continue
+        if pipeline_id_filter and pipeline_id != pipeline_id_filter:
+            continue
+        steps.append((pexec_id, pipeline_id))
+    steps.sort(key=lambda step: step[0])
+    return steps
+
+
+def _encode_detail_metadata_token(step_index, last_evaluated_key):
+    """Encode the paged read's resume point: which step to continue in, and where within it.
+
+    Both halves are required. A step index alone resumes a partially-read step from its beginning
+    (repeating rows), and a LastEvaluatedKey alone cannot say which step it belongs to. `stepKey` pins
+    the index to the step it was computed for, so a token issued before the execution gained a step is
+    detected rather than silently applied to a different step."""
+    return base64.b64encode(json.dumps({
+        "stepIndex": step_index,
+        "stepKey": last_evaluated_key.get("pipelineExecutionId", "") if last_evaluated_key else "",
+        "lastEvaluatedKey": last_evaluated_key or None,
+    }).encode("utf-8")).decode("utf-8")
+
+
+def _decode_detail_metadata_token(token, steps):
+    """Decode a paged-read continuation token into (step_index, last_evaluated_key), or None when it
+    cannot be used against `steps`.
+
+    Returning None is a caller error (a 400), never a silent restart at page 1: continuing without the
+    token would re-serve rows the caller already has, and continuing with a stale step index would skip
+    rows. The stored stepKey is re-checked against the step now at that index, so a token whose step
+    order has changed underneath it is refused rather than resumed in the wrong step."""
+    decoded = _decode_starting_token(token)
+    if decoded is None:
+        return None
+    try:
+        step_index = int(decoded.get("stepIndex", -1))
+    except (TypeError, ValueError):
+        return None
+    if step_index < 0 or step_index > len(steps):
+        return None
+    last_evaluated_key = decoded.get("lastEvaluatedKey") or None
+    if last_evaluated_key is not None and not isinstance(last_evaluated_key, dict):
+        return None
+    step_key = decoded.get("stepKey", "") or ""
+    if step_key:
+        # A within-step resume point only means anything in the step it came from.
+        if step_index >= len(steps) or steps[step_index][0] != step_key:
+            return None
+    return step_index, last_evaluated_key
+
+
+def _detail_metadata_collection_source(collection):
+    """(table_name, scrub, row_scope_filter) for a detail metadata collection.
+
+    row_scope_filter is None when the table holds only this collection's rows, and otherwise the
+    predicate selecting this collection's subset of the shared input-metadata table — 'input' is the
+    scope=='asset' rows and 'inputDatabase' the scope=='database' rows, matching the split the detail
+    view makes. A row stored before the discriminator existed reads as asset metadata, exactly as
+    _scrub_input_metadata defaults it."""
+    if collection == DETAIL_METADATA_COLLECTION_OUTPUT:
+        return pipeline_execution_output_metadata_table, _scrub_output_metadata, None
+    if collection == DETAIL_METADATA_COLLECTION_INPUT_DATABASE:
+        return (pipeline_execution_input_metadata_table, _scrub_input_metadata,
+                lambda row: (row.get('scope', '') or INPUT_METADATA_SCOPE_ASSET)
+                == INPUT_METADATA_SCOPE_DATABASE)
+    return (pipeline_execution_input_metadata_table, _scrub_input_metadata,
+            lambda row: (row.get('scope', '') or INPUT_METADATA_SCOPE_ASSET)
+            != INPUT_METADATA_SCOPE_DATABASE)
+
+
+def page_detail_metadata(execution_id, collection, page_size, token, pipeline_id_filter=""):
+    """One page of a detail metadata collection, walking the execution's steps in a stable order.
+
+    Returns {"Items": [...], "collection": ..., ["NextToken": ...]}. Rows carry the same scrubbed shape
+    the details view returns, plus the producing pipelineId, so a client renders them with identical
+    columns.
+
+    Rows are read step by step. A step whose rows fill the page yields a token holding both the step
+    position and that step's own LastEvaluatedKey, so the next request continues inside the same step;
+    a step read to exhaustion advances the position instead. Nothing is dropped by a bound here — the
+    page ends and the token resumes at the first row left out, which is what makes the walk complete
+    across every step rather than only bounded within one.
+
+    Raises VAMSGeneralErrorResponse for an unusable token (the handler maps it to a 400)."""
+    steps = _detail_metadata_step_order(execution_id, pipeline_id_filter)
+    table_name, scrub, scope_filter = _detail_metadata_collection_source(collection)
+
+    step_index, last_evaluated_key = 0, None
+    if token:
+        resumed = _decode_detail_metadata_token(token, steps)
+        if resumed is None:
+            raise VAMSGeneralErrorResponse("startingToken is invalid.")
+        step_index, last_evaluated_key = resumed
+
+    table = dynamodb.Table(table_name)
+    items = []
+    used_bytes = 0
+    scanned = 0
+    # Set when a bound (page size / bytes / scan cap) ends the page with rows still unread, carrying the
+    # exact resume point so the next page starts at the first row this one left out.
+    next_token = None
+
+    while step_index < len(steps) and next_token is None:
+        pexec_id, pipeline_id = steps[step_index]
+        # The scope-filtered collections read a fixed query page rather than only the rows still needed:
+        # Limit applies before the scope split, so sizing it to the remainder would take one query per
+        # matching row whenever the subset is sparse.
+        remaining = page_size - len(items)
+        query_limit = (DETAIL_METADATA_QUERY_PAGE_SIZE if scope_filter is not None
+                       else max(1, remaining))
+        kwargs = {'KeyConditionExpression': Key('pipelineExecutionId').eq(pexec_id),
+                  'Limit': query_limit}
+        if last_evaluated_key is not None:
+            kwargs['ExclusiveStartKey'] = last_evaluated_key
+        resp = table.query(**kwargs)
+        rows = resp.get('Items', [])
+        step_last_key = resp.get('LastEvaluatedKey')
+        # Where a bound firing inside this query page resumes: the key of the last row this page
+        # RETURNED. It starts as the key this query itself continued after, so a bound that fires before
+        # anything here is returned resumes exactly where this query did — the rows in this page are then
+        # re-read on the next request rather than stepped over. It advances only on a returned row, so a
+        # row skipped by the scope filter never becomes a resume point for rows that follow it.
+        resume_after = last_evaluated_key
+
+        for row in rows:
+            scanned += 1
+            if scope_filter is not None and not scope_filter(row):
+                continue
+            scrubbed = scrub(row)
+            scrubbed["pipelineId"] = pipeline_id
+            row_bytes = _detail_metadata_row_bytes(scrubbed)
+            # Keep at least one row per page: a page that came back empty while a token said there was
+            # more would stall the walk on a single oversized row.
+            if items and (len(items) >= page_size
+                          or used_bytes + row_bytes > MAX_DETAIL_METADATA_PAGE_BYTES):
+                # Resume at THIS row, not after it: it has not been returned.
+                next_token = _encode_detail_metadata_token(step_index, resume_after)
+                break
+            items.append(scrubbed)
+            used_bytes += row_bytes
+            resume_after = _detail_metadata_resume_key(row, pexec_id)
+        if next_token is not None:
+            break
+
+        if step_last_key is not None:
+            # More rows in this step. Continue in it — on this pass when the page has room, on the next
+            # request otherwise.
+            last_evaluated_key = step_last_key
+            if len(items) >= page_size or scanned >= MAX_DETAIL_METADATA_ROWS_SCANNED:
+                next_token = _encode_detail_metadata_token(step_index, step_last_key)
+            continue
+
+        # This step is exhausted; the next page (or this one) starts the following step at its beginning.
+        step_index += 1
+        last_evaluated_key = None
+        if step_index < len(steps) and (len(items) >= page_size
+                                        or scanned >= MAX_DETAIL_METADATA_ROWS_SCANNED):
+            next_token = _encode_detail_metadata_token(step_index, None)
+
+    result = {"Items": items, "collection": collection}
+    # Absent on the last page: its presence is what tells a client there is more, so it must never be
+    # emitted for a walk that reached the final step's final row.
+    if next_token is not None:
+        result["NextToken"] = next_token
+    return result
+
+
+def _detail_metadata_row_bytes(row):
+    """Serialized size of one scrubbed metadata row. An unserializable row measures as 0 rather than
+    ending the page — the response serializer raises on it, which is the honest failure."""
+    try:
+        return len(json.dumps(row, default=str).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def _detail_metadata_resume_key(row, pexec_id):
+    """The ExclusiveStartKey that resumes a step's query AFTER `row`, built from the row's own primary
+    key. The sort-key attribute differs per collection (the input table sorts on
+    'databaseId:assetId:filePath', the output table on 'targetFilePath:metadataKey'), so it is taken
+    from the row rather than named here — which also keeps this correct for a row shape that gains a
+    different sort key."""
+    key = {'pipelineExecutionId': row.get('pipelineExecutionId', '') or pexec_id}
+    for attr in ('databaseId:assetId:filePath', 'targetFilePath:metadataKey'):
+        if attr in row:
+            key[attr] = row[attr]
+    return key
+
+
+def get_execution_details_metadata(event, execution_id, query_params):
+    """Return one page of one of an execution's metadata collections (404 if the execution is unknown).
+
+    Authorization is the SAME Tier-2 rule the details view enforces (workflow GET, GET on every captured
+    metadata-source database, GET on every asset the run read), evaluated for GET — so exactly the
+    callers who can open the details page can page its metadata, and no others."""
+    main_item = get_execution_main_row(execution_id)
+    if not main_item:
+        return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
+
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    allowed, reason = authorize_execution_access(execution_id, main_item, "GET",
+                                                 config_row=config_row)
+    if not allowed:
+        logger.info(f"Details metadata access not authorized for execution {execution_id}: {reason}")
+        return authorization_error()
+
+    request = parse(dict(query_params or {}), model=DetailMetadataPageRequestModel)
+    # Clamped rather than rejected (as the execution lists treat pageSize): the cap bounds the RESPONSE
+    # size, so an over-large request is answered with a bounded page and its NextToken.
+    page_size = min(request.pageSize or DEFAULT_DETAIL_METADATA_PAGE_SIZE,
+                    MAX_DETAIL_METADATA_PAGE_SIZE)
+    result = page_detail_metadata(
+        execution_id, request.collection, page_size, request.resolved_starting_token(),
+        pipeline_id_filter=request.pipelineId or "")
+    return success(body={'message': result})
 
 
 def _reconcile_main_status(execution_id, main_item):
@@ -1607,8 +2747,8 @@ def get_execution_logs(event, execution_id, query_params):
       - full: a live CloudWatch FilterLogEvents search scoped to this execution (and, when
         pipelineExecutionId is supplied, scoped strictly to that one pipeline execution).
 
-    Authorization mirrors list-executions reads: workflow GET + GET on every input-file
-    asset tied to the execution."""
+    Authorization mirrors list-executions reads: workflow GET, GET on a captured metadata-source
+    database, and GET on every asset the run read (or the asset it wrote to when it read none)."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -1809,7 +2949,7 @@ def handle_details_request(event):
 
     logger.info("Validating path parameters")
     (valid, message) = validate({
-        'executionId': {'value': execution_id, 'validator': 'ASSET_ID'},
+        'executionId': {'value': execution_id, 'validator': 'GUID'},
     })
     if not valid:
         logger.error(message)
@@ -1820,6 +2960,30 @@ def handle_details_request(event):
 
     logger.info(f"Getting execution details {execution_id}")
     return get_execution_details(event, execution_id)
+
+
+def handle_details_metadata_request(event):
+    """Validate the executionId path param, enforce API authorization, return one page of one of the
+    execution's metadata collections."""
+    pathParams = event.get('pathParameters', {}) or {}
+    queryParameters = event.get('queryStringParameters', {}) or {}
+    execution_id = pathParams.get('executionId', '')
+    if not execution_id:
+        return validation_error(body={'message': 'Missing path parameter (executionId) in API call'}, event=event)
+
+    logger.info("Validating path parameters")
+    (valid, message) = validate({
+        'executionId': {'value': execution_id, 'validator': 'GUID'},
+    })
+    if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
+    if not _enforce_api(event):
+        return authorization_error()
+
+    logger.info(f"Getting execution details metadata {execution_id}")
+    return get_execution_details_metadata(event, execution_id, queryParameters)
 
 
 def _numeric_log_param_error(query_params):
@@ -1846,7 +3010,7 @@ def handle_logs_request(event):
 
     logger.info("Validating path parameters")
     (valid, message) = validate({
-        'executionId': {'value': execution_id, 'validator': 'ASSET_ID'},
+        'executionId': {'value': execution_id, 'validator': 'GUID'},
     })
     if not valid:
         logger.error(message)
@@ -1897,7 +3061,7 @@ def handle_delete_request(event):
 
     logger.info("Validating path parameters")
     (valid, message) = validate({
-        'executionId': {'value': execution_id, 'validator': 'ASSET_ID'},
+        'executionId': {'value': execution_id, 'validator': 'GUID'},
     })
     if not valid:
         logger.error(message)
@@ -1956,6 +3120,24 @@ def handle_get_request(event):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
+    # The query-parameter form of the workflow filter (get_executions applies these as equality
+    # filters). Validated to the same rule as the path/body form: an unvalidated value would be
+    # compared as-is and return an empty list, which is indistinguishable from "this asset has no
+    # executions for that workflow" — the caller could not tell a typo from a genuine empty result.
+    (valid, message) = validate({
+        'workflowId': {
+            'value': (queryParameters.get('workflowId') or '') if queryParameters else '',
+            'validator': 'ID', 'optional': True,
+        },
+        'workflowDatabaseId': {
+            'value': (queryParameters.get('workflowDatabaseId') or '') if queryParameters else '',
+            'validator': 'ID', 'allowGlobalKeyword': True, 'optional': True,
+        },
+    })
+    if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
     # Body field validation (workflowDatabaseId) via the request model.
     request_model = parse(body, model=ListExecutionsRequestModel)
     workflow_database_id = request_model.workflowDatabaseId
@@ -1982,64 +3164,17 @@ def handle_get_request(event):
 
 def _execution_visible_to_caller(execution_id, main_item, casbin_enforcer=None, config_row=None,
                                  config_row_loader=None):
-    """True when the caller may see an execution under the global access rule: workflow GET AND
-    (GET on ANY input-file asset OR GET on the output asset). A caller with data access to what the
-    run reads from or writes to may see it; access to neither hides it. Empty tokens -> not visible.
+    """True when the caller may see an execution in a list: the same rule the details/logs paths
+    enforce, evaluated for GET. A listed row therefore never 403s when it is opened. Empty tokens ->
+    not visible.
 
     `casbin_enforcer` may be passed in so a batch caller (the global list) builds one enforcer for the
-    whole page instead of one per row.
-
-    The configuration row is read LAZILY, and only if the workflow and input-asset checks above have
-    not already decided visibility — a row the caller cannot see, or can see via an input asset, must
-    not pay for a read. `config_row` supplies an already-read item; `config_row_loader` is a
-    zero-argument callable used instead, so a caller that also needs the row for its projection (the
-    global list, which reports the output target) can memoize the same single read rather than issuing
-    a second one."""
-    if len(claims_and_roles["tokens"]) == 0:
-        return False
-    if casbin_enforcer is None:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-
-    workflow_obj = {
-        "object__type": "workflow",
-        "workflowId": main_item.get("workflowId", ""),
-        "databaseId": main_item.get("workflowDatabaseId", ""),
-    }
-    if not casbin_enforcer.enforce(workflow_obj, "GET"):
-        return False
-
-    # Any input-file asset the caller can GET.
-    input_assets = get_execution_input_assets(execution_id)
-    for database_id, asset_id in input_assets:
-        asset = _get_asset_details_cached(database_id, asset_id)
-        if not asset:
-            continue
-        asset.update({"object__type": "asset"})
-        if casbin_enforcer.enforce(asset, "GET"):
-            return True
-
-    # Or the output asset. This is the first point that needs the configuration row.
-    if config_row is None:
-        config_row = (config_row_loader() if config_row_loader is not None
-                      else get_workflow_execution_configuration_row(execution_id))
-    output_database_id = config_row.get("outputDatabaseId", "")
-    output_asset_id = config_row.get("outputAssetId", "")
-    if output_database_id and output_asset_id:
-        output_asset = _get_asset_details_cached(output_database_id, output_asset_id)
-        if output_asset:
-            output_asset.update({"object__type": "asset"})
-            if casbin_enforcer.enforce(output_asset, "GET"):
-                return True
-
-    # Results-only execution with NO input assets: there is no input or output asset to gate on, so
-    # workflow GET (already passed) is the sole access control. This is gated on having no inputs so
-    # it agrees with authorize_execution_access (used by details/logs), which requires GET on every
-    # input asset — a results-only run that DOES have inputs is authorized on those inputs above, and
-    # must not be listed to a caller who would then be denied its details.
-    if ((config_row.get("outputLocationType") or "asset") == "none"
-            and not output_asset_id and not input_assets):
-        return True
-    return False
+    whole page instead of one per row; `config_row` / `config_row_loader` share the caller's single
+    configuration read (see _execution_access_check)."""
+    allowed, _reason = _execution_access_check(
+        execution_id, main_item, "GET", config_row=config_row,
+        config_row_loader=config_row_loader, casbin_enforcer=casbin_enforcer)
+    return allowed
 
 
 def _global_list_matches_filters(main_item, filters):
@@ -2058,6 +3193,21 @@ def _global_list_matches_filters(main_item, filters):
     if filters.get("triggeredByUserId") and main_item.get("triggeredByUserId", "") != filters["triggeredByUserId"]:
         return False
     return True
+
+
+def _global_list_row_key(main_item):
+    """The ExclusiveStartKey that resumes the by-date GSI query after this row.
+
+    A GSI continuation names both the index's own keys and the base table's, so a synthesized one
+    carries all four. Returns None when the row is missing any of them, so a malformed row yields no
+    token rather than one that resumes from the wrong place."""
+    key = {
+        "allListPartition": main_item.get("allListPartition"),
+        "executionStartDate": main_item.get("executionStartDate"),
+        "workflowExecutionId": main_item.get("workflowExecutionId"),
+        "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId"),
+    }
+    return key if all(key.values()) else None
 
 
 def _global_list_row(main_item, config_row=None):
@@ -2100,7 +3250,7 @@ def get_global_executions(event, query_params):
     }
     # Recency window (default 90 days) / custom range, applied as the GSI sort-key condition.
     filter_start_date = _resolve_filter_start_date(query_params)
-    filter_end_date = (query_params.get("filterEndDate") or "").strip()
+    filter_end_date = _resolve_date_filter(query_params, "filterEndDate") or ""
     # pageSize/maxItems were normalized to valid ints by validate_pagination_info in the handler;
     # cap the page so a single request cannot drive the per-candidate authorization fan-out
     # (input-asset + output-asset reads + Casbin enforce per row) over an unbounded page.
@@ -2152,42 +3302,80 @@ def get_global_executions(event, query_params):
     seen = set()
     # One CasbinEnforcer + a fresh per-request asset cache for the whole page: the visibility check
     # re-reads the same few assets and re-evaluates the same policy across many rows, so build the
-    # enforcer once and memoize asset lookups rather than repeating both per row.
+    # enforcer once and memoize both the asset lookups and the decisions rather than repeating them per
+    # row. The decision memo belongs to the enforcer built just below, so the page starts with an empty
+    # one by construction; it is cleared here as well, so a decision cannot outlive the page even if a
+    # future change hands this path a longer-lived enforcer. The entity budget is armed here (and only
+    # here): it bounds the breadth of a PAGE, whereas the single-execution paths authorize one run and
+    # must not be bounded by it.
     _asset_details_cache.clear()
+    _authz_decision_cache.clear()
+    _arm_authz_entity_budget()
     page_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
-    resp = main_table.query(**query_kwargs)
-    for main_item in resp.get("Items", []):
-        execution_id = main_item.get("workflowExecutionId", "")
-        if not execution_id or execution_id in seen:
-            continue
-        seen.add(execution_id)
-        if not _global_list_matches_filters(main_item, filters):
-            continue
-        # AT MOST one configuration read per execution, shared by the visibility check (which
-        # authorizes on the output asset) and the row projection (which reports the output target).
-        # Memoized and lazy: a row the caller cannot see, or one authorized via an input asset, never
-        # reaches the read at all — eagerly reading here would charge a lookup for every candidate the
-        # visibility filter then discards, which for a narrowly-scoped role is most of the page.
-        cached_config_row = {}
+    # The key of the last row this page evaluated. The entity bound can stop a page mid-way through a
+    # query that DynamoDB then reports as exhausted, leaving no LastEvaluatedKey to continue from — so
+    # the walk carries its own resume point rather than depending on one.
+    last_row_key = None
+    try:
+        resp = main_table.query(**query_kwargs)
+        for main_item in resp.get("Items", []):
+            execution_id = main_item.get("workflowExecutionId", "")
+            if not execution_id or execution_id in seen:
+                continue
+            seen.add(execution_id)
+            last_row_key = _global_list_row_key(main_item)
+            if not _global_list_matches_filters(main_item, filters):
+                continue
+            # AT MOST one configuration read per execution, shared by the visibility check (which
+            # authorizes on the metadata sources and the output asset, both recorded there) and the row
+            # projection (which reports the output target). Memoized and lazy: a row the caller cannot
+            # see at all never reaches the read — eagerly reading here would charge a lookup for every
+            # candidate the visibility filter then discards, which for a narrowly-scoped role is most of
+            # the page.
+            cached_config_row = {}
 
-        def _config_row(execution_id=execution_id, cache=cached_config_row):
-            if "item" not in cache:
-                cache["item"] = get_workflow_execution_configuration_row(execution_id)
-            return cache["item"]
+            def _config_row(execution_id=execution_id, cache=cached_config_row):
+                if "item" not in cache:
+                    cache["item"] = get_workflow_execution_configuration_row(execution_id)
+                return cache["item"]
 
-        if not _execution_visible_to_caller(
-                execution_id, main_item, page_enforcer, config_row_loader=_config_row):
-            continue
-        items.append(_global_list_row(main_item, _config_row()))
+            if not _execution_visible_to_caller(
+                    execution_id, main_item, page_enforcer, config_row_loader=_config_row):
+                continue
+            items.append(_global_list_row(main_item, _config_row()))
+        entity_bound_reached = _authz_entity_budget_exceeded()
+    finally:
+        # The budget bounds a list page only; leaving it armed would bound a single-execution
+        # authorization later in the same invocation.
+        _disarm_authz_entity_budget()
 
     # Echo the applied recency window so the caller can show the active range (matches the per-asset
     # list's filterStartDate echo). filterEndDate is included only when the caller set one.
     result = {"Items": items, "filterStartDate": filter_start_date}
     if filter_end_date:
         result["filterEndDate"] = filter_end_date
-    if "LastEvaluatedKey" in resp:
+    # The continuation DynamoDB reported, or — when the entity bound withheld rows from a query it
+    # reported as exhausted — one synthesized from the last row this page evaluated. Without that
+    # fallback the withheld executions would be unreachable rather than deferred: the bound is spent per
+    # request, so the next page resolves its own entities and reaches them.
+    next_key = resp.get("LastEvaluatedKey")
+    if next_key is None and entity_bound_reached:
+        next_key = last_row_key
+    if next_key is not None:
         result["NextToken"] = base64.b64encode(
-            json.dumps(resp["LastEvaluatedKey"]).encode("utf-8")).decode("utf-8")
+            json.dumps(next_key).encode("utf-8")).decode("utf-8")
+    if entity_bound_reached:
+        # The page reached the distinct-entity bound, so rows whose assets it did not resolve were
+        # withheld rather than admitted unchecked. Named so a short page is a stated bound, not an
+        # apparent absence of executions. The advice matches what the response actually offers: a token
+        # is present whenever the walk can continue, and its absence means this really is the end.
+        continuation = ("continue with NextToken to see the rest"
+                        if "NextToken" in result else
+                        "read them by narrowing to fewer executions per page")
+        result["warnings"] = [
+            f"This page reached the limit of {MAX_AUTHZ_ENTITIES_RESOLVED_PER_PAGE} distinct assets "
+            f"resolved for permission checks, so some executions were not evaluated and are not "
+            f"listed. Narrow the filters or {continuation}."]
     return success(body={"message": result})
 
 
@@ -2214,9 +3402,10 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
     """Rebuild the asset-less execute request body from an execution's stored records.
 
     inputFiles come from the workflow-input rows (databaseId/assetId/relativeFileKey); the output
-    target from the configuration row; per-pipeline template parameters from each pipeline's
-    input-configuration snapshot (templateId + templateTags + customTemplateOverrideUsed). The output
-    is the V2 execute body shape (see models.executions.ExecuteWorkflowRequestV2Model)."""
+    target and the metadata-source selection from the configuration row; per-pipeline template
+    parameters from each pipeline's input-configuration snapshot (templateId + templateTags +
+    customTemplateOverrideUsed). The output is the V2 execute body shape (see
+    models.executions.ExecuteWorkflowRequestV2Model)."""
     input_files = []
     for row in _query_all(workflow_execution_inputs_table, Key("workflowExecutionId").eq(execution_id)):
         # inputAssetFileKey is the normalized FULL asset-bucket key (assetRootS3Key + relative);
@@ -2258,8 +3447,19 @@ def _reconstruct_execute_request(execution_id, main_item, config_row):
         if params:
             pipeline_execution_parameters[pipeline_id] = params
 
+    # The metadata sources travel in their own fields, never as inputFiles: they are entities, not
+    # files, so re-emitting them as inputFiles would fail an arity-'none' workflow's own no-input-files
+    # rule. They are recorded on the configuration row only (there is no workflow-input row for a
+    # metadata source), and a row written before they existed yields empty values. The database field
+    # replays the caller's NAMED selection (inputMetadataDatabaseId) rather than the captured set: a run
+    # with input files derives its databases from those files, so the re-run derives the same ones from
+    # the same inputFiles, and naming them here would instead be read as an arity-'none' selection.
+    _metadata_source_databases, metadata_source_assets = _metadata_source_entities(config_row)
     body = {
         "inputFiles": input_files,
+        "metadataSourceDatabaseId": config_row.get("inputMetadataDatabaseId", "") or "",
+        "metadataSourceAssets": [{"databaseId": database_id, "assetId": asset_id}
+                                 for database_id, asset_id in metadata_source_assets],
         "outputAssetId": config_row.get("outputAssetId", ""),
         "outputDatabaseId": config_row.get("outputDatabaseId", ""),
         "pipelineExecutionParameters": pipeline_execution_parameters,
@@ -2286,7 +3486,8 @@ def rerun_execution(event, execution_id, request_model):
     if not main_item:
         return validation_error(status_code=404, body={"message": "Execution not found"}, event=event)
 
-    # The caller must be able to see the original execution (workflow GET + input/output asset GET).
+    # The caller must be able to see the original execution (workflow GET + GET on every asset it read,
+    # or on the asset it wrote to for a run with no inputs).
     if not _execution_visible_to_caller(execution_id, main_item):
         logger.info(f"Re-run not authorized for execution {execution_id}")
         return authorization_error()
@@ -2337,6 +3538,17 @@ def rerun_execution(event, execution_id, request_model):
         status_code = inner.get("statusCode", 500)
         inner_body = json.loads(inner["body"]) if inner.get("body") else {}
         if status_code == 200:
+            # AUDIT LOG: re-run. The delegated invoke audits the new execution's own launch, but that
+            # entry cannot say the run was a RE-run of an earlier one, so the provenance is recorded
+            # here: which execution was replayed, and which new execution it produced.
+            log_actions(event, "workflowExecutionRerun", {
+                "sourceExecutionId": execution_id,
+                "workflowId": main_item.get('workflowId', ''),
+                "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
+                "newExecutionId": (inner_body.get("message") or {}).get("executionId", "")
+                if isinstance(inner_body.get("message"), dict) else "",
+                "operation": "rerun",
+            })
             return success(body=inner_body)
         return validation_error(status_code=status_code, body=inner_body, event=event)
     return internal_error(event=event)
@@ -2367,8 +3579,13 @@ def permanent_delete_execution(event, execution_id):
     if not main_item:
         return validation_error(status_code=404, body={"message": "Execution not found"}, event=event)
 
-    # Authorize like an abort (workflow GET + POST on every input asset — a destructive op).
-    allowed, reason = authorize_abort(execution_id, main_item)
+    # The configuration row carries both the metadata sources the authorization pass checks and the
+    # output-target ids the index cleanup below needs, and it is deleted at the end, so read it once
+    # here (re-reading a deleted row would return {}).
+    config_row = get_workflow_execution_configuration_row(execution_id)
+
+    # Authorize like an abort (workflow GET + POST on every asset the run read — a destructive op).
+    allowed, reason = authorize_abort(execution_id, main_item, config_row=config_row)
     if not allowed:
         logger.info(f"Permanent delete not authorized for execution {execution_id}: {reason}")
         return authorization_error()
@@ -2428,12 +3645,6 @@ def permanent_delete_execution(event, execution_id):
         dynamodb.Table(pipeline_executions_table).delete_item(
             Key={"pipelineExecutionId": pexec_id, "workflowExecutionId": execution_id})
 
-    # Capture the output-target ids from the configuration row BEFORE deleting it, so the
-    # output-index row can be removed afterward (re-reading a deleted config row would return {}).
-    config_row = get_workflow_execution_configuration_row(execution_id)
-    output_database_id = config_row.get("outputDatabaseId", "")
-    output_asset_id = config_row.get("outputAssetId", "")
-
     # Workflow-level rows.
     _delete_all_rows(workflow_execution_inputs_table,
                      Key("workflowExecutionId").eq(execution_id),
@@ -2451,6 +3662,14 @@ def permanent_delete_execution(event, execution_id):
              "workflowDatabaseId:workflowId": main_item.get("workflowDatabaseId:workflowId", "")})
 
     logger.info(f"Permanently deleted execution records for {execution_id}")
+    # AUDIT LOG: permanent delete — admin-only and irreversible, the highest-value audit event of the
+    # execution surface: after this the execution's own records no longer evidence what happened.
+    log_actions(event, "workflowExecutionPermanentDelete", {
+        "executionId": execution_id,
+        "workflowId": main_item.get('workflowId', ''),
+        "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
+        "operation": "permanentDelete",
+    })
     return success(body={"message": "Execution records permanently deleted"})
 
 
@@ -2519,6 +3738,16 @@ def abort_group(event, group_id):
     if more_remaining:
         # More active, authorized members remain beyond this request's cap; re-invoke to continue.
         message["moreRemaining"] = True
+    # AUDIT LOG: group abort — one call stops many runs. Each member's own abort is audited by
+    # abort_execution, so this entry records the GROUP action: how many this pass stopped, how many were
+    # withheld for access, and whether more remain beyond the per-request cap.
+    log_actions(event, "workflowExecutionGroupAbort", {
+        "executionGroupId": group_id,
+        "abortedCount": aborted_this_pass,
+        "skippedInaccessibleCount": skipped_inaccessible,
+        "moreRemaining": bool(more_remaining),
+        "operation": "abortGroup",
+    })
     return success(body={"message": message})
 
 
@@ -2541,7 +3770,7 @@ def handle_rerun_request(event):
     """POST /workflows/executions/{executionId}/rerun."""
     path_params = event.get("pathParameters", {}) or {}
     execution_id = path_params.get("executionId", "")
-    (valid, message) = validate({"executionId": {"value": execution_id, "validator": "ASSET_ID"}})
+    (valid, message) = validate({"executionId": {"value": execution_id, "validator": "GUID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
     if not _enforce_api(event):
@@ -2560,7 +3789,7 @@ def handle_permanent_delete_request(event):
     """DELETE /workflows/executions/{executionId}/permanent."""
     path_params = event.get("pathParameters", {}) or {}
     execution_id = path_params.get("executionId", "")
-    (valid, message) = validate({"executionId": {"value": execution_id, "validator": "ASSET_ID"}})
+    (valid, message) = validate({"executionId": {"value": execution_id, "validator": "GUID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
     if not _enforce_api(event):
@@ -2582,6 +3811,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     GET .../executions[/{workflowId}]              -> list an asset's workflow executions.
     GET /workflows/executions                       -> global (asset-less) permission-filtered list.
     GET /workflows/executions/{executionId}/details -> full execution detail/traceability.
+    GET /workflows/executions/{executionId}/details/metadata -> one page of one metadata collection.
     GET /workflows/executions/{executionId}/logs    -> execution logs (truncated | full).
     POST /workflows/executions/{executionId}/rerun  -> re-run (new execution from stored records).
     DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).
@@ -2593,10 +3823,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     # v2-style http block the dispatch below reads).
     normalize_event(event)
     claims_and_roles = request_to_claims(event)
-    # Fresh per-request asset cache: a warm container reuses module globals across invocations, and
-    # every authorization path reads asset attributes through this memo, so a carried-over row would
-    # decide the next request's ABAC check on stale attributes.
+    # Fresh per-request asset and decision caches: a warm container reuses module globals across
+    # invocations, and every authorization path reads asset attributes through the asset memo, so a
+    # carried-over row would decide the next request's ABAC check on stale attributes. The decision memo
+    # is keyed per enforcer AND per caller identity, so it cannot answer this request with an earlier
+    # one's decisions; it is cleared here too, as defense in depth against a future path that reuses an
+    # enforcer. The entity budget starts disarmed; the list page arms it.
     _asset_details_cache.clear()
+    _authz_decision_cache.clear()
+    _disarm_authz_entity_budget()
 
     try:
         method = event['requestContext']['http']['method']
@@ -2605,7 +3840,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if method == 'GET':
             # Dispatch GETs by matching the master route templates (never hard-coded
             # path fragments) so the detail/log/global reads are routed before the asset list view.
-            if API_WORKFLOW_EXECUTION_DETAILS.matches(path):
+            # The paged metadata sub-resource is matched before the details route it sits under: the
+            # templates are exact-match so neither claims the other's path, but keeping the more
+            # specific route first means a later template change cannot silently reroute it.
+            if API_WORKFLOW_EXECUTION_DETAILS_METADATA.matches(path):
+                return handle_details_metadata_request(event)
+            elif API_WORKFLOW_EXECUTION_DETAILS.matches(path):
                 return handle_details_request(event)
             elif API_WORKFLOW_EXECUTION_LOGS.matches(path):
                 return handle_logs_request(event)

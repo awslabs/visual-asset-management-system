@@ -110,10 +110,16 @@ class DownloadResult:
 class Workflow:
     """Parsed workflow entry from vamscli workflow list."""
     workflow_id: str = ""
+    workflow_name: str = ""
     database_id: str = ""
+    category: str = ""
     description: str = ""
     workflow_arn: str = ""
-    auto_trigger_extensions: str = ""
+    enabled: bool = True
+    archived: bool = False
+    specified_pipelines: List[Dict[str, Any]] = field(default_factory=list)
+    trigger_count: int = 0
+    triggers_enabled_count: int = 0
 
 
 @dataclass
@@ -123,6 +129,8 @@ class WorkflowExecution:
     workflow_id: str = ""
     workflow_database_id: str = ""
     execution_status: str = ""
+    trigger_type: str = ""
+    execution_group_id: str = ""
     start_date: str = ""
     stop_date: str = ""
     input_file_key: str = ""
@@ -791,10 +799,16 @@ class VamsCliService:
         return [
             Workflow(
                 workflow_id=item.get("workflowId", ""),
+                workflow_name=item.get("workflowName", ""),
                 database_id=item.get("databaseId", ""),
+                category=item.get("category", ""),
                 description=item.get("description", ""),
                 workflow_arn=item.get("workflow_arn", ""),
-                auto_trigger_extensions=item.get("autoTriggerOnFileExtensionsUpload", ""),
+                enabled=item.get("enabled", True),
+                archived=item.get("archived", False),
+                specified_pipelines=item.get("specifiedPipelines", []) or [],
+                trigger_count=item.get("triggerCount") or 0,
+                triggers_enabled_count=item.get("triggersEnabledCount") or 0,
             )
             for item in items
         ]
@@ -834,12 +848,14 @@ class VamsCliService:
         items = data.get("Items", [])
         return [
             WorkflowExecution(
-                execution_id=item.get("executionId", ""),
+                execution_id=item.get("workflowExecutionId", ""),
                 workflow_id=item.get("workflowId", ""),
                 workflow_database_id=item.get("workflowDatabaseId", ""),
                 execution_status=item.get("executionStatus", ""),
-                start_date=item.get("startDate", ""),
-                stop_date=item.get("stopDate", ""),
+                trigger_type=item.get("triggerType", ""),
+                execution_group_id=item.get("executionGroupId", ""),
+                start_date=item.get("executionStartDate", item.get("startDate", "")),
+                stop_date=item.get("executionStopDate", item.get("stopDate", "")),
                 input_file_key=item.get("inputAssetFileKey", ""),
             )
             for item in items
@@ -854,28 +870,35 @@ class VamsCliService:
         file_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a workflow on an asset.
+        Execute a workflow on one input file, or on an entire asset.
+
+        Inputs are addressed as 'databaseId:assetId:relativeFileKey' references rather
+        than an asset plus a file key; a relativeFileKey of "/" selects the whole asset.
+        This wrapper covers the single-asset case Isaac Sim drives; a workflow can take
+        input files spanning several assets.
 
         Args:
             database_id: The database ID containing the asset.
             asset_id: The asset ID to run the workflow on.
             workflow_id: The workflow ID to execute.
             workflow_database_id: The database ID that owns the workflow.
-            file_key: Optional file key within the asset. Defaults to "/"
-                      (top-level asset) if not specified.
+            file_key: Optional relative file key within the asset. Defaults to "/"
+                      (the whole asset) when not specified.
 
         Returns:
-            Raw JSON dict with execution result (includes execution ID).
+            Raw JSON dict with execution result (includes executionId).
         """
         self.ensure_authenticated()
 
+        relative_file_key = file_key or "/"
+        if not relative_file_key.startswith("/"):
+            relative_file_key = f"/{relative_file_key}"
+
         cmd = ["workflow", "execute",
-               "-d", database_id, "-a", asset_id,
-               "-w", workflow_id,
                "--workflow-database-id", workflow_database_id,
+               "-w", workflow_id,
+               "--input-file", f"{database_id}:{asset_id}:{relative_file_key}",
                "--json-output"]
-        if file_key:
-            cmd += ["--file-key", file_key]
 
         output = self._execute_command(cmd)
         return self._parse_json(output)

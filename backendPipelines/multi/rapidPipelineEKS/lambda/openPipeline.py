@@ -6,6 +6,7 @@ import boto3
 import json
 import datetime
 import time
+import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
 
@@ -334,7 +335,7 @@ def lambda_handler(event, context):
         # Generate job name with enhanced uniqueness
         try:
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # Include milliseconds
-            job_name = f"PipelineJobEKS_{timestamp}"
+            job_name = f"PipelineJobEKS_{timestamp}_{uuid.uuid4().hex[:8]}"
             logger.info(f"Generated job name: {job_name}")
 
         except Exception as e:

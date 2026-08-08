@@ -120,7 +120,7 @@ backend/
 
 8.  **ALWAYS use `extra='ignore'`** on every Pydantic model class to silently drop unexpected fields.
 
-9.  **NEVER log sensitive data.** `safeLogger` auto-redacts `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`. Do not circumvent this.
+9.  **NEVER log sensitive data.** `safeLogger` auto-redacts the credential keys `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` and the caller-authored content keys `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions` (also inside a JSON-string request `body`), at every nesting level in dicts and lists. Do not circumvent this. The redaction is key-driven, so an f-string that interpolates a payload value bypasses it — log identifiers and counts, never rendered bodies or tag values.
 
 10. **ALWAYS resolve resource names at module level** via `get_table_name()`, `get_bucket_name()`, or `get_log_group_name()` from `common.resourceNames` inside a `try/except`. Never read `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers — SSM resolution provides centralized name management with env-var overrides for testing.
 
@@ -311,7 +311,7 @@ Reference: `backend/models/assetsV3.py`
 
 ### CORRECT Model Definition
 
-Import `BaseModel` from `aws_lambda_powertools.utilities.parser`; declare `extra='ignore'` on the class; use `Field(...)` with `pattern=` (loaded from `common.validators`); attach a `@root_validator` for cross-field logic that calls the `validate()` dispatcher.
+Import `BaseModel` from `aws_lambda_powertools.utilities.parser`; declare `extra='ignore'` on the class; use `Field(...)` with `regex=` (loaded from `common.validators`); attach a `@root_validator` for cross-field logic that calls the `validate()` dispatcher.
 
 ```python
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, ValidationError
@@ -319,8 +319,8 @@ from pydantic import Field
 from common.validators import validate, id_pattern, object_name_pattern
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    itemName:   str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    itemName:   str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     tags: Optional[list[str]] = []
 
     @root_validator
@@ -342,14 +342,30 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
 | `MyModel.model_validate(data)`           | `parse(body, model=MyModel)` (from `aws_lambda_powertools...parser`) |
 | `@field_validator('name')`               | `@validator('name')`                                                 |
 | `item.model_dump()`                      | `item.dict()`                                                        |
+| `Field(pattern=...)`                     | `Field(regex=...)`                                                   |
 
 Every model class must declare `extra='ignore'`.
+
+**`Field()` silently swallows unknown kwargs.** Pydantic v1 collects any keyword it does not
+recognize into `FieldInfo.extra` instead of raising, so a v2 spelling like `pattern=` becomes an
+inert annotation that validates **nothing** — the model imports cleanly, tests pass, and the
+field is unconstrained. `regex=` is the v1 spelling. `strip_whitespace=` is likewise inert on
+`Field()` (it is a `class Config` / `constr` option, not a field constraint); a padded value is
+stored verbatim, which matters for the ABAC-visible name fields. To confirm a constraint is live,
+assert on the parsed field rather than reading the declaration:
+
+```python
+assert MyModel.__fields__['databaseId'].field_info.regex is not None   # live
+assert not MyModel.__fields__['databaseId'].field_info.extra          # nothing swallowed
+```
+
+`tests/models/test_no_dead_field_kwargs.py` enforces this across every model.
 
 ### Field Validation Patterns
 
 Common shapes:
 
--   String with regex: `Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)`
+-   String with regex: `Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)`
 -   Optional with default: `Optional[list[str]] = []`, `Optional[str] = None`
 -   Numeric constraints: `Field(None, ge=0)`, `Field(None, ge=0, le=10000)`
 -   Nested models: `Optional[CurrentVersionModel] = None`
@@ -551,11 +567,16 @@ logger = safeLogger(service_name="YourServiceName")
 logger.info(...); logger.warning(...); logger.error(...); logger.exception(...)  # exception adds stack trace
 ```
 
-`safeLogger` auto-redacts these keys at every nesting level: `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+`safeLogger` auto-redacts two key families at every nesting level, walking dicts, lists, and tuples (`customLogging.logger.mask_sensitive_data`, case-insensitive on the key name):
+
+-   **Credential keys** (`SENSITIVE_KEYS`) — `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+-   **Content keys** (`CONTENT_KEYS`) — `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`. A pipeline template body or tag value carries free-form caller content (prompts, model configuration). Every field that can carry a template body belongs here whichever request delivers it: an execute request supplies one as `customTemplateOverride`, a template record as `configBody`. The value is replaced with `<redacted>` and the key is kept, so the record still shows that the field was submitted.
+
+A request `body` is masked whether it arrives as a dict or as a JSON string — the string is parsed, masked, and re-serialized. Redaction is key-driven, so an f-string that interpolates a payload value (`logger.info(f"template {body}")`) bypasses it entirely: log identifiers, counts, and flags instead.
 
 ### Audit Logging
 
-`backend/customLogging/auditLogging.py` exposes `log_authentication`, `log_authorization`, `log_authorization_api`, `log_file_upload`, `log_file_download`, `log_errors`, and other event-type functions — writing to **9 CloudWatch log groups** whose names resolve from SSM via `get_log_group_name(ResourceKeys.*)`. All audit functions extract user context via `request_to_claims(event)`. **Silent failure**: a failed audit write is logged locally, and Lambda execution continues.
+`backend/customLogging/auditLogging.py` exposes `log_authentication`, `log_authorization`, `log_authorization_api`, `log_file_upload`, `log_file_download`, `log_errors`, and other event-type functions — writing to **9 CloudWatch log groups** whose names resolve from SSM via `get_log_group_name(ResourceKeys.*)`. All audit functions extract user context via `request_to_claims(event)`. Every entry carries a `--- [event: ...]` echo of the triggering API event, passed through `mask_sensitive_data` first. **Silent failure**: a failed audit write is logged locally, and Lambda execution continues — `mask_sensitive_data` upholds that contract by returning `<redacted>` rather than raising on a structure it cannot walk.
 
 ---
 

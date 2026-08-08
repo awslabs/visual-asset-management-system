@@ -30,6 +30,21 @@ INPUT_FILE_ARITIES = ("none", "one", "multi")
 # XSS vector (e.g. a javascript:/data: URL rendered as a link in the web UI).
 _ALLOWED_URL_SCHEMES = ("http://", "https://")
 
+# Upper bound on the pipeline steps in one workflow. Each step becomes a Step Functions task state
+# (plus its interim-tracking states) in a single state-machine definition, one pipeline-execution row
+# per run, and one config + manifest S3 object per run. Generous relative to real workflows (the
+# built-ins declare a handful of steps) while bounding the ASL a single request can generate.
+MAX_SPECIFIED_PIPELINES = 100
+
+# Upper bound on a trigger's defaultTemplateIds map: one entry per pipeline step the trigger names a
+# default template for, so it is bounded by the same step count.
+MAX_TRIGGER_DEFAULT_TEMPLATES = MAX_SPECIFIED_PIPELINES
+
+# systemConfig.outputTarget keys whose value is a plain boolean gate. allowOverride decides whether
+# an execute request may redirect output away from the input asset, so a truthy string like "false"
+# stored here reads back as True and opens the override the author disabled.
+_OUTPUT_TARGET_BOOLEAN_KEYS = ("allowOverride",)
+
 
 def _validate_subdashboard_url(url):
     """Validate an optional subDashboardUrl: must be an absolute http(s) URL. Empty/None is allowed
@@ -63,6 +78,11 @@ def _validate_output_target(system_config):
     if not system_config:
         return
     output_target = system_config.get("outputTarget") or {}
+    # The boolean gates are checked whether or not a locationType is declared: allowOverride is read
+    # at execute time regardless (the default locationType is 'asset').
+    for key in _OUTPUT_TARGET_BOOLEAN_KEYS:
+        if key in output_target and not isinstance(output_target[key], bool):
+            raise ValueError(f"outputTarget.{key} must be a boolean")
     location_type = output_target.get("locationType")
     if location_type is None:
         return
@@ -143,6 +163,48 @@ def _validate_trigger_input_file_filters(filters):
         return
     from models.pipelines import _validate_input_file_filters
     _validate_input_file_filters(filters, "inputFileFilters")
+
+
+def _validate_trigger_default_template_ids(default_template_ids):
+    """Validate a trigger's defaultTemplateIds map: {'<pipelineDatabaseId>:<pipelineId>': templateId}.
+
+    Both halves of the key and the value are used as DynamoDB key values to resolve the template a
+    headless run launches with (triggerTemplateValidation / triggerMatching), so each is validated
+    with the id rule every other id in the API uses. No-op when absent."""
+    if not default_template_ids:
+        return
+    if not isinstance(default_template_ids, dict):
+        raise ValueError("defaultTemplateIds must be an object")
+    if len(default_template_ids) > MAX_TRIGGER_DEFAULT_TEMPLATES:
+        raise ValueError(
+            f"defaultTemplateIds may contain at most {MAX_TRIGGER_DEFAULT_TEMPLATES} entries")
+    for composite, template_id in default_template_ids.items():
+        pipeline_db, separator, pipeline_id = (composite or "").partition(":")
+        if not separator:
+            raise ValueError(
+                "defaultTemplateIds keys must be '<pipelineDatabaseId>:<pipelineId>'")
+        _validate_id(pipeline_db, allow_global=True)
+        _validate_id(pipeline_id)
+        # An empty value means "no default template for this pipeline" and is skipped downstream.
+        if template_id:
+            _validate_id(template_id)
+
+
+def _validate_single_line_text(values):
+    """Reject control characters / line breaks in the workflow's ABAC-visible name fields, using the
+    shared rule the pipeline models apply to their equivalents.
+
+    Scoped to workflowName and category because those are the ABAC CONSTRAINT fields (surfaced as
+    `name` / `category` on the Tier-2 Casbin object): a `^<value>$` policy rule matches a trailing
+    newline in Python, so a distinct stored name would satisfy a grant written for another.
+
+    `description` is deliberately NOT included. It is not an ABAC constraint field, so it gains no
+    security benefit, and the web offers it as a multi-line textarea — guarding it rejected exactly
+    what that control produces. Log integrity is not an argument for it either: auditLogging writes
+    values through json.dumps, which escapes a newline rather than emitting one."""
+    from models.pipelines import validate_no_control_characters
+    for field in ("workflowName", "category"):
+        validate_no_control_characters(values.get(field), field)
 
 
 class WorkflowSystemConfigModel(BaseModel, extra='ignore'):
@@ -234,6 +296,12 @@ class SpecifiedPipelineInput(BaseModel, extra='ignore'):
         job_name = values.get("jobName")
         if job_name:
             _validate_id(job_name)
+        # defaultTemplateId is used directly as a DynamoDB sort key to resolve the fallback template
+        # at execute time (executeWorkflow._resolve_pipeline_configs), so it carries the same id rule
+        # as the per-run templateId on the execute request.
+        default_template_id = values.get("defaultTemplateId")
+        if default_template_id:
+            _validate_id(default_template_id)
         return values
 
 
@@ -244,7 +312,8 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
     workflowName: str = Field(..., min_length=1, max_length=256)
     category: Optional[str] = Field("", max_length=256)
     description: Optional[str] = Field("", max_length=1024)
-    specifiedPipelines: List[SpecifiedPipelineInput] = Field(..., min_items=1)
+    specifiedPipelines: List[SpecifiedPipelineInput] = Field(
+        ..., min_items=1, max_items=MAX_SPECIFIED_PIPELINES)
     systemConfig: Optional[Dict[str, Any]] = Field(default_factory=dict)
     subDashboardUrl: Optional[str] = Field("", max_length=2048)
     enabled: Optional[bool] = True
@@ -264,6 +333,9 @@ class CreateWorkflowRequestModel(BaseModel, extra='ignore'):
         _validate_output_target(values.get("systemConfig"))
         _validate_system_config_shapes(values.get("systemConfig"))
         _validate_subdashboard_url(values.get("subDashboardUrl"))
+        # workflowName and category are ABAC constraint fields (surfaced as `name` / `category` on the
+        # Tier-2 Casbin object) and both appear in single-line log entries.
+        _validate_single_line_text(values)
         return values
 
 
@@ -272,7 +344,8 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
     workflowName: Optional[str] = Field(None, min_length=1, max_length=256)
     category: Optional[str] = Field(None, max_length=256)
     description: Optional[str] = Field(None, max_length=1024)
-    specifiedPipelines: Optional[List[SpecifiedPipelineInput]] = None
+    specifiedPipelines: Optional[List[SpecifiedPipelineInput]] = Field(
+        None, max_items=MAX_SPECIFIED_PIPELINES)
     systemConfig: Optional[Dict[str, Any]] = None
     subDashboardUrl: Optional[str] = Field(None, max_length=2048)
     enabled: Optional[bool] = None
@@ -295,6 +368,7 @@ class UpdateWorkflowRequestModel(BaseModel, extra='ignore'):
             _validate_output_target(cfg)
             _validate_system_config_shapes(cfg)
         _validate_subdashboard_url(values.get("subDashboardUrl"))
+        _validate_single_line_text(values)
         return values
 
 
@@ -364,6 +438,8 @@ class SetTriggerRequestModel(BaseModel, extra='ignore'):
     """Set (create/replace) a workflow trigger. fileUpload today: inputFileFilters +
     defaultTemplateIds ({'<pipelineDatabaseId>:<pipelineId>': templateId})."""
     inputFileFilters: Optional[Dict[str, List[str]]] = Field(default_factory=dict)
+    # The entry-count bound is enforced in the root validator: max_items is a list constraint, and
+    # pydantic v1 raises at class-definition time when it is set on a Dict field.
     defaultTemplateIds: Optional[Dict[str, str]] = Field(default_factory=dict)
     enabled: Optional[bool] = True
 
@@ -372,14 +448,24 @@ class SetTriggerRequestModel(BaseModel, extra='ignore'):
         # Dispatch treats an absent `allow` list as allow-all, so a key outside {allow, exclude}
         # would turn a scoped trigger into one that fires on every uploaded file.
         _validate_trigger_input_file_filters(values.get("inputFileFilters"))
+        _validate_trigger_default_template_ids(values.get("defaultTemplateIds"))
         return values
 
 
 class TriggerResponseModel(BaseModel, extra='ignore'):
-    """Response model for a workflow trigger."""
+    """Response model for a workflow trigger.
+
+    `triggerType` is the trigger's KEY: the bare type for a workflow's first trigger of that type, or
+    `type#triggerId` for an additional one — a workflow may carry several triggers of one type, each
+    with its own filters and default templates. It is the value to send back on the trigger path to
+    address this specific trigger. `triggerBaseType` is the plain type for grouping and display, and
+    `triggerId` is empty for the first trigger of a type.
+    """
     workflowDatabaseId: str
     workflowId: str
     triggerType: str
+    triggerBaseType: Optional[str] = ""
+    triggerId: Optional[str] = ""
     triggerConfig: Optional[Dict[str, Any]] = {}
     enabled: bool = True
     dateCreated: Optional[str] = ""

@@ -5,8 +5,10 @@
 
 import React, { useState } from "react";
 import { useLocation } from "react-router-dom";
-import { useExecutionDetails } from "../api/queries";
+import { useExecutionDetails, useExecutionDetailMetadata } from "../api/queries";
+import type { DetailMetadataCollection } from "../api/executions";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+import { toastErrorMessage } from "../components/ToastProvider";
 import StatusBadge from "../components/StatusBadge";
 import ConfigEditor from "../components/ConfigEditor";
 import Breadcrumb from "../components/Breadcrumb";
@@ -43,6 +45,161 @@ const Card: React.FC<{
         )}
         <div className="p-3">{children}</div>
     </section>
+);
+
+/**
+ * Marker on a section whose rows the server bounded. It sits in the section's own header rather than
+ * only in the page-level warning, so a shortened table cannot be read as the complete set while
+ * scrolled away from that banner.
+ */
+const TruncatedBadge: React.FC<{ label?: string }> = ({ label = "Partial" }) => (
+    <span
+        className="orch-outline px-2 py-0.5 text-xs font-bold bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300 rounded"
+        title="This section holds fewer rows than the execution produced. The remaining rows are not retrievable through this view."
+    >
+        {label}
+    </span>
+);
+
+/** Tier-1 route behind the paged metadata read; the panel's contents depend on it, never the tab. */
+const DETAILS_METADATA_ROUTE = "/workflows/executions/{executionId}/details/metadata";
+
+/**
+ * The paged route's name for each metadata collection the details view embeds. A collection absent
+ * here has no paged counterpart — the file and results collections stay inline, so for those the
+ * truncation flag is the only signal the view is incomplete.
+ */
+const PAGED_METADATA_COLLECTION: Record<string, DetailMetadataCollection> = {
+    inputMetadata: "input",
+    inputDatabaseMetadata: "inputDatabase",
+    "outputs.metadata": "output",
+};
+
+/** Rows per client-side page in the detail tables. */
+const TABLE_PAGE_SIZE = 25;
+
+interface MetadataSectionProps {
+    executionId: string;
+    /** The details-response collection name ("inputMetadata", "outputs.metadata", ...). */
+    collectionName: string;
+    /** Section heading, given the number of rows currently rendered. */
+    title: (count: number) => string;
+    columns: ColumnDef<any, any>[];
+    /** The rows the details response embedded, already in render shape. */
+    inlineRows: any[];
+    /** Maps the paged route's rows into the same render shape as `inlineRows`. */
+    mapPagedRows: (items: any[]) => any[];
+    truncated: boolean;
+    /** Tier-1 permission for the paged route. */
+    canPage: boolean;
+    emptyText: string;
+    titleAdornment?: React.ReactNode;
+}
+
+/**
+ * A metadata table that escalates to the paged route when the details view returned the collection
+ * bounded.
+ *
+ * The details response caps each collection, so a large run's table would otherwise be a silent subset
+ * of itself. When a collection comes back flagged, its rows are re-read through
+ * `GET .../details/metadata`, which walks every pipeline step of the run — so the table shows the
+ * collection, not the first slice of it. An unflagged collection is rendered from the details response
+ * and costs no extra request.
+ *
+ * Paging is in two layers: the table pages locally over what is loaded, and "Load more rows" fetches
+ * the next server page. The section is only free of the partial marker once the walk has reached the
+ * last page — a bounded read, a failed one, or one the caller lacks Tier-1 for all stay marked.
+ */
+const MetadataSection: React.FC<MetadataSectionProps> = ({
+    executionId,
+    collectionName,
+    title,
+    columns,
+    inlineRows,
+    mapPagedRows,
+    truncated,
+    canPage,
+    emptyText,
+    titleAdornment,
+}) => {
+    const collection = PAGED_METADATA_COLLECTION[collectionName];
+    const escalated = truncated && canPage && !!collection;
+    const paged = useExecutionDetailMetadata(executionId, collection || "input", escalated);
+    const pagedRows = React.useMemo(
+        () => mapPagedRows(((paged.data?.pages as any[]) || []).flatMap((p: any) => p.Items || [])),
+        [paged.data, mapPagedRows]
+    );
+
+    const pagedAvailable = escalated && !!paged.data;
+    // On a failed escalation the details view's own subset is still the best available answer, so it is
+    // shown with the failure stated inline rather than replaced by an empty table.
+    const rows = pagedAvailable ? pagedRows : inlineRows;
+    const fullyRetrieved = pagedAvailable && !paged.isError && !paged.hasNextPage;
+    const stillPartial = truncated && !fullyRetrieved;
+
+    return (
+        <Card
+            title={title(rows.length)}
+            titleAdornment={
+                stillPartial || titleAdornment ? (
+                    <>
+                        {stillPartial && <TruncatedBadge />}
+                        {titleAdornment}
+                    </>
+                ) : undefined
+            }
+        >
+            {escalated && paged.isLoading && (
+                <p className="text-text-secondary mb-2">Loading the complete set…</p>
+            )}
+            {escalated && paged.isError && (
+                <p role="alert" className="text-sm text-vams-error mb-2">
+                    Could not load the complete set: {toastErrorMessage(paged.error)} The rows below
+                    are the subset the detail view returned.
+                </p>
+            )}
+            {stillPartial && !escalated && (
+                <p className="text-sm text-yellow-700 dark:text-yellow-400 mb-2">
+                    {canPage
+                        ? "This execution produced more rows than this view returns. The rows below are a subset."
+                        : "This execution produced more rows than this view returns, and you do not have permission to page the complete set. The rows below are a subset."}
+                </p>
+            )}
+            {rows.length > 0 ? (
+                <DataTable columns={columns} rows={rows} pageSize={TABLE_PAGE_SIZE} flush />
+            ) : (
+                !(escalated && paged.isLoading) && (
+                    <p className="text-text-secondary">{emptyText}</p>
+                )
+            )}
+            {escalated && paged.hasNextPage && (
+                <div className="flex items-center gap-3 mt-3 text-sm">
+                    <button
+                        onClick={() => paged.fetchNextPage()}
+                        disabled={paged.isFetchingNextPage}
+                        className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {paged.isFetchingNextPage ? "Loading…" : "Load more rows"}
+                    </button>
+                    <span className="text-text-secondary">
+                        {rows.length} rows loaded · more available
+                    </span>
+                </div>
+            )}
+        </Card>
+    );
+};
+
+/**
+ * Stated where a bounded FILE collection is rendered. The file collections have no paged route to
+ * escalate to, so the flag is the reader's only signal that rows are missing — and unlike a metadata
+ * section, there is nothing more to load.
+ */
+const NoEscalationNote: React.FC = () => (
+    <p className="text-sm text-yellow-700 dark:text-yellow-400 mb-2">
+        This execution produced more files than this view returns. The rows below are a subset, and
+        the remaining rows are not retrievable through this view.
+    </p>
 );
 
 /**
@@ -201,6 +358,10 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
 
     const canViewLogs = can("GET", "/workflows/executions/{executionId}/logs");
+    // The paged metadata read carries the same Tier-2 rule as details, but is its own Tier-1 route — a
+    // deployment whose constraints omit it answers 403. Checked here so a truncated section explains
+    // that its complete set is out of reach instead of escalating into a failed request.
+    const canPageMetadata = can("GET", DETAILS_METADATA_ROUTE);
 
     // Per-pipeline Monaco editor state: { [pipelineIdx]: true if editor is visible }
     const [expandedEditors, setExpandedEditors] = useState<Record<number, boolean>>({});
@@ -239,7 +400,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         { key: "pipelines", label: "Pipelines" },
         { key: "outputs", label: "Outputs" },
         { key: "settings", label: "Settings" },
-        { key: "logs", label: "Logs", hidden: !canViewLogs },
+        { key: "logs", label: "Logs" },
     ];
 
     // Table column definitions for the (potentially long) input/output files + metadata lists.
@@ -284,9 +445,47 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         },
     ];
     const inputMetadataRows = flattenInputMetadata(execution.inputMetadata || []);
+    // Collections the server reports as partial. Looked up per section so each one is marked on its own
+    // evidence — the two metadata collections share one read server-side, so both can be named at once.
+    const truncatedSet = new Set(execution.truncatedCollections || []);
+    const isTruncated = (collection: string) => truncatedSet.has(collection);
+    // A truncated metadata collection is re-read through the paged route, so the banner must not call it
+    // a subset — the sections that stay a subset are the ones with no paged counterpart (the file and
+    // results collections), plus any metadata collection this caller cannot page.
+    const escalatedCollections = (execution.truncatedCollections || []).filter(
+        (c) => !!PAGED_METADATA_COLLECTION[c] && canPageMetadata
+    );
+    const cappedInline = (execution.truncatedCollections || []).filter(
+        (c) => !escalatedCollections.includes(c)
+    );
+    // Metadata rows are recorded per pipeline, each pipeline's rows describing the entities IT reads, so
+    // the same entity legitimately appears once per pipeline and the Pipeline column is what tells those
+    // rows apart.
     const metadataColumns: ColumnDef<any, any>[] = [
         { accessorKey: "assetId", header: "Asset" },
         { accessorKey: "filePath", header: "File" },
+        { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+        // Metadata and file attributes are separate metadataInputs a pipeline can be granted
+        // independently, so a row says which of the two it came from.
+        {
+            accessorKey: "source",
+            header: "Source",
+            cell: (c) => (c.getValue() === "attributes" ? "Attribute" : "Metadata"),
+        },
+        { accessorKey: "key", header: "Key" },
+        {
+            accessorKey: "value",
+            header: "Value",
+            cell: (c) => <MetadataValueCell value={c.getValue()} />,
+        },
+    ];
+    const databaseMetadataRows = flattenInputMetadata(execution.inputDatabaseMetadata || []);
+    // Database metadata belongs to a source database, not an asset, so the asset/file columns above
+    // have nothing to show for it. It belongs to every pipeline of the run — database metadata is
+    // envelope-global — so a multi-step run repeats each row once per pipeline.
+    const databaseMetadataColumns: ColumnDef<any, any>[] = [
+        { accessorKey: "databaseId", header: "Database" },
+        { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
         { accessorKey: "key", header: "Key" },
         {
             accessorKey: "value",
@@ -463,10 +662,20 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                         <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-300 mb-1">
                             Warning:
                         </p>
-                        <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
-                            Some collections were truncated:{" "}
-                            {execution.truncatedCollections.join(", ")}
-                        </p>
+                        {cappedInline.length > 0 && (
+                            <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
+                                This execution produced more rows than this view returns, so these
+                                sections are a subset: {cappedInline.join(", ")}. Each one is also
+                                marked where it is shown.
+                            </p>
+                        )}
+                        {escalatedCollections.length > 0 && (
+                            <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
+                                These sections held more rows than the detail view returns and are
+                                read separately, a page at a time: {escalatedCollections.join(", ")}
+                                .
+                            </p>
+                        )}
                     </div>
                 )}
             </Card>
@@ -503,30 +712,50 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
             <div>
                 {activeTab === "inputs" && (
                     <div className="space-y-4">
-                        <Card title={`Input Files (${execution.inputFiles?.length || 0})`}>
+                        <Card
+                            title={`Input Files (${execution.inputFiles?.length || 0})`}
+                            titleAdornment={
+                                isTruncated("inputFiles") ? <TruncatedBadge /> : undefined
+                            }
+                        >
+                            {isTruncated("inputFiles") && <NoEscalationNote />}
                             {execution.inputFiles && execution.inputFiles.length > 0 ? (
                                 <DataTable
                                     columns={inputFileColumns}
                                     rows={execution.inputFiles}
-                                    pageSize={25}
+                                    pageSize={TABLE_PAGE_SIZE}
                                     flush
                                 />
                             ) : (
                                 <p className="text-text-secondary">No input files</p>
                             )}
                         </Card>
-                        <Card title={`Input Metadata (${inputMetadataRows.length})`}>
-                            {inputMetadataRows.length > 0 ? (
-                                <DataTable
-                                    columns={metadataColumns}
-                                    rows={inputMetadataRows}
-                                    pageSize={25}
-                                    flush
-                                />
-                            ) : (
-                                <p className="text-text-secondary">No input metadata</p>
-                            )}
-                        </Card>
+                        {/* Widest entity first — database, then asset/file — matching the order the
+                            pipeline and workflow forms present the metadata toggles in. The database's
+                            own metadata is a separate collection because it belongs to no asset, so it
+                            has no asset/file column to sit under. */}
+                        <MetadataSection
+                            executionId={executionId}
+                            collectionName="inputDatabaseMetadata"
+                            title={(n) => `Input Database Metadata (${n})`}
+                            columns={databaseMetadataColumns}
+                            inlineRows={databaseMetadataRows}
+                            mapPagedRows={flattenInputMetadata}
+                            truncated={isTruncated("inputDatabaseMetadata")}
+                            canPage={canPageMetadata}
+                            emptyText="No input database metadata"
+                        />
+                        <MetadataSection
+                            executionId={executionId}
+                            collectionName="inputMetadata"
+                            title={(n) => `Input Asset and File Metadata (${n})`}
+                            columns={metadataColumns}
+                            inlineRows={inputMetadataRows}
+                            mapPagedRows={flattenInputMetadata}
+                            truncated={isTruncated("inputMetadata")}
+                            canPage={canPageMetadata}
+                            emptyText="No input asset or file metadata"
+                        />
                     </div>
                 )}
 
@@ -634,13 +863,40 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                                     {/* Rendered Config Body — the exact configuration sent to this pipeline */}
                                     {pipeline.renderedConfig && (
                                         <div>
-                                            <h4 className="text-sm font-semibold mb-2">
-                                                Executed Configuration
-                                            </h4>
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <h4 className="text-sm font-semibold">
+                                                    Executed Configuration
+                                                </h4>
+                                                {pipeline.renderedConfigTruncated && (
+                                                    <TruncatedBadge label="Truncated" />
+                                                )}
+                                            </div>
+                                            {/* The body always goes to Amazon S3 for the pipeline to
+                                                read, so a truncated inline copy still has a complete
+                                                source to point at. */}
                                             {pipeline.renderedConfigTruncated && (
-                                                <p className="text-sm text-text-secondary mb-1">
-                                                    Configuration was truncated for display.
-                                                </p>
+                                                <div className="orch-outline mb-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
+                                                    <p className="text-sm text-yellow-800 dark:text-yellow-300">
+                                                        The configuration below is a truncated copy.
+                                                    </p>
+                                                    {pipeline.renderedConfigLocation?.key && (
+                                                        <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
+                                                            Complete body in Amazon S3:{" "}
+                                                            <span className="font-mono break-all">
+                                                                s3://
+                                                                {
+                                                                    pipeline.renderedConfigLocation
+                                                                        .bucket
+                                                                }
+                                                                /
+                                                                {
+                                                                    pipeline.renderedConfigLocation
+                                                                        .key
+                                                                }
+                                                            </span>
+                                                        </p>
+                                                    )}
+                                                </div>
                                             )}
                                             {!expandedEditors[idx] ? (
                                                 <div>
@@ -712,36 +968,49 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                             <Card
                                 title={`Output Files (${execution.outputs.files.length})`}
                                 titleAdornment={
-                                    <InfoTooltip
-                                        text={OUTPUTS_SCOPE_HELP}
-                                        label="What this list includes"
-                                    />
+                                    <>
+                                        {isTruncated("outputs.files") && <TruncatedBadge />}
+                                        <InfoTooltip
+                                            text={OUTPUTS_SCOPE_HELP}
+                                            label="What this list includes"
+                                        />
+                                    </>
                                 }
                             >
+                                {isTruncated("outputs.files") && <NoEscalationNote />}
                                 <DataTable
                                     columns={outputFileColumns}
                                     rows={execution.outputs.files}
-                                    pageSize={25}
+                                    pageSize={TABLE_PAGE_SIZE}
                                     flush
                                 />
                             </Card>
                         )}
 
                         {/* Metadata */}
-                        {execution.outputs?.metadata && execution.outputs.metadata.length > 0 && (
-                            <Card title={`Output Metadata (${execution.outputs.metadata.length})`}>
-                                <DataTable
-                                    columns={outputMetadataColumns}
-                                    rows={execution.outputs.metadata}
-                                    pageSize={25}
-                                    flush
-                                />
-                            </Card>
+                        {(!!execution.outputs?.metadata?.length ||
+                            isTruncated("outputs.metadata")) && (
+                            <MetadataSection
+                                executionId={executionId}
+                                collectionName="outputs.metadata"
+                                title={(n) => `Output Metadata (${n})`}
+                                columns={outputMetadataColumns}
+                                inlineRows={execution.outputs?.metadata || []}
+                                mapPagedRows={identityRows}
+                                truncated={isTruncated("outputs.metadata")}
+                                canPage={canPageMetadata}
+                                emptyText="No output metadata"
+                            />
                         )}
 
                         {/* Results */}
                         {execution.outputs?.results && execution.outputs.results.length > 0 && (
-                            <Card title="Output Results">
+                            <Card
+                                title="Output Results"
+                                titleAdornment={
+                                    isTruncated("outputs.results") ? <TruncatedBadge /> : undefined
+                                }
+                            >
                                 <div className="space-y-2">
                                     {execution.outputs.results.map((result: any, idx: number) => (
                                         <div
@@ -765,6 +1034,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
 
                         {!execution.outputs?.files?.length &&
                             !execution.outputs?.metadata?.length &&
+                            !isTruncated("outputs.metadata") &&
                             !execution.outputs?.results?.length && (
                                 <Card
                                     title="Outputs"
@@ -853,12 +1123,20 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                     </div>
                 )}
 
-                {activeTab === "logs" && canViewLogs && (
+                {activeTab === "logs" && (
                     <Card title="Logs">
-                        <ExecutionLogViewer
-                            executionId={executionId}
-                            pipelines={execution.pipelines || []}
-                        />
+                        {canViewLogs ? (
+                            <ExecutionLogViewer
+                                executionId={executionId}
+                                pipelines={execution.pipelines || []}
+                            />
+                        ) : (
+                            // The tab stays reachable so the logs are discoverable, and says why they
+                            // are unavailable rather than presenting an empty viewer.
+                            <p className="text-text-secondary">
+                                You do not have permission to view execution logs.
+                            </p>
+                        )}
                     </Card>
                 )}
             </div>
@@ -895,21 +1173,43 @@ const MetadataValueCell: React.FC<{ value: any }> = ({ value }) => {
     );
 };
 
-/** Flatten input-metadata records ({assetId, filePath, metadata:{k:v}}) to one row per key/value. */
+/**
+ * Rows already in render shape. The output-metadata collection is one key/value per row in both the
+ * details response and the paged route, so it needs no reshaping.
+ */
+function identityRows(items: any[]): any[] {
+    return items || [];
+}
+
+/**
+ * Flatten input-metadata records ({pipelineId, databaseId, assetId, filePath, metadata:{k:v}}) to one
+ * row per key/value. databaseId is carried through for the database-scoped collection, whose rows carry
+ * no asset or file. pipelineId is the pipeline that read the entity: the records are per pipeline, so
+ * dropping it collapses a run's pipelines into rows that cannot be told apart.
+ */
+// One table row per key, from BOTH of a record's content maps: `metadata` and `attributes`. The two are
+// gated independently by a pipeline's metadataInputs (fileMetadata vs fileAttributes), so a record may
+// legitimately carry attributes and no metadata — reading `metadata` alone would drop that record's row
+// entirely rather than merely omitting a column, and no truncation flag would explain the absence.
+// `source` says which map a row came from, so the two stay distinguishable once flattened together.
 function flattenInputMetadata(records: any[]): any[] {
     const rows: any[] = [];
     (records || []).forEach((rec) => {
-        const md = rec.metadata || {};
-        const keys = Object.keys(md);
-        if (keys.length === 0) return;
-        keys.forEach((key) => {
-            rows.push({
-                assetId: rec.assetId || "",
-                filePath: rec.filePath || "",
-                key,
-                value: md[key],
+        const emit = (map: any, source: "metadata" | "attributes") => {
+            Object.keys(map || {}).forEach((key) => {
+                rows.push({
+                    pipelineId: rec.pipelineId || "",
+                    databaseId: rec.databaseId || "",
+                    assetId: rec.assetId || "",
+                    filePath: rec.filePath || "",
+                    source,
+                    key,
+                    value: map[key],
+                });
             });
-        });
+        };
+        emit(rec.metadata, "metadata");
+        emit(rec.attributes, "attributes");
     });
     return rows;
 }

@@ -112,7 +112,16 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 `list_pipeline_templates`, `get_pipeline_template`,
 `get_pipeline_template_tag_schema`, `get_workflow`, `list_workflow_triggers`,
 `get_workflow_trigger`, `list_executions`, `get_execution_details`,
-`get_execution_logs`.
+`page_execution_detail_metadata`, `get_execution_logs`.
+
+`page_execution_detail_metadata` reads one metadata collection of the detail view
+past the bound `get_execution_details` applies — use it when that response names
+a metadata collection in `truncatedCollections`.
+
+`list_workflow_executions` covers ONE asset's history and accepts optional
+`workflow_id` / `workflow_database_id` filters; `list_executions` is the global,
+cross-asset list. A workflow id is unique only within its database, so pass both
+filters when the same id exists in more than one (`GLOBAL` is the shared catalog).
 
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
@@ -142,8 +151,10 @@ Pipelines, workflows, and executions: `archive_pipeline`, `unarchive_pipeline`,
 `delete_workflow_trigger`, `permanent_delete_execution`.
 
 Archiving a pipeline or workflow is a soft delete, reversible through the
-matching `unarchive_*` tool. `delete_pipeline_template`,
-`delete_workflow_trigger`, and `permanent_delete_execution` are not reversible.
+matching `unarchive_*` tool. Archiving also disables the row, so the
+`unarchive_*` tools re-enable it — pass `keep_disabled` to restore it archived-off
+but still not runnable. `delete_pipeline_template`, `delete_workflow_trigger`, and
+`permanent_delete_execution` are not reversible.
 
 ## Security notes
 

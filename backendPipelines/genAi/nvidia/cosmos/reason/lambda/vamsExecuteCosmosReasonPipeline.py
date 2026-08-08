@@ -96,8 +96,11 @@ def lambda_handler(event, context):
         manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
-        # Read metadata + input-configuration content from S3 (inline fallback for transition)
-        input_metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']) \
+        # Read metadata + input-configuration content from S3 (inline fallback for transition). The
+        # metadata file is the grouped-by-asset envelope, projected onto the legacy {"VAMS": {...}}
+        # view for this run's subject that the scopes below read (manifestHelper.run_vams_view).
+        input_metadata = manifestHelper.run_vams_view(
+            manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']), resolved) \
             or data.get('inputMetadata', '')
         input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location']) \
             or data.get('inputParameters', '')

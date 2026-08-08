@@ -55,6 +55,19 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
 from backend.backend.handlers.workflows import executionService as le
 
 
+@pytest.fixture(autouse=True)
+def _stub_configuration_row():
+    """Stand in for the workflow-execution configuration table.
+
+    A failed read of that row RAISES rather than degrading to {} — the row carries the metadata sources
+    and output target the read gate checks, so answering a failed read with {} would remove every
+    data-level check and let a throttle turn a denial into an approval. These wire tests do not stub
+    DynamoDB, so without this the real GetItem is attempted and every handler returns 500. A test that
+    cares about the row's CONTENT patches over this with its own return value."""
+    with patch.object(le, "get_workflow_execution_configuration_row", return_value={}):
+        yield
+
+
 def _event(method, path_params=None, body=None, query=None):
     event = {
         "requestContext": {"http": {"method": method, "path": "/x"}, "authorizer": {}},
@@ -86,7 +99,7 @@ class TestListExecutionsHandler:
     def test_happy_path_wire_shape(self):
         # Authorize, stub the listing to return one execution; assert {"message": {"Items":[...]}}.
         items = [{
-            "workflowDatabaseId": "wdb", "workflowId": "wfx", "workflowExecutionId": "E1",
+            "workflowDatabaseId": "wdb", "workflowId": "wfx", "workflowExecutionId": "e1000000000000000000000000000001",
             "executionStatus": "SUCCEEDED", "startDate": "2026-06-16T00:00:00Z",
             "stopDate": "2026-06-16T00:05:00Z", "inputAssetFileKey": "/x.glb",
             "databaseId": "dbx", "assetId": "a1", "executionError": "", "executionLog": "",
@@ -136,14 +149,14 @@ class TestAbortExecutionHandler:
 
     def _main_row(self, status="RUNNING"):
         return {
-            "workflowExecutionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
+            "workflowExecutionId": "abc00000000000000000000000000001", "workflowId": "wfx", "workflowDatabaseId": "dbx",
             "workflow_execution_arn": "arn:ex:main", "executionStatus": status,
             "executionStopDate": "",
         }
 
     def test_method_not_allowed(self):
         with patch.object(le, "request_to_claims", return_value=self._claims()):
-            resp = le.lambda_handler(_event("PUT", {"executionId": "EabcId"}), MagicMock())
+            resp = le.lambda_handler(_event("PUT", {"executionId": "abc00000000000000000000000000001"}), MagicMock())
         assert resp["statusCode"] == 400
         assert _body(resp)["message"] == "Method not allowed"
 
@@ -157,7 +170,7 @@ class TestAbortExecutionHandler:
         with patch.object(le, "request_to_claims", return_value=self._claims()), \
              patch.object(le, "CasbinEnforcer") as MockEnf:
             MockEnf.return_value.enforceAPI.return_value = False
-            resp = le.lambda_handler(_event("DELETE", {"executionId": "EabcId"}), MagicMock())
+            resp = le.lambda_handler(_event("DELETE", {"executionId": "abc00000000000000000000000000001"}), MagicMock())
         assert resp["statusCode"] == 403
 
     def test_execution_not_found_404(self):
@@ -165,7 +178,7 @@ class TestAbortExecutionHandler:
              patch.object(le, "CasbinEnforcer") as MockEnf, \
              patch.object(le, "get_execution_main_row", return_value=None):
             MockEnf.return_value.enforceAPI.return_value = True
-            resp = le.lambda_handler(_event("DELETE", {"executionId": "EabcId"}), MagicMock())
+            resp = le.lambda_handler(_event("DELETE", {"executionId": "abc00000000000000000000000000001"}), MagicMock())
         assert resp["statusCode"] == 404
         assert _body(resp)["message"] == "Execution not found"
 
@@ -176,7 +189,7 @@ class TestAbortExecutionHandler:
              patch.object(le, "get_execution_main_row", return_value=self._main_row()):
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = False  # workflow GET denied
-            resp = le.lambda_handler(_event("DELETE", {"executionId": "EabcId"}), MagicMock())
+            resp = le.lambda_handler(_event("DELETE", {"executionId": "abc00000000000000000000000000001"}), MagicMock())
         assert resp["statusCode"] == 403
 
     def test_input_asset_post_denied_403(self):
@@ -192,20 +205,20 @@ class TestAbortExecutionHandler:
              patch.object(le, "get_asset_details", return_value={"assetId": "a1", "databaseId": "dbx"}):
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.side_effect = _enforce
-            resp = le.lambda_handler(_event("DELETE", {"executionId": "EabcId"}), MagicMock())
+            resp = le.lambda_handler(_event("DELETE", {"executionId": "abc00000000000000000000000000001"}), MagicMock())
         assert resp["statusCode"] == 403
 
     def test_abort_happy_path_stops_inner_then_outer_and_marks_aborted(self):
         # Two pipeline rows: one running with a registered Step Functions sub-execution, one
         # already SUCCEEDED (must be left untouched). Assert inner+outer StopExecution and that
         # the running pipeline row + main row are written ABORTED.
-        running_pipe = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId",
+        running_pipe = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001",
                         "executionStatus": "RUNNING",
                         "registeredSubExecutions": [
                             {"resourceType": "stepFunctionsExecution",
                              "stateMachineArn": "arn:sm:inner1", "executionArn": "arn:ex:inner1"}],
                         "executionStopDate": ""}
-        done_pipe = {"pipelineExecutionId": "P2", "workflowExecutionId": "EabcId",
+        done_pipe = {"pipelineExecutionId": "P2", "workflowExecutionId": "abc00000000000000000000000000001",
                      "executionStatus": "SUCCEEDED",
                      "registeredSubExecutions": [], "executionStopDate": "d"}
         pexec_table = MagicMock()
@@ -226,7 +239,7 @@ class TestAbortExecutionHandler:
              patch.object(le.sfn, "stop_execution") as mock_stop:
             MockEnf.return_value.enforceAPI.return_value = True
             MockEnf.return_value.enforce.return_value = True
-            resp = le.lambda_handler(_event("DELETE", {"executionId": "EabcId"}), MagicMock())
+            resp = le.lambda_handler(_event("DELETE", {"executionId": "abc00000000000000000000000000001"}), MagicMock())
 
         assert resp["statusCode"] == 200
         assert _body(resp)["message"] == "Execution aborted"
@@ -259,7 +272,7 @@ class TestExecutionDetailsHandler:
 
     def _main_row(self):
         return {
-            "workflowExecutionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
+            "workflowExecutionId": "abc00000000000000000000000000001", "workflowId": "wfx", "workflowDatabaseId": "dbx",
             "workflow_execution_arn": "arn:ex:main", "executionStatus": "SUCCEEDED",
             "executionStartDate": "2026-06-16T00:00:00Z", "executionStopDate": "2026-06-16T00:05:00Z",
             "triggerType": "Manual", "triggeredByUserId": "user@x", "executionError": "",
@@ -267,7 +280,7 @@ class TestExecutionDetailsHandler:
 
     def _event_details(self):
         # {executionId} is the API route path parameter (unchanged client contract).
-        ev = _event("GET", {"executionId": "EabcId"})
+        ev = _event("GET", {"executionId": "abc00000000000000000000000000001"})
         ev["requestContext"]["http"]["path"] = "/workflows/executions/EabcId/details"
         return ev
 
@@ -315,7 +328,7 @@ class TestExecutionDetailsHandler:
 
         assert resp["statusCode"] == 200
         msg = _body(resp)["message"]
-        assert msg["workflowExecutionId"] == "EabcId"
+        assert msg["workflowExecutionId"] == "abc00000000000000000000000000001"
         assert msg["workflowDescription"] == "wf desc"
         assert msg["pipelines"][0]["name"] == "convert"
         assert msg["pipelines"][0]["description"] == "Converts"
@@ -361,13 +374,13 @@ class TestExecutionLogsHandler:
 
     def _main_row(self):
         return {
-            "executionId": "EabcId", "workflowId": "wfx", "workflowDatabaseId": "dbx",
+            "executionId": "abc00000000000000000000000000001", "workflowId": "wfx", "workflowDatabaseId": "dbx",
             "executionStatus": "RUNNING", "executionLog": "stored log text",
             "executionError": "", "executionLogGroupArn": "arn:aws:logs:us-east-1:1:log-group:vams-wf:*",
         }
 
     def _event_logs(self, query=None):
-        ev = _event("GET", {"executionId": "EabcId"}, query=query or {})
+        ev = _event("GET", {"executionId": "abc00000000000000000000000000001"}, query=query or {})
         ev["requestContext"]["http"]["path"] = "/workflows/executions/EabcId/logs"
         return ev
 
@@ -398,7 +411,7 @@ class TestExecutionLogsHandler:
         # Pipeline must belong to this execution; the live search filter pattern must
         # include BOTH the execution id and the pipeline execution id so only that
         # pipeline's events can ever be returned.
-        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId"}
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001"}
         captured = {}
 
         def _filter_log_events(**kwargs):
@@ -419,14 +432,14 @@ class TestExecutionLogsHandler:
         msg = _body(resp)["message"]
         assert msg["mode"] == "full" and msg["events"]
         # The filter pattern is scoped to BOTH ids -> cannot leak other pipelines/executions.
-        assert '"EabcId"' in captured["filterPattern"]
+        assert '"abc00000000000000000000000000001"' in captured["filterPattern"]
         assert '"P1"' in captured["filterPattern"]
 
     def test_logs_full_caller_filter_pattern_is_quoted_literal(self):
         # A caller filterPattern is appended as a single QUOTED literal term with embedded quotes
         # stripped, so it cannot break out of the quote and inject OR/negation that would broaden
         # the search past the AND-ed execution/pipeline scope (shared log group cross-read guard).
-        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "EabcId"}
+        prow = {"pipelineExecutionId": "P1", "workflowExecutionId": "abc00000000000000000000000000001"}
         captured = {}
 
         def _filter_log_events(**kwargs):
@@ -449,7 +462,7 @@ class TestExecutionLogsHandler:
         fp = captured["filterPattern"]
         # Scope terms still present, and the caller term is a single quoted literal with the
         # embedded double-quotes removed (so no term-boundary escape / OR injection).
-        assert '"EabcId"' in fp and '"P1"' in fp
+        assert '"abc00000000000000000000000000001"' in fp and '"P1"' in fp
         assert '"?"' not in fp  # the "?" OR-prefix cannot appear as its own bare token
         assert '" ?"OtherExecId"' not in fp  # raw malicious form is not passed through verbatim
 

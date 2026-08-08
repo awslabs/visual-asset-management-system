@@ -80,8 +80,10 @@ def construct_rapidPipeline_definition(event) -> dict:
 
     # Handle custom configurations using the input configuration read from S3 above.
     if config:
-        # Namespace the config object per execution so concurrent runs cannot read
-        # each other's config (L13). jobName is unique per Step Functions execution.
+        # Namespace the config object per execution so concurrent runs cannot read each other's
+        # config (L13). jobName carries a millisecond stamp and a random suffix, so it stays distinct
+        # for runs launched in the same second — one upload can fan out to several simultaneous runs
+        # of this pipeline.
         config_key = f"rp_config_{event.get('jobName', 'default')}.json"
         # write config json file to S3
         s3.put_object(

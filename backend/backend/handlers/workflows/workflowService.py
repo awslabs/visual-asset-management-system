@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import ValidationError
 
 from common.validators import validate
 from common.resourceNames import get_table_name, ResourceKeys
@@ -37,6 +38,7 @@ from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -45,6 +47,7 @@ from models.common import (
     internal_error,
     general_error,
     VAMSGeneralErrorResponse,
+    validation_error_message,
 )
 from models.workflows import (
     CreateWorkflowRequestModel,
@@ -434,7 +437,7 @@ def _save_validation(workflow_system_config, pipeline_records):
     return ev.validate_workflow_save(workflow_system_config, pipeline_configs)
 
 
-def create_workflow(database_id, request, username, claims_and_roles):
+def create_workflow(database_id, request, username, claims_and_roles, event=None):
     # A GUID is generated when the caller does not supply a workflowId (workflowRecords has no id
     # generator of its own; the shared pipelineRecords.new_guid produces a 32-hex GUID).
     workflow_id = request.workflowId or pr.new_guid()
@@ -495,13 +498,20 @@ def create_workflow(database_id, request, username, claims_and_roles):
     record["jobNames"] = job_names or []
 
     _workflow_table().put_item(Item=record)
+    # AUDIT LOG: workflow created (after the write, so a failed write is never audited as a success).
+    log_actions(event or {}, "workflowCreate", {
+        "databaseId": database_id,
+        "workflowId": workflow_id,
+        "pipelineCount": len(pipeline_records),
+        "operation": "create",
+    })
     return success(body={"message": _item_to_response(
         record, warnings=warnings,
         pipeline_system_configs=[rec.get("systemConfig", {}) or {}
                                  for rec in pipeline_records]).dict()})
 
 
-def update_workflow(database_id, workflow_id, request, username, claims_and_roles):
+def update_workflow(database_id, workflow_id, request, username, claims_and_roles, event=None):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
         return validation_error(status_code=404, body={"message": "Workflow not found"})
@@ -571,6 +581,13 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
         item["jobNames"] = job_names or []
 
     _workflow_table().put_item(Item=item)
+    # AUDIT LOG: workflow updated.
+    log_actions(event or {}, "workflowUpdate", {
+        "databaseId": database_id,
+        "workflowId": workflow_id,
+        "pipelineCount": len(pipeline_records),
+        "operation": "update",
+    })
     return success(body={"message": _item_to_response(
         item, warnings=warnings,
         pipeline_system_configs=[rec.get("systemConfig", {}) or {}
@@ -636,7 +653,7 @@ def _resolve_snapshot_pipeline_records(workflow_item):
     return records
 
 
-def archive_workflow(database_id, workflow_id, username, claims_and_roles):
+def archive_workflow(database_id, workflow_id, username, claims_and_roles, event=None):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
         return validation_error(status_code=404, body={"message": "Workflow not found"})
@@ -647,6 +664,12 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles):
     item["dateModified"] = pr.iso_now()
     item["modifiedBy"] = username
     _workflow_table().put_item(Item=item)
+    # AUDIT LOG: workflow archived (the delete route archives rather than removing).
+    log_actions(event or {}, "workflowArchive", {
+        "databaseId": database_id,
+        "workflowId": workflow_id,
+        "operation": "archive",
+    })
     return success(body={"message": "Workflow archived"})
 
 
@@ -732,18 +755,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if not database_id:
                 return validation_error(body={"message": "databaseId required to create a workflow"}, event=event)
             request = CreateWorkflowRequestModel(**json.loads(event.get("body") or "{}"))
-            return create_workflow(database_id, request, username, claims_and_roles)
+            return create_workflow(database_id, request, username, claims_and_roles, event)
 
         if method == "PUT":
             if not workflow_id:
                 return validation_error(body={"message": "workflowId required to update a workflow"}, event=event)
             request = UpdateWorkflowRequestModel(**json.loads(event.get("body") or "{}"))
-            return update_workflow(database_id, workflow_id, request, username, claims_and_roles)
+            return update_workflow(database_id, workflow_id, request, username, claims_and_roles, event)
 
         if method == "DELETE":
             if not workflow_id:
                 return validation_error(body={"message": "workflowId required to archive a workflow"}, event=event)
-            return archive_workflow(database_id, workflow_id, username, claims_and_roles)
+            return archive_workflow(database_id, workflow_id, username, claims_and_roles, event)
 
         return authorization_error(body={"message": "Method not allowed"})
 
@@ -752,6 +775,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return general_error(body={"message": str(v)}, event=event)
     except json.JSONDecodeError:
         return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as ve:
+        logger.exception(f"Validation error: {ve}")
+        return validation_error(body={"message": validation_error_message(ve)}, event=event)
     except ValueError as ve:
         logger.exception(f"Validation error: {ve}")
         return validation_error(body={"message": str(ve)}, event=event)

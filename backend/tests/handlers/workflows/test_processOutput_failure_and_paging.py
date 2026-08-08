@@ -16,13 +16,11 @@ import types
 import pytest
 from unittest.mock import MagicMock, patch
 
-# models.assetsV3 fails to import under Python 3.13 due to a pre-existing, unrelated Pydantic v1
-# regex incompatibility. The handler only needs AssetUploadTableModel inside
-# create_external_upload_record, which is not exercised here. Stub it before importing the handler.
-if "models.assetsV3" not in sys.modules:
-    _assetsv3_stub = types.ModuleType("models.assetsV3")
-    _assetsv3_stub.AssetUploadTableModel = MagicMock()
-    sys.modules["models.assetsV3"] = _assetsv3_stub
+# models.assetsV3 is imported for real here. It must NOT be replaced with a partial stub: a module
+# installed into sys.modules persists for the whole session, so a stub exposing only the one name
+# this file needs makes every LATER test module that imports any other model from assetsV3 fail at
+# collection — which, because a collection error aborts the run, took the entire
+# tests/handlers/workflows directory (1389 tests) down whenever this file was collected first.
 
 for _k, _v in {
     "S3_ASSET_BUCKETS_STORAGE_TABLE_NAME": "t-buckets",

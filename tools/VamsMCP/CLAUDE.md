@@ -95,6 +95,14 @@ response to `total` / `returned` / `results`).
     has. Wrap single-object and write calls in `CLIENT.unwrap_message(...)`;
     `paginate()` already does it.
 
+    **Repeat a filter-pinned endpoint's filters on every page.** Some continuation
+    tokens are only valid alongside the filters they were issued with — the paged
+    execution-detail metadata read (`page_execution_detail_metadata`) pins its
+    token to the `collection` and `pipelineId` of the request that produced it, and
+    the handler answers a mismatch with a 400. `paginate()` passes only `pageSize`
+    and `startingToken`, so merge the filters into the params inside the
+    `fetch_page` callable rather than sending them on the first request alone.
+
 8. **Support both `mcp` major versions.** `mcp` 1.x exposes `FastMCP` from
    `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
    `mcp.server.mcpserver` and removed the old module. `server.py` imports it

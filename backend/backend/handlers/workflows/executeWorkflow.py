@@ -42,6 +42,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_actions
 from common.workflows import executionRecords as er
 from common.workflows import executionValidation as ev
 from common.workflows import templateResolution as tres
@@ -79,6 +80,7 @@ GLOBAL_DATABASE = "GLOBAL"
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 OBJECT_TYPE_ASSET = "asset"
+OBJECT_TYPE_DATABASE = "database"
 
 # Output-target location types. "asset" writes outputs onto an asset; "none" is results-only —
 # the execution produces no asset files/metadata, only results text + logs stored against the
@@ -96,6 +98,52 @@ MAX_CONCURRENCY_CANDIDATES_INSPECTED = 200
 # independent calls; running them through a bounded pool keeps a many-file launch inside the API
 # request window without letting a single execute saturate downstream concurrency.
 MAX_PARALLEL_INPUT_WORKERS = 10
+
+# Caps on the metadata captured for ONE entity row of the grouped envelope — each database, each asset,
+# and each file's metadata and attributes are bounded independently, so a run over many entities leaves
+# every entity its own budget. The entry cap bounds how MANY keys a row carries; the byte cap bounds how
+# LARGE it is, which the entry cap alone cannot do because a metadata value carries no length limit — a
+# few hundred long values, or one very long one, otherwise build a row past the 400 KB DynamoDB item
+# limit, failing the input-metadata write after the state machine has already started. The byte budget
+# leaves room for the row's identity attributes and for DynamoDB's per-element map overhead, which a
+# JSON byte count does not reflect. Truncation is deterministic (keys are retained in sort order) and is
+# both logged and surfaced as an execute warning, so a capped row is never silently short.
+MAX_METADATA_ENTRIES_PER_ENTITY = 1000
+MAX_METADATA_BYTES_PER_ENTITY = 300 * 1024
+
+# Cap on the content ONE execution's grouped envelope carries across every entity together — every row's
+# metadata plus the assetData of every involved asset. The per-entity caps bound each row but not how many
+# rows there are: a request may name MAX_INPUT_FILES_PER_EXECUTION input files and
+# MAX_METADATA_SOURCE_ASSETS_PER_EXECUTION metadata-source assets, which assemble into thousands of rows
+# whose per-entity ceilings sum past a gigabyte — held in Lambda memory, serialized into the run's S3
+# metadata object, and written out as one DynamoDB row each per pipeline of the run. Bytes is the unit
+# because the ROW COUNT is already bounded structurally by those two request caps, while the total SIZE is
+# the dimension nothing bounds: a metadata value has no individual length limit, so a cap on rows or
+# entries still admits a gigabyte. One byte budget therefore bounds the S3 metadata object, the Lambda
+# working set, and the total write volume together. It is measured the way the per-entity byte cap is
+# (_metadata_entry_bytes: key + value + per-entry framing), so it covers the content and not the
+# envelope's own JSON scaffolding — a run at the bound serializes a few tens of KB above it. Metadata rows
+# are retained most-useful-first and deterministically, while assetData holds its place (see
+# _apply_total_metadata_budget); a row left out is logged and surfaced as an execute warning rather than
+# silently dropped.
+#
+# The value clears a heavy REAL workload rather than a small one. A production asset carries thousands of
+# files and hundreds of metadata entries each, so a run selecting the full MAX_INPUT_FILES_PER_EXECUTION
+# with a few hundred entries per file assembles tens of megabytes of content — a budget sized against a
+# lightly-populated asset would truncate ordinary work and report it as a warning, which is worse than not
+# bounding at all. 128 MB leaves that case untouched while still capping the run a Lambda cannot hold:
+# the write path's real ceiling is memory and in-request time (the function has 5308 MB), and the
+# separately-bounded detail view protects the read path, so the budget only has to keep one execution's
+# metadata inside a fraction of the working set.
+MAX_METADATA_BYTES_PER_EXECUTION = 128 * 1024 * 1024
+
+# Per-entry framing (quotes, separators, DynamoDB map element overhead) added to each key/value pair
+# when measuring a row against MAX_METADATA_BYTES_PER_ENTITY.
+METADATA_ENTRY_FRAMING_BYTES = 8
+
+# How many entity names one execute warning lists when several rows truncate, or several databases
+# cannot be read, so a run over many entities returns a bounded warning rather than one per entity.
+MAX_METADATA_NOTICE_ENTITIES_LISTED = 5
 
 # Cap on the output base path extension AFTER its template tags are rendered. Matches the raw-value cap
 # the request model and the workflow systemConfig validator apply, so a value that only becomes
@@ -400,14 +448,110 @@ def _fetch_file_metadata(database_id, asset_id, file_path, meta_type, event):
     return []
 
 
-def _simplify_metadata_array(metadata_array):
-    """Convert a verbose metadata array to a simple {key: value} dict."""
+def _metadata_service_payload(path, path_parameters, event):
+    """A metadata-service GET invoke payload carrying the identity THIS execute request arrived with.
+
+    An API request forwards its authorizer context. A lambda cross-call (trigger dispatch, re-run)
+    has no authorizer at all, so its `lambdaCrossCall` identity is forwarded instead — forwarding an
+    absent authorizer as `authorizer: None` makes the metadata service's claims extraction fail and
+    answer no metadata for a run that is otherwise fully authorized."""
+    payload = {
+        "requestContext": {"http": {"path": path, "method": "GET"}},
+        "pathParameters": path_parameters or {},
+        "queryStringParameters": {},
+    }
+    if event.get("lambdaCrossCall"):
+        payload["lambdaCrossCall"] = event["lambdaCrossCall"]
+    else:
+        payload["requestContext"]["authorizer"] = (
+            event.get("requestContext") or {}).get("authorizer")
+    return payload
+
+
+def _fetch_database_metadata(database_id, event):
+    """Invoke the metadata service's database endpoint; return the parsed 'metadata' list, or None when
+    the read did not succeed.
+
+    Database metadata is a read-only execution input, so a failure yields no metadata rather than
+    failing the launch. None distinguishes a read that FAILED — no payload, a non-200 answer, or an
+    exception — from a successful read of a database that genuinely carries nothing, which returns an
+    empty list. The two are otherwise identical in the envelope and in the persisted rows, so a run over
+    many databases could lose one silently; the caller reports a failed read as an execute warning."""
+    try:
+        payload = _metadata_service_payload(
+            f"/database/{database_id}/metadata", {"databaseId": database_id}, event)
+        response = _metadata_service_lambda(payload)
+        stream = response.get("Payload", "")
+        if not stream:
+            logger.warning(f"Metadata service returned no payload for database {database_id}")
+            return None
+        json_response = json.loads(stream.read().decode("utf-8"))
+        if json_response.get("statusCode") == 200 and "body" in json_response:
+            return json.loads(json_response["body"]).get("metadata", [])
+        logger.warning(
+            f"Metadata service answered status {json_response.get('statusCode')} for database "
+            f"{database_id}; the execution captures no database metadata.")
+    except Exception as e:
+        logger.exception(f"Failed fetching metadata for database {database_id}: {e}")
+    return None
+
+
+def _metadata_entry_bytes(key, value):
+    """The measured size of one metadata entry against the per-entity byte budget: its key and value in
+    UTF-8 plus METADATA_ENTRY_FRAMING_BYTES for the serialization/DynamoDB overhead of a single map
+    element."""
+    return (len(str(key).encode("utf-8")) + len(str(value).encode("utf-8"))
+            + METADATA_ENTRY_FRAMING_BYTES)
+
+
+def _simplify_metadata_array(metadata_array, entity_label="", truncated=None):
+    """Convert a verbose metadata array to a simple {key: value} dict, bounded BOTH at
+    MAX_METADATA_ENTRIES_PER_ENTITY entries and at MAX_METADATA_BYTES_PER_ENTITY bytes.
+
+    Every metadata read of the envelope — per database, per asset, per file's metadata, per file's
+    attributes — passes through here, so the bounds apply per entity row rather than to the run as a
+    whole. Both are needed: a metadata value has no length limit, so an entry count alone cannot keep a
+    row inside the DynamoDB item limit, and one entity carrying a few very long values would fail its
+    input-metadata write after the state machine had already started.
+
+    Keys are considered in sorted order and each is kept if it fits the remaining byte budget, so the
+    same entity yields the same subset on every run (and on a re-run) instead of whatever order the
+    metadata service happened to answer in. A single entry too large for the whole budget is skipped
+    rather than ending the walk, so one oversized value costs only itself.
+
+    entity_label names the row in the warning, and the label is appended to `truncated` (when a list is
+    supplied) so the caller can surface the cap to the caller of the execute request rather than leaving
+    it in the logs alone."""
     simplified = {}
     for item in metadata_array or []:
         key = item.get("metadataKey", "")
         if key:
             simplified[key] = item.get("metadataValue", "")
-    return simplified
+    total_bytes = sum(_metadata_entry_bytes(k, v) for k, v in simplified.items())
+    if (len(simplified) <= MAX_METADATA_ENTRIES_PER_ENTITY
+            and total_bytes <= MAX_METADATA_BYTES_PER_ENTITY):
+        return simplified
+
+    retained = {}
+    used_bytes = 0
+    for key in sorted(simplified):
+        if len(retained) >= MAX_METADATA_ENTRIES_PER_ENTITY:
+            break
+        entry_bytes = _metadata_entry_bytes(key, simplified[key])
+        if used_bytes + entry_bytes > MAX_METADATA_BYTES_PER_ENTITY:
+            continue
+        retained[key] = simplified[key]
+        used_bytes += entry_bytes
+
+    label = entity_label or "an execution input entity"
+    logger.warning(
+        f"Metadata for {label} carries {len(simplified)} entries in {total_bytes} bytes, over the "
+        f"{MAX_METADATA_ENTRIES_PER_ENTITY}-entry / {MAX_METADATA_BYTES_PER_ENTITY}-byte bound for one "
+        f"entity; capturing {len(retained)} entries in {used_bytes} bytes by key order and dropping "
+        f"{len(simplified) - len(retained)}.")
+    if truncated is not None:
+        truncated.append(label)
+    return retained
 
 
 def _run_bounded(jobs):
@@ -423,16 +567,71 @@ def _run_bounded(jobs):
         return list(executor.map(lambda job: job(), jobs))
 
 
-def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, event):
-    """Build the v2 grouped-by-asset metadata envelope for the selected inputs, honoring the
-    workflow's metadataInputs gate (asset/file/attribute toggles). One assets[] entry per unique
-    involved asset; per-file records for file metadata/attributes.
+def _derive_metadata_source_databases(selected_inputs, metadata_source_assets,
+                                      metadata_source_database_id, metadata_inputs):
+    """The databases a run captures database metadata from, de-duplicated in first-seen order.
 
-    The metadata-service reads (one per asset, up to two per selected file) are independent, so they
-    run through a bounded worker pool; the envelope is assembled afterwards in selection order."""
-    want_asset = bool((metadata_inputs or {}).get("assetMetadata", True))
-    want_file = bool((metadata_inputs or {}).get("fileMetadata", True))
-    want_attr = bool((metadata_inputs or {}).get("fileAttributes", True))
+    Every entity the run names contributes its database: each input file's asset, and each asset named
+    purely as a metadata source. Those are the databases the run's data actually lives in. The caller's
+    metadataSourceDatabaseId joins them only on the arity-'none' path, where there are no input files
+    and it is the one database the caller can name directly; it leads the order there. A run WITH input
+    files derives its set from them alone. An off databaseMetadata gate captures nothing.
+
+    The two ways a database enters the set matter to authorization, not to the set itself: a NAMED
+    database that the caller may not read fails the launch, while a DERIVED one is skipped
+    (_resolve_and_authorize_metadata_sources owns that split, and takes the named ids separately).
+
+    GLOBAL is dropped from the derived set. An asset may live in the GLOBAL database (both input files
+    and metadata-source assets accept it), but GLOBAL is the unscoped/all-databases keyword rather than a
+    database record, so there is no entity whose metadata could be read — the named field rejects it for
+    the same reason."""
+    if not er.metadata_input_enabled(metadata_inputs, "databaseMetadata"):
+        return []
+    ordered = []
+    seen = set()
+    if not selected_inputs and metadata_source_database_id:
+        seen.add(metadata_source_database_id)
+        ordered.append(metadata_source_database_id)
+    for item in list(selected_inputs) + list(metadata_source_assets or []):
+        database_id = item.get("databaseId", "")
+        if database_id and database_id != GLOBAL_DATABASE and database_id not in seen:
+            seen.add(database_id)
+            ordered.append(database_id)
+    return ordered
+
+
+def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, event,
+                            metadata_source_assets=None, metadata_source_databases=None,
+                            notices=None):
+    """Build the v2 grouped metadata envelope for the selected inputs plus any named metadata-source
+    entities, honoring the workflow's metadataInputs gate (asset/file/attribute/database toggles). One
+    assets[] entry per unique involved asset; per-file records for file metadata/attributes.
+
+    metadata_source_assets are [{databaseId, assetId}] named purely as metadata sources: each carries
+    the asset-level ('/') record only (a metadata source is an entity, never a file), and an asset that
+    is both an input's asset and a named source appears once. metadata_source_databases are the
+    databaseIds whose metadata becomes the envelope's top-level 'databases' list, one entry each
+    (_derive_metadata_source_databases resolves the set).
+
+    The metadata-service reads (one per asset, one per source database, up to two per selected file) are
+    independent, so they run through a bounded worker pool; the envelope is assembled afterwards in
+    selection order. Each read is bounded per entity by MAX_METADATA_ENTRIES_PER_ENTITY and
+    MAX_METADATA_BYTES_PER_ENTITY, so one heavily tagged entity cannot inflate the whole payload.
+
+    'notices' collects non-fatal messages about the capture itself — entity rows that were truncated and
+    source databases whose metadata could not be read — for the caller to return as execute warnings, so
+    a partial capture is visible in the response rather than only in the logs.
+
+    This is the INTAKE half of the two-level metadataInputs contract: the WORKFLOW's gate decides what
+    the run gathers into the shared envelope. The DELIVERY half — a step's own effective gate deciding
+    what that one step receives — is applied separately by er.narrow_metadata_envelope. Both are needed:
+    dropping this one gathers metadata no step asked for, and dropping that one hands every step the
+    workflow gate. They are not redundant."""
+    want_asset = er.metadata_input_enabled(metadata_inputs, "assetMetadata")
+    want_file = er.metadata_input_enabled(metadata_inputs, "fileMetadata")
+    want_attr = er.metadata_input_enabled(metadata_inputs, "fileAttributes")
+    want_database = er.metadata_input_enabled(metadata_inputs, "databaseMetadata")
+    source_databases = list(metadata_source_databases or []) if want_database else []
 
     # Group selected inputs by (databaseId, assetId), preserving order.
     grouped = {}
@@ -444,6 +643,14 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
             order.append(key)
         grouped[key].append(item)
 
+    # Metadata-source assets join the same ordering with no files of their own, so a source that is
+    # also an input's asset keeps that asset's file records instead of producing a second group.
+    for source in metadata_source_assets or []:
+        key = (source["databaseId"], source["assetId"])
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+
     # Collect every metadata read as a job keyed by what it populates, then run them together.
     jobs = []
     job_keys = []
@@ -451,6 +658,10 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
     def _add_job(key, fn):
         job_keys.append(key)
         jobs.append(fn)
+
+    for database_id in source_databases:
+        _add_job(("database", database_id),
+                 lambda d=database_id: _fetch_database_metadata(d, event))
 
     for (database_id, asset_id) in order:
         if want_asset:
@@ -471,6 +682,11 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
 
     fetched = dict(zip(job_keys, _run_bounded(jobs)))
 
+    # Entity rows whose metadata hit a per-entity bound, and source databases whose read failed. Both
+    # become execute warnings so a partial capture is visible in the response.
+    truncated_entities = []
+    unread_databases = []
+
     asset_groups = []
     for (database_id, asset_id) in order:
         asset = asset_records.get((database_id, asset_id), {})
@@ -480,7 +696,8 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
             "tags": asset.get("tags", []),
         }
         asset_metadata = _simplify_metadata_array(
-            fetched.get(("asset", database_id, asset_id), []))
+            fetched.get(("asset", database_id, asset_id), []),
+            entity_label=f"asset {database_id}:{asset_id}", truncated=truncated_entities)
 
         files = []
         # Asset-level record (fileKey '/').
@@ -489,16 +706,189 @@ def _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, eve
             relative_key = item["relativeFileKey"]
             if relative_key in ("", "/"):
                 continue
+            file_label = f"file {database_id}:{asset_id}{relative_key}"
             file_metadata = _simplify_metadata_array(
-                fetched.get(("metadata", database_id, asset_id, relative_key), []))
+                fetched.get(("metadata", database_id, asset_id, relative_key), []),
+                entity_label=f"{file_label} metadata", truncated=truncated_entities)
             file_attributes = _simplify_metadata_array(
-                fetched.get(("attribute", database_id, asset_id, relative_key), []))
+                fetched.get(("attribute", database_id, asset_id, relative_key), []),
+                entity_label=f"{file_label} attributes", truncated=truncated_entities)
             files.append(er.build_metadata_file_record(
                 relative_key, metadata=file_metadata, attributes=file_attributes if want_attr else None))
         asset_groups.append(er.build_metadata_asset_group(
             database_id, asset_id, asset_data=asset_data, files=files))
 
-    return er.build_grouped_metadata_envelope(asset_groups)
+    # A database entry is emitted for every captured database even when it carries no metadata, so a
+    # reader can tell "the run captured this database and it has nothing" apart from "the run captured
+    # no database metadata" (which emits no list at all). A read that FAILED answers None rather than an
+    # empty list, and is reported — the entry stays, so the run still records which databases it covered.
+    database_groups = []
+    for database_id in source_databases:
+        database_metadata = fetched.get(("database", database_id))
+        if database_metadata is None:
+            unread_databases.append(database_id)
+            database_metadata = []
+        database_groups.append(er.build_metadata_database_group(
+            database_id,
+            metadata=_simplify_metadata_array(
+                database_metadata, entity_label=f"database {database_id}",
+                truncated=truncated_entities)))
+
+    # The per-entity caps bound each row; this bounds all of them together, so a run over thousands of
+    # entities cannot assemble an envelope no Lambda can hold and no details response can serve.
+    dropped_entities = _apply_total_metadata_budget(asset_groups, database_groups)
+
+    if notices is not None:
+        notices.extend(_metadata_capture_warnings(
+            truncated_entities, unread_databases, dropped_entities=dropped_entities))
+
+    return er.build_grouped_metadata_envelope(asset_groups, databases=database_groups)
+
+
+def _metadata_budget_rows(asset_groups, database_groups):
+    """Every metadata-carrying row of an assembled envelope, ordered most-useful-first for the total
+    budget, as (label, container, key) triples naming the dict whose metadata may be cleared.
+
+    The retention order is by how much of the run a row describes:
+
+    1. Database rows — one per captured database, the broadest context and the fewest rows.
+    2. Asset-level ('/') rows — one per involved asset; the asset's own metadata, which every pipeline
+       reading asset metadata expects and which no other row carries.
+    3. Per-file metadata rows, then per-file attribute rows — the most numerous and the narrowest, each
+       describing one file, and the rows a pathological run multiplies.
+
+    Within each band rows keep the envelope's own selection order, which is derived from the request, so
+    the retained subset is identical across runs and processes. Nothing here iterates a set or a dict's
+    insertion order — the bands are explicit and each band walks the ordered lists the envelope was
+    assembled from."""
+    database_rows = []
+    asset_rows = []
+    file_metadata_rows = []
+    file_attribute_rows = []
+    for group in database_groups:
+        database_rows.append((f"database {group.get('databaseId', '')}", group, "metadata"))
+    for group in asset_groups:
+        database_id = group.get("databaseId", "")
+        asset_id = group.get("assetId", "")
+        for record in group.get("files") or []:
+            file_key = record.get("fileKey", "/")
+            if file_key == "/":
+                asset_rows.append((f"asset {database_id}:{asset_id}", record, "metadata"))
+                continue
+            label = f"file {database_id}:{asset_id}{file_key}"
+            file_metadata_rows.append((f"{label} metadata", record, "metadata"))
+            if "attributes" in record:
+                file_attribute_rows.append((f"{label} attributes", record, "attributes"))
+    return database_rows + asset_rows + file_metadata_rows + file_attribute_rows
+
+
+def _asset_data_bytes(asset_groups):
+    """The bytes an envelope spends on assetData — each group's assetName, description and tags.
+
+    Counted against the total budget but never reclaimable: assetData is the asset's identity, which
+    every consumer of a group reads and which no other row carries, so it holds its place and the
+    metadata rows are what give way to make room for it. It is bounded structurally instead — one
+    assetData per involved asset, and the involved assets are capped by MAX_INPUT_FILES_PER_EXECUTION
+    and MAX_METADATA_SOURCE_ASSETS_PER_EXECUTION — so counting it here is what keeps the budget a bound
+    on the whole envelope rather than on its metadata alone."""
+    total = 0
+    for group in asset_groups:
+        asset_data = group.get("assetData") or {}
+        for key, value in asset_data.items():
+            if isinstance(value, (list, tuple)):
+                total += len(str(key).encode("utf-8")) + METADATA_ENTRY_FRAMING_BYTES
+                for element in value:
+                    total += len(str(element).encode("utf-8")) + METADATA_ENTRY_FRAMING_BYTES
+                continue
+            total += _metadata_entry_bytes(key, value)
+    return total
+
+
+def _apply_total_metadata_budget(asset_groups, database_groups):
+    """Bound a whole envelope at MAX_METADATA_BYTES_PER_EXECUTION, clearing the least useful metadata
+    rows first. Mutates the groups in place; returns the labels of the rows that were emptied.
+
+    The measured total is every row's metadata plus the assetData the groups carry. assetData is
+    non-reclaimable (see _asset_data_bytes), so it is charged to the budget first and the metadata rows
+    are fitted into what is left — which is what makes the bound cover the envelope, not just its
+    metadata.
+
+    Rows are considered in _metadata_budget_rows order and each is kept whole while the running total
+    fits, so the broadest metadata survives and the per-file rows of a pathological run are what give
+    way. A row that does not fit is emptied rather than partially kept: a half-populated metadata map
+    reads as complete to every consumer, whereas an empty one carries the same meaning as an entity with
+    no metadata, which the envelope already emits. The walk continues past a row that does not fit, so a
+    single oversized row does not discard the smaller ones after it."""
+    rows = _metadata_budget_rows(asset_groups, database_groups)
+    asset_data_bytes = _asset_data_bytes(asset_groups)
+    total_bytes = asset_data_bytes
+    for _label, container, key in rows:
+        for entry_key, entry_value in (container.get(key) or {}).items():
+            total_bytes += _metadata_entry_bytes(entry_key, entry_value)
+    if total_bytes <= MAX_METADATA_BYTES_PER_EXECUTION:
+        return []
+
+    dropped = []
+    used_bytes = asset_data_bytes
+    for label, container, key in rows:
+        metadata = container.get(key) or {}
+        if not metadata:
+            continue
+        row_bytes = sum(_metadata_entry_bytes(k, v) for k, v in metadata.items())
+        if used_bytes + row_bytes > MAX_METADATA_BYTES_PER_EXECUTION:
+            container[key] = {}
+            dropped.append(label)
+            continue
+        used_bytes += row_bytes
+
+    logger.warning(
+        f"Execution input metadata totals {total_bytes} bytes across {len(rows)} entity rows plus "
+        f"{asset_data_bytes} bytes of assetData, over the {MAX_METADATA_BYTES_PER_EXECUTION}-byte bound "
+        f"for one execution; capturing {used_bytes} bytes and emptying {len(dropped)} rows, narrowest "
+        f"first.")
+    return dropped
+
+
+def _metadata_capture_warnings(truncated_entities, unread_databases, dropped_entities=None,
+                               ignored_source_databases=None):
+    """Non-blocking warnings describing an incomplete metadata capture: entity rows bounded by the
+    per-entity caps, rows dropped by the total cap, source databases whose metadata could not be read,
+    and a named source database the run derived its databases past.
+
+    Each is one message naming up to MAX_METADATA_NOTICE_ENTITIES_LISTED entities with a count of the
+    rest, so a run over hundreds of entities returns a bounded response rather than one warning each."""
+    warnings = []
+    for entities, singular, plural in (
+        (truncated_entities,
+         "captured only part of the metadata for {names}, which exceeded the per-entity metadata limits",
+         "captured only part of the metadata for {count} execution input entities ({names}), which "
+         "exceeded the per-entity metadata limits"),
+        (dropped_entities or [],
+         "captured no metadata for {names}, because the execution reached its total metadata limit of "
+         f"{MAX_METADATA_BYTES_PER_EXECUTION} bytes",
+         "captured no metadata for {count} execution input entities ({names}), because the execution "
+         f"reached its total metadata limit of {MAX_METADATA_BYTES_PER_EXECUTION} bytes"),
+        (unread_databases,
+         "could not read the metadata of database {names}, which therefore contributes no database "
+         "metadata",
+         "could not read the metadata of {count} metadata-source databases ({names}), which therefore "
+         "contribute no database metadata"),
+        (ignored_source_databases or [],
+         "did not use the metadata-source database {names} it was given: an execution with input files "
+         "derives its metadata-source databases from those files' assets instead",
+         "did not use the {count} metadata-source databases ({names}) it was given: an execution with "
+         "input files derives its metadata-source databases from those files' assets instead"),
+    ):
+        if not entities:
+            continue
+        listed = entities[:MAX_METADATA_NOTICE_ENTITIES_LISTED]
+        names = ", ".join(listed)
+        if len(entities) > len(listed):
+            names += f", and {len(entities) - len(listed)} more"
+        message = singular if len(entities) == 1 else plural
+        warnings.append(
+            f"This execution {message.format(count=len(entities), names=names)}.")
+    return warnings
 
 
 #######################
@@ -596,6 +986,67 @@ def _resolve_and_authorize_assets(selected_inputs, output_asset_id, output_datab
         return validation_error(body={"message": "The output asset bucket is invalid."}), None, None, None
 
     return None, asset_records, output_asset, output_bucket_details
+
+
+def _resolve_and_authorize_metadata_sources(metadata_source_assets, candidate_source_databases,
+                                            asset_records, named_database_ids=()):
+    """Resolve + authorize the run's metadata-source entities and merge the source assets into
+    asset_records (mutating it), so the envelope builder finds their assetData.
+
+    Returns (error_response_or_None, resolved_source_assets, resolved_source_databases) where
+    resolved_source_assets is the de-duplicated ordered [{databaseId, assetId}] and
+    resolved_source_databases the ordered databaseIds the run captures metadata from.
+
+    A metadata source is read, so an asset source needs the same GET an input asset needs, and each
+    source database needs a database GET. Both fail closed on empty tokens (via _enforce). A database is
+    authorized on its ids alone — the metadata service performing the read enforces GET again against
+    the same object, so no database record is resolved here.
+
+    named_database_ids are the candidate databases the caller named directly (the arity-'none'
+    metadataSourceDatabaseId); every other candidate was derived from the run's own entities. The two
+    are separated because a denial means different things in each:
+      - NAMED: a denial is the caller asking for something they may not read, so it fails the launch
+        with a 403 rather than quietly dropping the source they asked for.
+      - DERIVED from an input file's or a metadata-source asset's database: an asset GET does not imply
+        a database GET, so a caller legitimately running a workflow over assets they can read may hold
+        no access to those assets' databases. Database metadata is optional, so such a database is
+        SKIPPED (logged, and left out of the resolved set, so no read path later gates on metadata this
+        run never captured) instead of failing an otherwise-valid execution."""
+    resolved_assets = []
+    seen = set()
+    for source in metadata_source_assets or []:
+        key = (source["databaseId"], source["assetId"])
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved_assets.append({"databaseId": key[0], "assetId": key[1]})
+        if key in asset_records:
+            continue  # already resolved + GET-authorized as an input asset
+        asset = _get_asset(key[0], key[1])
+        # Same 404-then-403 split the input assets use: a missing entity is reported distinctly from
+        # one the caller may not read.
+        if not asset:
+            logger.info(f"Metadata-source asset {key[0]}:{key[1]} not found")
+            return validation_error(
+                status_code=404,
+                body={"message": "A metadata-source asset was not found."}), None, None
+        if not _enforce(_with_name(asset, "assetName"), OBJECT_TYPE_ASSET, "GET"):
+            return authorization_error(), None, None
+        asset_records[key] = asset
+
+    named = set(named_database_ids or ())
+    resolved_databases = []
+    for database_id in candidate_source_databases or []:
+        if _enforce({"databaseId": database_id}, OBJECT_TYPE_DATABASE, "GET"):
+            resolved_databases.append(database_id)
+            continue
+        if database_id in named:
+            return authorization_error(), None, None
+        logger.info(
+            f"Database {database_id} was derived from an input or metadata-source asset but the caller "
+            f"cannot read it; the execution captures no metadata for it.")
+
+    return None, resolved_assets, resolved_databases
 
 
 #######################
@@ -708,6 +1159,71 @@ def _run_cross_validation(workflow, pipeline_records, resolved_configs, selected
         workflow.get("systemConfig", {}) or {}, pipeline_effective_configs, selected_inputs,
         output_target)
     return errors, filtered_by_composite
+
+
+def _metadata_source_span_errors(workflow_asset_scope, metadata_source_assets):
+    """Asset-span errors for the metadata-source selection under the workflow's assetScope. Returns []
+    when the span is allowed.
+
+    The span rule is ev._scope_errors — the same evaluation the input FILES pass through at the workflow
+    level, with the same defaults for an omitted key — so both spans read ONE interpretation of
+    assetScope rather than two that can drift apart. Only the span keys (singleAssetOnly,
+    crossAssetAllowed) can apply: a metadata source is an entity with no file key, so the whole-asset and
+    folder keys have nothing to describe and are left out of the scope handed over, which `declared_only`
+    then skips. Both span keys are always jointly evaluated, so a scope declaring singleAssetOnly bounds
+    the sources whether or not it also allows cross-asset inputs — the contradictory
+    {crossAssetAllowed: true, singleAssetOnly: true} pair (unreachable in the web asset-span control,
+    arrivable by API or vamsSchema registration) resolves to the stricter key and admits a single source
+    asset."""
+    scope = ev.normalize_asset_scope(workflow_asset_scope)
+    span_scope = {
+        "singleAssetOnly": scope.get("singleAssetOnly", False),
+        "crossAssetAllowed": scope.get("crossAssetAllowed", False),
+    }
+    entries = [{"assetId": s.get("assetId", "")} for s in metadata_source_assets or []]
+    messages = ev._scope_errors(span_scope, entries, "This workflow", declared_only=True)
+    return [m.replace("inputs span multiple assets",
+                      "the named metadata-source assets span several")
+            + " Name at most one metadata-source asset."
+            for m in messages]
+
+
+def _missing_metadata_source_warnings(pipeline_records, resolved_configs, workflow_metadata_inputs,
+                                      metadata_source_assets, metadata_source_databases):
+    """Non-blocking warnings for an arity-'none' pipeline that declares a metadata type the run named
+    no source for. Returns [] or one message per unsourced type.
+
+    A metadata source is always optional, so this never blocks: a pipeline that genuinely requires the
+    metadata performs its own check and fails itself. The warning turns the silent case — a pipeline
+    asking for metadata that the run gave it no entity to read from — into something the caller sees at
+    launch. Only arity 'none' is covered: at any other arity the input files supply the assets, so
+    asset metadata is collected without a named source."""
+    warnings = []
+    workflow_gate = workflow_metadata_inputs or {}
+    for record in pipeline_records:
+        composite = er.pipeline_composite_key(
+            record.get("databaseId", ""), record.get("pipelineId", ""))
+        overrides = (resolved_configs.get(composite) or {}).get("templateOverrides", {})
+        effective = ev.resolve_effective_pipeline_config(
+            record.get("systemConfig", {}) or {}, overrides)
+        if (effective.get("inputFileArity") or "one") != "none":
+            continue
+        metadata = effective.get("metadataInputs") or {}
+        # Both gates must be on for the type to be collected at all, so a type the workflow suppresses
+        # is not reported as missing a source (validate_workflow_save already warns about that case).
+        if (er.metadata_input_enabled(metadata, "assetMetadata")
+                and er.metadata_input_enabled(workflow_gate, "assetMetadata")
+                and not metadata_source_assets):
+            warnings.append(
+                f"{composite} uses asset metadata but expects no input files and the execution named "
+                "no metadata-source asset, so it receives no asset metadata.")
+        if (er.metadata_input_enabled(metadata, "databaseMetadata")
+                and er.metadata_input_enabled(workflow_gate, "databaseMetadata")
+                and not metadata_source_databases):
+            warnings.append(
+                f"{composite} uses database metadata but the execution captured no metadata-source "
+                "database, so it receives no database metadata.")
+    return warnings
 
 
 #######################
@@ -869,11 +1385,19 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
 
 
 def _write_execution_input_files(execution_id, run_bucket, pipelines_count, metadata_envelope,
-                                 first_manifest, pipeline_config_bodies):
+                                 first_manifest, pipeline_config_bodies,
+                                 step_metadata_gates=None):
     """Write the execution's input-definition files to the DEFAULT run bucket (per-execution input
     folder keyed on execution id): the shared metadata file, one config.json per pipeline, and
-    pipeline 1's manifest. Returns {metadataFileS3Key, configKeys[], firstManifestS3Key}."""
-    locations = {"metadataFileS3Key": "", "configKeys": [], "firstManifestS3Key": ""}
+    pipeline 1's manifest. Returns {metadataFileS3Key, configKeys[], firstManifestS3Key,
+    narrowedMetadataKeys{}}.
+
+    'step_metadata_gates' maps a 1-based pipeline index to that step's effective metadataInputs. A
+    step whose gate narrows the envelope gets its OWN metadata.json written alongside its config, and
+    only those steps — a step wanting everything the workflow gathered keeps reading the shared file,
+    so the common case stays one object."""
+    locations = {"metadataFileS3Key": "", "configKeys": [], "firstManifestS3Key": "",
+                 "narrowedMetadataKeys": {}}
     if pipelines_count == 0:
         return locations
 
@@ -888,6 +1412,25 @@ def _write_execution_input_files(execution_id, run_bucket, pipelines_count, meta
         s3c.put_object(Bucket=run_bucket, Key=cfg_key,
                        Body=(cfg_body or "").encode("utf-8"), ContentType="application/json")
         locations["configKeys"].append(cfg_key)
+
+        # Per-step DELIVERY narrowing — the second half of the two-level metadataInputs contract.
+        # The INTAKE half is the workflow gate applied in _build_grouped_metadata, which decides what
+        # the shared envelope carries at all; this decides what THIS step receives out of it. The two
+        # apply the same four keys at different scopes and are NOT redundant: drop this one and every
+        # step silently widens back to the workflow gate (the bug this exists to fix), drop that one
+        # and the run gathers metadata no step asked for.
+        #
+        # Written only where the step's gate actually subtracts something, so an unnarrowed step keeps
+        # pointing at the shared envelope and the common case stays a single object.
+        gate = (step_metadata_gates or {}).get(idx + 1)
+        if gate is not None:
+            narrowed = er.narrow_metadata_envelope(metadata_envelope, gate)
+            if narrowed is not metadata_envelope:
+                step_key = er.pipeline_input_metadata_key(execution_id, idx + 1)
+                s3c.put_object(Bucket=run_bucket, Key=step_key,
+                               Body=json.dumps(narrowed).encode("utf-8"),
+                               ContentType="application/json")
+                locations["narrowedMetadataKeys"][idx + 1] = step_key
 
     manifest_key = er.pipeline_input_manifest_key(execution_id, 1)
     s3c.put_object(Bucket=run_bucket, Key=manifest_key,
@@ -941,6 +1484,48 @@ def _unescape_rendered_path(rendered):
         return json.loads(f'"{rendered}"')
     except (ValueError, TypeError):
         return rendered
+
+
+def _step_tag_metadata_payload(step_envelope, subject_input):
+    """The legacy {"VAMS": {...}} view a STEP's template tags render, projected for its primary input.
+
+    `step_envelope` must be that step's DELIVERY envelope (already narrowed by its effective
+    metadataInputs), not the shared per-execution one. A step's gate has to govern its tags as well as
+    its metadata file: {{inputMetadataObject}} renders the whole payload, so rendering the shared
+    envelope here would let any template recover an excluded type just by choosing that tag over the
+    per-scope one, making the gate advisory."""
+    subject = subject_input or {}
+    return er.to_legacy_vams_view(
+        step_envelope or {}, subject.get("databaseId", ""), subject.get("assetId", ""),
+        subject.get("relativeFileKey", "/"))
+
+
+def _resolve_step_delivery(metadata_envelope, gate, execution_id, run_bucket, pipeline_index,
+                           shared_location):
+    """One step's metadata DELIVERY: (envelope, s3Location, tagPayloadFn).
+
+    All three DELIVERY channels resolve through here so the step's gate cannot be applied to one and
+    missed on another — the envelope written for the step, the location its manifest points at, and the
+    payload its template tags render all come from this single decision. A gate that subtracts nothing
+    yields the shared envelope and location unchanged, so the common case stays one S3 object.
+
+    REPORTING is a fourth consumer and does NOT come through here: _persist_execution_records applies
+    the same gate itself when it writes the per-step input-metadata rows, because those rows are also
+    narrowed by ENTITY (this step's own input files) which delivery is not. Both call
+    er.narrow_metadata_envelope with the step's gate, so they agree — a change to one has to be made
+    in the other, and the row writer's own comment says so.
+
+    `tagPayloadFn` takes the step's primary input (the projection subject) and is passed to
+    templateRender as its lazy metadata_loader, so no metadata is projected unless a tag needs it."""
+    narrowed = er.narrow_metadata_envelope(metadata_envelope, gate)
+    location = shared_location
+    if narrowed is not metadata_envelope:
+        location = f"s3://{run_bucket}/{er.pipeline_input_metadata_key(execution_id, pipeline_index)}"
+
+    def tag_payload(subject_input):
+        return _step_tag_metadata_payload(narrowed, subject_input)
+
+    return narrowed, location, tag_payload
 
 
 def _render_output_path_extension(extension, manifest, execution_context, metadata_loader=None):
@@ -1014,7 +1599,8 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                      output_asset, output_database_id, output_asset_id, run_bucket, metadata_envelope,
                      trigger_type_stored, execution_group_id, executing_user, executing_request_context,
                      output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/",
-                     filtered_inputs_by_composite=None):
+                     filtered_inputs_by_composite=None, metadata_source_assets=None,
+                     metadata_source_database_id="", metadata_source_databases=None):
     """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
     records. Run I/O (manifest, config files, output/aux prefixes) lives in run_bucket; input files
     are read from their own asset buckets (carried per manifest entry). Returns the executionId.
@@ -1022,7 +1608,14 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     filtered_inputs_by_composite maps pipelineDatabaseId:pipelineId -> the inputs that pipeline
     accepts (its effective inputFileFilters applied, empty for arity 'none'). Pipeline 1's manifest
     carries its own filtered set, not the workflow's full selection; pipelines 2+ receive the prior
-    step's outputs from the interim tracking lambda."""
+    step's outputs from the interim tracking lambda. The same map narrows each pipeline's persisted
+    input-metadata rows to the entities that pipeline reads.
+
+    metadata_source_assets/metadata_source_databases are the resolved metadata-source entities whose
+    metadata the envelope already carries, and metadata_source_database_id the database the caller
+    NAMED; they are recorded on the configuration row so a re-run names the same sources and the read
+    paths gate on the same databases. They are NOT input files, so they take no part in the manifest or
+    the input rows."""
     workflow_id = workflow["workflowId"]
     workflow_database_id = workflow["databaseId"]
     workflow_arn = workflow.get("workflow_arn", "")
@@ -1060,6 +1653,27 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     first_aux_preview_suffix = (first_pipeline.get("systemConfig", {}) or {}).get(
         "auxPreviewPipelineSuffix", "")
 
+    # Each step's DELIVERY gate: its pipeline systemConfig with the chosen template's overrides
+    # applied, keyed 1-based to match the pipeline input folders. A step whose gate narrows the shared
+    # envelope reads its own metadata file instead (see _write_execution_input_files); the gates for
+    # steps 2+ also travel in the ASL so the interim lambda can point their manifests at theirs.
+    step_metadata_gates = {}
+    for idx, record in enumerate(pipeline_records):
+        composite = er.pipeline_composite_key(
+            record.get("databaseId", ""), record.get("pipelineId", ""))
+        overrides = (resolved_configs.get(composite) or {}).get("templateOverrides", {})
+        effective = ev.resolve_effective_pipeline_config(
+            record.get("systemConfig", {}) or {}, overrides)
+        step_metadata_gates[idx + 1] = effective.get("metadataInputs") or {}
+
+    # Pipeline 1's delivery: its own narrowed metadata file when its gate subtracts anything, else the
+    # shared envelope. The manifest is what the pipeline honors (manifestHelper.resolve_inputs takes
+    # the metadata location from the manifest), so pointing it here is the whole delivery mechanism —
+    # and the same decision supplies the payload its template tags render.
+    first_narrowed, metadata_location, _first_tag_payload = _resolve_step_delivery(
+        metadata_envelope, step_metadata_gates.get(1), execution_id, run_bucket, 1,
+        metadata_location)
+
     # output_extension is the caller's output base path, normalized to a single leading + trailing
     # slash and defaulting to "/" (asset root). Its {{dynamicTag}} placeholders are substituted below,
     # once the manifest + execution context the tags read from exist.
@@ -1085,15 +1699,20 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
 
     # The renderer's metadata-content tags read the legacy {"VAMS": {...}} view; project the v2 grouped
     # envelope onto it for this pipeline's primary input file (the first file in its manifest, falling
-    # back to the run's first selection when the pipeline takes no files), so tags like
-    # {{assetMetadataObject}} resolve to real values rather than {}.
+    # back to the run's first selection when the pipeline takes no files, then to the first
+    # metadata-source asset when the run has no files at all), so tags like {{assetMetadataObject}}
+    # resolve to real values rather than {}. A source asset's projection subject is its asset-level
+    # record, so its relativeFileKey is '/'.
     _projection_inputs = first_pipeline_inputs or selected_inputs
-    _first_input = _projection_inputs[0] if _projection_inputs else {}
+    if _projection_inputs:
+        _first_input = _projection_inputs[0]
+    elif metadata_source_assets:
+        _first_input = {**metadata_source_assets[0], "relativeFileKey": "/"}
+    else:
+        _first_input = {}
 
     def _metadata_payload():
-        return er.to_legacy_vams_view(
-            metadata_envelope or {}, _first_input.get("databaseId", ""),
-            _first_input.get("assetId", ""), _first_input.get("relativeFileKey", "/"))
+        return _first_tag_payload(_first_input)
 
     first_context = {
         "executionId": execution_id,
@@ -1128,7 +1747,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
 
     input_locations = _write_execution_input_files(
         execution_id, run_bucket, len(pipeline_records), metadata_envelope, first_manifest,
-        pipeline_config_bodies)
+        pipeline_config_bodies, step_metadata_gates=step_metadata_gates)
 
     # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
     response = sfn_client.start_execution(
@@ -1147,6 +1766,15 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             "outputFileBaseExecutionPathExtension": output_extension,
             "executingUserName": executing_user,
             "executingRequestContext": executing_request_context,
+            # Per-step DELIVERY metadata keys, one entry per pipeline in workflow order ("" where the
+            # step reads the shared envelope). Templates are chosen per EXECUTION while the ASL is
+            # baked at workflow save time, so the gates cannot live in the ASL itself — the ASL
+            # threads a static index into this per-execution list, exactly as it does for
+            # pipelineExecutionIds.
+            "stepMetadataS3Keys": [
+                input_locations["narrowedMetadataKeys"].get(i + 1, "")
+                for i in range(len(pipeline_records))
+            ],
         }))
     logger.info(f"Started workflow execution {execution_id}")
 
@@ -1164,7 +1792,12 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             output_database_id=output_database_id, output_asset_id=output_asset_id,
             output_extension=output_extension, trigger_type_stored=trigger_type_stored,
             executing_user=executing_user, input_locations=input_locations,
-            execution_group_id=execution_group_id, output_location_type=output_location_type)
+            execution_group_id=execution_group_id, output_location_type=output_location_type,
+            metadata_source_assets=metadata_source_assets,
+            metadata_source_database_id=metadata_source_database_id,
+            metadata_source_databases=metadata_source_databases,
+            filtered_inputs_by_composite=filtered_inputs_by_composite,
+            step_metadata_gates=step_metadata_gates)
     except Exception:
         logger.exception(
             f"Failed persisting execution records for {execution_id}; stopping the started execution "
@@ -1195,9 +1828,24 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                                pipeline_execution_ids, first_job_name, run_bucket, metadata_envelope,
                                output_database_id, output_asset_id, output_extension,
                                trigger_type_stored, executing_user, input_locations,
-                               execution_group_id, output_location_type=OUTPUT_LOCATION_TYPE_ASSET):
+                               execution_group_id, output_location_type=OUTPUT_LOCATION_TYPE_ASSET,
+                               metadata_source_assets=None, metadata_source_database_id="",
+                               metadata_source_databases=None, filtered_inputs_by_composite=None,
+                               step_metadata_gates=None):
     """Write the main execution row, per-input workflow-input rows, the workflow configuration row,
-    one PipelineExecutions row + config-snapshot per pipeline, and the output index rows."""
+    one PipelineExecutions row + config-snapshot per pipeline, and the output index rows.
+
+    The metadata-source entities land on the configuration row only. They get no workflow-input row:
+    those rows are input FILES, and a re-run rebuilds its inputFiles from them — so a source asset
+    recorded there would come back as an input file and fail an arity-'none' workflow's own
+    no-input-files rule. Their captured metadata VALUES are still persisted, as scope-tagged
+    input-metadata rows alongside the asset ones.
+
+    filtered_inputs_by_composite maps pipelineDatabaseId:pipelineId -> the inputs that pipeline
+    receives (the same map the manifest and the cross-entity validator are built from), so each
+    pipeline's input-metadata rows describe the entities IT reads rather than the run's whole
+    selection. A composite the map does not carry falls back to the full selection, mirroring the
+    manifest's own fallback."""
     start_date = er.iso_now()
     workflow_id = workflow["workflowId"]
     workflow_database_id = workflow["databaseId"]
@@ -1240,7 +1888,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
             s3_bucket=asset_bucket, asset_root_s3_key=root,
             version_id=item.get("resolvedVersionId", "")))
 
-    # 3) Workflow configuration row: pipeline snapshot + grouped metadata + output target.
+    # 3) Workflow configuration row: pipeline snapshot + grouped metadata + output target + the
+    #    metadata-source selection.
     wf_cfg_table = dynamodb.Table(workflow_execution_configuration_table)
     wf_cfg_table.put_item(Item=er.build_workflow_configuration_record(
         workflow_execution_id=execution_id, workflow_configuration="",
@@ -1250,6 +1899,9 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         output_database_id=output_database_id,
         output_file_base_execution_path_extension=output_extension,
         input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", ""),
+        input_metadata_database_id=metadata_source_database_id or "",
+        metadata_source_assets=metadata_source_assets or [],
+        metadata_source_databases=metadata_source_databases or [],
         # The SAME timestamp the main row and the per-input rows use (start_date, above), so an
         # output-asset listing orders and bounds identically to the by-input-asset one instead of by
         # when this particular row happened to be written.
@@ -1260,68 +1912,112 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
     pin_cfg_table = dynamodb.Table(pipeline_execution_input_configuration_table)
     pin_md_table = dynamodb.Table(pipeline_execution_input_metadata_table)
     config_keys = input_locations.get("configKeys", [])
+    # One S3 metadata object per execution, referenced by every input-metadata row of every pipeline.
+    metadata_file_key = input_locations.get("metadataFileS3Key", "")
     prev_id = ""
-    for idx, record in enumerate(pipeline_records):
-        pexec_id = pipeline_execution_ids[idx]
-        is_end_state = (idx == len(pipeline_records) - 1)
-        pipeline_id = record.get("pipelineId", "")
-        composite = er.pipeline_composite_key(record.get("databaseId", ""), pipeline_id)
-        resolved = resolved_configs.get(composite, {}) or {}
-        cfg_key = config_keys[idx] if idx < len(config_keys) else ""
-        # Aux temp prefix mirrors the ASL's per-pipeline working folder (jobName-based name), so the
-        # recorded prefix matches where the interim lambda stages the pipeline's working files.
-        aux_pipeline_name = record.get("_jobName", "") or pipeline_id
-        aux_temp_prefix = er.aux_pipeline_prefix(aux_pipeline_name, execution_id)
-        event_prefix = er.orchestration_event_prefix(
-            orchestration_event_source_prefix, execution_id, pexec_id) \
-            if orchestration_event_source_prefix else ""
+    # The input-metadata rows of every pipeline go out through ONE batch writer spanning the whole loop:
+    # boto3's writer buffers to 25 items per BatchWriteItem — the request's hard limit — and retries
+    # unprocessed items itself, so a run whose pipelines each contribute a handful of rows fills whole
+    # requests instead of sending a part-filled one per pipeline. An asset carrying thousands of files
+    # with metadata makes this the dominant cost of recording a run: the rows are one per (asset,
+    # filePath) PER PIPELINE, so a per-row put_item spends thousands of serial round-trips inside the
+    # same invocation that has to start the state machine.
+    #
+    # Size-aware chunking is unnecessary: DynamoDB caps a single item at 400 KB, so 25 items cannot
+    # exceed 10 MB against BatchWriteItem's 16 MB request limit. That holds for any item the table can
+    # accept, independent of MAX_METADATA_BYTES_PER_ENTITY, so it stays true if that cap moves.
+    #
+    # overwrite_by_pkeys names the table's own key, making a repeated row collapse to its last value the
+    # way a per-row put_item did — one request carrying the same key twice is rejected outright, and a
+    # file selected at two versionIds yields one metadata row per pipeline (the version is not part of
+    # the metadata row's identity).
+    #
+    # Buffered rows flush on context exit, including when the loop raises: any exception here leaves the
+    # caller stopping the started execution and re-surfacing the failure, so a run whose rows are
+    # incomplete is aborted rather than left advancing — the same handling a failed put_item got.
+    with pin_md_table.batch_writer(
+            overwrite_by_pkeys=["pipelineExecutionId", "databaseId:assetId:filePath"]) as pin_md_batch:
+        for idx, record in enumerate(pipeline_records):
+            pexec_id = pipeline_execution_ids[idx]
+            is_end_state = (idx == len(pipeline_records) - 1)
+            pipeline_id = record.get("pipelineId", "")
+            composite = er.pipeline_composite_key(record.get("databaseId", ""), pipeline_id)
+            resolved = resolved_configs.get(composite, {}) or {}
+            cfg_key = config_keys[idx] if idx < len(config_keys) else ""
+            # Aux temp prefix mirrors the ASL's per-pipeline working folder (jobName-based name), so the
+            # recorded prefix matches where the interim lambda stages the pipeline's working files.
+            aux_pipeline_name = record.get("_jobName", "") or pipeline_id
+            aux_temp_prefix = er.aux_pipeline_prefix(aux_pipeline_name, execution_id)
+            event_prefix = er.orchestration_event_prefix(
+                orchestration_event_source_prefix, execution_id, pexec_id) \
+                if orchestration_event_source_prefix else ""
 
-        pexec_record = er.build_pipeline_execution_record(
-            pipeline_execution_id=pexec_id, workflow_execution_id=execution_id,
-            pipeline_database_id=record.get("databaseId", ""), pipeline_id=pipeline_id,
-            end_state_pipeline=is_end_state, s3_asset_bucket=run_bucket,
-            s3_aux_bucket=bucket_name_assetAuxiliary, output_prefixes=output_prefixes,
-            input_metadata_file_prefix="", input_config_file_prefix=cfg_key,
-            aux_temp_prefix=aux_temp_prefix, aux_preview_prefix="",
-            pipeline_execution_type=_pipeline_exec_type(record),
-            wait_for_callback=_pipeline_wait_for_callback(record),
-            pipeline_resource_arn=_pipeline_resource_arn(record), from_pipeline_execution_id=prev_id,
-            orchestration_bus_event_prefix=event_prefix)
-        # First pipeline starts immediately; the rest stay NEW until the interim lambda advances them.
-        if idx == 0:
-            pexec_record["executionStatus"] = "RUNNING"
-        pexec_table.put_item(Item=pexec_record)
+            pexec_record = er.build_pipeline_execution_record(
+                pipeline_execution_id=pexec_id, workflow_execution_id=execution_id,
+                pipeline_database_id=record.get("databaseId", ""), pipeline_id=pipeline_id,
+                end_state_pipeline=is_end_state, s3_asset_bucket=run_bucket,
+                s3_aux_bucket=bucket_name_assetAuxiliary, output_prefixes=output_prefixes,
+                input_metadata_file_prefix="", input_config_file_prefix=cfg_key,
+                aux_temp_prefix=aux_temp_prefix, aux_preview_prefix="",
+                pipeline_execution_type=_pipeline_exec_type(record),
+                wait_for_callback=_pipeline_wait_for_callback(record),
+                pipeline_resource_arn=_pipeline_resource_arn(record),
+                from_pipeline_execution_id=prev_id,
+                orchestration_bus_event_prefix=event_prefix)
+            # First pipeline starts immediately; the rest stay NEW until the interim lambda advances it.
+            if idx == 0:
+                pexec_record["executionStatus"] = "RUNNING"
+            pexec_table.put_item(Item=pexec_record)
 
-        # Config snapshot: what the run was built from (traceable + re-runnable).
-        pin_cfg_table.put_item(Item=er.build_input_configuration_record(
-            pipeline_execution_id=pexec_id,
-            input_configuration=resolved.get("renderedConfig", ""),
-            input_configuration_file_s3_key=cfg_key,
-            template_id=resolved.get("templateId", ""),
-            template_schema_version=resolved.get("templateSchemaVersion", ""),
-            tag_schema_version=resolved.get("tagSchemaVersion", ""),
-            template_tags=resolved.get("templateTags", []),
-            custom_template_override_used=resolved.get("customTemplateOverrideUsed", False),
-            custom_template_override=resolved.get("customTemplateOverrideRaw", ""),
-            config_format=resolved.get("configFormat", ""),
-            # The merge of the pipeline's systemConfig with this run's chosen template overrides — the
-            # settings the step actually ran under, recomputed here from the same inputs the execute
-            # validation used so the snapshot cannot drift from what was enforced.
-            effective_system_config=ev.resolve_effective_pipeline_config(
-                record.get("systemConfig", {}) or {}, resolved.get("templateOverrides", {})),
-            template_overrides=resolved.get("templateOverrides", {})))
-
-        # Input-metadata snapshot, one row per (asset, filePath) this step received. The grouped
-        # envelope is already written to S3 for the pipeline to read; these rows are what the execution
-        # DETAILS response reads, so without them the details page reports no input metadata even when
-        # the pipeline was handed plenty. Asset-level metadata lands on the '/' filePath row.
-        for row in er.metadata_envelope_rows(metadata_envelope):
-            pin_md_table.put_item(Item=er.build_input_metadata_record(
+            # Config snapshot: what the run was built from (traceable + re-runnable).
+            pin_cfg_table.put_item(Item=er.build_input_configuration_record(
                 pipeline_execution_id=pexec_id,
-                database_id=row["databaseId"], asset_id=row["assetId"],
-                file_path=row["filePath"], metadata=row["metadata"],
-                source_input_metadata_file_s3_key=input_locations.get("metadataFileS3Key", "")))
-        prev_id = pexec_id
+                input_configuration=resolved.get("renderedConfig", ""),
+                input_configuration_file_s3_key=cfg_key,
+                template_id=resolved.get("templateId", ""),
+                template_schema_version=resolved.get("templateSchemaVersion", ""),
+                tag_schema_version=resolved.get("tagSchemaVersion", ""),
+                template_tags=resolved.get("templateTags", []),
+                custom_template_override_used=resolved.get("customTemplateOverrideUsed", False),
+                custom_template_override=resolved.get("customTemplateOverrideRaw", ""),
+                config_format=resolved.get("configFormat", ""),
+                # The merge of the pipeline's systemConfig with this run's chosen template overrides —
+                # the settings the step actually ran under, recomputed here from the same inputs the
+                # execute validation used so the snapshot cannot drift from what was enforced.
+                effective_system_config=ev.resolve_effective_pipeline_config(
+                    record.get("systemConfig", {}) or {}, resolved.get("templateOverrides", {})),
+                template_overrides=resolved.get("templateOverrides", {})))
+
+            # Input-metadata snapshot, one row per (asset, filePath) this step received plus one per
+            # captured database's own metadata. The grouped envelope is already written to S3 for the
+            # pipeline to read; these rows are what the execution DETAILS response reads, so without them
+            # the details page reports no input metadata even when the pipeline was handed plenty.
+            # Asset-level metadata lands on the '/' filePath row; each row's scope says whether it
+            # describes an asset or a database.
+            #
+            # The rows are narrowed TWICE, and both narrowings are required:
+            #   - by TYPE, through this step's own effective metadataInputs gate. These rows are what
+            #     the details response reports as "what this step received", so they must be built from
+            #     the step's DELIVERY envelope — the same narrowing _resolve_step_delivery applies to
+            #     the step's metadata file, its manifest location, and its template-tag payload.
+            #     Reporting from the shared envelope instead over-states a gated step's input.
+            #   - by ENTITY, to this pipeline's own inputs (plus the run's named metadata sources and
+            #     database rows, which every pipeline reads) — see er.pipeline_metadata_envelope_rows
+            #     for which row kinds belong to a pipeline and why.
+            # The envelope itself stays per-execution and shared: one S3 file every task reads, whose
+            # shape these rows do not touch.
+            pipeline_inputs = (filtered_inputs_by_composite or {}).get(composite, selected_inputs)
+            step_gate = (step_metadata_gates or {}).get(idx + 1)
+            step_envelope = er.narrow_metadata_envelope(metadata_envelope, step_gate)
+            for row in er.pipeline_metadata_envelope_rows(
+                    step_envelope, pipeline_inputs, metadata_source_assets=metadata_source_assets):
+                pin_md_batch.put_item(Item=er.build_input_metadata_record(
+                    pipeline_execution_id=pexec_id,
+                    database_id=row["databaseId"], asset_id=row["assetId"],
+                    file_path=row["filePath"], metadata=row["metadata"],
+                    source_input_metadata_file_s3_key=metadata_file_key,
+                    scope=row["scope"], attributes=row.get("attributes")))
+            prev_id = pexec_id
 
     # The execution's output target is recorded on the configuration row above (outputDatabaseId /
     # outputAssetId, plus the composite key that backs WorkflowExecConfigByOutputAssetGSI). That one
@@ -1386,6 +2082,28 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         _seen_inputs.add(identity)
         selected_inputs.append(item)
 
+    # 3b) Metadata sources: entities the run reads stored metadata from. They are not input files, so
+    #     they stay out of selected_inputs — which drives arity, filters, output-target resolution, the
+    #     S3 existence check, the concurrency guard, and the input-FILE rows. A repeated source asset is
+    #     collapsed the same way a repeated input file is.
+    metadata_source_assets = []
+    _seen_sources = set()
+    for source in (request_model.metadataSourceAssets or []):
+        identity = (source.databaseId, source.assetId)
+        if identity in _seen_sources:
+            continue
+        _seen_sources.add(identity)
+        metadata_source_assets.append({"databaseId": identity[0], "assetId": identity[1]})
+    metadata_source_database_id = request_model.metadataSourceDatabaseId or ""
+
+    # The WORKFLOW's assetScope governs how many assets a run may span, so it governs the source span
+    # too: one envelope is built from the workflow gate and shared by every step.
+    workflow_asset_scope = ev.normalize_asset_scope(
+        (workflow.get("systemConfig", {}) or {}).get("assetScope"))
+    span_errors = _metadata_source_span_errors(workflow_asset_scope, metadata_source_assets)
+    if span_errors:
+        return validation_error(body={"message": " ".join(span_errors)}, event=event)
+
     # 4) Resolve the output target. Three shapes:
     #    - One input asset: output is locked to that asset; outputTarget.allowOverride is the SOLE gate
     #      for redirecting it elsewhere (db falls back to the single input asset's db).
@@ -1421,6 +2139,22 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             output_database_id = requested_output_db or single_db
         else:
             output_database_id, output_asset_id = single_db, single_asset
+            # A requested target this run cannot honor is a contradiction, not a hint: dropping it
+            # silently writes the outputs somewhere the caller never asked for, and the caller is told
+            # the run launched. The results-only branch above refuses a supplied target for the same
+            # reason. A request naming the asset the run is already locked to is a no-op and passes,
+            # which is what lets a re-run replay its recorded target verbatim — for a run that did not
+            # override, that recorded target IS the input asset.
+            if ((requested_output_asset and requested_output_asset != output_asset_id)
+                    or (requested_output_db and requested_output_db != output_database_id)):
+                if not allow_override:
+                    return validation_error(body={"message":
+                        "This workflow writes its output to the single input asset and does not allow "
+                        "redirecting it (outputTarget.allowOverride is false). Omit outputAssetId and "
+                        "outputDatabaseId."}, event=event)
+                return validation_error(body={"message":
+                    "Redirecting this execution's output requires outputAssetId; outputDatabaseId "
+                    "alone does not name a target asset."}, event=event)
     else:
         # 0 or multiple input assets with an asset output: honor the explicit output (both ids required).
         output_asset_id = requested_output_asset or ""
@@ -1441,6 +2175,39 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             selected_inputs, output_asset_id, output_database_id)
     if err:
         return err
+
+    # 5b) Resolve + authorize the metadata-source entities (asset GET, database GET per database). Their
+    #     assets join asset_records so the envelope builder finds their assetData, but never
+    #     selected_inputs. The candidate databases are every database the run's own entities live in,
+    #     plus the caller's single named database on the arity-'none' path. Only the named one is passed
+    #     as named: it fails the launch when denied, while a derived one is skipped.
+    metadata_inputs = (workflow.get("systemConfig", {}) or {}).get("metadataInputs", {})
+    candidate_source_databases = _derive_metadata_source_databases(
+        selected_inputs, metadata_source_assets, metadata_source_database_id, metadata_inputs)
+    named_source_databases = ([metadata_source_database_id]
+                              if metadata_source_database_id and not selected_inputs else [])
+    err, metadata_source_assets, metadata_source_databases = _resolve_and_authorize_metadata_sources(
+        metadata_source_assets, candidate_source_databases, asset_records,
+        named_database_ids=named_source_databases)
+    if err:
+        return err
+    # A run WITH input files derives its databases from them, so the named database took no part in
+    # choosing the set; the recorded selection is narrowed to match, rather than naming a database as the
+    # caller's choice when the run reached it another way.
+    #
+    # The warning names the database only when the DERIVED set really left it out. Naming the database the
+    # input files already live in is the ordinary request and that database's metadata is captured
+    # regardless, so warning there would contradict the envelope. A database that was derived but is
+    # skipped for want of database GET is left to the derived-skip path that owns it
+    # (_resolve_and_authorize_metadata_sources logs it): the run did drop it, but not for the reason this
+    # message states, and a warning naming the wrong cause is worse than none.
+    discarded_source_database = ""
+    if selected_inputs:
+        if (metadata_source_database_id
+                and er.metadata_input_enabled(metadata_inputs, "databaseMetadata")
+                and metadata_source_database_id not in candidate_source_databases):
+            discarded_source_database = metadata_source_database_id
+        metadata_source_database_id = ""
 
     executing_user = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else ""
 
@@ -1482,13 +2249,23 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         return validation_error(body={
             "message": "A conflicting execution of this workflow is already running."}, event=event)
 
-    # 11) Grouped input metadata (honoring the workflow's metadataInputs gate).
-    metadata_inputs = (workflow.get("systemConfig", {}) or {}).get("metadataInputs", {})
-    metadata_envelope = _build_grouped_metadata(selected_inputs, asset_records, metadata_inputs, event)
+    # 11) Grouped input metadata (honoring the workflow's metadataInputs gate) from the selected inputs
+    #     plus the resolved metadata sources. capture_notices collects what the capture could not take
+    #     whole — truncated entity rows, rows past the total bound, unreadable source databases, and a
+    #     named source database the run derived past — for the response warnings.
+    capture_notices = _metadata_capture_warnings(
+        [], [], ignored_source_databases=[discarded_source_database] if discarded_source_database else [])
+    metadata_envelope = _build_grouped_metadata(
+        selected_inputs, asset_records, metadata_inputs, event,
+        metadata_source_assets=metadata_source_assets,
+        metadata_source_databases=metadata_source_databases, notices=capture_notices)
 
     # 12) Launch + persist.
     trigger_type_stored = TRIGGER_TYPE_TO_STORED.get(request_model.triggerType, "Manual")
     output_extension = _resolve_requested_output_extension(request_model, workflow)
+    warnings = _missing_metadata_source_warnings(
+        pipeline_records, resolved_configs, metadata_inputs, metadata_source_assets,
+        metadata_source_databases) + capture_notices
     execution_id = _launch_workflow(
         workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
         selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
@@ -1497,10 +2274,31 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
         execution_group_id=request_model.executionGroupId, executing_user=executing_user,
         executing_request_context=event.get("requestContext"),
         output_location_type=output_location_type, output_extension=output_extension,
-        filtered_inputs_by_composite=filtered_inputs_by_composite)
+        filtered_inputs_by_composite=filtered_inputs_by_composite,
+        metadata_source_assets=metadata_source_assets,
+        metadata_source_database_id=metadata_source_database_id,
+        metadata_source_databases=metadata_source_databases)
 
+    # AUDIT LOG: execution launched. Logged after the state machine has started, so a launch that
+    # failed is never audited as a run. Tag VALUES are omitted deliberately — they can carry prompts and
+    # credential-shaped strings; the counts and the output target are what an audit needs. A
+    # trigger-launched run is attributed to SYSTEM_USER by design (a user may upload a file without
+    # holding permission to run the workflow), and triggerType records that cause.
+    log_actions(event, "workflowExecute", {
+        "workflowDatabaseId": workflow_database_id,
+        "workflowId": workflow_id,
+        "executionId": execution_id,
+        "executionGroupId": request_model.executionGroupId or "",
+        "triggerType": trigger_type_stored,
+        "inputFileCount": len(selected_inputs or []),
+        "outputLocationType": output_location_type or "",
+        "outputDatabaseId": output_database_id or "",
+        "outputAssetId": output_asset_id or "",
+        "operation": "execute",
+    })
     return success(body={"message": ExecuteWorkflowResponseModel(
-        executionId=execution_id, executionGroupId=request_model.executionGroupId).dict()})
+        executionId=execution_id, executionGroupId=request_model.executionGroupId,
+        warnings=warnings or None).dict()})
 
 
 #######################

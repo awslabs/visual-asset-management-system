@@ -41,7 +41,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
@@ -2521,7 +2521,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

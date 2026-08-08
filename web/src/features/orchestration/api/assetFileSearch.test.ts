@@ -151,7 +151,7 @@ describe("searchAssetFilesPaged scoping", () => {
     });
 
     it("uses only the query_string key the backend model requires", async () => {
-        // A bare `term` filter is rejected with `filters -> N -> query_string: field required` (400).
+        // A bare `term` filter is rejected with `filters.N.query_string: field required` (400).
         await searchAssetFilesPaged("", "smoke-db", "a1");
         for (const f of sentFilters()) {
             expect(Object.keys(f)).toEqual(["query_string"]);

@@ -718,6 +718,19 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    image-to-video template on the same pipeline overrides arity to `one`. This keeps one pipeline per
    MODEL rather than one per mode, and the execute form asks for a file only when the chosen template
    consumes one. The Cosmos 3 bundles are configured this way.
+   **A template's `tagSchema` is how a run gets OPERATOR-SUPPLIED options** — a prompt, a seed, an
+   output format, a quality preset — so each becomes a form field rather than a hardcoded value. Each
+   entry declares `tagKey` (letters/digits/underscore only, so `{{tagKey}}` substitutes), `type`
+   (`string` | `integer` | `number` | `boolean` | `string-list` | `enum`), `required`, `default`,
+   `enumValues` (required for `enum`), and `label` / `description` for the form. Reference every
+   declared tag as `{{TAG}}` in the `configBody` — a tag the body never references is silently unused,
+   so the operator fills in a field that reaches no pipeline.
+   **In a `json` body, quoting is type-driven and checked on save:** an `integer`/`number`/`boolean`/
+   `string-list` placeholder is a bare JSON value (`"seed": {{SEED}}`) while a `string`/`enum` one sits
+   inside the string it fills (`"prompt": "{{PROMPT}}"`). The reverse is rejected with a 400, since
+   quoting a typed tag would hand the container `"42"` where it expects `42`. Non-`json` formats
+   (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
+   collide with a reserved system tag name or begin with the reserved `metadata_` prefix.
    **A workflow's `inputFileArity` is authored, not derived** — templates are chosen per execution, so
    set it to the MAXIMUM any pipeline/template combination in that workflow can require; a lower gate
    rejects a selection a template would have accepted.
@@ -735,6 +748,14 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     with no error. When one model needs two modes in one workflow (train then evaluate, say), ship two
     pipelines sharing a container image / ECR repo / compute environment rather than one pipeline
     listed twice with different templates.
+11. **A sub-state-machine execution name must be unique at millisecond concurrency.** `openPipeline.py`
+    derives the name a pipeline's own state machine runs under (`PipelineJob_<stamp>_<random>`), and
+    Step Functions rejects a repeat with `ExecutionAlreadyExists`. A workflow may carry several triggers
+    of one type, so one upload fans out to N simultaneous runs of the SAME pipeline — a timestamp alone
+    (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
+    per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
+    concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
+    80-character Step Functions limit and free of `:` and `/`.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output

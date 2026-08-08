@@ -174,8 +174,10 @@ def prepare_next_pipeline(body):
     if orchestration_event_source_prefix and next_pexec_id:
         next_event_prefix = er.orchestration_event_prefix(
             orchestration_event_source_prefix, workflow_execution_id, next_pexec_id)
+    next_metadata_location = resolve_next_metadata_location(body, wf_exec_bucket)
+
     envelope_context = {
-        "inputMetadataS3Location": body.get('inputMetadataS3Location', ''),
+        "inputMetadataS3Location": next_metadata_location,
         "outputs": er.build_manifest_outputs(
             bucket=wf_exec_bucket,
             files=body.get('outputFilesPrefixRelative', ''),
@@ -217,6 +219,29 @@ def prepare_next_pipeline(body):
         "nextPipelineManifestS3Key": next_manifest_key,
         "nextPipelineConfigS3Key": next_config_key,
     }
+
+
+def resolve_next_metadata_location(body, wf_exec_bucket):
+    """The metadata S3 location the NEXT pipeline step reads.
+
+    Per-step DELIVERY of the two-level metadataInputs contract: the next step reads its OWN narrowed
+    metadata file when executeWorkflow wrote one for it (its key threaded through the ASL as
+    nextPipelineMetadataS3Key), otherwise the shared per-execution envelope. Narrowing is computed at
+    launch, where template overrides resolve; only the resulting key travels. The INTAKE half is the
+    workflow gate in executeWorkflow._build_grouped_metadata.
+
+    Fails CLOSED to today's behavior: this runs MID-EXECUTION, so an absent or unusable threaded key
+    delivers the SHARED envelope rather than nothing. Handing a step an empty payload would break a
+    pipeline that needs metadata — worse than delivering the wider set."""
+    shared_location = (body or {}).get('inputMetadataS3Location', '')
+    next_metadata_key = (body or {}).get('nextPipelineMetadataS3Key', '')
+    if isinstance(next_metadata_key, str) and next_metadata_key.strip():
+        return f"s3://{wf_exec_bucket}/{next_metadata_key.strip()}"
+    if next_metadata_key not in ("", None):
+        logger.warning(
+            f"Ignoring malformed nextPipelineMetadataS3Key ({next_metadata_key!r}); delivering the "
+            f"shared execution metadata envelope to the next pipeline.")
+    return shared_location
 
 
 def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key):

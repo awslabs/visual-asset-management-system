@@ -25,6 +25,7 @@ import string
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import ValidationError
 
 from common.validators import validate
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
@@ -33,6 +34,7 @@ from common.dynamodb import validate_pagination_info
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -41,6 +43,7 @@ from models.common import (
     internal_error,
     general_error,
     VAMSGeneralErrorResponse,
+    validation_error_message,
 )
 from models.pipelines import (
     CreatePipelineRequestModel,
@@ -50,6 +53,7 @@ from models.pipelines import (
 )
 from common.workflows import pipelineRecords as pr
 from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
+from common.workflows.executionValidation import arity_none_metadata_warnings
 
 logger = safeLogger(service_name="PipelineService")
 
@@ -96,6 +100,18 @@ GLOBAL_DATABASE = "GLOBAL"
 # Page cap for the cross-database id-uniqueness lookup (bounds the work one create may do).
 MAX_ID_LOOKUP_PAGES = 50
 
+# Ceiling on the pipelines one list request may return, whatever the caller asks for in
+# maxItems/pageSize. Each returned pipeline costs one COUNT query for its templateCount, so this
+# bounds both the response size (6MB Lambda limit) and the per-request query fan-out; callers read
+# the rest of the set through NextToken. Mirrors workflowService.MAX_LIST_PAGE_ITEMS.
+MAX_LIST_PAGE_ITEMS = 500
+
+# Templates returned inline on a pipeline DETAILS response, and the ceiling for that inline set. A
+# pipeline may accumulate far more; the full set is paged through the template list endpoint
+# (pipelineTemplateService), which the details response points at via templateCount. Bounds the
+# details response so one heavily templated pipeline cannot breach the 6MB Lambda limit.
+MAX_DETAIL_TEMPLATES = 10
+
 
 #######################
 # Utilities
@@ -126,12 +142,17 @@ def _get_fileupload_trigger_row(workflow_database_id, workflow_id):
 
 
 def _pipeline_save_warnings(item):
-    """Non-blocking warnings for a saved pipeline (empty list when none). Today: a require-template
-    pipeline that is part of an auto-triggered workflow with no default template chosen for it."""
-    require_template = bool((item.get("systemConfig") or {}).get("requireTemplate"))
-    return pipeline_trigger_template_warnings(
+    """Non-blocking warnings for a saved pipeline (empty list when none): a require-template pipeline
+    that is part of an auto-triggered workflow with no default template chosen for it, and file-scoped
+    metadata inputs the pipeline's own inputFileArity leaves nothing to collect from."""
+    system_config = item.get("systemConfig") or {}
+    require_template = bool(system_config.get("requireTemplate"))
+    warnings = pipeline_trigger_template_warnings(
         _workflow_table(), _get_fileupload_trigger_row,
         item.get("databaseId", ""), item.get("pipelineId", ""), require_template)
+    warnings.extend(arity_none_metadata_warnings(
+        system_config, f"pipeline '{item.get('pipelineId', '')}'"))
+    return warnings
 
 
 def _referencing_workflow_labels(database_id, pipeline_id):
@@ -372,11 +393,19 @@ def _provision_lambda_for_pipeline(execution_config, pipeline_id):
 
 def _pagination_config(query_params):
     """Boto3 paginator config from the validated query params (validate_pagination_info fills
-    maxItems/pageSize/startingToken). Bounds the page so a list never accumulates the whole table
-    into a single response (backend Rule 15: stay under the 6 MB Lambda response limit)."""
+    maxItems/pageSize/startingToken). Both sizes are clamped to MAX_LIST_PAGE_ITEMS so a caller
+    cannot ask one request to accumulate the whole table (and one COUNT query per accumulated row);
+    the remainder is reachable through NextToken.
+
+    PageSize is DynamoDB's per-REQUEST size, which the paginator keeps issuing until MaxItems is
+    reached — so PageSize alone bounds nothing. MaxItems is the total the paginator accumulates into
+    one response, and it is the value that has to be capped (backend Rule 15: stay under the 6 MB
+    Lambda response limit)."""
+    max_items = min(int(query_params["maxItems"]), MAX_LIST_PAGE_ITEMS)
+    page_size = min(int(query_params["pageSize"]), max_items)
     return {
-        "MaxItems": int(query_params["maxItems"]),
-        "PageSize": int(query_params["pageSize"]),
+        "MaxItems": max_items,
+        "PageSize": page_size,
         "StartingToken": query_params["startingToken"],
     }
 
@@ -389,7 +418,7 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles):
             continue
         if _enforce(claims_and_roles, item, "GET"):
             # Template count is a bounded COUNT query per authorized pipeline on this page
-            # (page size caps the fan-out, so no unbounded N+1). Best-effort — None on failure.
+            # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
             count = _template_count(item.get("databaseId", ""), item.get("pipelineId", ""))
             items.append(_item_to_response(item, template_count=count))
     result = GetPipelinesResponseModel(Items=items)
@@ -453,12 +482,24 @@ def find_pipeline_id_owner(pipeline_id, excluding_database_id=None):
     return None
 
 
-def get_pipeline_templates(database_id, pipeline_id):
-    """List a pipeline's template rows (bodies as stored — details view rehydrates via the template
-    service; here we return lightweight descriptors)."""
+def get_pipeline_templates(database_id, pipeline_id, limit=MAX_DETAIL_TEMPLATES):
+    """The first `limit` template descriptors for a pipeline (lightweight — no config bodies).
+
+    Bounded on purpose: this feeds the pipeline DETAILS response, which carries the descriptors
+    inline, so an unbounded read would let one heavily templated pipeline breach the 6MB Lambda
+    response limit. The paginated peer is pipelineTemplateService.list_templates (NextToken, and the
+    only place that returns bodies) — the details response reports the true total in templateCount so
+    a caller can tell that more exist and page for them there.
+
+    Stops as soon as `limit` descriptors are collected rather than reading every page. The DynamoDB
+    Limit is what the query itself is capped at, so a pipeline with thousands of templates costs one
+    request here, not one per page."""
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
     templates = []
-    query_kwargs = {"KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite)}
+    query_kwargs = {
+        "KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite),
+        "Limit": limit,
+    }
     table = _templates_table()
     while True:
         response = table.query(**query_kwargs)
@@ -469,13 +510,15 @@ def get_pipeline_templates(database_id, pipeline_id):
                 "configFormat": item.get("configFormat", "json"),
                 "allowCustomEdit": item.get("allowCustomEdit", False),
             })
+            if len(templates) >= limit:
+                return templates
         if "LastEvaluatedKey" not in response:
             break
         query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
     return templates
 
 
-def create_pipeline(database_id, request, username, claims_and_roles):
+def create_pipeline(database_id, request, username, claims_and_roles, event=None):
     table = _pipeline_table()
     pipeline_id = request.pipelineId or pr.new_guid()
 
@@ -535,6 +578,13 @@ def create_pipeline(database_id, request, username, claims_and_roles):
         record.get("executionConfig"), pipeline_id)
 
     table.put_item(Item=record)
+    # AUDIT LOG: pipeline created (after the write, so a failed write is never audited as a success).
+    log_actions(event or {}, "pipelineCreate", {
+        "databaseId": database_id,
+        "pipelineId": pipeline_id,
+        "executionType": (record.get("executionConfig") or {}).get("executionType", ""),
+        "operation": "create",
+    })
     body = {"message": _item_to_response(record).dict()}
     # Non-blocking save warnings (e.g. require-template pipeline in an auto-trigger with no default
     # template chosen). Included only when present so a clean save is unchanged.
@@ -544,7 +594,7 @@ def create_pipeline(database_id, request, username, claims_and_roles):
     return success(body=body)
 
 
-def update_pipeline(database_id, pipeline_id, request, username, claims_and_roles):
+def update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event=None):
     item = get_pipeline_item(database_id, pipeline_id)
     if not item:
         # Authorize against a provisional record first so the 404 is not an existence oracle.
@@ -581,6 +631,14 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
     item["modifiedBy"] = username
 
     _pipeline_table().put_item(Item=item)
+    # AUDIT LOG: pipeline updated. executionConfigChanged is worth auditing on its own — it repoints
+    # the compute the pipeline invokes.
+    log_actions(event or {}, "pipelineUpdate", {
+        "databaseId": database_id,
+        "pipelineId": pipeline_id,
+        "executionConfigChanged": bool(execution_config_changed),
+        "operation": "update",
+    })
     body = {"message": _item_to_response(item).dict()}
     warnings = _pipeline_save_warnings(item)
     if execution_config_changed:
@@ -590,7 +648,7 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
     return success(body=body)
 
 
-def archive_pipeline(database_id, pipeline_id, username, claims_and_roles):
+def archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event=None):
     item = get_pipeline_item(database_id, pipeline_id)
     if not item:
         # Authorize against a provisional record first so the 404 is not an existence oracle.
@@ -605,6 +663,12 @@ def archive_pipeline(database_id, pipeline_id, username, claims_and_roles):
     item["dateModified"] = pr.iso_now()
     item["modifiedBy"] = username
     _pipeline_table().put_item(Item=item)
+    # AUDIT LOG: pipeline archived (the delete route archives rather than removing).
+    log_actions(event or {}, "pipelineArchive", {
+        "databaseId": database_id,
+        "pipelineId": pipeline_id,
+        "operation": "archive",
+    })
     return success(body={"message": "Pipeline archived"})
 
 
@@ -680,9 +744,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return validation_error(status_code=404, body={"message": "Pipeline not found"}, event=event)
                 if not _enforce(claims_and_roles, item, "GET"):
                     return authorization_error()
+                # The inline `templates` list is capped at MAX_DETAIL_TEMPLATES, so the count MUST
+                # come from the COUNT query rather than len(templates) — otherwise a pipeline with
+                # more templates than the cap silently reports the cap as its total, and a caller has
+                # no way to know more exist (or where to page for them).
                 templates = get_pipeline_templates(database_id, pipeline_id)
                 return success(body={"message": _item_to_response(
-                    item, templates=templates, template_count=len(templates)).dict()})
+                    item, templates=templates,
+                    template_count=_template_count(database_id, pipeline_id)).dict()})
             if database_id:
                 result = get_database_pipelines(database_id, query_parameters, include_archived, claims_and_roles)
                 return success(body={"message": result.dict()})
@@ -704,18 +773,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return validation_error(body={
                     "message": "databaseId in the request body must match the request path."},
                     event=event)
-            return create_pipeline(database_id, request, username, claims_and_roles)
+            return create_pipeline(database_id, request, username, claims_and_roles, event)
 
         if method == "PUT":
             if not pipeline_id:
                 return validation_error(body={"message": "pipelineId required to update a pipeline"}, event=event)
             request = UpdatePipelineRequestModel(**_request_body(event))
-            return update_pipeline(database_id, pipeline_id, request, username, claims_and_roles)
+            return update_pipeline(database_id, pipeline_id, request, username, claims_and_roles, event)
 
         if method == "DELETE":
             if not pipeline_id:
                 return validation_error(body={"message": "pipelineId required to archive a pipeline"}, event=event)
-            return archive_pipeline(database_id, pipeline_id, username, claims_and_roles)
+            return archive_pipeline(database_id, pipeline_id, username, claims_and_roles, event)
 
         return validation_error(body={"message": "Method not allowed"}, event=event)
 
@@ -724,6 +793,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return general_error(body={"message": str(v)}, event=event)
     except json.JSONDecodeError:
         return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as ve:
+        logger.exception(f"Validation error: {ve}")
+        return validation_error(body={"message": validation_error_message(ve)}, event=event)
     except ValueError as ve:
         logger.exception(f"Validation error: {ve}")
         return validation_error(body={"message": str(ve)}, event=event)

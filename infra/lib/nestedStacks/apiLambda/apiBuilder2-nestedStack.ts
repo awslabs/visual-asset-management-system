@@ -244,11 +244,6 @@ export class ApiBuilder2NestedStack extends NestedStack {
         const workflowsLogGroup = new logs.LogGroup(this, "vamsPipelineWorkflows", {
             logGroupName:
                 "/aws/vendedlogs/vamsPipelineWorkflows" + //important to have 'vams' in the name as resource access looks for this
-                // Seed the deterministic name with a "V2" cutover marker so it does not collide with a
-                // pre-overhaul deployment's identically-named log group during an in-place upgrade —
-                // CloudFormation would otherwise try to create this one while the old one still exists
-                // (ResourceAlreadyExistsException). Both groups can coexist through the transition; the
-                // old one is removed with its prior stack.
                 generateUniqueNameHash(
                     config.env.coreStackName,
                     config.env.account,
@@ -259,8 +254,8 @@ export class ApiBuilder2NestedStack extends NestedStack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        // Execution service: asset-scoped + global list, details/traceability, logs, abort,
-        // abort-by-group, re-run, permanent delete.
+        // Execution service: asset-scoped + global list, details/traceability, paged detail
+        // metadata, logs, abort, abort-by-group, re-run, permanent delete.
         const executionServiceFunction = buildExecutionServiceFunction(
             this,
             lambdaCommonBaseLayer,
@@ -288,6 +283,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
         });
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}/details",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, executionServiceFunction, {
+            routePath: "/workflows/executions/{executionId}/details/metadata",
             method: apigateway.HttpMethod.GET,
             registry: registry,
         });

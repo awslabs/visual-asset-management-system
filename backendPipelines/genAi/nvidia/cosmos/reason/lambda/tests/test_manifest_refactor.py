@@ -369,7 +369,10 @@ class TestContainerReadsFromS3:
         with patch.object(mio, "_get_json", MagicMock(return_value=envelope)):
             md = mio.fetch_metadata("s3://abkt/.../metadata.json")
         assert md == {"VAMS": {"fileMetadata": {"COSMOS_REASON_PROMPT": "x"}}}
-        with patch.object(mio, "_get_json", MagicMock(return_value=cfg)):
+        # fetch_input_configuration reads the RAW text and parses it itself, so a present-but-
+        # unparseable body raises instead of degrading to {} (which would look like "no
+        # configuration" and silently drop the caller's parameters).
+        with patch.object(mio, "_read_text", MagicMock(return_value=json.dumps(cfg))):
             got = mio.fetch_input_configuration("s3://abkt/.../config.json")
         assert got == cfg
         # best-effort: empty location -> {}

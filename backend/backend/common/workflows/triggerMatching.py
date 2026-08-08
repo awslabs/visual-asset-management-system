@@ -7,7 +7,7 @@ Given an uploaded file (its owning database + asset + asset-relative key) and th
 trigger rows that apply, decide which workflows fire and build the per-trigger execute request body.
 
 No AWS/env dependencies — the dispatcher lambda resolves the trigger rows (WorkflowTriggersTable
-TriggersByTypeGSI) + asset and passes them in; this module encodes the matching rules so they
+TriggersByBaseTypeGSI) + asset and passes them in; this module encodes the matching rules so they
 unit-test in isolation, mirroring the other common/workflows pure modules.
 
 Matching rules (per trigger row's triggerConfig):
@@ -128,7 +128,13 @@ def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file
     pre-chaining behavior of never re-firing on workflow output."""
     matches = []
     for trigger_row in trigger_rows or []:
-        if trigger_row.get("triggerType", TRIGGER_TYPE_FILE_UPLOAD) != TRIGGER_TYPE_FILE_UPLOAD:
+        # The row's `triggerType` is its SORT KEY, which is the bare type for a workflow's first trigger
+        # of that type and "type#triggerId" for an additional one, so the base type is what identifies
+        # the kind. An exact comparison here would silently drop every additional trigger. A row written
+        # before multiple triggers existed carries the bare type and reads identically.
+        base_type = (trigger_row.get("triggerBaseType")
+                     or (trigger_row.get("triggerType") or TRIGGER_TYPE_FILE_UPLOAD).split("#", 1)[0])
+        if base_type != TRIGGER_TYPE_FILE_UPLOAD:
             continue
         if not _trigger_fires(trigger_row, database_id, relative_file_key):
             continue

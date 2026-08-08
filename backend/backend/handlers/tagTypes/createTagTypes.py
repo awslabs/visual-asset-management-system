@@ -14,6 +14,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2,
     success,
     validation_error,
@@ -202,7 +203,7 @@ def handle_post_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
@@ -243,7 +244,7 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
@@ -280,7 +281,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)

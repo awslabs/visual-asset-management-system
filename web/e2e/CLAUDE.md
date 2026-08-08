@@ -126,6 +126,8 @@ locators — the app's markup is not always guessable, and these were establishe
 | `firstCardId(page)`                             | Id of the first card, or `null` when the list is empty |
 | `openCardMenu(page, id)`                        | Filter to a card and open its actions menu             |
 | `tableRows(page)` / `expectTableRendered(page)` | Table rows / "rendered in any environment" assertion   |
+| `menuSurface(items)`                            | The open menu's own floating surface, from an item     |
+| `rowValue(page, label)`                         | The value cell of a label/value row in a detail panel  |
 | `collectPageErrors(page)`                       | Uncaught page errors, for crash-regression assertions  |
 
 **Selector facts worth not rediscovering:**
@@ -138,6 +140,21 @@ locators — the app's markup is not always guessable, and these were establishe
 -   The template panel heading is an `h1` reading exactly `Templates`.
 -   Card lists are server-paginated (pageSize 50); filter down to a card before locating it.
 -   Execution trigger values use the **stored** vocabulary (`Manual`, `File-Upload`) — not `fileUpload`.
+-   The **pipeline form is a three-step wizard** ("1 Basic", "2 Execution", "3 Settings") and opens on
+    Basic. Fields on a later step do not exist in the DOM until you advance with the form's own `Next`
+    button. Do **not** locate a step by name: `getByRole("button", { name: /Settings/ })` matches the
+    global navigation's Settings button, not the step. The metadata-input toggles are on Settings.
+-   The **execute wizard's `Launch` button exists only on the final step**. An assertion about the input
+    stage must target `Next`; looking for `Launch` there finds nothing.
+-   The executions board names the workflow's database `Workflow Database` (there is also an Output
+    Type / Output Database / Output Asset ID group) and has **no** `Group` column.
+-   **`[role="menu"]` is ambiguous on every page.** Each closed Cloudscape Select / ButtonDropdown keeps
+    a zero-size `<ul role="menu">` in the DOM, and those come BEFORE the portalled Radix menu in
+    document order — so `.first()` resolves to a hidden one whose background is `rgba(0, 0, 0, 0)`. Use
+    `menuSurface(items)` to reach the open surface from a visible item.
+-   Detail and quick-view panels render a field as a label span plus its value span, so a field's value
+    is the label's next sibling. Use `rowValue(page, label)`; a page-wide `getByText` for a value's
+    shape (a path, a slash, an id) matches dozens of unrelated elements.
 
 When a page's markup changes, fix the helper once; every spec follows.
 

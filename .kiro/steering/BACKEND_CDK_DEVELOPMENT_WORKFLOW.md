@@ -107,7 +107,7 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
--   [ ] **Add Logging**: Use `safeLogger` for structured logging
+-   [ ] **Add Logging**: Use `safeLogger` for structured logging. It redacts credential keys (`authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`) and caller-authored content keys (`configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`), at every nesting level in dicts, lists, and tuples, and inside a request `body` that arrives as a JSON string. Redaction is key-driven, so an f-string interpolating a payload value bypasses it — log identifiers and counts, never rendered template bodies or tag values
 -   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
@@ -346,9 +346,9 @@ raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}
 ```python
 class CreateAssetRequestModel(BaseModel, extra='ignore'):
     """Secure request model with proper validation"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
 
     @root_validator
     def validate_fields(cls, values):
@@ -502,7 +502,7 @@ from common.validators import validate, id_pattern, object_name_pattern
 
 class [Domain]RequestModel(BaseModel, extra='ignore'):
     """Request model for [operation] [domain]"""
-    requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    requiredField: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=id_pattern)
     optionalField: Optional[str] = Field(None, min_length=1, max_length=256)
 
     @root_validator
@@ -1465,8 +1465,8 @@ class [Domain]ListRequestModel(BaseModel, extra='ignore'):
 
 class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a [domain]"""
-    [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    [domain]Id: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    [domain]Name: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     tags: Optional[List[str]] = []
 
@@ -1489,7 +1489,7 @@ class [Domain]CreateRequestModel(BaseModel, extra='ignore'):
 
 class [Domain]UpdateRequestModel(BaseModel, extra='ignore'):
     """Request model for updating a [domain]"""
-    [domain]Name: Optional[str] = Field(None, min_length=1, max_length=256, pattern=object_name_pattern)
+    [domain]Name: Optional[str] = Field(None, min_length=1, max_length=256, regex=object_name_pattern)
     description: Optional[str] = Field(None, min_length=4, max_length=256)
     tags: Optional[List[str]] = None
 

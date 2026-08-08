@@ -293,11 +293,13 @@ class TestPipelineServiceV2:
         table.put_item.assert_called_once()
         mock_owner.assert_called_once()
 
+    @patch(f"{MOD}._templates_table")
     @patch(f"{MOD}._pipeline_table")
     @patch(f"{MOD}.get_pipeline_templates")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
-    def test_get_single_pipeline_with_templates(self, mock_enforcer, mock_claims, mock_templates, mock_table):
+    def test_get_single_pipeline_with_templates(self, mock_enforcer, mock_claims, mock_templates,
+                                                mock_table, mock_templates_table):
         from backend.backend.handlers.pipelines.pipelineService import lambda_handler
         mock_claims.return_value = {"tokens": ["user1"]}
         mock_enforcer.return_value = _enforcer()
@@ -306,13 +308,16 @@ class TestPipelineServiceV2:
                                                  "pipelineName": "P", "enabled": True, "archived": False}}
         mock_table.return_value = table
         mock_templates.return_value = [{"templateId": "t1", "templateName": "tmpl"}]
+        # templateCount comes from the COUNT query, not from the inline list.
+        templates_table = MagicMock()
+        templates_table.query.return_value = {"Count": 1}
+        mock_templates_table.return_value = templates_table
         resp = lambda_handler(
             _event("GET", "/database/db1/pipelines/pipe1", {"databaseId": "db1", "pipelineId": "pipe1"}), MagicMock())
         assert resp["statusCode"] == 200
         data = json.loads(resp["body"])["message"]
         assert data["pipelineId"] == "pipe1"
         assert data["templates"][0]["templateId"] == "t1"
-        # templateCount reflects the number of templates fetched for the details view.
         assert data["templateCount"] == 1
 
     @patch(f"{MOD}._templates_table")

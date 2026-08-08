@@ -4,6 +4,7 @@
  */
 
 import { Workflow, Pipeline } from "../types";
+import { metadataEnabled } from "../wizard/resolveRestrictions";
 
 export interface ValidationResult {
     errors: string[];
@@ -18,7 +19,12 @@ export interface ValidationResult {
 export const JOB_NAME_PATTERN = /^[-_a-zA-Z0-9]{3,63}$/;
 
 /** The metadata-input gates the backend compares between a workflow and its pipelines. */
-const METADATA_KEYS = ["assetMetadata", "fileMetadata", "fileAttributes"] as const;
+const METADATA_KEYS = [
+    "assetMetadata",
+    "fileMetadata",
+    "fileAttributes",
+    "databaseMetadata",
+] as const;
 
 /** The two extension forms the backend recognises: '*.ext' (canonical) and '.ext' (shorthand). */
 const EXTENSION_PATTERN = /^\*?\.[a-zA-Z0-9]+$/;
@@ -163,10 +169,18 @@ export function validateWorkflow(
                 }
             }
 
-            // A metadata input the pipeline uses but the workflow gate turns off.
+            // A metadata input the pipeline uses but the workflow gate turns off. Both sides read
+            // through metadataEnabled: a key either map omits carries its builder default (ON), so
+            // only an explicit `false` on the workflow is a gate. Reading the raw values instead would
+            // warn that the workflow suppresses a type it actually provides — the same rule
+            // validate_workflow_save applies in common/workflows/executionValidation.py.
             const pipelineMetadata = pipeline.systemConfig?.metadataInputs || {};
+            const workflowMetadata = wf.systemConfig?.metadataInputs || {};
             METADATA_KEYS.forEach((key) => {
-                if (pipelineMetadata[key] && !wf.systemConfig?.metadataInputs?.[key]) {
+                if (
+                    metadataEnabled(pipelineMetadata, key) &&
+                    !metadataEnabled(workflowMetadata, key)
+                ) {
                     warnings.push(
                         `Pipeline '${ref.pipelineId}' uses ${key} but the workflow's metadata input for ${key} is off; the pipeline will run without it`
                     );

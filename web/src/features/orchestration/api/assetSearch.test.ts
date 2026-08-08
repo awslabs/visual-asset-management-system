@@ -167,7 +167,7 @@ describe("searchAssetsPaged database scoping", () => {
 
     it("keeps the query_string key the backend model requires", async () => {
         // SearchFilterModel declares `query_string` as required, so a bare `term` filter is rejected
-        // with `filters -> 0 -> query_string: field required` (400). Exactness has to be achieved
+        // with `filters.0.query_string: field required` (400). Exactness has to be achieved
         // THROUGH a query_string, not by swapping the filter type.
         await searchAssetsPaged("", "smoke-db");
         for (const f of sentFilters()) {

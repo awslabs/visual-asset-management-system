@@ -18,6 +18,33 @@ import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { appCache } from "../../../services/appCache";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import { METADATA_LABELS, metadataEnabled } from "../wizard/resolveRestrictions";
+import type { MetadataKey } from "../wizard/resolveRestrictions";
+
+// The metadata-input toggles, in the order the form shows them: widest entity first, so the rows read
+// database -> asset -> file as the containment they describe.
+const METADATA_INPUT_FIELDS: { key: MetadataKey; label: string; info: string }[] = [
+    {
+        key: "databaseMetadata",
+        label: METADATA_LABELS.databaseMetadata,
+        info: "Include the metadata of each involved database. With input files these are the databases of the files' assets; a run with no input files reads the one database it names.",
+    },
+    {
+        key: "assetMetadata",
+        label: METADATA_LABELS.assetMetadata,
+        info: "Include each input asset's asset-level metadata.",
+    },
+    {
+        key: "fileMetadata",
+        label: METADATA_LABELS.fileMetadata,
+        info: "Include per-file metadata for each input file.",
+    },
+    {
+        key: "fileAttributes",
+        label: METADATA_LABELS.fileAttributes,
+        info: "Include per-file attributes (the string-typed file attribute fields).",
+    },
+];
 
 // Registration options for an optional numeric input: a blank field carries no value, so it is
 // submitted as undefined rather than NaN.
@@ -137,6 +164,19 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     const executionType = watch("executionConfig.executionType");
     const waitForCallback = watch("executionConfig.waitForCallback");
     const inputFileArity = watch("systemConfig.inputFileArity") || "one";
+    // Each toggle's effective value: a key the stored map omits reads ON, matching the record builders,
+    // so a pipeline saved with a partial map is not shown as having opted out of what it still gets.
+    const storedMetadataInputs = watch("systemConfig.metadataInputs");
+    const metadataInputs = React.useMemo(
+        () =>
+            Object.fromEntries(
+                METADATA_INPUT_FIELDS.map(({ key }) => [
+                    key,
+                    metadataEnabled(storedMetadataInputs, key),
+                ])
+            ) as Record<MetadataKey, boolean>,
+        [storedMetadataInputs]
+    );
 
     React.useEffect(() => {
         if (executionType === "DeadlineCloud") {
@@ -856,34 +896,28 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             Metadata provided to the pipeline
                             <InfoTooltip text="Which metadata is gathered from the input assets/files and passed to the pipeline in the shared metadata envelope." />
                         </div>
+                        {/* Controlled rather than registered: every key defaults ON when a stored map
+                            omits it (matching the record builders), so a plain registration would
+                            render a pipeline whose map omits a key as opted out of it and save it that
+                            way. */}
                         <div className="space-y-2">
-                            <label className="flex items-center gap-2">
-                                <input
-                                    {...register("systemConfig.metadataInputs.assetMetadata")}
-                                    type="checkbox"
-                                    disabled={isDeadlineCloudDisabled}
-                                />
-                                <span className="text-sm">Asset metadata</span>
-                                <InfoTooltip text="Include each input asset's asset-level metadata." />
-                            </label>
-                            <label className="flex items-center gap-2">
-                                <input
-                                    {...register("systemConfig.metadataInputs.fileMetadata")}
-                                    type="checkbox"
-                                    disabled={isDeadlineCloudDisabled}
-                                />
-                                <span className="text-sm">File metadata</span>
-                                <InfoTooltip text="Include per-file metadata for each input file." />
-                            </label>
-                            <label className="flex items-center gap-2">
-                                <input
-                                    {...register("systemConfig.metadataInputs.fileAttributes")}
-                                    type="checkbox"
-                                    disabled={isDeadlineCloudDisabled}
-                                />
-                                <span className="text-sm">File attributes</span>
-                                <InfoTooltip text="Include per-file attributes (the string-typed file attribute fields)." />
-                            </label>
+                            {METADATA_INPUT_FIELDS.map(({ key, label, info }) => (
+                                <label key={key} className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={metadataInputs[key]}
+                                        disabled={isDeadlineCloudDisabled}
+                                        onChange={(e) =>
+                                            setValue(
+                                                `systemConfig.metadataInputs.${key}` as const,
+                                                e.target.checked
+                                            )
+                                        }
+                                    />
+                                    <span className="text-sm">{label}</span>
+                                    <InfoTooltip text={info} />
+                                </label>
+                            ))}
                         </div>
                     </div>
 

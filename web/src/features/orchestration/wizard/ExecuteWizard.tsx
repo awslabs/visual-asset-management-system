@@ -24,6 +24,7 @@ import type {
     PipelineSystemConfig,
     ExecuteInputFile,
     ExecuteRequest,
+    MetadataSourceAsset,
     PipelineExecutionParameters,
 } from "../types";
 
@@ -376,6 +377,13 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
               ]
             : []
     );
+    // Metadata sources: entities the run reads stored metadata from. Kept in their OWN state (never
+    // folded into inputFiles) because they are not input files — they carry no file key, take no part
+    // in arity or the input-file filters, and travel in their own request fields.
+    const [metadataSourceAssets, setMetadataSourceAssets] = useState<MetadataSourceAsset[]>([]);
+    const [metadataSourceDatabaseId, setMetadataSourceDatabaseId] = useState<string | undefined>(
+        undefined
+    );
     const [outputAssetId, setOutputAssetId] = useState<string | undefined>(undefined);
     const [outputDatabaseId, setOutputDatabaseId] = useState<string | undefined>(undefined);
     // undefined = untouched (still eligible for the workflow's default); a string is the user's own
@@ -604,6 +612,15 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
         if (outputPathPrefix !== undefined) {
             body.outputFileBaseExecutionPathExtension = outputPathPrefix;
         }
+        // Metadata sources travel in their own fields. Sent only when complete: a half-filled picker
+        // row (a database chosen, no asset yet) is not a selection, and the request model rejects it.
+        const completeSourceAssets = metadataSourceAssets.filter((s) => s.databaseId && s.assetId);
+        if (completeSourceAssets.length > 0) {
+            body.metadataSourceAssets = completeSourceAssets;
+        }
+        if (metadataSourceDatabaseId) {
+            body.metadataSourceDatabaseId = metadataSourceDatabaseId;
+        }
 
         try {
             const result = await executeWorkflow.mutateAsync({
@@ -680,10 +697,14 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                         databaseId={databaseId}
                         presetAsset={presetAsset}
                         inputFiles={inputFiles}
+                        metadataSourceAssets={metadataSourceAssets}
+                        metadataSourceDatabaseId={metadataSourceDatabaseId}
                         outputAssetId={outputAssetId}
                         outputDatabaseId={outputDatabaseId}
                         outputPathPrefix={outputPathPrefix}
                         onInputFilesChange={setInputFiles}
+                        onMetadataSourceAssetsChange={setMetadataSourceAssets}
+                        onMetadataSourceDatabaseIdChange={setMetadataSourceDatabaseId}
                         onOutputAssetIdChange={setOutputAssetId}
                         onOutputDatabaseIdChange={setOutputDatabaseId}
                         onOutputPathPrefixChange={setOutputPathPrefix}
@@ -723,6 +744,8 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                         pipelines={pipelines}
                         pipelineData={pipelineData}
                         inputFiles={inputFiles}
+                        metadataSourceAssets={metadataSourceAssets}
+                        metadataSourceDatabaseId={metadataSourceDatabaseId}
                         outputAssetId={outputAssetId}
                         outputDatabaseId={outputDatabaseId}
                         validationErrors={validationErrors}

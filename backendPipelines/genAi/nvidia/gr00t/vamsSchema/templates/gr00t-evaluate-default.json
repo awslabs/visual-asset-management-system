@@ -3,7 +3,7 @@
     "templateName": "Evaluate a fine-tuned checkpoint (SO-100 dual-cam)",
     "description": "Score a fine-tuned Gr00t checkpoint by replaying recorded episodes and reporting the mean squared error between predicted and recorded actions. Runs offline -- no simulator or robot is involved.",
     "configFormat": "json",
-    "configBody": "{\"mode\":\"evaluate\",\"datasetPath\":\"dataset\",\"dataConfig\":\"so100_dualcam\",\"baseModelPath\":\"nvidia/GR00T-N1.5-3B\",\"embodimentTag\":\"new_embodiment\",\"videoBackend\":\"torchvision_av\",\"checkpointFolder\":\"{{CHECKPOINT_FOLDER}}\",\"evalTrajectories\":\"{{EVAL_TRAJECTORIES}}\",\"evalSteps\":\"{{EVAL_STEPS}}\",\"evaluationKind\":\"sanity-check-on-training-data\"}",
+    "configBody": "{\"mode\":\"evaluate\",\"datasetPath\":\"dataset\",\"dataConfig\":\"so100_dualcam\",\"baseModelPath\":\"nvidia/GR00T-N1.5-3B\",\"embodimentTag\":\"new_embodiment\",\"videoBackend\":\"torchvision_av\",\"checkpointFolder\":\"{{CHECKPOINT_FOLDER}}\",\"evalTrajectories\":{{EVAL_TRAJECTORIES}},\"evalSteps\":{{EVAL_STEPS}},\"evaluationKind\":\"sanity-check-on-training-data\"}",
     "allowCustomEdit": true,
     "inputInstructions": "Scores an existing checkpoint on the asset. Leave Checkpoint folder blank to evaluate the most recent gr00tOutput_* folder, which is what an evaluation run straight after a fine-tuning run wants. The dataset evaluated is the one at 'dataset' within the asset -- when that is the dataset the checkpoint trained on, the reported MSE measures fit rather than generalization, and the metrics file records that caveat.",
     "tagSchema": [

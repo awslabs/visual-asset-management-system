@@ -3,12 +3,20 @@
 
 import re
 import json
+from datetime import datetime
 
 from common.s3PathPatterns import PIPELINES_PREFIX, PIPELINE_OUTPUT_PREFIX
 
 #Define patterns as global constants
 id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
 uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
+# System-generated execution identifiers: the undashed 32-hex form produced by
+# common.workflows.executionRecords.new_guid() (uuid.uuid4().hex) — workflow-execution,
+# pipeline-execution, and execution-group ids. Distinct from uuid_pattern, which is the DASHED
+# form used by externally-issued ids such as an API key id; a .hex value has no dashes and so does
+# not match it. Lowercase only, because .hex emits lowercase and these values are compared as exact
+# DynamoDB key values, where an uppercase variant would simply match nothing.
+guid_pattern = r'^[0-9a-f]{32}$'
 
 sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
@@ -18,6 +26,9 @@ filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
 
 relative_file_path_pattern = r'^\/.*$'
 bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
+# S3 bucket name: 3-63 chars, lowercase letters/digits/hyphens/dots, must start
+# and end with a letter or digit.
+s3_bucket_name_pattern = r'^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$'
 asset_path_pattern = r'^.+\/.+$'
 asset_folder_path_pattern = r'^.+\/.+\/$'
 asset_auxiliarypreview_path_pattern = r'^.+\/preview\/.+$'
@@ -25,6 +36,14 @@ asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/output\/.+\/$'
 
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
+
+# UTC timestamp in the canonical form VAMS stores execution dates in ('%Y-%m-%dT%H:%M:%SZ').
+# Execution listings compare a caller-supplied bound against these values as a DynamoDB sort key,
+# which is a lexicographic string compare — so a value in any other shape silently widens or empties
+# the window rather than failing. Fractional seconds and a '+00:00' offset in place of 'Z' are
+# accepted for tolerance, but they do NOT sort as equal to the stored form ('.' and '+' both order
+# before 'Z'), so a caller supplying one must normalize before using it as a key bound.
+iso8601_utc_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)$'
 
 # AWS resource patterns - partition-aware (aws, aws-us-gov, aws-cn, aws-iso, aws-iso-b)
 aws_partition_group = r'aws(?:-us-gov|-cn|-iso(?:-[a-z])?)?'
@@ -55,6 +74,7 @@ log_stream_name_pattern = r'^[^:*]{1,512}$'
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
 uuid_regex = re.compile(uuid_pattern)
+guid_regex = re.compile(guid_pattern)
 
 
 sagemaker_notebook_name_regex = re.compile(sagemaker_notebook_name_pattern)
@@ -71,6 +91,7 @@ asset_auxiliarypreview_path_regex = re.compile(asset_auxiliarypreview_path_patte
 asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
 userid_regex = re.compile(userid_pattern)
+s3_bucket_name_regex = re.compile(s3_bucket_name_pattern)
 
 sqs_queue_url_regex = re.compile(sqs_queue_url_pattern)
 eventbridge_bus_arn_regex = re.compile(eventbridge_bus_arn_pattern)
@@ -97,6 +118,11 @@ def validate_asset_id(name, value):
 def validate_uuid(name, value):
     if not uuid_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+uuid_pattern)
+    return (True, '')
+
+def validate_guid(name, value):
+    if not guid_regex.fullmatch(value):
+        return (False, name + " is invalid. Must follow the regexp "+guid_pattern)
     return (True, '')
 
 def validate_relative_file_path(name, value):
@@ -294,12 +320,15 @@ def validate_string_fileType(name, value):
     return (True, '')
 
 def validate_email(name, value):
-    if not bool(re.match(email_regex, value)):
+    # fullmatch, not match: '$' also matches just before a trailing newline, so
+    # re.match would accept "user@example.com\n" and let a newline reach a stored
+    # value or a log line.
+    if not email_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+email_pattern)
     return (True, '')
 
 def validate_userid(name, value):
-    if not bool(re.match(userid_regex, value)):
+    if not userid_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+userid_pattern)
     return (True, '')
 
@@ -325,6 +354,29 @@ def validate_bool(name, value):
     if isinstance(value, str) and value.strip().lower() in ('true', 'false'):
         return (True, '')
     return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
+
+
+def validate_iso8601_utc(name, value):
+    # Rejects a shape mismatch and a syntactically well-formed but impossible date alike
+    # (e.g. month 13), since both reach a listing's sort-key comparison as an ordinary string.
+    if not isinstance(value, str) or not re.fullmatch(iso8601_utc_pattern, value):
+        return (False, name + " is invalid. Must be a UTC timestamp of the form"
+                              " YYYY-MM-DDTHH:MM:SSZ.")
+    try:
+        datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return (False, name + " is invalid. Must be a UTC timestamp of the form"
+                              " YYYY-MM-DDTHH:MM:SSZ.")
+    return (True, '')
+
+
+def normalize_iso8601_utc(value):
+    """Reduce a validated UTC timestamp to the canonical stored form ('YYYY-MM-DDTHH:MM:SSZ').
+
+    A listing bound is compared against stored dates as a DynamoDB sort key, which is a plain
+    lexicographic compare: '.500Z' and '+00:00' both order BEFORE 'Z', so an un-normalized bound
+    shifts the window by up to a second. Assumes the value already passed validate_iso8601_utc."""
+    return value[:19] + "Z"
 
 
 def validate_sqs_queue_url(name, value):
@@ -365,6 +417,13 @@ def validate_cloudwatch_log_group_name(name, value):
 def validate_log_stream_name(name, value):
     if not log_stream_name_regex.fullmatch(value):
         return (False, name + " is invalid. Must be 1-512 characters and may not contain ':' or '*'.")
+    return (True, '')
+
+def validate_s3_bucket_name(name, value):
+    if not s3_bucket_name_regex.fullmatch(value):
+        return (False, name + " is invalid. Must be a valid S3 bucket name (3-63 lowercase letters, digits, hyphens or dots, starting and ending with a letter or digit).")
+    if '..' in value:
+        return (False, name + " is invalid. Cannot contain consecutive dots.")
     return (True, '')
 
 
@@ -435,6 +494,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'UUID':
             (valid, message) = validate_uuid(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'GUID':
+            (valid, message) = validate_guid(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'SAGEMAKER_NOTEBOOK_ID':
@@ -539,6 +602,10 @@ def validate(values):
             (valid, message) = validate_bool(k, v['value'])
             if not valid:
                 return (valid, message)
+        if v['validator'] == 'ISO8601_UTC':
+            (valid, message) = validate_iso8601_utc(k, v['value'])
+            if not valid:
+                return (valid, message)
         if v['validator'] == 'SQS_QUEUE_URL':
             (valid, message) = validate_sqs_queue_url(k, v['value'])
             if not valid:
@@ -569,6 +636,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'LOG_STREAM_NAME':
             (valid, message) = validate_log_stream_name(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'S3_BUCKET_NAME':
+            (valid, message) = validate_s3_bucket_name(k, v['value'])
             if not valid:
                 return (valid, message)
 

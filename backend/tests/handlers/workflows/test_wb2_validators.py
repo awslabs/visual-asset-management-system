@@ -553,10 +553,11 @@ class TestAggregateInputFileFilters:
 class TestAggregateMetadataInputs:
     def test_requires_both_the_workflow_gate_and_a_pipeline_asking(self):
         # The gate loads the payload; a pipeline that does not ask is not handed it. So a type is
-        # actually delivered only when both are true.
+        # actually delivered only when both are true. A pipeline declines a type EXPLICITLY — an
+        # omitted key defaults on — so fileMetadata is false on the pipeline rather than absent.
         agg = ev.aggregate_metadata_inputs(
             {"metadataInputs": {"assetMetadata": True, "fileMetadata": True}},
-            [{"metadataInputs": {"assetMetadata": True}}])
+            [{"metadataInputs": {"assetMetadata": True, "fileMetadata": False}}])
         assert agg["assetMetadata"] is True
         assert agg["fileMetadata"] is False   # gate on, but nothing asks for it
         assert agg["gatedOffByWorkflow"] == []
@@ -579,6 +580,50 @@ class TestAggregateMetadataInputs:
         agg = ev.aggregate_metadata_inputs({}, [{}])
         assert agg["includesTemplateOverrides"] is False
 
+    def test_a_map_omitting_databaseMetadata_reports_it_on(self):
+        # A systemConfig stored without the key carries the builder default (True), which is what the
+        # execute path collects on — reporting it off would contradict the run.
+        stored = {"assetMetadata": True, "fileMetadata": True, "fileAttributes": True}
+        agg = ev.aggregate_metadata_inputs(
+            {"metadataInputs": stored}, [{"metadataInputs": {"databaseMetadata": True}}])
+        assert agg["databaseMetadata"] is True
+        assert agg["gatedOffByWorkflow"] == []
+        # A pipeline map omitting the key likewise asks for it.
+        assert ev.aggregate_metadata_inputs(
+            {"metadataInputs": stored}, [{"metadataInputs": {}}])["databaseMetadata"] is True
+
+    def test_every_key_a_map_omits_reports_on(self):
+        # The same rule for all four, not databaseMetadata alone: the record builders default every
+        # key to True, and the API stores systemConfig wholesale, so a client that sends only the
+        # keys it cares about persists a partial map whose omissions still collect. Reporting an
+        # omitted key off would tell the caller a run gathers less than it does.
+        agg = ev.aggregate_metadata_inputs({"metadataInputs": {}}, [{"metadataInputs": {}}])
+        for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
+            assert agg[key] is True, key
+        assert agg["gatedOffByWorkflow"] == []
+        # An entirely absent metadataInputs block reads the same way.
+        assert ev.aggregate_metadata_inputs({}, [{}])["fileAttributes"] is True
+
+    def test_an_explicit_false_databaseMetadata_still_gates_off(self):
+        agg = ev.aggregate_metadata_inputs(
+            {"metadataInputs": {"databaseMetadata": False}},
+            [{"metadataInputs": {"databaseMetadata": True}}])
+        assert agg["databaseMetadata"] is False
+        assert agg["gatedOffByWorkflow"] == ["databaseMetadata"]
+
+    def test_gating_a_type_off_takes_an_explicit_false(self):
+        # An omitted key is not a gate: only `False` suppresses a type the pipeline asks for. This is
+        # the direction that matters for a partial map — an omission that read as a gate would report
+        # every type suppressed while the execute path went on collecting them.
+        assert ev.aggregate_metadata_inputs(
+            {"metadataInputs": {}},
+            [{"metadataInputs": {"assetMetadata": True}}])["gatedOffByWorkflow"] == []
+        agg = ev.aggregate_metadata_inputs(
+            {"metadataInputs": {"assetMetadata": False}},
+            [{"metadataInputs": {"assetMetadata": True}}])
+        assert agg["assetMetadata"] is False
+        assert agg["gatedOffByWorkflow"] == ["assetMetadata"]
+
 
 # ============================ executionValidation: workflow-save checks ============================
 
@@ -592,6 +637,25 @@ class TestValidateWorkflowSave:
         errs, warns = ev.validate_workflow_save(wf, pipes)
         assert errs == []
         assert any("fileMetadata" in w for w in warns)
+
+    def test_a_workflow_map_omitting_databaseMetadata_does_not_warn(self):
+        # The key is absent, not off, so the run does collect it — warning would misdescribe the save.
+        wf = {"metadataInputs": {"assetMetadata": True, "fileMetadata": True, "fileAttributes": True},
+              "inputFileArity": "one", "inputFileFilters": {}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"metadataInputs": {"databaseMetadata": True}}}]
+        errs, warns = ev.validate_workflow_save(wf, pipes)
+        assert errs == []
+        assert not [w for w in warns if "databaseMetadata" in w]
+
+    def test_an_explicitly_off_databaseMetadata_still_warns(self):
+        wf = {"metadataInputs": {"databaseMetadata": False},
+              "inputFileArity": "one", "inputFileFilters": {}}
+        pipes = [{"pipelineId": "p", "enabled": True, "archived": False,
+                  "systemConfig": {"metadataInputs": {"databaseMetadata": True}}}]
+        errs, warns = ev.validate_workflow_save(wf, pipes)
+        assert errs == []
+        assert any("databaseMetadata" in w for w in warns)
 
     def test_arity_mismatch_warns(self):
         wf = {"inputFileArity": "multi", "metadataInputs": {}, "inputFileFilters": {}}

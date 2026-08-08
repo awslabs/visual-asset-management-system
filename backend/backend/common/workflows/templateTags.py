@@ -97,6 +97,7 @@ ASSET_METADATA_OBJECT = "assetMetadataObject"
 FILE_METADATA_OBJECT = "fileMetadataObject"
 FILE_ATTRIBUTES_OBJECT = "fileAttributesObject"
 ASSET_DATA_OBJECT = "assetDataObject"
+DATABASE_METADATA_OBJECT = "databaseMetadataObject"
 
 # --- K. Deadline Cloud (scalar) ---
 # Reserved for the future pipeline system-configuration that sets a pipeline's Deadline Cloud farm
@@ -154,7 +155,7 @@ SYSTEM_TAG_NAMES = frozenset(
         ORCHESTRATION_BUS_ARN, ORCHESTRATION_EVENT_PREFIX,
         # J. Metadata content
         INPUT_METADATA_OBJECT, ASSET_METADATA_OBJECT, FILE_METADATA_OBJECT,
-        FILE_ATTRIBUTES_OBJECT, ASSET_DATA_OBJECT,
+        FILE_ATTRIBUTES_OBJECT, ASSET_DATA_OBJECT, DATABASE_METADATA_OBJECT,
         # K. Deadline Cloud
         DEADLINE_FARM_ID, DEADLINE_QUEUE_ID, DEADLINE_STORAGE_PROFILE_ID,
     }

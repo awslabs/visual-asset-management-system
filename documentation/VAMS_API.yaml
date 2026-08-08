@@ -4104,6 +4104,25 @@ paths:
                 is honored regardless, or the workflow may be configured as results-only. Per-pipeline
                 template parameters (templateId + templateTags, or a customTemplateOverride) resolve the
                 config for each pipeline.
+
+
+                The execution also captures the stored metadata its pipelines declared through
+                metadataInputs. Metadata sources are optional at every arity and are never enforced, but
+                the workflow assetScope's SPAN keys (singleAssetOnly, crossAssetAllowed) bound the named
+                metadata-source assets as well as the input files: a workflow declaring singleAssetOnly
+                (or crossAssetAllowed false) rejects an execution naming more than one asset in
+                metadataSourceAssets with a 400. The span is evaluated by the same rule the input files
+                pass through, so a scope setting both keys resolves to the stricter one and admits a
+                single source asset. Executing requires GET on the workflow, GET on every referenced
+                pipeline, GET on every input-file asset, GET on every asset named as a metadata source,
+                and GET on every database whose metadata is captured; a named database the caller cannot
+                read fails the request, while a database derived from the input files that the caller
+                cannot read is skipped and contributes no metadata. A successful response's warnings
+                array reports the non-fatal observations - a pipeline declaring a metadata type the run
+                named no source for, an entity bounded by the per-entity metadata limits, an entity
+                emptied by the total per-execution metadata bound, a metadata-source database whose
+                metadata could not be read, and a metadataSourceDatabaseId the run did not use because
+                it also supplied input files.
             requestBody:
                 required: true
                 content:
@@ -4113,7 +4132,8 @@ paths:
                             properties:
                                 inputFiles:
                                     type: array
-                                    description: "Selected input files (0..N; arity enforced against the workflow/pipeline config)."
+                                    maxItems: 1000
+                                    description: "Selected input files (0..1000; arity enforced against the workflow/pipeline config)."
                                     items:
                                         type: object
                                         properties:
@@ -4131,6 +4151,42 @@ paths:
                                             - databaseId
                                             - assetId
                                             - relativeFileKey
+                                metadataSourceDatabaseId:
+                                    $ref: "#/components/schemas/id_regex"
+                                    description: >
+                                        A database whose own metadata is captured as an execution input. Applies ONLY
+                                        to an execution with NO input files: an execution that selects input files
+                                        derives its databases from those files' assets, so a value sent alongside
+                                        input files takes no part in the capture - the request still succeeds and the
+                                        response warnings name the ignored database, rather than the setting being
+                                        silently dropped. GLOBAL is rejected - it is the unscoped/all-databases
+                                        keyword rather than a database whose metadata can be read. Optional at every
+                                        arity and never enforced. Requires GET on the named database. See
+                                        pipelineMetadataInputs for the entities captured and the per-entity limits.
+                                metadataSourceAssets:
+                                    type: array
+                                    maxItems: 1000
+                                    description: >
+                                        Assets whose own metadata is captured as an execution input (0..1000). A
+                                        metadata source is an ENTITY, never a file: it carries no file key, is exempt
+                                        from input-file arity and input-file filters, and takes no part in resolving
+                                        the output target - which is what lets an inputFileArity 'none' execution name
+                                        the assets its pipelines read metadata from. The assetScope SPAN keys do apply:
+                                        a workflow declaring singleAssetOnly (or crossAssetAllowed false) accepts at
+                                        most one source asset here and rejects several with a 400. The whole-asset and
+                                        folder keys do not apply - a source has no file key for them to describe.
+                                        Their databases also contribute to the databases captured. Optional at every
+                                        arity and never enforced. Requires GET on every named asset.
+                                    items:
+                                        type: object
+                                        properties:
+                                            databaseId:
+                                                $ref: "#/components/schemas/id_regex"
+                                            assetId:
+                                                $ref: "#/components/schemas/asset_id_regex"
+                                        required:
+                                            - databaseId
+                                            - assetId
                                 outputAssetId:
                                     $ref: "#/components/schemas/asset_id_regex"
                                     description: >
@@ -4185,7 +4241,10 @@ paths:
                 "200":
                     description: Workflow execution started.
                 "400":
-                    description: Validation, template-resolution, or cross-entity validation error.
+                    description: >
+                        Validation, template-resolution, or cross-entity validation error, including
+                        metadataSourceAssets spanning more assets than the workflow's assetScope span
+                        keys allow.
                     content:
                         application/json:
                             schema:
@@ -4218,9 +4277,16 @@ paths:
     /database/{databaseId}/assets/{assetId}/workflows/executions:
         get:
             summary: "List all workflow executions for an asset."
+            description: "Lists the executions associated with an asset — the union of runs that read it and runs that wrote to it. Lists recent executions by default (started within the last 90 days); filterStartDate queries an explicit lower bound. Supports optional equality filters (workflowId, workflowDatabaseId, status, triggerType, groupId), each AND-ed and matched per field, and NextToken pagination. The applied window is echoed back as filterStartDate."
             responses:
                 "200":
                     description: OK.
+                "400":
+                    description: A filter or pagination parameter is invalid.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Asset not found.
                     content:
@@ -4249,6 +4315,39 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/asset_id_regex'
+              - in: query
+                name: filterStartDate
+                required: false
+                description: "UTC lower bound on execution start date, of the form YYYY-MM-DDTHH:MM:SSZ; only executions started on or after this date are listed. Fractional seconds and a +00:00 offset are accepted and normalized. Any other form is rejected with 400. Defaults to 90 days ago."
+                schema:
+                    type: string
+              - in: query
+                name: workflowId
+                required: false
+                description: "List only executions of this workflow. Pair with workflowDatabaseId to name a single workflow: a workflow ID is unique only within its database. An ID that does not match the ID pattern is rejected with 400 rather than returning an empty list."
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - in: query
+                name: workflowDatabaseId
+                required: false
+                description: "List only executions of workflows in this database. Accepts GLOBAL for the shared workflow catalog."
+                schema:
+                    type: string
+              - in: query
+                name: status
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: triggerType
+                required: false
+                schema:
+                    type: string
+              - in: query
+                name: groupId
+                required: false
+                schema:
+                    type: string
     /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}:
         get:
             summary: "List executions for a specific workflow on an asset."
@@ -4763,15 +4862,17 @@ paths:
                     $ref: '#/components/schemas/id_regex'
               - name: triggerType
                 in: path
-                description: "Trigger type. Supported value: fileUpload."
+                description: "The trigger's key. Use the bare type (supported value: fileUpload) to address a workflow's first trigger of that type, or '<type>#<triggerId>' to address an additional one. On PUT, a key with a new id creates another trigger of that type."
                 required: true
                 schema:
                     type: string
-                    enum:
-                        - fileUpload
+                    pattern: '^[-_a-zA-Z0-9]+(#[-_a-zA-Z0-9]{3,63})?$'
+                    example: "fileUpload#nightly"
         put:
             summary: "Set or replace a workflow trigger."
-            description: "Configures a trigger that auto-launches the workflow on a matching event (e.g. a fileUpload trigger firing on a matching file upload). A trigger-launched execution runs as the reserved system user (SYSTEM_USER), not as the user whose action fired the trigger: the acting user may lack permission to run the workflow, so the execution is intentionally decoupled from their permissions to ensure the trigger functions reliably on the data. Executions started directly through the execute endpoint run as the calling user."
+            description: "Configures a trigger that auto-launches the workflow on a matching event (e.g. a fileUpload trigger firing on a matching file upload). A trigger-launched execution runs as the reserved system user (SYSTEM_USER), not as the user whose action fired the trigger: the acting user may lack permission to run the workflow, so the execution is intentionally decoupled from their permissions to ensure the trigger functions reliably on the data. Executions started directly through the execute endpoint run as the calling user.
+
+Several triggers of one type are supported: address each with its own key ('<type>#<triggerId>'), give it its own inputFileFilters, and point it at its own defaultTemplateIds. An upload launches the workflow once per matching trigger. Two conditions are rejected: a workflow whose concurrencyRestriction is perAsset supports only one trigger of a type (several would contend on the same asset), and two triggers of one type may not name the same defaultTemplateIds — including two that both name none, which is a valid choice and therefore a comparable value."
             requestBody:
                 required: true
                 content:
@@ -4789,7 +4890,7 @@ paths:
                                     message:
                                         $ref: '#/components/schemas/workflowTrigger'
                 "400":
-                    description: "Invalid parameters, or a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list). A triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional."
+                    description: "Invalid parameters; a template named in defaultTemplateIds has a required tag with no default value (message contains a triggerTemplateErrors list) — a triggered (headless) execution cannot supply template tags, so give each such tag a default value or make it optional; an additional trigger of a type on a workflow whose concurrencyRestriction is perAsset; or an additional trigger of a type naming the same defaultTemplateIds as an existing one."
                     content:
                         application/json:
                             schema:
@@ -4827,12 +4928,12 @@ paths:
                     $ref: '#/components/schemas/id_regex'
               - name: triggerType
                 in: path
-                description: "Trigger type. Supported value: fileUpload."
+                description: "The trigger's key. Use the bare type (supported value: fileUpload) to address a workflow's first trigger of that type, or '<type>#<triggerId>' to address an additional one. On PUT, a key with a new id creates another trigger of that type."
                 required: true
                 schema:
                     type: string
-                    enum:
-                        - fileUpload
+                    pattern: '^[-_a-zA-Z0-9]+(#[-_a-zA-Z0-9]{3,63})?$'
+                    example: "fileUpload#nightly"
         delete:
             summary: "Delete a workflow trigger."
             responses:
@@ -4877,12 +4978,12 @@ paths:
                     $ref: '#/components/schemas/id_regex'
               - name: triggerType
                 in: path
-                description: "Trigger type. Supported value: fileUpload."
+                description: "The trigger's key. Use the bare type (supported value: fileUpload) to address a workflow's first trigger of that type, or '<type>#<triggerId>' to address an additional one. On PUT, a key with a new id creates another trigger of that type."
                 required: true
                 schema:
                     type: string
-                    enum:
-                        - fileUpload
+                    pattern: '^[-_a-zA-Z0-9]+(#[-_a-zA-Z0-9]{3,63})?$'
+                    example: "fileUpload#nightly"
     /ingest-asset:
         post:
             summary: "Ingest a new asset into the database."
@@ -7365,7 +7466,7 @@ paths:
     /workflows/executions:
         get:
             summary: "List workflow executions across all assets (global)."
-            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on any of its input assets or its output asset. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files."
+            description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), or on the asset it wrote to for a run with no inputs; a permanently deleted asset defers to GET on the database it lived in. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files."
             parameters:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
@@ -7373,13 +7474,13 @@ paths:
               - in: query
                 name: filterStartDate
                 required: false
-                description: "ISO-8601 lower bound on execution start date; only executions started on or after this date are listed. Defaults to 90 days ago."
+                description: "UTC lower bound on execution start date, of the form YYYY-MM-DDTHH:MM:SSZ; only executions started on or after this date are listed. Fractional seconds and a +00:00 offset are accepted and normalized. Any other form is rejected with 400. Defaults to 90 days ago."
                 schema:
                     type: string
               - in: query
                 name: filterEndDate
                 required: false
-                description: "ISO-8601 upper bound on execution start date; only executions started on or before this date are listed."
+                description: "UTC upper bound on execution start date, of the form YYYY-MM-DDTHH:MM:SSZ; only executions started on or before this date are listed. Fractional seconds and a +00:00 offset are accepted and normalized. Any other form is rejected with 400."
                 schema:
                     type: string
               - in: query
@@ -7474,7 +7575,7 @@ paths:
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and the exact rendered configuration each pipeline received as renderedConfig), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata, input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and the input collections (inputFiles, inputMetadata, inputDatabaseMetadata) are then trimmed to at most 1000 returned rows. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results' -- and is empty when the view is complete; there is no continuation token, so a named collection's remaining rows are not retrievable through this route. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -7512,7 +7613,7 @@ paths:
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges three sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow and GET on every input-file asset tied to the execution."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges three sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -9239,14 +9340,63 @@ components:
                     description: "Registration-schema shorthand for wholeAssetAllowed."
         pipelineMetadataInputs:
             type: object
-            description: "Controls which metadata sources are supplied to the pipeline as input."
+            description: >-
+                Controls which metadata is supplied to the pipeline as input. Four independent
+                booleans, each gathered from the execution's own entities and written into the
+                metadata file the pipeline reads. A workflow carries the same block as the outer
+                gate: a type reaches a pipeline only when the workflow gate and the pipeline both
+                have it on.
+
+
+                The entities an execution gathers from follow from its selection: every input file's
+                asset, every asset named purely as a metadata source, and every distinct database of
+                those assets - or, for an execution with no input files, the single database named in
+                metadataSourceDatabaseId. Naming metadata sources is always optional and is never
+                enforced; a pipeline that requires the metadata performs its own check and fails its
+                own step.
+
+
+                Metadata is bounded PER ENTITY: each database, each asset, each file's metadata, and
+                each file's attributes carries at most 1000 entries and 300 KB, measured on its own.
+                An execution over 3 databases, 5 assets, and 10 files therefore captures up to 1000
+                entries for each of the 3 databases, each of the 5 assets, and each of the 10 files.
+                Entries are retained in key order so a bounded entity yields the same subset on every
+                run, and the execute response returns a warning naming any bounded entity - a capture
+                is never silently short. An execution reads at most 1000 input files and 1000
+                metadata-source assets.
+
+
+                One execution's metadata is additionally bounded IN TOTAL at 128 MB across every
+                entity together, plus the involved assets' own assetData - the per-entity bounds limit
+                each row but not how many rows a run has. The bound clears a heavy real workload: a
+                production asset carries thousands of files with hundreds of metadata entries each,
+                and 128 MB covers a run selecting the full 1000-file input allowance at several
+                hundred entries per file, so it engages only on a pathological run. When it does, whole
+                entity rows are emptied narrowest-first - each file's attributes, then each file's
+                metadata, then the assets' '/' rows, then the databases' - and never partially kept: a
+                half-populated metadata map reads as complete to a pipeline, whereas an emptied row
+                writes no metadata row and reads as an entity that holds no metadata, so pipelines need
+                no special handling. The walk continues past a row that does not fit, and the execute
+                response returns one warning naming up to 5 emptied entities with a count of the rest.
             properties:
                 assetMetadata:
                     type: boolean
+                    description: "Each involved asset's own metadata."
                 fileMetadata:
                     type: boolean
+                    description: "Each input file's metadata. Inert for inputFileArity 'none', which has no input file to describe."
                 fileAttributes:
                     type: boolean
+                    description: "Each input file's attributes. Inert for inputFileArity 'none', which has no input file to describe."
+                databaseMetadata:
+                    type: boolean
+                    default: true
+                    description: >-
+                        Each involved database's own metadata. Gathered at every arity, since a
+                        database is an entity rather than a file. READ ONLY - database metadata is
+                        supplied to a pipeline as input and is never a metadata output target;
+                        pipeline metadata write-back targets assets and files only. Defaults to true
+                        for a configuration that omits the key.
         pipelineInputFileFilters:
             type: object
             description: >-
@@ -9356,7 +9506,7 @@ components:
                     nullable: true
                 templates:
                     type: array
-                    description: "Lightweight descriptors of the templates that belong to this pipeline. Present on the details response."
+                    description: "Lightweight descriptors of the templates that belong to this pipeline. Present on the details response, capped at the first 10 — templateCount reports the true total, and the template list endpoint pages the full set."
                     items:
                         $ref: "#/components/schemas/pipelineTemplateDescriptor"
             required:
@@ -9584,7 +9734,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateConfigFormat"
                 configBody:
                     type: string
-                    description: "The template text. May contain {{tagName}} placeholders."
+                    description: "The template text. May contain {{tagName}} placeholders. When configFormat is 'json', the body must be valid JSON around those placeholders: a placeholder for a text value sits inside the JSON string it fills, while one for a JSON object, array, or number (the input-file collection and metadata-content tags) is the whole value and takes no quotes."
                 webFormJson:
                     type: string
                     description: "Opaque web form markup."
@@ -9615,6 +9765,7 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateConfigFormat"
                 configBody:
                     type: string
+                    description: "The template text. May contain {{tagName}} placeholders. When the effective configFormat is 'json', the body must be valid JSON around those placeholders (see createPipelineTemplateRequest.configBody)."
                 webFormJson:
                     type: string
                 allowCustomEdit:
@@ -9666,8 +9817,11 @@ components:
                     description: >
                         Gates redirecting the output when an execution resolves to a single input asset:
                         when true the execute request may redirect via outputAssetId/outputDatabaseId,
-                        when false the output is locked to that asset. When inputs resolve to zero or
-                        multiple assets an explicit output target is honored regardless of this flag.
+                        when false the output is locked to that asset and an execute request naming a
+                        different target is rejected rather than relocked (naming the input asset itself
+                        is accepted as a no-op, so a re-run can replay its recorded target). When inputs
+                        resolve to zero or multiple assets an explicit output target is honored
+                        regardless of this flag.
         workflowSystemConfig:
             type: object
             description: "Input handling, asset-scope gating, and output defaults for a workflow."
@@ -9806,6 +9960,8 @@ components:
                             type: boolean
                         fileAttributes:
                             type: boolean
+                        databaseMetadata:
+                            type: boolean
                         gatedOffByWorkflow:
                             type: array
                             items:
@@ -9888,7 +10044,7 @@ components:
                     type: boolean
         workflowTrigger:
             type: object
-            description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded."
+            description: "A workflow trigger. The fileUpload trigger auto-launches the workflow when matching files are uploaded. A workflow may carry several triggers of one type, each with its own input-file filters and default templates; an upload launches the workflow once per matching trigger."
             properties:
                 workflowDatabaseId:
                     $ref: "#/components/schemas/id_regex"
@@ -9896,8 +10052,16 @@ components:
                     $ref: "#/components/schemas/id_regex"
                 triggerType:
                     type: string
+                    description: "The trigger's key, and the value to send on the trigger path to address it: the bare type for a workflow's first trigger of that type, or '<type>#<triggerId>' for an additional one."
+                    example: "fileUpload#nightly"
+                triggerBaseType:
+                    type: string
+                    description: "The plain trigger type, for grouping and display, without any id suffix."
                     enum:
                         - fileUpload
+                triggerId:
+                    type: string
+                    description: "Distinguishes several triggers of one type. Empty for a workflow's first trigger of a type."
                 triggerConfig:
                     type: object
                     description: "Trigger configuration. For the fileUpload trigger this carries the input-file filters and the per-pipeline default template ids."

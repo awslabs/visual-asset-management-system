@@ -30,6 +30,27 @@ METADATA_SCHEMA_VERSION_GROUPED = 2
 # Constant PK for the by-date global-list GSI (newest-first query, not a table scan).
 ALL_EXECUTIONS_LIST_PARTITION = "execution"
 
+# The value a systemConfig's metadataInputs map carries for a key it OMITS. A stored map may be
+# partial two ways: a record written before a key existed cannot carry it, and the API stores
+# systemConfig wholesale, so a client that sends only the keys it cares about persists exactly those.
+# Every reader resolves an omitted key through this table rather than through plain truthiness, which
+# would read a partial map as opting OUT of everything it does not mention.
+#
+# All four default ON, matching build_pipeline_system_config / build_workflow_system_config: a
+# configuration that says nothing about a metadata type gets it. Add a new key here in the same change
+# that adds it to the builders, and the readers stay correct for every record written before it.
+METADATA_INPUT_DEFAULTS = {
+    "assetMetadata": True,
+    "fileMetadata": True,
+    "fileAttributes": True,
+    "databaseMetadata": True,
+}
+
+
+def metadata_input_enabled(metadata_inputs, key) -> bool:
+    """One metadataInputs toggle, resolving a key the map omits to its builder default."""
+    return bool((metadata_inputs or {}).get(key, METADATA_INPUT_DEFAULTS.get(key, True)))
+
 
 def new_guid() -> str:
     """Generate a VAMS execution/pipeline-execution GUID (32 hex chars)."""
@@ -149,6 +170,16 @@ def execution_input_prefix(execution_id: str) -> str:
 def execution_input_metadata_key(execution_id: str) -> str:
     """Asset-bucket key of the shared input-metadata file for an execution."""
     return execution_input_prefix(execution_id) + "metadata.json"
+
+
+def pipeline_input_metadata_key(execution_id: str, pipeline_index: int) -> str:
+    """Asset-bucket key of a pipeline's OWN narrowed input-metadata file.
+
+    Written only when a step's effective metadataInputs is narrower than the workflow's, so the
+    common case (every step wanting what the workflow gathered) stays a single shared object. The
+    step's manifest points at whichever file applies, and manifestHelper.resolve_inputs takes the
+    metadata location from the manifest — so the pipeline reads its own file with no reader change."""
+    return f"{execution_input_prefix(execution_id)}pipeline{pipeline_index}/metadata.json"
 
 
 def pipeline_input_config_key(execution_id: str, pipeline_index: int) -> str:
@@ -292,14 +323,106 @@ def build_metadata_asset_group(database_id, asset_id, asset_data=None, files=Non
     }
 
 
-def build_grouped_metadata_envelope(assets):
+def build_metadata_database_group(database_id, metadata=None):
+    """One databases[] entry for the v2 grouped metadata envelope: a metadata-source database's
+    identity + its database-level metadata (read-only input; databases are never a metadata output
+    target)."""
+    return {
+        "databaseId": database_id or "",
+        "metadata": metadata or {},
+    }
+
+
+def build_grouped_metadata_envelope(assets, databases=None):
     """The v2 grouped-by-asset input-metadata file envelope (schemaVersion-stamped). 'assets' is a
     list of build_metadata_asset_group(...) dicts — one per involved asset. Asset-level metadata is
-    the fileKey '/' record within an asset group; file metadata/attributes are per-file records."""
-    return {
+    the fileKey '/' record within an asset group; file metadata/attributes are per-file records.
+
+    'databases' is a list of build_metadata_database_group(...) dicts carried as a top-level sibling
+    of 'assets' (database metadata belongs to no asset) — one per database the run captured metadata
+    from. The key is present only when the list is non-empty, exactly as it would be for an empty
+    'assets', so its absence — rather than an empty list — means the run captured no database
+    metadata."""
+    envelope = {
         "schemaVersion": METADATA_SCHEMA_VERSION_GROUPED,
         "assets": assets or [],
     }
+    if databases:
+        envelope["databases"] = list(databases)
+    return envelope
+
+
+def narrow_metadata_envelope(envelope, metadata_inputs):
+    """A copy of a v2 grouped envelope carrying only the metadata types `metadata_inputs` enables.
+
+    This is the SECOND of two independent applications of the same four metadataInputs keys, and it
+    is deliberate — do not collapse it into the other one:
+
+    - INTAKE (the workflow's gate, applied in executeWorkflow._build_grouped_metadata) decides what
+      the execution gathers into the shared per-execution envelope at all.
+    - DELIVERY (a step's own effective gate, applied HERE) decides what that one step receives.
+
+    A step therefore receives a type only when the workflow gathered it AND the step asks for it.
+    Removing either application silently widens delivery back to the workflow gate, which is the bug
+    this narrowing exists to fix.
+
+    Narrowing is subtractive only: assetMetadata clears each asset's fileKey '/' record metadata,
+    fileMetadata/fileAttributes clear the per-file records, and databaseMetadata drops the top-level
+    'databases' key entirely (its absence is what a run with no database metadata already looks
+    like). Asset identity, assetData, and the file-record skeleton are preserved so a reader still
+    resolves the same subjects. Returns the envelope unchanged when every type is enabled."""
+    body = envelope or {}
+    if not isinstance(body, dict):
+        return body
+    want_asset = metadata_input_enabled(metadata_inputs, "assetMetadata")
+    want_file = metadata_input_enabled(metadata_inputs, "fileMetadata")
+    want_attr = metadata_input_enabled(metadata_inputs, "fileAttributes")
+    want_database = metadata_input_enabled(metadata_inputs, "databaseMetadata")
+    if want_asset and want_file and want_attr and want_database:
+        return body
+
+    narrowed = dict(body)
+    assets = []
+    for group in body.get("assets", []) or []:
+        group_copy = dict(group or {})
+        files = []
+        for record in group_copy.get("files", []) or []:
+            record_copy = dict(record or {})
+            is_asset_level = normalize_file_key(record_copy.get("fileKey")) == "/"
+            if is_asset_level:
+                if not want_asset:
+                    record_copy["metadata"] = None
+            else:
+                if not want_file:
+                    record_copy["metadata"] = None
+                if not want_attr and "attributes" in record_copy:
+                    record_copy.pop("attributes")
+            files.append(record_copy)
+        group_copy["files"] = files
+        assets.append(group_copy)
+    narrowed["assets"] = assets
+    if not want_database:
+        narrowed.pop("databases", None)
+    return narrowed
+
+
+def get_database_metadata(envelope, database_id):
+    """Return the metadata map recorded for one databaseId in a v2 envelope's 'databases' list, or
+    {} when the envelope carries no entry for it. Keeps the per-database lookup a single call for
+    readers projecting one (databaseId, assetId, fileKey) at a time.
+
+    A run that captured exactly ONE database resolves to that database whatever the requested id. A
+    file-less run has no asset to project through, so its subject databaseId is empty and an id match
+    would find nothing — yet the one database it named is unambiguously the database its metadata
+    describes. With several databases the requested id is the only thing that can disambiguate them,
+    so the match is required."""
+    groups = (envelope or {}).get("databases", []) or []
+    if len(groups) == 1:
+        return (groups[0] or {}).get("metadata") or {}
+    for group in groups:
+        if (group or {}).get("databaseId") == database_id:
+            return (group or {}).get("metadata") or {}
+    return {}
 
 
 def get_asset_file_record(envelope, database_id, asset_id, file_key):
@@ -317,13 +440,16 @@ def get_asset_file_record(envelope, database_id, asset_id, file_key):
 
 def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key=""):
     """Project a metadata payload onto the legacy ``{"VAMS": {assetData, assetMetadata, fileMetadata,
-    fileAttributes}}`` view the config-template renderer's metadata-content tags read.
+    fileAttributes, databaseMetadata}}`` view the config-template renderer's metadata-content tags read.
 
     - A v2 grouped body (``{"schemaVersion": 2, "assets": [...]}``) is projected for the given
       (databaseId, assetId, fileKey): assetData + assetMetadata come from the asset's '/' record,
       fileMetadata/fileAttributes from the fileKey record. A fileKey of '/' (whole-asset selection)
       resolves to the asset-level record only, leaving the file scopes empty — mirroring the writer,
-      which emits no per-file record for a whole-asset selection.
+      which emits no per-file record for a whole-asset selection. databaseMetadata is the entry the
+      envelope's top-level 'databases' list holds for THE databaseId being projected, so the five
+      scopes describe one coherent (database, asset, file) subject; it is empty when the list carries
+      no entry for that database.
     - A body already in the ``{"VAMS": {...}}`` shape (or any non-grouped dict) passes through
       unchanged; ``{}`` when it is not a usable dict.
 
@@ -347,6 +473,7 @@ def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key="")
             "assetMetadata": asset_record.get("metadata") or {},
             "fileMetadata": file_record.get("metadata") or {},
             "fileAttributes": file_record.get("attributes") or {},
+            "databaseMetadata": get_database_metadata(body, database_id),
         }}
     return body
 
@@ -542,15 +669,29 @@ def build_workflow_execution_input_record(
 
 
 def metadata_envelope_rows(envelope):
-    """Flatten a grouped metadata envelope into one row per (asset, filePath) that HAS metadata.
+    """Flatten a grouped metadata envelope into one row per (asset, filePath) that carries metadata
+    or file attributes, plus one row per database that carries metadata.
 
-    Yields dicts of {databaseId, assetId, filePath, metadata} ready for build_input_metadata_record.
-    Asset-level metadata lives on the fileKey '/' record, so it flattens to a '/' filePath row — a
-    reader that walks only per-FILE records misses asset metadata entirely.
+    Yields dicts of {databaseId, assetId, filePath, metadata, attributes, scope} ready for
+    build_input_metadata_record. 'scope' is 'asset' for an asset/file row and 'database' for an entry
+    of the envelope's 'databases' list, which belongs to no asset and so flattens to an empty assetId
+    and a '/' filePath — each database becoming its own row, so a run spanning several databases keeps
+    their metadata separately readable. Asset-level metadata lives on the fileKey '/' record, so it
+    flattens to a '/' filePath row — a reader that walks only per-FILE records misses asset metadata
+    entirely.
 
-    Records with no metadata are skipped: the envelope always emits a '/' record per asset (so the
-    file list is uniform) even when the asset carries nothing, and persisting those would fill the
-    details response with empty rows.
+    'attributes' (file attributes) rides on the SAME row as that file's metadata rather than becoming
+    its own row: attributes describe the very file the row already identifies, so they are a second
+    property of one fact, not a second fact. (Contrast 'database', which earns its own scope because a
+    database is a different entity.) Keeping them on one row also leaves the row identity — and so the
+    details view's dedupe key of (pipelineId, scope, databaseId, assetId, filePath) — unchanged.
+
+    A record is skipped only when it has NEITHER metadata NOR attributes: the envelope always emits a
+    '/' record per asset (so the file list is uniform) even when the asset carries nothing, and
+    persisting those would fill the details response with empty rows. Attributes alone are enough to
+    keep a row, because the four metadataInputs gates are independent — 'fileMetadata: false' with
+    'fileAttributes: true' is a valid configuration whose files carry attributes and no metadata, and
+    skipping on empty metadata alone would make those attributes unreadable through the API.
 
     Accepts the legacy flat shape too, so a caller holding either envelope version works.
     """
@@ -558,31 +699,118 @@ def metadata_envelope_rows(envelope):
     if not isinstance(payload, dict):
         return
     if payload.get("schemaVersion") == METADATA_SCHEMA_VERSION_GROUPED and "assets" in payload:
+        for group in payload.get("databases") or []:
+            database_metadata = (group or {}).get("metadata")
+            if not database_metadata:
+                continue
+            yield {
+                "databaseId": (group or {}).get("databaseId", ""),
+                "assetId": "",
+                "filePath": "/",
+                "metadata": database_metadata,
+                "attributes": {},
+                "scope": "database",
+            }
         for group in payload.get("assets") or []:
             database_id = (group or {}).get("databaseId", "")
             asset_id = (group or {}).get("assetId", "")
             for record in (group or {}).get("files") or []:
                 metadata = (record or {}).get("metadata")
-                if not metadata:
+                attributes = (record or {}).get("attributes")
+                if not metadata and not attributes:
                     continue
                 yield {
                     "databaseId": database_id,
                     "assetId": asset_id,
                     "filePath": (record or {}).get("fileKey", "/"),
-                    "metadata": metadata,
+                    "metadata": metadata or {},
+                    "attributes": attributes or {},
+                    "scope": "asset",
                 }
         return
     # Legacy flat shape: {"VAMS": {"assetMetadata": {...}}} carries asset metadata only.
     legacy = (payload.get("VAMS") or {}).get("assetMetadata") or {}
     if legacy:
-        yield {"databaseId": "", "assetId": "", "filePath": "/", "metadata": legacy}
+        yield {"databaseId": "", "assetId": "", "filePath": "/", "metadata": legacy,
+               "attributes": {}, "scope": "asset"}
+
+
+def pipeline_metadata_envelope_rows(envelope, pipeline_inputs, metadata_source_assets=None):
+    """The metadata_envelope_rows of one PIPELINE: the subset of the run's envelope rows describing
+    entities that pipeline reads from.
+
+    The envelope is assembled once from ALL of the run's selected inputs and metadata sources, but a
+    workflow's pipelines do not receive the same inputs — each receives the subset passing its own
+    effective inputFileFilters, and an arity-'none' pipeline receives none. pipeline_inputs is that
+    pipeline's received subset ([{databaseId, assetId, relativeFileKey}, ...]); metadata_source_assets
+    the run's named source assets, which every pipeline reads regardless of arity or filters.
+
+    Which rows belong to a pipeline, by row kind:
+      - A per-FILE row belongs to the pipeline that received THAT file. This is the whole question the
+        rows answer — "which metadata went into which pipeline" — and a pipeline that never saw the
+        file read none of its metadata.
+      - An asset-level ('/') row belongs to a pipeline receiving at least one file from that asset, or
+        to every pipeline when the asset is a named metadata source. A reader looking at one pipeline's
+        rows is asking what that step read; an asset it got no file from is not in its picture at all,
+        so its asset-level metadata is not something the step read. A named source asset is the
+        exception because the run reads it as an entity in its own right, not through a file.
+      - A DATABASE row belongs to every pipeline. Database metadata describes an entity, not a file
+        selection, and the shared per-execution envelope every task is handed carries the whole
+        'databases' list — so every pipeline can read it whatever files it received. Narrowing these to
+        the databases of a pipeline's own files would under-report what the step can read.
+      - An asset row naming no asset (the legacy flat envelope's single row) belongs to every pipeline:
+        it is attributable to no asset, so no per-pipeline input set can include or exclude it.
+    """
+    received_files = set()
+    received_assets = set()
+    for item in pipeline_inputs or []:
+        database_id = (item or {}).get("databaseId", "")
+        asset_id = (item or {}).get("assetId", "")
+        received_assets.add((database_id, asset_id))
+        received_files.add(
+            (database_id, asset_id, normalize_file_key((item or {}).get("relativeFileKey", "/"))))
+    source_assets = {((s or {}).get("databaseId", ""), (s or {}).get("assetId", ""))
+                     for s in metadata_source_assets or []}
+
+    # A pipeline receiving no files still reads asset metadata: with no input file to project through,
+    # the pipeline-side helper takes the envelope's FIRST asset group as its subject (run_vams_view),
+    # so that group's asset-level metadata is what the step actually reads. Recording it keeps the rows
+    # and the step's own read describing the same entity; omitting it under-reports the step.
+    if not received_assets:
+        groups = (envelope or {}).get("assets") or []
+        if groups:
+            subject = groups[0] or {}
+            source_assets = source_assets | {
+                (subject.get("databaseId", "") or "", subject.get("assetId", "") or "")}
+
+    for row in metadata_envelope_rows(envelope):
+        if row["scope"] == "database" or not row["assetId"]:
+            yield row
+            continue
+        entity = (row["databaseId"], row["assetId"])
+        if row["filePath"] == "/":
+            if entity in received_assets or entity in source_assets:
+                yield row
+            continue
+        if (row["databaseId"], row["assetId"], row["filePath"]) in received_files:
+            yield row
 
 
 def build_input_metadata_record(
     pipeline_execution_id, database_id, asset_id, file_path, metadata,
-    source_input_metadata_file_s3_key,
+    source_input_metadata_file_s3_key, scope="asset", attributes=None,
 ):
-    """PipelineExecutionInputMetadataStorageTable row ('/' filePath = asset-level)."""
+    """PipelineExecutionInputMetadataStorageTable row ('/' filePath = asset-level).
+
+    scope discriminates what the metadata describes: 'asset' for an asset/file row, 'database' for the
+    metadata-source database's own metadata (empty assetId, '/' filePath, so its SK is
+    '{databaseId}::/'). Readers group by it to present database metadata separately from asset
+    metadata; a row written without it is an asset row.
+
+    'attributes' holds that file's ATTRIBUTES, kept in their own key rather than merged into
+    'metadata': the two are distinct entities in the four-key metadataInputs model (fileMetadata and
+    fileAttributes are separately gated), so merging them would make the delivered set unattributable
+    to the gate that allowed it. A row for an asset-level or database scope carries an empty map."""
     fp = normalize_file_key(file_path)
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
@@ -590,7 +818,9 @@ def build_input_metadata_record(
         "assetId": asset_id,
         "databaseId": database_id,
         "filePath": fp,
+        "scope": scope or "asset",
         "metadata": metadata or {},
+        "attributes": attributes or {},
         "sourceInputMetadataFileS3Key": source_input_metadata_file_s3_key or "",
     }
 
@@ -730,8 +960,18 @@ def build_workflow_configuration_record(
     input_metadata_asset_id="", input_metadata_database_id="",
     input_metadata_file_s3_key="",
     execution_start_date="",
+    metadata_source_assets=None, metadata_source_databases=None,
 ):
-    """WorkflowExecutionConfigurationStorageTable row (SK='configuration')."""
+    """WorkflowExecutionConfigurationStorageTable row (SK='configuration').
+
+    metadata_source_assets is the run's resolved [{databaseId, assetId}] metadata-source selection and
+    input_metadata_database_id the source database the CALLER named — the selection a re-run replays.
+    metadata_source_databases is every databaseId the run actually captured database metadata from
+    (derived from the input files' assets when the run has input files, the caller's one choice when it
+    has none), so the read paths authorize and report the set that is really in the envelope rather than
+    re-deriving it. These are recorded here (and nowhere else) because they are not input FILES:
+    re-emitting them as inputFiles on a re-run would violate an arity-'none' workflow's own
+    no-input-files rule."""
     ((config_content, config_truncated),
      (metadata_content, metadata_truncated)) = truncate_text_budget(
         [workflow_configuration or "", input_metadata or ""])
@@ -757,6 +997,15 @@ def build_workflow_configuration_record(
         "inputMetadataAssetId": input_metadata_asset_id or "",
         "inputMetadataDatabaseId": input_metadata_database_id or "",
         "inputMetadataFileS3Key": input_metadata_file_s3_key or "",
+        # Metadata-source assets, in selection order. A re-run rebuilds the same sources from these.
+        "metadataSourceAssets": [
+            {"databaseId": s.get("databaseId", ""), "assetId": s.get("assetId", "")}
+            for s in (metadata_source_assets or [])
+        ],
+        # Every database whose metadata the run captured, in capture order. This is the set the read
+        # paths gate on, so a run deriving its databases from the input files does not have to re-derive
+        # them (the input rows carry no database-metadata provenance).
+        "metadataSourceDatabases": [d for d in (metadata_source_databases or []) if d],
     }
     # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
     # with a resolved destination. Omitting the attribute keeps the row out of the index entirely

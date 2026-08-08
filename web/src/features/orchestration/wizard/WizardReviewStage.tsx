@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import type { Workflow, Pipeline, ExecuteInputFile } from "../types";
+import type { Workflow, Pipeline, ExecuteInputFile, MetadataSourceAsset } from "../types";
 import type { PipelineStageData } from "./ExecuteWizard";
 
 interface WizardReviewStageProps {
@@ -14,6 +14,10 @@ interface WizardReviewStageProps {
     pipelines: (Pipeline | undefined)[];
     pipelineData: Record<string, PipelineStageData>;
     inputFiles: ExecuteInputFile[];
+    /** Assets named purely as metadata sources (never input files). */
+    metadataSourceAssets?: MetadataSourceAsset[];
+    /** The ONE database whose own metadata the run reads. */
+    metadataSourceDatabaseId?: string;
     outputAssetId?: string;
     outputDatabaseId?: string;
     validationErrors: Record<string, string[]>;
@@ -25,10 +29,16 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
     pipelines,
     pipelineData,
     inputFiles,
+    metadataSourceAssets = [],
+    metadataSourceDatabaseId,
     outputAssetId,
     outputDatabaseId,
     validationErrors,
 }) => {
+    // Only complete rows are sent, so only they are summarized — a half-filled picker row would read
+    // as a selection the run does not carry.
+    const completeSourceAssets = metadataSourceAssets.filter((s) => s.databaseId && s.assetId);
+    const hasMetadataSources = completeSourceAssets.length > 0 || !!metadataSourceDatabaseId;
     const hasAnyErrors = Object.values(validationErrors).some((errors) => errors.length > 0);
 
     return (
@@ -53,6 +63,32 @@ const WizardReviewStage: React.FC<WizardReviewStageProps> = ({
                     </ul>
                 )}
             </div>
+
+            {/* Metadata sources — entities read for their metadata only, never as input files. */}
+            {hasMetadataSources && (
+                <div className="p-3 bg-surface-secondary rounded">
+                    <h4 className="text-md font-semibold text-text-primary mb-2">
+                        Metadata Sources
+                    </h4>
+                    <p className="text-xs text-text-secondary mb-2">
+                        Read for their metadata only — not input files.
+                    </p>
+                    {metadataSourceDatabaseId && (
+                        <p className="text-sm text-text-primary">
+                            Database: {metadataSourceDatabaseId}
+                        </p>
+                    )}
+                    {completeSourceAssets.length > 0 && (
+                        <ul className="list-disc list-inside text-sm text-text-primary">
+                            {completeSourceAssets.map((source, idx) => (
+                                <li key={idx}>
+                                    {source.databaseId} / {source.assetId}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
 
             {/* Output target */}
             {(outputAssetId || outputDatabaseId) && (

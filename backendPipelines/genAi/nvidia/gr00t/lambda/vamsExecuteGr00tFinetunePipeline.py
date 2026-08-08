@@ -122,7 +122,11 @@ def lambda_handler(event, context):
         # falling back to inline payload fields for the legacy/transition path.
         input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location']) \
             or data.get('inputParameters', '')
-        input_metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']) \
+        # The metadata file is the grouped-by-asset envelope, projected onto the legacy
+        # {"VAMS": {...}} view for this run's subject that the scope below reads
+        # (manifestHelper.run_vams_view).
+        input_metadata = manifestHelper.run_vams_view(
+            manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']), resolved) \
             or data.get('inputMetadata', '')
 
         # Merge order, lowest first so later sources override: asset metadata, then the

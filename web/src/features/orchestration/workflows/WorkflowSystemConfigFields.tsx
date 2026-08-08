@@ -8,6 +8,7 @@ import type { InputFileArity, ConcurrencyRestriction, OutputLocationType } from 
 import InfoTooltip from "../components/InfoTooltip";
 import StringListInput from "../components/StringListInput";
 import AssetSpanControl from "../components/AssetSpanControl";
+import { metadataEnabled } from "../wizard/resolveRestrictions";
 
 interface WorkflowSystemConfigFieldsProps {
     inputFileArity: InputFileArity;
@@ -175,20 +176,31 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
                     <InfoTooltip text="Which metadata is gathered from the input assets/files and passed to the pipelines in the shared metadata envelope." />
                 </div>
                 <div className="space-y-1">
+                    {/* Widest entity first, so the rows read database -> asset -> file as the
+                        containment they describe. Every key reads through metadataEnabled, which
+                        defaults an omitted one ON to match the record builders. Binding a checkbox
+                        straight to the raw value would show a config that omits a key as having it
+                        off, and saving the form would then persist that as an explicit opt-out. */}
                     <ToggleRow
-                        checked={metadataInputs.assetMetadata || false}
+                        checked={metadataEnabled(metadataInputs, "databaseMetadata")}
+                        onChange={(v) => setMeta("databaseMetadata", v)}
+                        label="Database metadata"
+                        info="Include the metadata of each involved database. With input files these are the databases of the files' assets; a run with no input files reads the one database it names."
+                    />
+                    <ToggleRow
+                        checked={metadataEnabled(metadataInputs, "assetMetadata")}
                         onChange={(v) => setMeta("assetMetadata", v)}
                         label="Asset metadata"
                         info="Include each input asset's asset-level metadata."
                     />
                     <ToggleRow
-                        checked={metadataInputs.fileMetadata || false}
+                        checked={metadataEnabled(metadataInputs, "fileMetadata")}
                         onChange={(v) => setMeta("fileMetadata", v)}
                         label="File metadata"
                         info="Include per-file metadata for each input file."
                     />
                     <ToggleRow
-                        checked={metadataInputs.fileAttributes || false}
+                        checked={metadataEnabled(metadataInputs, "fileAttributes")}
                         onChange={(v) => setMeta("fileAttributes", v)}
                         label="File attributes"
                         info="Include per-file attributes (the string-typed file attribute fields)."

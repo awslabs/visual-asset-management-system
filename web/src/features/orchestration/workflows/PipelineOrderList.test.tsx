@@ -75,7 +75,7 @@ describe("PipelineOrderList", () => {
             );
 
             // Should render 3 cards
-            const removeButtons = screen.getAllByLabelText(/remove pipeline/i);
+            const removeButtons = screen.getAllByLabelText(/remove step/i);
             expect(removeButtons).toHaveLength(3);
         });
 
@@ -98,7 +98,7 @@ describe("PipelineOrderList", () => {
                 />
             );
 
-            const removeButtons = screen.getAllByLabelText(/remove pipeline/i);
+            const removeButtons = screen.getAllByLabelText(/remove step/i);
             // Remove middle card (index 1)
             await user.click(removeButtons[1]);
 
@@ -107,6 +107,39 @@ describe("PipelineOrderList", () => {
                 { pipelineId: "p1", pipelineDatabaseId: "db1" },
                 { pipelineId: "p3", pipelineDatabaseId: "db1" },
             ]);
+        });
+
+        it("labels the remove control with visible text, not a bare glyph", () => {
+            // A muted "x" with no button chrome reads as decoration: the control worked, but users
+            // could not find it and believed the only way to undo a mis-added step was to leave the
+            // wizard and start over. The visible word is the fix, so it is what the test pins.
+            render(
+                <PipelineOrderList
+                    value={[{ pipelineId: "p1", pipelineDatabaseId: "db1" }]}
+                    pipelineOptions={mockPipelines}
+                    templatesByPipeline={{}}
+                    onChange={jest.fn()}
+                />
+            );
+            const button = screen.getByLabelText(/remove step 1/i);
+            expect(button).toHaveTextContent(/remove/i);
+            // Inside a form a submit-typed button would save the workflow instead of removing a step.
+            expect(button).toHaveAttribute("type", "button");
+        });
+
+        it("removing the only step leaves the empty state rather than crashing", async () => {
+            const user = userEvent.setup();
+            const onChange = jest.fn();
+            render(
+                <PipelineOrderList
+                    value={[{ pipelineId: "p1", pipelineDatabaseId: "db1" }]}
+                    pipelineOptions={mockPipelines}
+                    templatesByPipeline={{}}
+                    onChange={onChange}
+                />
+            );
+            await user.click(screen.getByLabelText(/remove step 1/i));
+            expect(onChange).toHaveBeenCalledWith([]);
         });
     });
 });

@@ -111,6 +111,314 @@ class TestExecutionDetails:
             result = cli_runner.invoke(cli, ['execution', 'details', 'bad'])
             assert result.exit_code != 0
 
+    def _details(self, mocks, cli_runner, message):
+        mocks['api_client'].get_execution_details.return_value = {'message': message}
+        return cli_runner.invoke(cli, ['execution', 'details', 'e1'])
+
+    def test_details_marks_a_truncated_input_section(self, cli_runner, generic_command_mocks):
+        """A shortened section must be marked where it is rendered — a user must never read a partial
+        list as the complete set."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'inputFiles': [{'databaseId': 'db1', 'assetId': 'a1', 'inputAssetFileKey': '/f.glb'}],
+                'truncatedCollections': ['inputFiles']})
+            assert result.exit_code == 0
+            assert 'Input files (1) [PARTIAL - more rows exist]' in result.output
+
+    def test_details_does_not_mark_a_complete_section(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'inputFiles': [{'databaseId': 'db1', 'assetId': 'a1', 'inputAssetFileKey': '/f.glb'}],
+                'truncatedCollections': []})
+            assert result.exit_code == 0
+            assert 'PARTIAL' not in result.output
+            assert 'Truncated collections' not in result.output
+
+    def test_details_reports_metadata_counts_and_their_truncation(self, cli_runner,
+                                                                  generic_command_mocks):
+        """The rows themselves are only in --json-output, so the counts (and their partial state) are
+        what makes a truncated metadata section visible in CLI output."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'inputMetadata': [{'assetId': 'a1', 'metadata': {'k': 'v'}}],
+                'inputDatabaseMetadata': [{'databaseId': 'src', 'metadata': {'k': 'v'}}],
+                'truncatedCollections': ['inputMetadata']})
+            assert result.exit_code == 0
+            assert 'Input metadata: 1 row(s) [PARTIAL - more rows exist]' in result.output
+            # The database collection was NOT truncated, so it carries no marker.
+            assert 'Input database metadata: 1 row(s)\n' in result.output
+
+    def test_details_shows_the_config_body_s3_location_when_truncated(self, cli_runner,
+                                                                     generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED',
+                               'renderedConfigTruncated': True,
+                               'renderedConfigLocation': {'bucket': 'run-bkt',
+                                                          'key': 'executions/e1/input/1/config.json'}}]})
+            assert result.exit_code == 0
+            assert 'Config body: truncated in this response' in result.output
+            assert 's3://run-bkt/executions/e1/input/1/config.json' in result.output
+
+    def test_details_omits_the_config_location_when_not_truncated(self, cli_runner,
+                                                                  generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED',
+                               'renderedConfigTruncated': False}]})
+            assert result.exit_code == 0
+            assert 'Config body' not in result.output
+            assert 's3://' not in result.output
+
+    def test_details_lists_every_captured_source_database_not_just_the_named_one(
+            self, cli_runner, generic_command_mocks):
+        """A run WITH input files derives its databases from those files, so the named id is empty
+        while the captured list is what the run read. Rendering only the named id would report no
+        database metadata source at all."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'metadataSourceDatabaseId': '',
+                'metadataSourceDatabases': ['db-a', 'db-b'],
+                'metadataSourceAssets': []})
+            assert result.exit_code == 0
+            assert 'Metadata sources:' in result.output
+            assert 'Databases captured: db-a, db-b' in result.output
+            assert 'Named database' not in result.output
+
+    def test_details_shows_the_named_database_and_source_assets(self, cli_runner,
+                                                               generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'metadataSourceDatabaseId': 'src-db',
+                'metadataSourceDatabases': ['src-db'],
+                'metadataSourceAssets': [{'databaseId': 'src-db', 'assetId': 'a1'}]})
+            assert result.exit_code == 0
+            assert 'Named database: src-db' in result.output
+            assert 'Asset: src-db:a1' in result.output
+
+    def test_details_omits_the_source_section_when_the_run_read_none(self, cli_runner,
+                                                                    generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'metadataSourceDatabaseId': '',
+                'metadataSourceDatabases': [],
+                'metadataSourceAssets': []})
+            assert result.exit_code == 0
+            assert 'Metadata sources:' not in result.output
+
+    def test_details_marks_truncated_database_metadata_independently(self, cli_runner,
+                                                                    generic_command_mocks):
+        """inputDatabaseMetadata is trimmed on its own, so it must carry its own marker rather than
+        inheriting the asset/file collection's state."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'inputMetadata': [{'assetId': 'a1'}],
+                'inputDatabaseMetadata': [{'databaseId': 'src'}],
+                'truncatedCollections': ['inputDatabaseMetadata']})
+            assert result.exit_code == 0
+            assert 'Input metadata: 1 row(s)\n' in result.output
+            assert 'Input database metadata: 1 row(s) [PARTIAL - more rows exist]' in result.output
+            assert 'Truncated collections: inputDatabaseMetadata' in result.output
+
+    def test_details_flags_an_empty_but_truncated_database_metadata_collection(
+            self, cli_runner, generic_command_mocks):
+        """Zero rows with the collection named as truncated is not "no database metadata" — it is a
+        section the response could not carry, and must not read as complete."""
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'inputDatabaseMetadata': [],
+                'truncatedCollections': ['inputDatabaseMetadata']})
+            assert result.exit_code == 0
+            assert 'Input database metadata: 0 row(s) [PARTIAL - more rows exist]' in result.output
+
+
+class TestExecutionDetailsMetadata:
+    def test_input_collection_is_the_default(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/f.glb',
+                           'scope': 'asset', 'metadata': {'k': 'v'}, 'pipelineId': 'p1'}],
+                'collection': 'input'}}
+            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            assert result.exit_code == 0
+            params = mocks['api_client'].get_execution_details_metadata.call_args.kwargs['params']
+            assert params['collection'] == 'input'
+            assert 'db1:a1/f.glb' in result.output
+            assert 'scope=asset' in result.output
+            assert '[p1]' in result.output
+
+    def test_output_collection_renders_the_output_row_shape(self, cli_runner, generic_command_mocks):
+        """The output collection's rows have different fields (targetFilePath/metadataKey/
+        metadataValue), so rendering them with the input columns would print only '?'."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [{'targetFilePath': '/out.glb', 'metadataKey': 'triangles',
+                           'metadataValue': '1200', 'pipelineId': 'p1'}],
+                'collection': 'output'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--collection', 'output'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
+                'params']['collection'] == 'output'
+            assert '/out.glb' in result.output
+            assert 'triangles=1200' in result.output
+
+    def test_input_database_collection_passed_through(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [], 'collection': 'inputDatabase'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--collection', 'inputDatabase'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
+                'params']['collection'] == 'inputDatabase'
+
+    def test_unknown_collection_rejected_before_the_call(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--collection', 'bogus'])
+            assert result.exit_code != 0
+            mocks['api_client'].get_execution_details_metadata.assert_not_called()
+
+    def test_pipeline_id_filter_passed(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [], 'collection': 'input'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--pipeline-id', 'p1'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
+                'params']['pipelineId'] == 'p1'
+
+    def test_page_size_above_the_cap_is_clamped(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [], 'collection': 'input'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--page-size', '5000'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
+                'params']['pageSize'] == 500
+
+    def test_starting_token_resumes(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [], 'collection': 'input'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--starting-token', 'tok-abc'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_args.kwargs[
+                'params']['startingToken'] == 'tok-abc'
+
+    def test_next_token_is_surfaced_for_manual_paging(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/f.glb',
+                           'scope': 'asset', 'metadata': {}}],
+                'collection': 'input', 'NextToken': 'tok-next'}}
+            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            assert result.exit_code == 0
+            assert 'tok-next' in result.output
+
+    def test_auto_paginate_stops_when_next_token_is_absent(self, cli_runner, generic_command_mocks):
+        """NextToken absent is the ONLY end-of-walk signal, and every page's rows must be kept —
+        a walk that stopped early or dropped a page would under-report the collection."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.side_effect = [
+                {'message': {'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/1',
+                                        'scope': 'asset', 'metadata': {}}],
+                             'collection': 'input', 'NextToken': 'tok1'}},
+                {'message': {'Items': [{'databaseId': 'db1', 'assetId': 'a2', 'filePath': '/2',
+                                        'scope': 'asset', 'metadata': {}}],
+                             'collection': 'input'}},
+            ]
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_count == 2
+            data = json.loads(result.output)
+            assert [row['assetId'] for row in data['Items']] == ['a1', 'a2']
+            # The second request resumes with the first page's token.
+            second = mocks['api_client'].get_execution_details_metadata.call_args_list[1]
+            assert second.kwargs['params']['startingToken'] == 'tok1'
+
+    def test_auto_paginate_stops_at_max_items(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/1',
+                           'scope': 'asset', 'metadata': {}}],
+                'collection': 'input', 'NextToken': 'tok'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--auto-paginate', '--max-items', '1',
+                '--json-output'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].get_execution_details_metadata.call_count == 1
+            assert 'More may be available' in json.loads(result.output)['note']
+
+    def test_auto_paginate_rejects_a_starting_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--auto-paginate',
+                '--starting-token', 'tok'])
+            assert result.exit_code != 0
+            mocks['api_client'].get_execution_details_metadata.assert_not_called()
+
+    def test_json_output_is_the_page_payload(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [{'databaseId': 'db1', 'assetId': 'a1', 'filePath': '/f.glb',
+                           'scope': 'asset', 'metadata': {'k': 'v'}, 'pipelineId': 'p1'}],
+                'collection': 'input', 'NextToken': 'tok'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['collection'] == 'input'
+            assert data['NextToken'] == 'tok'
+            assert data['Items'][0]['metadata'] == {'k': 'v'}
+
+    def test_not_found(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.side_effect = \
+                ExecutionNotFoundError("nope")
+            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'bad'])
+            assert result.exit_code != 0
+
+    def test_invalid_token_reports_the_collection_pinning(self, cli_runner, generic_command_mocks):
+        """A token issued for one collection/pipelineId is refused by the service, so the error must
+        say which inputs a resume has to match."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.side_effect = \
+                InvalidExecutionDataError("startingToken is invalid.")
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--starting-token', 'stale'])
+            assert result.exit_code != 0
+            assert '--collection' in result.output
+
+    def test_empty_collection_message(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
+                'Items': [], 'collection': 'output'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'details-metadata', 'e1', '--collection', 'output'])
+            assert result.exit_code == 0
+            assert 'No output metadata rows found.' in result.output
+
+    def test_no_setup(self, cli_runner, no_setup_command_mocks):
+        with no_setup_command_mocks('execution'):
+            result = cli_runner.invoke(cli, ['execution', 'details-metadata', 'e1'])
+            assert result.exit_code != 0
+
 
 class TestExecutionLogs:
     def test_logs_truncated_success(self, cli_runner, generic_command_mocks):
@@ -253,6 +561,26 @@ class TestExecutionRerun:
             mocks['api_client'].rerun_execution.side_effect = InvalidExecutionDataError("unavailable")
             result = cli_runner.invoke(cli, ['execution', 'rerun', 'e1'])
             assert result.exit_code != 0
+
+    def test_rerun_surfaces_response_warnings(self, cli_runner, generic_command_mocks):
+        """A re-run goes through the execute path, so it returns that handler's warnings — e.g. a
+        metadata capture the per-entity cap bounded, meaning the re-run's inputs differ."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].rerun_execution.return_value = {'message': {
+                'executionId': 'e2',
+                'warnings': ["Metadata for asset 'a1' was truncated at the per-entity cap."]}}
+            result = cli_runner.invoke(cli, ['execution', 'rerun', 'e1'])
+            assert result.exit_code == 0
+            assert 'Warnings:' in result.output
+            assert 'truncated at the per-entity cap' in result.output
+
+    def test_rerun_warnings_reach_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].rerun_execution.return_value = {'message': {
+                'executionId': 'e2', 'warnings': ['Metadata truncated.']}}
+            result = cli_runner.invoke(cli, ['execution', 'rerun', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['warnings'] == ['Metadata truncated.']
 
 
 class TestExecutionPermanentDelete:

@@ -268,6 +268,7 @@ out
 
 # Pycache output
 **/__pycache__/**
+.pytest_cache
 
 # Gatsby files
 .cache/
@@ -355,7 +356,9 @@ docs/superpowers/*
 docs/*
 .claude.json
 .superpower/
+.superpowers
 .playwright-mcp/
+.plans
 
 .codegraph/
 *.bak*

@@ -1087,9 +1087,11 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // One row per (workflow, trigger). Composite PK matches the workflow table; SK is
-    // the trigger type (fileUpload today). A by-type GSI lets the upload dispatcher find
-    // candidate workflows without scanning; file-filter evaluation runs after the lookup.
+    // One row per (workflow, trigger). Composite PK matches the workflow table; SK is the trigger type
+    // for a workflow's FIRST trigger of that type, or "type#triggerId" for an additional one — a
+    // workflow may carry several triggers of one type, each with its own file filters and default
+    // templates. A by-type GSI lets the upload dispatcher find candidate workflows without scanning;
+    // file-filter evaluation runs after the lookup.
     const workflowTriggersStorageTable = new dynamodb.Table(scope, "WorkflowTriggersStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1098,9 +1100,16 @@ export function storageResourcesBuilder(
         },
         sortKey: { name: "triggerType", type: dynamodb.AttributeType.STRING },
     });
+    // Partitioned on triggerBaseType — the BARE type, carried separately from the sort key. A lookup by
+    // type is an exact match, so a suffixed sort-key value ("fileUpload#7f3a91") would land in its own
+    // partition and that trigger would never fire.
+    //
+    // Named ByBaseType rather than keying on the sort key because DynamoDB cannot change an existing
+    // index's key schema: CloudFormation rejects it outright with "Cannot update GSI's properties other
+    // than Provisioned Throughput ... You can create a new GSI with a different name."
     workflowTriggersStorageTable.addGlobalSecondaryIndex({
-        indexName: "TriggersByTypeGSI",
-        partitionKey: { name: "triggerType", type: dynamodb.AttributeType.STRING },
+        indexName: "TriggersByBaseTypeGSI",
+        partitionKey: { name: "triggerBaseType", type: dynamodb.AttributeType.STRING },
         sortKey: {
             name: "workflowDatabaseId:workflowId",
             type: dynamodb.AttributeType.STRING,

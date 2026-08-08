@@ -169,6 +169,19 @@ partition. Author it with the block for your execution type present but empty:
    **A workflow's `inputFileArity` is authored, not derived** — templates are chosen per execution, so
    set it to the MAXIMUM any pipeline/template combination in that workflow can require; a lower gate
    rejects a selection a template would have accepted.
+   **A template's `tagSchema` is how a run gets OPERATOR-SUPPLIED options** — a prompt, a seed, an
+   output format, a quality preset. Each entry declares one field the execute form renders and the API
+   validates: `tagKey` (letters/digits/underscore only, so `{{tagKey}}` substitutes), `type`
+   (`string` | `integer` | `number` | `boolean` | `string-list` | `enum`), `required`, `default`,
+   `enumValues` (required for `enum`), and `label` / `description` for the form. Reference each one as
+   `{{TAG}}` in the `configBody`; a declared tag the body never references is silently unused, so the
+   operator fills in a field that reaches no pipeline.
+   **In a `json` body, quoting is type-driven and checked on save:** an `integer`/`number`/`boolean`/
+   `string-list` placeholder is a bare JSON value (`"seed": {{SEED}}`) while a `string`/`enum` one sits
+   inside the string it fills (`"prompt": "{{PROMPT}}"`). The reverse is rejected with a 400, because
+   quoting a typed tag would hand the container `"42"` where it expects `42`. Non-`json` formats
+   (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
+   collide with a reserved system tag name or start with the reserved `metadata_` prefix.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
    `{jobName}` folder in `pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`, is persisted
    on the workflow record as the derived `jobNames[]`, and is what `executeWorkflow` reads to
@@ -183,6 +196,14 @@ partition. Author it with the block for your execution type present but empty:
     with no error. When one model needs two modes in one workflow (train then evaluate, say), ship two
     pipelines sharing a container image / ECR repo / compute environment rather than one pipeline
     listed twice with different templates.
+11. **A sub-state-machine execution name must be unique at millisecond concurrency.** `openPipeline.py`
+    derives the name a pipeline's own state machine runs under (`PipelineJob_<stamp>_<random>`), and
+    Step Functions rejects a repeat with `ExecutionAlreadyExists`. A workflow may carry several triggers
+    of one type, so one upload fans out to N simultaneous runs of the SAME pipeline — a timestamp alone
+    (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
+    per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
+    concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
+    80-character Step Functions limit and free of `:` and `/`.
 
 Verify registration after a deploy rather than assuming it:
 
@@ -205,7 +226,10 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
 3. Add container if needed in `container/` subdirectory.
 4. **Author the `vamsSchema/` bundle** (`pipeline.json`, plus `workflow.json` and `templates/` as
    needed) and register it with the `VamsSchemaRegistration` construct from the pipeline's nested
-   stack. Without this the AWS resources deploy but nothing appears in VAMS. See
+   stack. Without this the AWS resources deploy but nothing appears in VAMS. Each
+   `templates/{templateId}.json` carries the `configBody` the container receives and the `tagSchema`
+   declaring the per-run options an operator sets on the execute form — that is where a prompt, a seed,
+   or a target format belongs, rather than hardcoded in the body. See
    [vamsSchema Registration](#vamsschema-registration-how-a-built-in-becomes-usable).
 5. Create CDK nested stack in `infra/lib/nestedStacks/pipelines/`.
 6. Add pipeline config to `config.ts` under `pipelines` section.

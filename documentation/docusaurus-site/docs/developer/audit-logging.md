@@ -297,6 +297,7 @@ The audit logging system is designed with security-first principles and never lo
 -   API keys or access tokens
 -   AWS credentials (access keys, secret keys, session tokens)
 -   Token signatures or detailed token validation errors
+-   Pipeline template bodies and the tag values substituted into them
 
 ### What Is Logged
 
@@ -313,11 +314,20 @@ The system logs only non-sensitive operational data:
 
 ### Automatic Data Masking
 
-The `mask_sensitive_data()` function filters all audit log entries before writing to Amazon CloudWatch. It removes:
+Every audit entry carries an echo of the triggering API event, and the `mask_sensitive_data()` function filters that echo before it is written to Amazon CloudWatch. Matching is case-insensitive on the key name and applies at every nesting level, walking both objects and arrays. Two key families are replaced with `<redacted>`:
+
+**Credential keys**
 
 -   `authorization` headers
 -   `idJwtToken` fields
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` objects
+
+**Content keys**
+
+-   `configBody` -- a pipeline template body, which carries free-form content such as generative-AI prompts and model configuration
+-   `templateTags` and `tagValues` -- the caller-supplied values substituted into a template body
+
+The field name is preserved when the value is redacted, so the audit trail still records that a template body or tag value was submitted with the request. A request `body` is filtered whether it arrives as a JSON object or as a JSON string: the string is parsed, filtered, and re-serialized, and a string payload that names a redacted key but does not parse as JSON is dropped in full.
 
 ## Integration with SIEM Systems
 
@@ -363,23 +373,51 @@ Create Amazon CloudWatch alarms on the patterns above to detect audit logging fa
 
 The following table provides guidance on which logging function to call in different operational contexts:
 
-| Function                       | When to Use                                                                                                                                                                                                                                     |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `log_authentication()`         | User login attempts, token validation results, session creation. Called by the custom Lambda authorizer and authentication-related handlers.                                                                                                    |
-| `log_authorization()`          | Permission checks using claims and roles directly. Called inside Casbin enforcement logic where the `claims_and_roles` dictionary is available (not the full API Gateway event). Only log on data-level authorization failures for performance. |
-| `log_authorization_api()`      | API-level permission checks using the full API Gateway event. Called in handler entry points where `enforceAPI()` is evaluated.                                                                                                                 |
-| `log_authorization_gateway()`  | Authorization events from the API Gateway custom Lambda authorizer. Uses enhanced security: never logs JWT tokens, uses generic failure categories only, and extracts user IDs only after successful JWT verification.                          |
-| `log_file_upload()`            | File uploads to Amazon S3, multipart uploads, and upload validation results (including denied uploads with reasons).                                                                                                                            |
-| `log_file_download()`          | Direct file downloads and presigned URL generation.                                                                                                                                                                                             |
-| `log_file_download_streamed()` | Streaming downloads and large file transfers via chunked protocols.                                                                                                                                                                             |
-| `log_auth_other()`             | Token refresh events, session management operations, and MFA challenge events.                                                                                                                                                                  |
-| `log_auth_changes()`           | Role assignments, permission constraint updates, user-role modifications, and any change to the authorization model.                                                                                                                            |
-| `log_actions()`                | CRUD operations on databases, assets, files, and metadata. Also covers workflow executions and pipeline runs.                                                                                                                                   |
-| `log_errors()`                 | Application errors, input validation failures, system exceptions, and any unhandled error conditions.                                                                                                                                           |
+| Function                       | When to Use                                                                                                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `log_authentication()`         | User login attempts, token validation results, session creation. Called by the custom Lambda authorizer and authentication-related handlers.                                                                                                                                          |
+| `log_authorization()`          | Permission checks using claims and roles directly. Called inside Casbin enforcement logic where the `claims_and_roles` dictionary is available (not the full API Gateway event). Only log on data-level authorization failures for performance.                                       |
+| `log_authorization_api()`      | API-level permission checks using the full API Gateway event. Called in handler entry points where `enforceAPI()` is evaluated.                                                                                                                                                       |
+| `log_authorization_gateway()`  | Authorization events from the API Gateway custom Lambda authorizer. Uses enhanced security: never logs JWT tokens, uses generic failure categories only, and extracts user IDs only after successful JWT verification.                                                                |
+| `log_file_upload()`            | File uploads to Amazon S3, multipart uploads, and upload validation results (including denied uploads with reasons).                                                                                                                                                                  |
+| `log_file_download()`          | Direct file downloads and presigned URL generation.                                                                                                                                                                                                                                   |
+| `log_file_download_streamed()` | Streaming downloads and large file transfers via chunked protocols.                                                                                                                                                                                                                   |
+| `log_auth_other()`             | Token refresh events, session management operations, and MFA challenge events.                                                                                                                                                                                                        |
+| `log_auth_changes()`           | Role assignments, permission constraint updates, user-role modifications, and any change to the authorization model.                                                                                                                                                                  |
+| `log_actions()`                | Orchestration write operations: launching, aborting, re-running, and permanently deleting an execution, and creating, updating, archiving, or deleting a workflow, pipeline, pipeline template, or workflow trigger. See [Orchestration action events](#orchestration-action-events). |
+| `log_errors()`                 | Application errors, input validation failures, system exceptions, and any unhandled error conditions.                                                                                                                                                                                 |
 
 :::note[Function signature differences]
 `log_authorization()` accepts `claims_and_roles` as its first parameter (the claims dictionary from `request_to_claims()`), not the full API Gateway event. Use `log_authorization_api()` when you have the full event object, and `log_authorization_gateway()` in the API Gateway authorizer Lambda.
 :::
+
+### Orchestration action events
+
+Every write on the pipeline, workflow, and execution surface records an `ACTIONS` entry. The
+`secondary_type` names the operation, and the payload carries identifiers, counts, and flags:
+
+| `secondary_type`                                                               | Recorded when                                              | Payload highlights                                                                      |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `workflowExecute`                                                              | An execution is launched and its state machine has started | Workflow and execution ids, trigger type, input-file count, output target               |
+| `workflowExecutionAbort`                                                       | A single execution is aborted                              | Execution and workflow ids                                                              |
+| `workflowExecutionGroupAbort`                                                  | An execution group is aborted                              | Group id, how many this pass aborted, how many were withheld for access, more-remaining |
+| `workflowExecutionRerun`                                                       | An execution is re-run                                     | The replayed execution id and the new execution id                                      |
+| `workflowExecutionPermanentDelete`                                             | An execution's records are permanently deleted             | Execution and workflow ids                                                              |
+| `workflowCreate` / `workflowUpdate` / `workflowArchive`                        | A workflow is created, updated, or archived                | Database and workflow ids, pipeline count                                               |
+| `pipelineCreate` / `pipelineUpdate` / `pipelineArchive`                        | A pipeline is created, updated, or archived                | Database and pipeline ids, execution type, whether the execution config changed         |
+| `pipelineTemplateCreate` / `pipelineTemplateUpdate` / `pipelineTemplateDelete` | A template is created, updated, or deleted                 | Database, pipeline, and template ids, configuration format, default flag                |
+| `workflowTriggerSet` / `workflowTriggerDelete`                                 | A trigger is set or removed                                | Database and workflow ids, trigger type, enabled flag                                   |
+
+Three properties hold across all of them:
+
+-   **The entry follows the write.** It is emitted only after the operation succeeded, so a write that
+    failed — or a request rejected as not found — never appears as a completed action.
+-   **Configuration bodies and tag values are never recorded.** A rendered configuration body or a tag
+    value can carry a model prompt or a credential-shaped string, so the entry records the template id,
+    the format, and counts instead.
+-   **A trigger-launched execution is attributed to `SYSTEM_USER`.** A user may upload a file without
+    holding permission to run the workflow the upload fires, so the execution runs as the system
+    identity by design; the `triggerType` field records that the run was automatic rather than manual.
 
 ## Error Handling Details
 

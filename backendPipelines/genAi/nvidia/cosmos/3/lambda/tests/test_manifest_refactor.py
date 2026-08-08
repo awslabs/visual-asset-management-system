@@ -325,3 +325,64 @@ class TestConstructPipeline:
         assert definition["modelVariant"] == "nano"
         assert "inputMetadata" not in definition
         assert "inputParameters" not in definition
+
+
+# ================== output-target identity for a run with no input files ==================
+
+@pytest.mark.unit
+class TestFileLessRunResolvesTheOutputTargetIdentity:
+    """A run with no input files takes its asset identity from the execution's OUTPUT target.
+
+    That target reaches the reader in TWO shapes, and both must resolve. The manifest's
+    `outputTarget` block is the one a manifest-driven run actually uses: the per-pipeline Step
+    Functions task body carries only the manifest POINTER (workflowExecutionId, the manifest S3
+    location, the task token), so a reader that consults only the legacy top-level
+    outputAssetId/outputDatabaseId sees nothing — and the container then fails with "assetId is
+    required in pipeline definition" AFTER the Batch job has been scheduled and the GPU paid for.
+
+    Verified against a live cosmos3 execution whose manifest carried
+    outputTarget.assetId = 'xddcc84a4-...' while the task body carried no output ids at all.
+    """
+
+    def test_the_manifest_output_target_supplies_the_identity(self):
+        manifest = {"schemaVersion": 2, "inputFiles": [],
+                    "outputTarget": {"locationType": "asset", "assetId": "xDest",
+                                     "databaseId": "dbDest",
+                                     "fileBaseExecutionPathExtension": "/"},
+                    "outputs": {"bucket": "abkt", "files": "f/", "metadata": "m/",
+                                "previews": "p/", "results": "r/"}}
+        # The task body carries NO output ids — exactly what the SFN pipeline task sends.
+        resolved = mh.resolve_inputs({"workflowExecutionId": "e1"}, manifest)
+        assert (resolved["assetId"], resolved["databaseId"]) == ("xDest", "dbDest")
+
+    def test_the_legacy_top_level_shape_still_resolves(self):
+        # No manifest at all: the pre-manifest body shape must keep working.
+        resolved = mh.resolve_inputs({"outputAssetId": "xLegacy", "outputDatabaseId": "dbLegacy"},
+                                     None)
+        assert (resolved["assetId"], resolved["databaseId"]) == ("xLegacy", "dbLegacy")
+
+    def test_the_manifest_output_target_wins_over_the_legacy_keys(self):
+        manifest = {"schemaVersion": 2, "inputFiles": [],
+                    "outputTarget": {"assetId": "xManifest", "databaseId": "dbManifest"},
+                    "outputs": {"bucket": "abkt", "files": "f/", "metadata": "m/",
+                                "previews": "p/", "results": "r/"}}
+        resolved = mh.resolve_inputs(
+            {"outputAssetId": "xLegacy", "outputDatabaseId": "dbLegacy"}, manifest)
+        assert (resolved["assetId"], resolved["databaseId"]) == ("xManifest", "dbManifest")
+
+    def test_an_input_file_still_wins_over_the_output_target(self):
+        # The output target is a FALLBACK. When the run has an input file, that file's asset is the
+        # subject — otherwise a run reading asset A would report itself as running against output B.
+        manifest = {"schemaVersion": 2,
+                    "inputFiles": [{"relativePath": "/in.mp4", "databaseId": "dbIn",
+                                    "assetId": "xIn", "bucket": "abkt",
+                                    "key": "xIn/in.mp4"}],
+                    "outputTarget": {"assetId": "xDest", "databaseId": "dbDest"},
+                    "outputs": {"bucket": "abkt", "files": "f/", "metadata": "m/",
+                                "previews": "p/", "results": "r/"}}
+        resolved = mh.resolve_inputs({}, manifest)
+        assert (resolved["assetId"], resolved["databaseId"]) == ("xIn", "dbIn")
+
+    def test_no_identity_anywhere_leaves_it_empty_rather_than_raising(self):
+        resolved = mh.resolve_inputs({}, {"schemaVersion": 2, "inputFiles": [], "outputs": {}})
+        assert (resolved["assetId"], resolved["databaseId"]) == ("", "")

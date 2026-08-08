@@ -10,8 +10,10 @@ import {
     facet,
     firstCardId,
     gotoOrchestration,
+    menuSurface,
     openCardMenu,
     orchestrationRoot,
+    rowValue,
     tableRows,
 } from "./support/fixtures";
 
@@ -81,8 +83,13 @@ test.describe("execution output target", () => {
             timeout: 30_000,
         });
         // Always present, even when there is no prefix — "no prefix" is itself information, and
-        // hiding the row made it indistinguishable from a missing field.
-        await expect(page.getByText(/None \(asset root\)|\//).first()).toBeVisible();
+        // hiding the row made it indistinguishable from a missing field. Asserted on the row's own
+        // value cell: matching a slash anywhere on the page picks up any of a hundred paths and ids.
+        const prefix = rowValue(page, "Output Path Prefix");
+        await expect(prefix).toBeVisible();
+        // Either the empty-prefix wording or a real path — never blank and never a bare em dash,
+        // both of which would mean the resolved prefix never reached the panel.
+        await expect(prefix).toHaveText(/^(None \(asset root\)|\/.*)$/);
     });
 
     test("output type, database and asset are stated alongside it", async ({ page }) => {
@@ -109,11 +116,11 @@ test.describe("record action menus", () => {
         await expect(items.first()).toBeVisible({ timeout: 30_000 });
 
         // Read the menu's computed background and the page's, and require they differ. Comparing
-        // computed values (rather than asserting a hex) keeps this true in both themes.
-        const menuBg = await page
-            .locator('[role="menu"]')
-            .first()
-            .evaluate((el) => getComputedStyle(el).backgroundColor);
+        // computed values (rather than asserting a hex) keeps this true in both themes. The surface is
+        // reached from an item, not from `[role="menu"]` — see menuSurface().
+        const menuBg = await menuSurface(items).evaluate(
+            (el) => getComputedStyle(el).backgroundColor
+        );
         const pageBg = await orchestrationRoot(page)
             .first()
             .evaluate((el) => getComputedStyle(el).backgroundColor);

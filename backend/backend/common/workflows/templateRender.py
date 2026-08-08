@@ -122,6 +122,7 @@ _METADATA_TAGS = {
     tags.FILE_METADATA_OBJECT: ("VAMS", "fileMetadata"),
     tags.FILE_ATTRIBUTES_OBJECT: ("VAMS", "fileAttributes"),
     tags.ASSET_DATA_OBJECT: ("VAMS", "assetData"),
+    tags.DATABASE_METADATA_OBJECT: ("VAMS", "databaseMetadata"),
 }
 
 
@@ -322,6 +323,123 @@ def _substitute(text, context, config_format="json"):
 def uses_template_tags(text):
     """True if the text contains at least one ``{{tag}}``."""
     return bool(text) and bool(_TAG_PATTERN.search(text))
+
+
+# ---------------------------------------------------------------------------
+# Save-time JSON shape validation
+# ---------------------------------------------------------------------------
+
+def _json_literal_tag_shapes():
+    """{tagName: JSON literal text} for every tag whose substitution kind is ``json``, taken from the
+    renderer's own context so each tag is classified by the kind it is registered with."""
+    context = build_template_context({}, {})
+    context.update(_metadata_context({}))
+    shapes = {}
+    for name, (kind, value) in context.items():
+        if kind != "json":
+            continue
+        if isinstance(value, dict):
+            shapes[name] = "{}"
+        elif isinstance(value, (list, tuple)):
+            shapes[name] = "[]"
+        else:
+            shapes[name] = "0"
+    return shapes
+
+
+JSON_LITERAL_TAG_SHAPES = _json_literal_tag_shapes()
+
+# The tags that render a JSON object or array — the ones that must stand alone as an unquoted value.
+STRUCTURED_TAG_NAMES = frozenset(
+    name for name, shape in JSON_LITERAL_TAG_SHAPES.items() if shape in ("{}", "[]"))
+
+# The stand-in for a scalar tag: bare text, valid inside the template's own quotes (where a scalar tag
+# sits) and invalid as a value on its own (where it renders escaped text that needs those quotes).
+SCALAR_TAG_PLACEHOLDER = "vams-tag"
+
+# The JSON literal each USER tag type renders as, keyed by the declared type from a template's tagSchema.
+# templateResolution.substitute_user_tags emits a str value as escaped-and-unquoted text and every other
+# value through json.dumps, so a declared type predicts the rendered SHAPE: an integer renders `5`, a
+# boolean `true`, a string-list `["a"]`. string and enum are absent on purpose — they render text, which
+# is what the scalar fallback already covers.
+USER_TAG_TYPE_SHAPES = {
+    "integer": "0",
+    "number": "0.0",
+    "boolean": "true",
+    "string-list": "[]",
+}
+
+# Every typed user tag renders a non-text JSON value, so for all four the placeholder is the whole value
+# and takes no quotes. Quoting one is not a syntax error at save — `{"k": "0"}` parses — it is a TYPE
+# error that only shows up at run time, when the pipeline reads the string "5" where its schema promised
+# 5. The structured-as-string pass makes that detectable: emitting a QUOTED stand-in is valid in a value
+# position and breaks a string it sits inside, so the two positions produce different verdicts.
+STRUCTURED_USER_TAG_TYPES = frozenset(USER_TAG_TYPE_SHAPES)
+
+
+def user_tag_shapes(tag_schema):
+    """{tagKey: JSON literal text} for the typed user tags in a template's ``tagSchema``.
+
+    Only the types that render a NON-text value appear. A malformed or partial schema entry is skipped
+    rather than raising: this feeds a structural parse check, and the schema's own shape is validated
+    separately by ``validate_tag_schema``.
+    """
+    shapes = {}
+    for field in tag_schema or []:
+        if not isinstance(field, dict):
+            continue
+        key = field.get("tagKey")
+        shape = USER_TAG_TYPE_SHAPES.get(field.get("type"))
+        if key and shape:
+            shapes[key] = shape
+    return shapes
+
+
+def json_body_placeholder_text(text, structured_as_string=False, tag_schema=None):
+    """The text with every ``{{tag}}`` replaced by a JSON-valid stand-in for what that tag renders, so
+    a json-format body can be parse-checked while its tags are unresolved.
+
+    A json-kind tag becomes a literal of its own shape (``{}`` / ``[]`` / ``0``); a USER tag declared
+    with a non-text type in ``tag_schema`` becomes a literal of that type's shape; every other tag
+    becomes bare text, which parses inside the template's quotes and fails outside them, matching where
+    each kind renders.
+
+    ``tag_schema`` is the template's own declared tags, and it arrives in the same request as the body —
+    so a typed user tag is classified by its declaration rather than defaulting to text. Without it the
+    four non-text types fall back to the scalar stand-in, which accepts them only inside quotes: exactly
+    where they render a string and the pipeline receives the wrong type.
+
+    ``structured_as_string`` swaps the object/array literals for a quoted string, which parses in a
+    value position and breaks a string it sits inside. Parsing both forms therefore tells a tag standing
+    alone as a value apart from one written inside quotes, where the rendered object would break the
+    surrounding JSON."""
+    if not text:
+        return text or ""
+
+    declared = user_tag_shapes(tag_schema)
+    structured_user_tags = {
+        field.get("tagKey")
+        for field in (tag_schema or [])
+        if isinstance(field, dict) and field.get("type") in STRUCTURED_USER_TAG_TYPES
+    }
+
+    def _replace(match):
+        name = match.group(1)
+        # A reserved system name wins over a same-named user tag: the renderer resolves system tags from
+        # its own context, so the system shape is what would actually be substituted.
+        shape = JSON_LITERAL_TAG_SHAPES.get(name)
+        if shape is not None:
+            if structured_as_string and name in STRUCTURED_TAG_NAMES:
+                return json.dumps(SCALAR_TAG_PLACEHOLDER)
+            return shape
+        shape = declared.get(name)
+        if shape is not None:
+            if structured_as_string and name in structured_user_tags:
+                return json.dumps(SCALAR_TAG_PLACEHOLDER)
+            return shape
+        return SCALAR_TAG_PLACEHOLDER
+
+    return _TAG_PATTERN.sub(_replace, text)
 
 
 def render_config(text, manifest, execution, metadata_loader=None, now=None,

@@ -19,10 +19,21 @@ the base; a chosen template's `overrides` replaces, per key, only `inputFileArit
 
 import fnmatch
 
+from common.workflows.executionRecords import metadata_input_enabled
+
 # Keys a template may override on the pipeline systemConfig.
 TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inputFileFilters")
 
-_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes")
+_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+
+# The metadata keys scoped to an input FILE. assetMetadata and databaseMetadata describe an entity, so
+# they are collectable regardless of arity; these two have nothing to describe without an input file.
+_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes")
+
+# A stored metadataInputs map may omit keys, so every read of one resolves an absent key to its builder
+# default (METADATA_INPUT_DEFAULTS) rather than to False — the execute path collects on the same rule,
+# so what these checks report is what a run actually gathers.
+_metadata_enabled = metadata_input_enabled
 
 # Patterns that match every file. In an ALLOW list these mean allow-all, which is also what an absent
 # or empty allow list means — so an allow list consisting only of these is "open" and defers to the
@@ -252,36 +263,76 @@ def aggregate_input_file_filters(workflow_system_config, pipeline_system_configs
     }
 
 
-def aggregate_metadata_inputs(workflow_system_config, pipeline_system_configs):
+def aggregate_metadata_inputs(workflow_system_config, pipeline_system_configs,
+                              template_overrides=None):
     """The metadata inputs a workflow's steps will actually receive, for display alongside its
     systemConfig.
 
-    A metadata type reaches a pipeline only when BOTH the workflow gate has it on and some pipeline
-    asks for it — the workflow gate is what loads the payload, and a pipeline that does not ask for it
-    is not handed it. So each key is (workflow gate AND any pipeline wants it), and a key the workflow
-    gates off is reported as off however many pipelines want it.
+    A metadata type reaches a pipeline only when BOTH the workflow gate has it on and the pipeline
+    asks for it. The two levels do different jobs: the workflow gate is INTAKE (what the run gathers
+    into the shared envelope at all) and the pipeline's own value is DELIVERY (what that step is
+    handed, narrowed per step by executionRecords.narrow_metadata_envelope). So each key is
+    (workflow gate AND any pipeline wants it), and a key the workflow gates off is reported as off
+    however many pipelines want it.
 
-    Returns {assetMetadata, fileMetadata, fileAttributes, gatedOffByWorkflow: [keys]} where
-    `gatedOffByWorkflow` names the types a pipeline asked for but the workflow suppressed — the case
-    worth showing, since the pipeline runs without data it declared it uses.
+    Returns {assetMetadata, fileMetadata, fileAttributes, databaseMetadata,
+    gatedOffByWorkflow: [keys]} where `gatedOffByWorkflow` names the types a pipeline asked for but
+    the workflow suppressed — the case worth showing, since the pipeline runs without data it
+    declared it uses.
 
-    Carries the same template-override caveat as aggregate_input_file_filters."""
+    A map that omits a key carries that key's builder default, so a config stored before a key existed
+    reports the toggle the execute path actually collects on.
+
+    `template_overrides` is the ordered list of each pipeline's chosen template `overrides` map,
+    positionally matching `pipeline_system_configs`. Supplying it folds the overrides into each
+    pipeline's effective config — overrides genuinely change delivery, so a view computed without them
+    can differ from what a run delivers. `includesTemplateOverrides` reports whether they were
+    supplied: a workflow-level view has no single template choice (templates are chosen per execution,
+    or per trigger via defaultTemplateIds), so that caller reports False truthfully rather than
+    implying a resolution it did not perform."""
     wsc = workflow_system_config or {}
     gate = wsc.get("metadataInputs") or {}
+    configs = list(pipeline_system_configs or [])
+    overrides_list = list(template_overrides or [])
+    effective_configs = [
+        resolve_effective_pipeline_config(
+            psc or {}, overrides_list[i] if i < len(overrides_list) else None)
+        for i, psc in enumerate(configs)
+    ]
     result = {}
     gated_off = []
     for key in _METADATA_KEYS:
         wanted = any(
-            ((psc or {}).get("metadataInputs") or {}).get(key)
-            for psc in pipeline_system_configs or []
+            _metadata_enabled((psc or {}).get("metadataInputs"), key)
+            for psc in effective_configs
         )
-        allowed = bool(gate.get(key))
+        allowed = _metadata_enabled(gate, key)
         result[key] = bool(allowed and wanted)
         if wanted and not allowed:
             gated_off.append(key)
     result["gatedOffByWorkflow"] = gated_off
-    result["includesTemplateOverrides"] = False
+    result["includesTemplateOverrides"] = bool(overrides_list)
     return result
+
+
+def arity_none_metadata_warnings(system_config, label=""):
+    """Warnings (never errors) for a systemConfig that declares inputFileArity 'none' while asking for
+    the file-scoped metadata types. Those types describe an input file, so an arity-none run has
+    nothing to collect them from and they are inert; the config is authored, not broken, and several
+    shipped pipelines carry it. `label` prefixes the message ('' for an unlabeled single config)."""
+    sc = system_config or {}
+    if _arity(sc) != "none":
+        return []
+    metadata = sc.get("metadataInputs") or {}
+    inert = [k for k in _FILE_SCOPED_METADATA_KEYS if _metadata_enabled(metadata, k)]
+    if not inert:
+        return []
+    prefix = f"{label} " if label else ""
+    return [
+        f"{prefix}uses {', '.join(inert)} but expects no input files (inputFileArity 'none'), so "
+        f"{'that type has' if len(inert) == 1 else 'those types have'} no effect. Asset and database "
+        "metadata are still collected from any metadata sources the run names."
+    ]
 
 
 def _pipeline_label(pipeline_database_id, pipeline_id):
@@ -481,6 +532,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
     Unlike validate_execution this has no concrete inputs; it compares the workflow's systemConfig
     against its included pipelines' declared systemConfig to surface authoring issues early:
       - metadata mismatch: a pipeline needs a metadata type the workflow gate has off,
+      - inert file-scoped metadata: arity 'none' with fileMetadata/fileAttributes asked for,
       - arity mismatch: workflow multi vs pipeline single,
       - filter shadowing: workflow filters that would exclude everything a pipeline needs,
       - trigger-default sanity: a default template whose required tags are not all defaulted.
@@ -497,6 +549,8 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
     wf_arity = _arity(wsc)
     wf_filters = wsc.get("inputFileFilters") or {}
 
+    warnings.extend(arity_none_metadata_warnings(wsc, "the workflow"))
+
     for pipeline in pipeline_configs or []:
         pid = pipeline.get("pipelineId", "")
         pdb = pipeline.get("pipelineDatabaseId", "")
@@ -511,11 +565,15 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
         # Metadata mismatch: pipeline wants a metadata type the workflow gate turned off.
         p_metadata = psc.get("metadataInputs") or {}
         for meta_key in _METADATA_KEYS:
-            if p_metadata.get(meta_key) and not wf_metadata.get(meta_key):
+            if (_metadata_enabled(p_metadata, meta_key)
+                    and not _metadata_enabled(wf_metadata, meta_key)):
                 warnings.append(
                     f"{label} uses {meta_key} but the workflow's metadata input for {meta_key} is "
                     "off; the pipeline will run without it."
                 )
+
+        # File-scoped metadata a pipeline asks for that its own arity leaves nothing to collect from.
+        warnings.extend(arity_none_metadata_warnings(psc, label))
 
         # Arity mismatch (surfaces the execute matrix's multi-vs-single case at save time).
         if wf_arity == "multi" and _arity(psc) == "one":

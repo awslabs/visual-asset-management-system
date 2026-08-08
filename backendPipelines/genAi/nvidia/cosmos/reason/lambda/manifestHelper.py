@@ -133,6 +133,24 @@ def get_asset_file_record(envelope, database_id, asset_id, file_key):
     return None
 
 
+def get_database_metadata(envelope, database_id):
+    """Return the metadata map recorded for one databaseId in a v2 grouped envelope's top-level
+    ``databases`` list, or ``{}`` when the envelope carries no entry for it.
+
+    A run that captured exactly ONE database resolves to that database whatever the requested id. A
+    file-less run has no asset to project through, so its subject databaseId is empty and an id match
+    would find nothing — yet the one database it named is unambiguously the database its metadata
+    describes. With several databases the requested id is the only thing that can disambiguate them,
+    so the match is required."""
+    groups = (envelope or {}).get("databases", []) or []
+    if len(groups) == 1:
+        return (groups[0] or {}).get("metadata") or {}
+    for group in groups:
+        if (group or {}).get("databaseId") == database_id:
+            return (group or {}).get("metadata") or {}
+    return {}
+
+
 def _legacy_scope(metadata_body, scope):
     """Read one scope out of a legacy ``{"VAMS": {...}}`` body."""
     if not isinstance(metadata_body, dict):
@@ -165,15 +183,26 @@ def file_attributes_for(metadata_body, database_id, asset_id, file_key):
     return _legacy_scope(metadata_body, "fileAttributes")
 
 
+def database_metadata_for(metadata_body, database_id):
+    """Database-level metadata for a database. Reads the v2 top-level ``databases`` entry (a lone
+    captured database resolves whatever the requested id, see ``get_database_metadata``), falling
+    back to the legacy ``VAMS.databaseMetadata`` scope for a v1 body."""
+    if isinstance(metadata_body, dict) and "assets" in metadata_body:
+        return get_database_metadata(metadata_body, database_id)
+    return _legacy_scope(metadata_body, "databaseMetadata")
+
+
 def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key=""):
     """Project a metadata payload onto the legacy ``{"VAMS": {assetData, assetMetadata,
-    fileMetadata, fileAttributes}}`` view existing pipeline readers dig into.
+    fileMetadata, fileAttributes, databaseMetadata}}`` view existing pipeline readers dig into.
 
     - A v2 grouped body is projected for the given (databaseId, assetId, fileKey): assetData +
       assetMetadata come from the asset's '/' record, fileMetadata/fileAttributes from the fileKey
       record. A fileKey of '/' (whole-asset selection) resolves to the asset-level record only,
       leaving the file scopes empty — mirroring the writer, which emits no per-file record for a
-      whole-asset selection.
+      whole-asset selection. databaseMetadata is the entry the envelope's top-level 'databases' list
+      holds for THE databaseId being projected, so the five scopes describe one coherent (database,
+      asset, file) subject; it is empty when the list carries no entry for that database.
     - A body already in the ``{"VAMS": {...}}`` shape (or any non-grouped dict) passes through
       unchanged; ``{}`` when it is not a usable dict.
 
@@ -197,6 +226,7 @@ def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key="")
             "assetMetadata": asset_record.get("metadata") or {},
             "fileMetadata": file_record.get("metadata") or {},
             "fileAttributes": file_record.get("attributes") or {},
+            "databaseMetadata": get_database_metadata(body, database_id),
         }}
     return body
 
@@ -210,11 +240,55 @@ def resolved_file_key(resolved):
     return _normalize_file_key(input_files[0].get("relativePath"))
 
 
+def run_vams_view(metadata_body, resolved):
+    """Project a metadata payload onto the legacy ``{"VAMS": {...}}`` view for the subject a RESOLVED
+    manifest describes, choosing that subject the way the backend's renderer does.
+
+    The subject is the run's primary INPUT FILE when the manifest carries one: its (databaseId,
+    assetId) plus ``resolved_file_key``. With no input files (arity 'none') the resolved identity is
+    the run's OUTPUT TARGET, which is where results are written rather than where metadata was read
+    from — so the subject becomes the envelope's FIRST asset group at its asset level ('/'). That
+    group is the run's first metadata-source asset, since a run with no input files contributes no
+    other asset to the envelope. An envelope naming no asset at all (a database-only selection) keeps
+    an empty subject, leaving the asset and file scopes empty while ``databaseMetadata`` still resolves
+    through its lone-database rule.
+
+    Mirrors the subject chain in the backend's render path (input file, else first metadata-source
+    asset at '/', else nothing), so a template tag and a pipeline's own metadata read resolve to the
+    same values. A v1 body passes through ``to_legacy_vams_view`` unchanged."""
+    body = metadata_body or {}
+    if not isinstance(body, dict):
+        return {}
+    if not (body.get("schemaVersion") == METADATA_SCHEMA_VERSION_GROUPED and "assets" in body):
+        return to_legacy_vams_view(body)
+    resolved = resolved or {}
+    if resolved.get("inputFiles"):
+        return to_legacy_vams_view(body, resolved.get("databaseId", ""), resolved.get("assetId", ""),
+                                   resolved_file_key(resolved))
+    groups = body.get("assets") or []
+    first_group = (groups[0] if groups else {}) or {}
+    return to_legacy_vams_view(body, first_group.get("databaseId", "") or "",
+                               first_group.get("assetId", "") or "", "/")
+
+
+class InputConfigurationError(RuntimeError):
+    """Raised when an input-configuration file exists but cannot be parsed as a JSON object."""
+
+
 def fetch_input_configuration(s3_client, input_configuration_s3_location):
     """Fetch + parse the per-pipeline input configuration file (the user-defined
     ``inputParameters``) from S3, returning the parsed object. The configuration file is the
-    raw user JSON (it carries no VAMS schema envelope), so it is returned as parsed. Best-effort:
-    returns ``{}`` on a missing location or any S3/parse failure.
+    raw user JSON (it carries no VAMS schema envelope), so it is returned as parsed.
+
+    ``{}`` when no configuration file was supplied or it could not be fetched — callers rely on that
+    falsy result to fall back to the legacy inline ``inputParameters`` field. Raises
+    ``InputConfigurationError`` when the file WAS fetched but its body is not a JSON object.
+
+    The distinction is the point. Returning ``{}`` for a malformed body makes it indistinguishable from
+    "no configuration file", so the pipeline runs on its defaults (or a stale inline field), reports
+    SUCCESS, and every parameter the caller set is silently gone. This is the launch path, so failing
+    here costs nothing but a failed execution record; failing later costs a full job that did the wrong
+    thing.
 
     Like metadata, the configuration content is never forwarded past the vamsExecute lambda —
     only its S3 location travels — so a consumer reads the file from S3 here, removing the
@@ -227,9 +301,19 @@ def fetch_input_configuration(s3_client, input_configuration_s3_location):
     try:
         resp = s3_client.get_object(Bucket=bucket, Key=key)
         body = resp["Body"].read().decode("utf-8")
-        return json.loads(body) if body else {}
-    except Exception:  # nosec B110 - best-effort; an unreadable config file yields {}
+    except Exception:  # nosec B110 - an unfetchable config file yields {} (the legacy fallback)
         return {}
+    if not body or not body.strip():
+        return {}
+    try:
+        parsed = json.loads(body)
+    except ValueError as e:
+        raise InputConfigurationError(
+            f"The input configuration at {input_configuration_s3_location} is not valid JSON: {e}")
+    if not isinstance(parsed, dict):
+        raise InputConfigurationError(
+            f"The input configuration at {input_configuration_s3_location} is not a JSON object")
+    return parsed
 
 
 def pipeline_execution_id_from_event_prefix(orchestration_event_prefix):
@@ -295,14 +379,21 @@ def resolve_inputs(data, manifest=None):
         "manifestUsed": False,
     }
 
-    # A results-only pipeline (inputFileArity "none") has no input files, so the asset identity
-    # falls back to the execution's output target, which the Step Functions body always carries.
-    # Applied before the no-manifest return so both paths get it; a manifest input file below
-    # still wins when one is present.
-    if not resolved["assetId"] and data.get("outputAssetId"):
-        resolved["assetId"] = data["outputAssetId"]
-    if not resolved["databaseId"] and data.get("outputDatabaseId"):
-        resolved["databaseId"] = data["outputDatabaseId"]
+    # A run with no input files (inputFileArity "none", or a results-only workflow) has no input file
+    # to take an asset identity from, so it falls back to the execution's OUTPUT target. That target
+    # is carried in two different shapes and both are read here:
+    #   - the manifest's `outputTarget` block, which is where a manifest-driven run carries it; and
+    #   - top-level `outputAssetId`/`outputDatabaseId` on the Step Functions body, the legacy shape.
+    # The per-pipeline task body deliberately carries only the manifest POINTER, so reading the
+    # legacy keys alone leaves assetId empty for every arity-"none" run — and the container then
+    # fails with "assetId is required in pipeline definition" after the job has been scheduled.
+    # Applied before the no-manifest return so both paths get it; a manifest input file below still
+    # wins when one is present.
+    output_target = (manifest or {}).get("outputTarget") or {}
+    if not resolved["assetId"]:
+        resolved["assetId"] = output_target.get("assetId") or data.get("outputAssetId") or ""
+    if not resolved["databaseId"]:
+        resolved["databaseId"] = output_target.get("databaseId") or data.get("outputDatabaseId") or ""
 
     if not manifest:
         return resolved
@@ -390,6 +481,27 @@ def enforce_single_input_file(resolved):
             f"supported for this pipeline.")
 
 
+def _unambiguous_vams_view(envelope):
+    """Project a v2 grouped envelope onto the legacy view WITHOUT a caller-supplied subject.
+
+    A scope resolves only where it is unambiguous. The asset and file scopes need exactly ONE asset
+    group — several assets leave no way to tell which one a value belongs to — and the file scopes
+    additionally need exactly one per-file record within it; anything else leaves those scopes empty.
+    The database scope carries its own lone-database rule (``get_database_metadata``), so it still
+    resolves for a file-less run whose envelope names one database and no asset."""
+    assets = envelope.get("assets", []) or []
+    database_id, asset_id, file_key = "", "", "/"
+    if len(assets) == 1:
+        group = assets[0] or {}
+        database_id = group.get("databaseId", "") or ""
+        asset_id = group.get("assetId", "") or ""
+        file_records = [record for record in (group.get("files") or [])
+                        if (record or {}).get("fileKey") not in (None, "", "/")]
+        if len(file_records) == 1:
+            file_key = file_records[0].get("fileKey") or "/"
+    return to_legacy_vams_view(envelope, database_id, asset_id, file_key)
+
+
 def resolve_input_setting(input_configuration, metadata, config_keys, metadata_key,
                           metadata_scopes=("assetMetadata",)):
     """One pipeline input setting, resolved CONFIG-FIRST with an ASSET-METADATA fallback.
@@ -402,7 +514,14 @@ def resolve_input_setting(input_configuration, metadata, config_keys, metadata_k
 
     Only ``assetMetadata`` is consulted by default: these settings describe the RUN (a prompt, a seed,
     a frame count), not an individual file, and a workflow may select many files. Pass
-    ``metadata_scopes`` explicitly for a pipeline whose setting genuinely is per-file.
+    ``metadata_scopes`` explicitly for a pipeline whose setting genuinely is per-file, or to consult
+    ``databaseMetadata`` — the scope that lets a standing value live on the database rather than on
+    each asset (``("assetMetadata", "databaseMetadata")``).
+
+    ``metadata`` may be either the v2 grouped envelope ``fetch_metadata`` returns or a legacy
+    ``{"VAMS": {...}}`` view a caller already projected with ``to_legacy_vams_view``. A grouped
+    envelope is projected here through ``_unambiguous_vams_view``, so a scope supplies a value only
+    when the envelope leaves no doubt which asset (or database) it came from.
 
     ``config_keys`` is tried in order, so a template may use either the canonical upper-case key or a
     lower-case alias. Returns "" when neither source has a value.
@@ -428,6 +547,8 @@ def resolve_input_setting(input_configuration, metadata, config_keys, metadata_k
             md = {}
     if not isinstance(md, dict):
         return ""
+    if md.get("schemaVersion") == METADATA_SCHEMA_VERSION_GROUPED and "assets" in md:
+        md = _unambiguous_vams_view(md)
     vams = md.get("VAMS", {})
     if not isinstance(vams, dict):
         return ""

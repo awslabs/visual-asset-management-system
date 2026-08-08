@@ -10,7 +10,7 @@ by buildWorkflowTriggerDispatchFunction); this lambda consumes that buffer. SQS 
 single upload action fanning out to many files gets batching / retry / throttled concurrency.
 
 For each uploaded file the dispatcher resolves its asset (databaseId/assetId + asset-relative key),
-enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByTypeGSI), matches each row's
+enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByBaseTypeGSI), matches each row's
 inputFileFilters + database scope (common.workflows.triggerMatching), and invokes the asset-less
 executeWorkflowV2 handler once per firing trigger as SYSTEM_USER with triggerType=fileUpload. Each
 launch is best-effort + isolated: one failing workflow does not stop the others or fail the batch.
@@ -83,11 +83,16 @@ def _should_skip_key(s3_key):
 
 
 def _list_fileupload_triggers():
-    """All fileUpload trigger rows via TriggersByTypeGSI (PK triggerType). Paginated to exhaustion."""
+    """All fileUpload trigger rows via TriggersByBaseTypeGSI. Paginated to exhaustion.
+
+    The index partitions on `triggerBaseType`, which always holds the BARE type, because a workflow may
+    carry several fileUpload triggers whose sort keys are suffixed ("fileUpload#7f3a91"). Keying the
+    lookup on the sort key instead would put each additional trigger in its own partition, and an
+    exact-match query would never find it — the trigger would sit in the table and silently never fire."""
     rows = []
     kwargs = {
-        "IndexName": "TriggersByTypeGSI",
-        "KeyConditionExpression": Key("triggerType").eq(TRIGGER_TYPE_FILE_UPLOAD),
+        "IndexName": "TriggersByBaseTypeGSI",
+        "KeyConditionExpression": Key("triggerBaseType").eq(TRIGGER_TYPE_FILE_UPLOAD),
     }
     resp = workflow_triggers_table.query(**kwargs)
     while True:

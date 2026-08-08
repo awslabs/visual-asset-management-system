@@ -31,6 +31,18 @@ const IGNORE = [
     /net::ERR_ABORTED/i,
     /ResizeObserver loop/i,
     /Download the React DevTools/i,
+    // App-shell config bootstrap, not a viewer. Auth.tsx re-fetches amplify-config and secure-config
+    // on every page load and logs these three when the request fails at the network layer, keeping the
+    // cached config so the page still renders — which is why the heading and the viewer surface both
+    // appear. Those requests share the connection with a multi-MB asset download, so late in a long
+    // run the edge rejects one, and the case that catches it is whichever happens to be running:
+    // gramophone.usdz one round, Ifc4_CubeAdvancedBrep.ifc the next. Attributing an app-shell fetch
+    // failure to the viewer under test made an environmental condition look asset-specific. A viewer's
+    // own init errors are still fatal here, and a genuine config outage fails the heading assertion
+    // above rather than reaching this list.
+    /getAmplifyConfig: Fetch error/i,
+    /Failed to refresh amplify-config/i,
+    /Error getting secure-config/i,
 ];
 
 function watchErrors(page: Page): string[] {

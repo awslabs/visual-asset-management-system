@@ -126,7 +126,13 @@ def format_pipeline(pipeline: Dict[str, Any]) -> str:
         lines.append(f"Description: {description}")
     templates = pipeline.get('templates')
     if templates:
-        lines.append(f"Templates: {', '.join(t.get('templateId', '?') for t in templates)}")
+        listed = ', '.join(t.get('templateId', '?') for t in templates)
+        # The details response caps its inline templates list; templateCount is the true total, so a
+        # shortfall means the rest are only reachable through `pipeline template list`.
+        if isinstance(template_count, int) and template_count > len(templates):
+            listed += (f" (showing {len(templates)} of {template_count} — "
+                       f"use 'pipeline template list' for the rest)")
+        lines.append(f"Templates: {listed}")
     return '\n'.join(lines)
 
 
@@ -265,6 +271,10 @@ def create_pipeline(ctx: click.Context, database_id: str, pipeline_name: str,
     executionConfig selects the execution type (Lambda / SQS / EventBridge / DeadlineCloud) and its
     per-type resource block; systemConfig sets input-file arity, asset scope, metadata inputs, and
     template requirements. Both are JSON objects supplied inline or from a file.
+
+    systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
+    and databaseMetadata, each defaulting to true. It gates which metadata a run captures, not
+    whether the caller must supply it: naming a metadata source is always optional.
 
     Examples:
         vamscli pipeline create -d my-db -n "My Converter" \\
@@ -534,6 +544,10 @@ def create_template(ctx: click.Context, database_id: str, pipeline_id: str, temp
                     overrides: Optional[str], overrides_file: Optional[str],
                     tag_schema: Optional[str], tag_schema_file: Optional[str], json_output: bool):
     """Create a pipeline template.
+
+    --overrides narrows the pipeline's own systemConfig for runs that use this template, over the keys
+    inputFileArity, assetScope, metadataInputs, and inputFileFilters. metadataInputs takes the same
+    boolean map as the pipeline: assetMetadata, fileMetadata, fileAttributes, databaseMetadata.
 
     Examples:
         vamscli pipeline template create -d my-db -p my-pipe -n "OBJ output" \\

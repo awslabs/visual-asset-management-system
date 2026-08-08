@@ -428,25 +428,49 @@ class CasbinEnforcerService:
             # arbitrary expression syntax into the eval()'d matcher (authz expression injection).
             value = self._escape_rule_value(criterion['value'])
 
+            # Two newline properties of Python's regex dialect decide the anchors and wildcards used
+            # below. `regexMatch` is `re.match` (casbin.util.regex_match), so:
+            #
+            #   '$' also matches immediately BEFORE a trailing newline, so '^value$' matches both
+            #   "value" and "value\n". On an allow rule that grants a second, distinct stored value;
+            #   '\Z' is the true end of string. Names reach here through OBJECT_NAME, whose charset
+            #   includes \s — so "value\n" is a storable name, not a hypothetical.
+            #
+            #   '.' does NOT cross a newline, so '.*value.*' fails to see "pre\nvalue". On a
+            #   containment DENY that is a bypass: the inner match returns False, the negation
+            #   returns True, and access is granted. The wildcards therefore use the SCOPED group
+            #   '(?s:.*)' rather than a leading '(?s)': a global flag would apply to the caller's
+            #   value too, so a value containing '.' would start spanning lines and the rule would
+            #   match more than it says.
+            #
+            # The two treatments are per-operator on purpose. '\Z' narrows, so it belongs on the
+            # operators that terminate a match; '(?s:.*)' widens the machine-generated wildcards, so
+            # it belongs only where under-matching is the hazard. Applying '(?s)' to `equals` would
+            # widen an allow rule instead of tightening it.
             if criterion["operator"] == "equals":
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '^{value}$')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '^{value}\\\\Z')"""
                 )
             elif criterion["operator"] == "contains":
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '.*{value}.*')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '(?s:.*){value}(?s:.*)')"""
                 )
             elif criterion["operator"] == "does_not_contain":
                 obj_rule.append(
-                    f"""!(regexMatch(r.obj.{criterion['field']}, '.*{value}.*'))"""
+                    f"""!(regexMatch(r.obj.{criterion['field']}, '(?s:.*){value}(?s:.*)'))"""
                 )
             elif criterion["operator"] == "starts_with":
+                # `re.match` already anchors at offset 0 and a trailing '.*' can
+                # always match empty, so '^value.*' is boolean-identical to '^value' — there is no
+                # forward over-match to close, and nothing a newline-crossing wildcard would alter.
                 obj_rule.append(
                     f"""regexMatch(r.obj.{criterion['field']}, '^{value}.*')"""
                 )
             elif criterion["operator"] == "ends_with":
+                # The leading wildcard must span newlines (an under-matching
+                # deny is a bypass) and the terminator must be '\Z' rather than '$'.
                 obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '.*{value}$')"""
+                    f"""regexMatch(r.obj.{criterion['field']}, '(?s:.*){value}\\\\Z')"""
                 )
             elif criterion["operator"] == "is_one_of":
                 obj_rule.append(

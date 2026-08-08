@@ -34,8 +34,10 @@ def make_remote_item(relative_path, size=100, timestamp='2026-01-01T00:00:00+00:
 def mock_asyncio_run(return_value):
     """Build an asyncio.run replacement that closes the received coroutine.
 
-    Closing prevents 'coroutine was never awaited' RuntimeWarnings from
-    leaking into other tests' captured output during garbage collection.
+    Closing prevents 'coroutine was never awaited' RuntimeWarnings from being emitted during a
+    later test's garbage collection. Kept as a `side_effect` here because these call sites pass
+    the value in at patch time; the equivalent for sites that assign `mock.return_value`
+    afterwards is `new_callable=CoroutineClosingMock` from conftest.
     """
     def _run(coro):
         coro.close()

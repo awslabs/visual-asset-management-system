@@ -106,7 +106,10 @@ class TestTemplateResolution:
     def test_case2_override_with_template_allowed(self):
         errs, res = tr.resolve_pipeline_config(
             {"requireTemplate": False, "allowCustomTemplateOverride": True},
-            {"templateId": "t1", "configBody": "stored", "configFormat": "json"},
+            # configFormat is yaml: these bodies are YAML, and a json-format override is now checked
+            # against the same parse gate the save path applies, which "over: {{p}}" fails (as would
+            # the stored "stored" — a template declaring json could never have held either).
+            {"templateId": "t1", "configBody": "stored", "configFormat": "yaml"},
             [{"tagKey": "p", "type": "string"}],
             {"templateId": "t1", "customTemplateOverride": "over: {{p}}",
              "templateTags": [{"key": "p", "value": "v"}]})
@@ -118,7 +121,7 @@ class TestTemplateResolution:
         # edited body is accepted (the unified "Customize configuration" grant).
         errs, res = tr.resolve_pipeline_config(
             {"requireTemplate": True, "allowCustomTemplateOverride": False},
-            {"templateId": "t1", "configBody": "stored", "configFormat": "json",
+            {"templateId": "t1", "configBody": "stored", "configFormat": "yaml",
              "allowCustomEdit": True},
             [], {"templateId": "t1", "customTemplateOverride": "edited: 1"})
         assert errs == [] and res["renderedConfig"] == "edited: 1"

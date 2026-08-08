@@ -147,11 +147,39 @@ export interface Workflow {
 /** Create body: workflowId is null when the backend generates it. */
 export type WorkflowCreateRequest = Omit<Workflow, "workflowId"> & { workflowId?: string | null };
 
+/**
+ * The trigger types VAMS can configure. `fileUpload` is the only one implemented today; the editor is
+ * driven by this list rather than by a hard-coded type, so adding one here surfaces it in the UI.
+ */
+export const TRIGGER_TYPES = [
+    {
+        type: "fileUpload",
+        label: "File upload",
+        description: "Runs the workflow when an uploaded file matches this trigger's filters.",
+    },
+] as const;
+
+export type TriggerBaseType = (typeof TRIGGER_TYPES)[number]["type"];
+
 export interface WorkflowTrigger {
-    triggerType: "fileUpload";
+    /**
+     * The trigger's KEY, and what the trigger endpoints take: the bare type for a workflow's first
+     * trigger of that type, or `type#triggerId` for an additional one. A workflow may carry several
+     * triggers of one type, each with its own filters and default templates.
+     */
+    triggerType: string;
+    /** The plain type, for grouping and display. Absent on a row written before it was reported. */
+    triggerBaseType?: TriggerBaseType | string;
+    /** Distinguishes several triggers of one type; empty for a workflow's first trigger of a type. */
+    triggerId?: string;
     enabled?: boolean;
     inputFileFilters?: { allow?: string[]; exclude?: string[] };
     defaultTemplateIds?: Record<string, string>;
+}
+
+/** A trigger's plain type, falling back to splitting the key for a row that does not report it. */
+export function triggerBaseTypeOf(trigger: WorkflowTrigger): string {
+    return trigger.triggerBaseType || (trigger.triggerType || "").split("#")[0];
 }
 
 export interface ExecuteInputFile {
@@ -159,6 +187,16 @@ export interface ExecuteInputFile {
     assetId: string;
     relativeFileKey: string;
     versionId?: string;
+}
+
+/**
+ * One asset named purely as a metadata source. It carries no file key — a metadata source is an
+ * entity, never a file — and is not an input file, so it takes no part in arity, input-file filters,
+ * or output-target resolution.
+ */
+export interface MetadataSourceAsset {
+    databaseId: string;
+    assetId: string;
 }
 
 export interface PipelineExecutionParameters {
@@ -169,6 +207,10 @@ export interface PipelineExecutionParameters {
 
 export interface ExecuteRequest {
     inputFiles: ExecuteInputFile[];
+    // Metadata sources: entities whose stored metadata is captured into the run's metadata payload.
+    // ONE concrete database ("GLOBAL" is rejected server-side) and any number of source assets.
+    metadataSourceDatabaseId?: string;
+    metadataSourceAssets?: MetadataSourceAsset[];
     outputAssetId?: string;
     outputDatabaseId?: string;
     // Optional base path (under the output asset) output files are written beneath; supports
@@ -210,7 +252,15 @@ export interface ExecutionDetail extends Execution {
     pipelines?: any[];
     inputFiles?: any[];
     inputMetadata?: any[];
+    /** A metadata-source database's own metadata — its own collection because it belongs to no asset. */
+    inputDatabaseMetadata?: any[];
     outputs?: { files?: any[]; metadata?: any[]; results?: any[] };
+    /**
+     * Names of the collections the server returned partial, because the run exceeded the per-collection
+     * bound: "inputFiles", "inputMetadata", "inputDatabaseMetadata", "outputs.files",
+     * "outputs.metadata", "outputs.results". A named section holds fewer rows than the run produced,
+     * and there is no token to fetch the rest — so it must be shown as partial, never as the full set.
+     */
     truncatedCollections?: string[];
     // outputLocationType / outputAssetId / outputDatabaseId are inherited from Execution.
     outputFileBaseExecutionPathExtension?: string;

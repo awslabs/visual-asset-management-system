@@ -25,7 +25,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from common.dynamodb import to_update_expr
 from common.s3 import is_object_version_archived, list_all_object_versions
 from models.assetsV3 import (
@@ -1944,7 +1944,7 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2041,7 +2041,7 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2110,7 +2110,7 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2179,7 +2179,7 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2297,7 +2297,7 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2398,7 +2398,7 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2491,7 +2491,7 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

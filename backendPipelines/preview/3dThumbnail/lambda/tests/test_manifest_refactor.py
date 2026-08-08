@@ -7,6 +7,7 @@ vamsExecute lambda's use of it. The container is unchanged (A-shallow refactor).
 
 import os
 import sys
+import datetime
 import json
 import types
 import importlib
@@ -437,6 +438,48 @@ class TestOpenPipelineRegistration:
         assert detail["subExecution"]["executionArn"].endswith("PipelineJob_x")
         assert detail["subExecution"]["stateMachineArn"] == mod.STATE_MACHINE_ARN
         assert detail["logs"][0]["logGroupName"] == "/aws/vendedlogs/Preview3dThumbnail"
+
+    def test_concurrent_runs_get_distinct_execution_names(self):
+        """A state-machine execution name must be unique, and one upload can fan out to several
+        simultaneous runs of the same pipeline.
+
+        Caught live: two triggers on one workflow both matched an upload, both openPipeline invocations
+        landed in the same second, and the second StartExecution failed with ExecutionAlreadyExists on
+        the name PipelineJob_20260806_012019. The SFN retry hid it — it only succeeded because the
+        retry landed in the NEXT second."""
+        mod = self._load_module()
+        # A fresh response per call: the handler rewrites startDate in place, so a single shared dict
+        # would hand the second call a string where it expects a datetime.
+        start = MagicMock(side_effect=lambda **kw: {
+            "executionArn": f"arn:aws:states:us-east-1:1:execution:Preview3dThumbnail:{kw['name']}",
+            "startDate": datetime.datetime(2026, 1, 1, 0, 0, 0),
+        })
+        with patch.object(mod.sfn, "start_execution", start),                 patch.object(mod.events_client, "put_events", MagicMock()):
+            # Same wall-clock second for every run: what the timestamp alone cannot distinguish.
+            # Only the module's own datetime reference is frozen — patching datetime globally also
+            # freezes botocore's credential-expiry clock, which then raises on a tz-aware subtraction.
+            fixed = datetime.datetime(2026, 8, 6, 1, 20, 19, 500000)
+
+            class _FixedClock:
+                """Stands in for the module's `datetime` module: `now()` is pinned, everything else
+                delegates to the real one so the response's own strftime still works."""
+
+                class datetime(datetime.datetime):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return fixed
+
+            with patch.object(mod, "datetime", _FixedClock):
+                for _ in range(25):
+                    assert mod.lambda_handler(self._event(), MagicMock())["statusCode"] == 200
+
+        names = [c.kwargs["name"] for c in start.call_args_list]
+        assert len(names) == 25
+        assert len(set(names)) == 25, f"duplicate execution names: {names}"
+        # The name is also the S3 config-key namespace in other pipelines, so it must stay SFN-legal.
+        for name in names:
+            assert len(name) <= 80, name
+            assert ":" not in name and "/" not in name and " " not in name, name
 
     def test_registration_skipped_without_event_prefix(self):
         mod = self._load_module()

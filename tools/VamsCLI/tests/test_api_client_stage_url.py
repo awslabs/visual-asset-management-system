@@ -116,8 +116,16 @@ class TestStageInclusiveBaseUrl:
 
 
 class TestListWorkflowExecutionsHttpMethod:
-    """The asset-scoped execution list route is GET-only; the optional workflowDatabaseId filter must
-    be sent as a GET body, not a POST (no POST is registered on that resource)."""
+    """The asset-scoped execution list route is GET-only, and its workflow filter travels as QUERY
+    parameters.
+
+    It previously sent workflowDatabaseId as a GET request BODY, pairing it with the
+    `.../executions/{workflowId}` path form. That form compares against the joined
+    `workflowDatabaseId:workflowId` key, so `workflow_id` without `workflow_database_id` filtered
+    against ':<workflowId>' and returned an empty list rather than that workflow's executions —
+    verified live before the change. Query parameters are matched per field, so either half narrows
+    the list on its own.
+    """
 
     def _client(self):
         mock_profile_manager = MagicMock()
@@ -126,7 +134,7 @@ class TestListWorkflowExecutionsHttpMethod:
         return APIClient("https://x.execute-api.us-east-1.amazonaws.com/api",
                          profile_manager=mock_profile_manager)
 
-    def test_workflow_database_filter_uses_get_with_body(self):
+    def test_workflow_database_filter_uses_a_query_parameter(self):
         client = self._client()
         with patch.object(client.session, "request") as mock_req:
             mock_resp = MagicMock()
@@ -140,7 +148,64 @@ class TestListWorkflowExecutionsHttpMethod:
 
             method = mock_req.call_args[0][0]
             assert method == "GET", f"Expected GET (route is GET-only), got {method}"
-            assert mock_req.call_args.kwargs.get("json") == {"workflowDatabaseId": "global"}
+            assert mock_req.call_args.kwargs.get("params") == {"workflowDatabaseId": "global"}
+            # No GET body: fetch/XHR cannot send one, so the browser and the CLI must agree on the
+            # query form.
+            assert mock_req.call_args.kwargs.get("json") is None
+
+    def test_workflow_id_alone_is_sent_and_stays_on_the_base_path(self):
+        """The regression this guards: a workflow id must filter WITHOUT its database. Appending it
+        to the path instead selects the joined-key form, which matches nothing on its own."""
+        client = self._client()
+        with patch.object(client.session, "request") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.content = b'{"message": {"Items": []}}'
+            mock_resp.headers = {}
+            mock_resp.json.return_value = {"message": {"Items": []}}
+            mock_req.return_value = mock_resp
+
+            client.list_workflow_executions("db1", "asset1", workflow_id="wf-alpha")
+
+            assert mock_req.call_args.kwargs.get("params") == {"workflowId": "wf-alpha"}
+            called_url = mock_req.call_args[0][1]
+            assert called_url.endswith("/workflows/executions"), \
+                f"Expected the base path (not /executions/wf-alpha), got {called_url}"
+
+    def test_both_halves_are_sent_together(self):
+        client = self._client()
+        with patch.object(client.session, "request") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.content = b'{"message": {"Items": []}}'
+            mock_resp.headers = {}
+            mock_resp.json.return_value = {"message": {"Items": []}}
+            mock_req.return_value = mock_resp
+
+            client.list_workflow_executions("db1", "asset1", workflow_id="wf-alpha",
+                                            workflow_database_id="wdb-one",
+                                            params={"pageSize": 50})
+
+            assert mock_req.call_args.kwargs.get("params") == {
+                "pageSize": 50, "workflowId": "wf-alpha", "workflowDatabaseId": "wdb-one"}
+
+    def test_caller_params_are_not_mutated(self):
+        """The filters are merged into a COPY: a caller reusing its params dict across pages would
+        otherwise accumulate them (harmless here) or see them appear in its own dict (surprising)."""
+        client = self._client()
+        with patch.object(client.session, "request") as mock_req:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.content = b'{"message": {"Items": []}}'
+            mock_resp.headers = {}
+            mock_resp.json.return_value = {"message": {"Items": []}}
+            mock_req.return_value = mock_resp
+
+            caller_params = {"pageSize": 50}
+            client.list_workflow_executions("db1", "asset1", workflow_id="wf-alpha",
+                                            params=caller_params)
+
+            assert caller_params == {"pageSize": 50}
 
     def test_no_filter_uses_plain_get(self):
         client = self._client()
@@ -156,6 +221,77 @@ class TestListWorkflowExecutionsHttpMethod:
 
             assert mock_req.call_args[0][0] == "GET"
             assert mock_req.call_args.kwargs.get("json") is None
+            # No filter -> no filter keys at all, so the route applies its own defaults.
+            assert mock_req.call_args.kwargs.get("params") == {}
+
+
+class TestGetExecutionDetailsMetadata:
+    """The paged detail-metadata read: the endpoint path, the query parameters, and the raw
+    {'message': ...} envelope the pipeline/workflow/execution methods return intact."""
+
+    def _client(self):
+        mock_profile_manager = MagicMock()
+        mock_profile_manager.is_override_token.return_value = False
+        mock_profile_manager.load_auth_profile.return_value = {}
+        return APIClient("https://x.execute-api.us-east-1.amazonaws.com/api",
+                         profile_manager=mock_profile_manager)
+
+    @staticmethod
+    def _response(body):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = b"non-empty"
+        resp.headers = {}
+        resp.json.return_value = body
+        return resp
+
+    def test_endpoint_and_params(self):
+        client = self._client()
+        body = {"message": {"Items": [{"pipelineId": "p1"}], "collection": "output",
+                            "NextToken": "tok"}}
+        with patch.object(client.session, "request") as mock_req:
+            mock_req.return_value = self._response(body)
+
+            result = client.get_execution_details_metadata(
+                "e1", params={"collection": "output", "pageSize": 500, "pipelineId": "p1"})
+
+            called_url = mock_req.call_args[0][1]
+            assert called_url.endswith("/workflows/executions/e1/details/metadata")
+            assert mock_req.call_args[0][0] == "GET"
+            assert mock_req.call_args.kwargs["params"] == {
+                "collection": "output", "pageSize": 500, "pipelineId": "p1"}
+            # The envelope is left intact, as every pipeline/workflow/execution method does.
+            assert result == body
+
+    def test_missing_execution_raises_not_found(self):
+        from vamscli.utils.exceptions import ExecutionNotFoundError
+
+        client = self._client()
+        with patch.object(client, "get") as mock_get:
+            resp = MagicMock()
+            resp.status_code = 404
+            resp.content = b'{"message": "Execution not found"}'
+            resp.json.return_value = {"message": "Execution not found"}
+            mock_get.side_effect = requests.exceptions.HTTPError(response=resp)
+
+            with pytest.raises(ExecutionNotFoundError):
+                client.get_execution_details_metadata("missing")
+
+    def test_bad_token_raises_invalid_execution_data(self):
+        """The handler answers an unusable startingToken with a 400, which must surface as the
+        invalid-request error the command explains rather than a generic APIError."""
+        from vamscli.utils.exceptions import InvalidExecutionDataError
+
+        client = self._client()
+        with patch.object(client, "get") as mock_get:
+            resp = MagicMock()
+            resp.status_code = 400
+            resp.content = b'{"message": "startingToken is invalid."}'
+            resp.json.return_value = {"message": "startingToken is invalid."}
+            mock_get.side_effect = requests.exceptions.HTTPError(response=resp)
+
+            with pytest.raises(InvalidExecutionDataError):
+                client.get_execution_details_metadata("e1", params={"startingToken": "stale"})
 
 
 class TestPweErrorMessageFlattening:

@@ -143,6 +143,29 @@ def _parse_specified_pipelines(pipelines_json: Optional[str], pipelines_file: Op
     return result
 
 
+def _parse_metadata_source_assets(sources_json: Optional[str], sources_file: Optional[str],
+                                  source_refs: List[str]) -> List[Dict[str, Any]]:
+    """Build the metadataSourceAssets list from either a JSON option or repeated 2-segment refs.
+
+    A ref is 'databaseId:assetId'. It carries no file key: a metadata source is an entity, not a file,
+    which is what separates it from the 3-segment --input-file ref. Both segments are required, so a
+    ref with a third segment is rejected rather than read as a file selection that is then dropped."""
+    parsed = _load_json_option(sources_json, sources_file, "metadataSourceAssets")
+    if parsed is not None:
+        if not isinstance(parsed, list):
+            raise click.ClickException("metadataSourceAssets must be a JSON list.")
+        return parsed
+    result = []
+    for ref in source_refs:
+        parts = ref.split(':')
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise click.ClickException(
+                f"Invalid --metadata-source-asset ref '{ref}'. Use 'databaseId:assetId' — a metadata "
+                "source is an asset, not a file, so it takes no file key.")
+        result.append({'databaseId': parts[0], 'assetId': parts[1]})
+    return result
+
+
 @click.group()
 def workflow():
     """Workflow management commands."""
@@ -307,6 +330,10 @@ def create_workflow(ctx: click.Context, database_id: str, workflow_name: str,
     A --pipeline ref is 'databaseId:pipelineId[:defaultTemplateId[:jobName]]'. The segments are
     positional, so leave the template segment empty to set only a job name. A jobName becomes a
     folder in that step's output path; omit it to use the pipeline id.
+
+    systemConfig.metadataInputs is a boolean map over assetMetadata, fileMetadata, fileAttributes,
+    and databaseMetadata, each defaulting to true; it gates which metadata a run of this workflow
+    captures. The workflow's gate builds the one metadata envelope every step shares.
 
     Examples:
         vamscli workflow create -d my-db -n "Convert + Label" \\
@@ -525,7 +552,9 @@ def list_triggers(ctx: click.Context, database_id: str, workflow_id: str, json_o
 @trigger.command('get')
 @click.option('-d', '--database-id', required=True, help='Database ID containing the workflow')
 @click.option('-w', '--workflow-id', required=True, help='Workflow ID owning the trigger')
-@click.option('-t', '--trigger-type', default='fileUpload', help='Trigger type (default: fileUpload)')
+@click.option('-t', '--trigger-type', default='fileUpload',
+              help="Trigger key: the bare type (default: fileUpload) for the workflow's first "
+                   "trigger of that type, or 'type#triggerId' for an additional one")
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -546,7 +575,9 @@ def get_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
 @trigger.command('set')
 @click.option('-d', '--database-id', required=True, help='Database ID containing the workflow')
 @click.option('-w', '--workflow-id', required=True, help='Workflow ID owning the trigger')
-@click.option('-t', '--trigger-type', default='fileUpload', help='Trigger type (default: fileUpload)')
+@click.option('-t', '--trigger-type', default='fileUpload',
+              help="Trigger key: the bare type (default: fileUpload) for the workflow's first "
+                   "trigger of that type, or 'type#triggerId' for an additional one")
 @click.option('--input-file-filters', help='inputFileFilters as inline JSON (allow/exclude lists)')
 @click.option('--input-file-filters-file', type=click.Path(exists=True),
               help='inputFileFilters from a JSON file')
@@ -595,7 +626,9 @@ def set_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigger_
 @trigger.command('delete')
 @click.option('-d', '--database-id', required=True, help='Database ID containing the workflow')
 @click.option('-w', '--workflow-id', required=True, help='Workflow ID owning the trigger')
-@click.option('-t', '--trigger-type', default='fileUpload', help='Trigger type (default: fileUpload)')
+@click.option('-t', '--trigger-type', default='fileUpload',
+              help="Trigger key: the bare type (default: fileUpload) for the workflow's first "
+                   "trigger of that type, or 'type#triggerId' for an additional one")
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -624,6 +657,18 @@ def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigg
               help="Input file 'databaseId:assetId:relativeFileKey[:versionId]' (repeatable)")
 @click.option('--input-files', help='inputFiles as inline JSON list (alternative to --input-file)')
 @click.option('--input-files-file', type=click.Path(exists=True), help='inputFiles from a JSON file')
+@click.option('--metadata-source-asset', 'metadata_source_asset_refs', multiple=True,
+              help="Asset read purely as a metadata source, 'databaseId:assetId' (repeatable). Not an "
+                   'input file, so it takes no file key and is exempt from arity and input filters')
+@click.option('--metadata-source-assets',
+              help='metadataSourceAssets as inline JSON list (alternative to --metadata-source-asset)')
+@click.option('--metadata-source-assets-file', type=click.Path(exists=True),
+              help='metadataSourceAssets from a JSON file')
+@click.option('--metadata-source-database',
+              help='Database whose own metadata is read as an input. Applies only to a run with NO '
+                   "input files; a run with input files derives its databases from those files' "
+                   'assets (plus any metadata-source assets). One concrete database ID — GLOBAL is '
+                   'rejected. Database metadata is read-only and never an output target')
 @click.option('--output-asset-id',
               help='Output asset ID. Honored whenever the inputs do not resolve to a single input '
                    'asset (regardless of override); for a single input asset only when the workflow '
@@ -649,6 +694,8 @@ def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigg
 @requires_setup_and_auth
 def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, input_file_refs,
             input_files: Optional[str], input_files_file: Optional[str],
+            metadata_source_asset_refs, metadata_source_assets: Optional[str],
+            metadata_source_assets_file: Optional[str], metadata_source_database: Optional[str],
             output_asset_id: Optional[str], output_database_id: Optional[str],
             output_path_prefix: Optional[str],
             pipeline_parameters: Optional[str], pipeline_parameters_file: Optional[str],
@@ -659,6 +706,14 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
     '/folder/' selects a folder. Per-pipeline template selection, tag values, and a one-off custom
     config body are supplied via --pipeline-parameters (keyed by pipelineId, with the keys
     templateId / templateTags / customTemplateOverride).
+
+    Metadata sources: entities whose stored metadata is read as an input. Naming them is always
+    optional and never enforced — a pipeline that genuinely needs metadata validates and fails on its
+    own. --metadata-source-asset names an asset that is not an input file, so it plays no part in
+    arity, input filters, or output-target resolution. --metadata-source-database applies only to a
+    run with no input files; with input files the databases are derived from those files' assets (plus
+    any metadata-source assets') instead. Database metadata is read-only — a database is never an
+    output target. Metadata is capped per entity, and a capped capture comes back as a warning.
 
     Output target: when the inputs resolve to a single input asset the output is locked to that
     asset unless the workflow allows override; when they resolve to zero or multiple assets, supply
@@ -672,6 +727,8 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
     Examples:
         vamscli workflow execute --workflow-database-id global -w my-workflow \\
             --input-file my-db:asset1:/model.glb
+        vamscli workflow execute --workflow-database-id global -w my-workflow \\
+            --metadata-source-database my-db --metadata-source-asset my-db:asset1
         vamscli workflow execute --workflow-database-id global -w my-workflow \\
             --input-files-file inputs.json --pipeline-parameters-file params.json
     """
@@ -693,10 +750,26 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
     elif not isinstance(parsed_inputs, list):
         raise click.ClickException("inputFiles must be a JSON list.")
 
+    parsed_sources = _parse_metadata_source_assets(
+        metadata_source_assets, metadata_source_assets_file, list(metadata_source_asset_refs))
+
+    # GLOBAL is the unscoped/all-databases keyword rather than a database record, so there is no
+    # entity whose metadata could be read. It IS accepted for --workflow-database-id and inside a
+    # source asset's ref, which makes it an easy value to reach for here; rejected locally so the
+    # reason is stated rather than arriving as a validation failure from the service.
+    if metadata_source_database and metadata_source_database.strip().lower() == 'global':
+        raise click.ClickException(
+            "--metadata-source-database must name one concrete database; GLOBAL is the "
+            "all-databases keyword, not a database whose metadata can be read.")
+
     pipeline_params = _load_json_option(
         pipeline_parameters, pipeline_parameters_file, "pipelineExecutionParameters")
 
     body: Dict[str, Any] = {'inputFiles': parsed_inputs}
+    if parsed_sources:
+        body['metadataSourceAssets'] = parsed_sources
+    if metadata_source_database:
+        body['metadataSourceDatabaseId'] = metadata_source_database
     if output_asset_id:
         body['outputAssetId'] = output_asset_id
     if output_database_id:

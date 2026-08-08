@@ -455,7 +455,9 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
-**Admin-only actions** (Logs, Permanent-Delete) are hidden when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+**Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+
+A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
 
 ---
 

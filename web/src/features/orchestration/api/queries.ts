@@ -29,6 +29,7 @@ import type {
     ExecutionDetail,
 } from "../types";
 import type { DatabaseSummary } from "./databases";
+import type { DetailMetadataCollection, DetailMetadataPage } from "./executions";
 import type {
     AssetSummary,
     AssetFileSummary,
@@ -56,6 +57,8 @@ export const qk = {
     executions: (scope: ExecutionScope, filters?: any) =>
         ["executions", scope, filters ?? null] as const,
     execution: (executionId: string) => ["execution", executionId] as const,
+    executionDetailMetadata: (executionId: string, collection: DetailMetadataCollection) =>
+        ["executionDetailMetadata", executionId, collection] as const,
     allowedRoutes: () => ["allowedRoutes"] as const,
     databases: () => ["databases"] as const,
     assets: (databaseId?: string) => ["assets", databaseId ?? null] as const,
@@ -645,6 +648,44 @@ export function useExecutionDetails(executionId: string) {
         // forever.
         refetchInterval: (query: any) =>
             computeRefetchInterval(query.state.data ? [query.state.data] : []),
+    });
+}
+
+/** Rows per request against the paged detail-metadata route. The backend clamps at 500. */
+export const DETAIL_METADATA_PAGE_SIZE = 200;
+
+/**
+ * One of an execution's metadata collections, read through the paged route instead of the bounded
+ * copy the details view embeds.
+ *
+ * `useInfiniteQuery` so each server page is kept and the loaded rows accumulate — the detail page
+ * renders the union of `data.pages` and pages over it locally, fetching the next server page only when
+ * the reader reaches the end of what is loaded. `NextToken` is absent on the last page, so
+ * `getNextPageParam` returning undefined is what marks the collection fully retrieved.
+ *
+ * Disabled until a caller opts in: the collections are only re-read when the details response reported
+ * them truncated, so an execution whose metadata fits inline costs no extra request.
+ */
+export function useExecutionDetailMetadata(
+    executionId: string,
+    collection: DetailMetadataCollection,
+    enabled: boolean
+) {
+    return useInfiniteQuery({
+        queryKey: qk.executionDetailMetadata(executionId, collection),
+        queryFn: async ({ pageParam }: { pageParam?: string }) => {
+            const params: Record<string, string> = {
+                collection,
+                pageSize: String(DETAIL_METADATA_PAGE_SIZE),
+            };
+            if (pageParam) params.startingToken = pageParam;
+            return callService<DetailMetadataPage>(() =>
+                executionService.getExecutionDetailsMetadata(executionId, params)
+            );
+        },
+        getNextPageParam: (lastPage: DetailMetadataPage) => lastPage.NextToken,
+        initialPageParam: undefined as string | undefined,
+        enabled: enabled && !!executionId,
     });
 }
 

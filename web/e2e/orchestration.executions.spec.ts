@@ -34,14 +34,23 @@ test.describe("Executions board", () => {
             "Status",
             "Execution ID",
             "Workflow",
-            "Database",
+            "Workflow Database",
             "Trigger",
-            "Group",
             "Started",
             "Actions",
         ]) {
             await expect(page.getByRole("columnheader", { name: col }).first()).toBeVisible();
         }
+    });
+
+    test("offers the workflow and workflow-database filters in global scope", async ({ page }) => {
+        // The global board pins nothing, so both halves of the workflow identity are separately
+        // selectable here. The asset tab replaces them with ONE composite-valued control (a workflow
+        // id is unique only within its database, and that board has no database dropdown to pair
+        // with); the workflow-scoped board offers neither, being already pinned to one workflow.
+        // Asserted on the controls' presence only, so it holds on an empty environment.
+        await expect(facet(page, "Filter by workflow")).toBeVisible();
+        await expect(facet(page, "Filter by workflow database")).toBeVisible();
     });
 
     test("exposes the status, trigger, and time-window filters", async ({ page }) => {

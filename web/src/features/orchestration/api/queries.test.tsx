@@ -245,3 +245,115 @@ describe("useExecutionDetails polling", () => {
         expect(computeRefetchInterval([{ executionStatus: "RUNNING" }])).toBe(5000);
     });
 });
+
+/**
+ * The paged detail-metadata read: the escalation path for a collection the details view returned
+ * bounded. Every server page must be KEPT (the detail page renders their union), the token must
+ * round-trip verbatim, and a last page — which carries no NextToken — must end the walk.
+ */
+describe("useExecutionDetailMetadata", () => {
+    const wrapper = (qc: QueryClient) => {
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return Wrapper;
+    };
+    const client = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("requests the named collection with the module's page size", async () => {
+        const { useExecutionDetailMetadata, DETAIL_METADATA_PAGE_SIZE } = require("./queries");
+        (executionService.getExecutionDetailsMetadata as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [{ assetId: "a1" }], collection: "inputDatabase" },
+        ]);
+        const { result } = renderHook(
+            () => useExecutionDetailMetadata("e1", "inputDatabase", true),
+            { wrapper: wrapper(client()) }
+        );
+
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+        expect(executionService.getExecutionDetailsMetadata).toHaveBeenCalledWith("e1", {
+            collection: "inputDatabase",
+            pageSize: String(DETAIL_METADATA_PAGE_SIZE),
+        });
+    });
+
+    it("issues no request until the caller enables it", () => {
+        const { useExecutionDetailMetadata } = require("./queries");
+        renderHook(() => useExecutionDetailMetadata("e1", "input", false), {
+            wrapper: wrapper(client()),
+        });
+        expect(executionService.getExecutionDetailsMetadata).not.toHaveBeenCalled();
+    });
+
+    it("keeps both pages and resumes from the previous page's NextToken", async () => {
+        const { useExecutionDetailMetadata } = require("./queries");
+        (executionService.getExecutionDetailsMetadata as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                { Items: [{ assetId: "a1" }], collection: "input", NextToken: "tok-2" },
+            ])
+            .mockResolvedValueOnce([true, { Items: [{ assetId: "a2" }], collection: "input" }]);
+
+        const { result } = renderHook(() => useExecutionDetailMetadata("e1", "input", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+        expect(result.current.hasNextPage).toBe(true);
+
+        await result.current.fetchNextPage();
+        await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
+
+        // The second request resumes at the token the first page returned, unaltered.
+        expect(executionService.getExecutionDetailsMetadata).toHaveBeenLastCalledWith(
+            "e1",
+            expect.objectContaining({ startingToken: "tok-2" })
+        );
+        // Nothing is skipped or repeated: the union of the pages is the full row set.
+        const rows = (result.current.data as any).pages.flatMap((p: any) => p.Items);
+        expect(rows).toEqual([{ assetId: "a1" }, { assetId: "a2" }]);
+    });
+
+    it("treats a page without NextToken as the last one", async () => {
+        // NextToken's PRESENCE is the only "there is more" signal, so its absence must end the walk.
+        const { useExecutionDetailMetadata } = require("./queries");
+        (executionService.getExecutionDetailsMetadata as jest.Mock).mockResolvedValue([
+            true,
+            { Items: [{ assetId: "a1" }], collection: "input" },
+        ]);
+        const { result } = renderHook(() => useExecutionDetailMetadata("e1", "input", true), {
+            wrapper: wrapper(client()),
+        });
+
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+        expect(result.current.hasNextPage).toBe(false);
+    });
+
+    it("surfaces a rejected read as an error rather than an empty page", async () => {
+        const { useExecutionDetailMetadata } = require("./queries");
+        (executionService.getExecutionDetailsMetadata as jest.Mock).mockResolvedValue([
+            false,
+            "Forbidden",
+        ]);
+        const { result } = renderHook(() => useExecutionDetailMetadata("e1", "input", true), {
+            wrapper: wrapper(client()),
+        });
+
+        await waitFor(() => expect(result.current.isError).toBe(true));
+        expect((result.current.error as Error).message).toBe("Forbidden");
+    });
+
+    it("keys each collection separately so one does not answer another's read", () => {
+        expect(qk.executionDetailMetadata("e1", "input")).toEqual([
+            "executionDetailMetadata",
+            "e1",
+            "input",
+        ]);
+        expect(qk.executionDetailMetadata("e1", "output")).not.toEqual(
+            qk.executionDetailMetadata("e1", "input")
+        );
+    });
+});

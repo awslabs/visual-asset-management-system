@@ -22,7 +22,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download, log_file_download_bulk
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel, DownloadAssetFileUrlModel
 )
@@ -551,7 +551,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             request_model = parse(body, model=DownloadAssetRequestModel)
         except ValidationError as v:
             logger.error(f"Validation error: {v}")
-            return validation_error(body={'message': str(v)}, event=event)
+            return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Check authorization
         asset = get_asset_details(database_id, asset_id)
@@ -611,7 +611,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

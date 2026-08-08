@@ -395,6 +395,12 @@ API_WORKFLOW_EXECUTION_DETAILS = ApiRoute(
 API_WORKFLOW_EXECUTION_LOGS = ApiRoute(
     "/workflows/executions/{executionId}/logs", (GET,), "workflows"
 )
+# Paged read of ONE of the detail view's metadata collections (input / inputDatabase / output). The
+# details route returns each collection bounded; this route pages the same scrubbed rows so a client
+# can walk a collection the detail view reported truncated. Same Tier-2 rule as details.
+API_WORKFLOW_EXECUTION_DETAILS_METADATA = ApiRoute(
+    "/workflows/executions/{executionId}/details/metadata", (GET,), "workflows"
+)
 # Re-run: reconstruct the execute request from the stored execution records and launch a new
 # execution (new executionId; optionally the same executionGroupId).
 API_WORKFLOW_EXECUTION_RERUN = ApiRoute(
@@ -418,6 +424,7 @@ WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
     API_EXECUTE_WORKFLOW,
     API_WORKFLOW_EXECUTION,
     API_WORKFLOW_EXECUTION_DETAILS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA,
     API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_EXECUTION_PERMANENT,

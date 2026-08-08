@@ -52,11 +52,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
-    // Workflow-database / workflow filters. Only meaningful in the global scope: an asset- or
-    // workflow-scoped board already has these pinned by the scope (see useExecutions), so the
-    // controls are hidden there rather than offering a choice that would be overridden.
+    // Workflow-database / workflow filters. Only meaningful in the global scope: a WORKFLOW-scoped
+    // board already has these pinned by the scope (see useExecutions), so the controls are hidden
+    // there rather than offering a choice that would be overridden.
     const [workflowDatabaseFilter, setWorkflowDatabaseFilter] = useState("");
     const [workflowFilter, setWorkflowFilter] = useState("");
+    // The asset tab's workflow filter, held as the composite "databaseId:workflowId" because a
+    // workflowId is unique only within its database. Kept separate from the two global controls so
+    // one dropdown picks both halves at once — the asset tab has no workflow-database dropdown to
+    // pair with, and sending half a composite would filter against ":wf1" and match nothing.
+    const [assetWorkflowFilter, setAssetWorkflowFilter] = useState("");
     // Time-window filter (executions started within the window). A preset ("90"/"120"/"180" days)
     // resolves to a filterStartDate N days before now; "custom" reveals an explicit from/to date
     // range. Default is the last 90 days (matching the backend default).
@@ -72,6 +77,14 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         if (triggerFilter) f.triggerType = triggerFilter;
         if (workflowDatabaseFilter) f.workflowDatabaseId = workflowDatabaseFilter;
         if (workflowFilter) f.workflowId = workflowFilter;
+        // The asset tab sends both halves of the composite together. The backend matches these two
+        // per field rather than as a joined key, so sending only one would not narrow to a single
+        // workflow when two databases happen to share a workflow id.
+        if (assetWorkflowFilter) {
+            const separator = assetWorkflowFilter.indexOf(":");
+            f.workflowDatabaseId = assetWorkflowFilter.slice(0, separator);
+            f.workflowId = assetWorkflowFilter.slice(separator + 1);
+        }
         if (dateWindow === "custom") {
             if (startDateFilter) f.filterStartDate = `${startDateFilter}T00:00:00Z`;
             if (endDateFilter) f.filterEndDate = `${endDateFilter}T23:59:59Z`;
@@ -86,6 +99,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         triggerFilter,
         workflowDatabaseFilter,
         workflowFilter,
+        assetWorkflowFilter,
         dateWindow,
         startDateFilter,
         endDateFilter,
@@ -94,6 +108,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     // Only the global board offers workflow/database filters: useExecutions pins both from the scope
     // for asset- and workflow-scoped boards, so a control there would be silently overridden.
     const isGlobalScope = scope.kind === "global";
+    // The asset tab gets a workflow filter too, built from the workflows that actually ran on this
+    // asset (see assetWorkflowOptions). A workflow-scoped board is excluded: it is already pinned to
+    // one workflow, so a picker there could only re-select what is already in force.
+    const isAssetScope = scope.kind === "asset";
     // Only fetched for the workflow-scoped board, to label its breadcrumb.
     const { data: scopedWorkflow } = useWorkflow(
         scope.kind === "workflow" ? scope.databaseId : "",
@@ -102,7 +120,14 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const scopedWorkflowName =
         scope.kind === "workflow" ? (scopedWorkflow as any)?.workflowName || scope.workflowId : "";
     const { data: allDatabases } = useDatabases(isGlobalScope);
-    const { data: allWorkflows } = useAllWorkflows(workflowDatabaseFilter || undefined);
+    // Global scope narrows the workflow list to the chosen database. The asset tab passes no database
+    // (its executions can come from workflows in any of them) and uses this only to put NAMES on the
+    // ids its rows carry — an execution row has workflowId but no workflowName.
+    const { data: allWorkflows } = useAllWorkflows(
+        isGlobalScope ? workflowDatabaseFilter || undefined : undefined,
+        undefined,
+        isGlobalScope || isAssetScope
+    );
 
     // Database ids for the filter: the databases the caller can see, unioned with any id already
     // present on a loaded row (mirrors WorkflowsPage) so a row's database is always selectable.
@@ -121,6 +146,29 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         );
     }, [allWorkflows, isGlobalScope]);
 
+    // Composite key -> display name for every workflow the caller can see, so the asset tab can
+    // label a row's ids. Rows carry ids only.
+    const workflowNamesByKey = React.useMemo(() => {
+        const map = new Map<string, string>();
+        (allWorkflows || []).forEach((w: any) => {
+            if (w?.workflowId) {
+                map.set(`${w.databaseId}:${w.workflowId}`, w.workflowName || w.workflowId);
+            }
+        });
+        return map;
+    }, [allWorkflows]);
+
+    // The asset tab's workflow choices, ACCUMULATED across loads rather than recomputed from the
+    // rows currently on screen.
+    //
+    // This has to accumulate. The filter is applied server-side, so the moment a workflow is chosen
+    // the response contains only that workflow's executions — recomputing options from those rows
+    // would collapse the dropdown to the single selected entry, stranding the user with no way back
+    // to another workflow without first clearing the filter. Growing a set instead keeps every
+    // workflow seen in this asset's history selectable. Paging in more rows with "Load more" adds to
+    // it for the same reason.
+    const [seenAssetWorkflows, setSeenAssetWorkflows] = useState<Map<string, string>>(new Map());
+
     const {
         data,
         isLoading,
@@ -137,6 +185,36 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const executions = React.useMemo(
         () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
         [data]
+    );
+
+    // Fold whatever workflows the loaded rows reveal into the accumulated option set (asset tab
+    // only). Rows carry ids, so the label comes from the workflow list when it is available and falls
+    // back to the id — a workflow that has since been archived or that the caller cannot read still
+    // gets a selectable entry rather than vanishing from its own history.
+    React.useEffect(() => {
+        if (!isAssetScope) return;
+        setSeenAssetWorkflows((previous) => {
+            let added = false;
+            const next = new Map(previous);
+            executions.forEach((e: any) => {
+                if (!e?.workflowId) return;
+                const key = `${e.workflowDatabaseId || ""}:${e.workflowId}`;
+                const label = workflowNamesByKey.get(key) || e.workflowId;
+                if (next.get(key) !== label) {
+                    next.set(key, label);
+                    added = true;
+                }
+            });
+            // Returning the same reference when nothing changed keeps this from re-rendering on
+            // every 5s poll of an unchanged list.
+            return added ? next : previous;
+        });
+    }, [executions, isAssetScope, workflowNamesByKey]);
+
+    // Sorted by label, with the id-only fallbacks ordering alongside names.
+    const assetWorkflowOptions = React.useMemo(
+        () => Array.from(seenAssetWorkflows.entries()).sort((a, b) => a[1].localeCompare(b[1])),
+        [seenAssetWorkflows]
     );
 
     // Sort: non-terminal first, then by start date descending
@@ -539,6 +617,27 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             ))}
                         </select>
                     )}
+                    {/* Asset tab: one dropdown selecting the whole composite key, listing only the
+                        workflows this asset has actually run. Rendered when there is more than one
+                        to choose between — with a single workflow in an asset's history the control
+                        can only reproduce the list already shown. It stays rendered once a filter is
+                        active, so narrowing to one workflow cannot remove the control that undoes
+                        it. */}
+                    {isAssetScope && (assetWorkflowOptions.length > 1 || !!assetWorkflowFilter) && (
+                        <select
+                            aria-label="Filter by workflow"
+                            value={assetWorkflowFilter}
+                            onChange={(e) => setAssetWorkflowFilter(e.target.value)}
+                            className={control}
+                        >
+                            <option value="">All workflows</option>
+                            {assetWorkflowOptions.map(([key, label]) => (
+                                <option key={key} value={key}>
+                                    {label}
+                                </option>
+                            ))}
+                        </select>
+                    )}
                     {/* Time window: preset day-counts (default 90) or a custom from/to range. */}
                     <select
                         aria-label="Time window"
@@ -578,6 +677,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         triggerFilter ||
                         workflowDatabaseFilter ||
                         workflowFilter ||
+                        assetWorkflowFilter ||
                         dateWindow !== "90" ||
                         startDateFilter ||
                         endDateFilter) && (
@@ -587,6 +687,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 setTriggerFilter("");
                                 setWorkflowDatabaseFilter("");
                                 setWorkflowFilter("");
+                                setAssetWorkflowFilter("");
                                 setDateWindow("90");
                                 setStartDateFilter("");
                                 setEndDateFilter("");

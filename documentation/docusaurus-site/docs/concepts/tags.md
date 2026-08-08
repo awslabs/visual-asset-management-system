@@ -52,7 +52,11 @@ Tags are a constraint field in the VAMS [permissions model](permissions-model.md
 -   Deny modification of assets tagged with `locked` or `approved`.
 -   Restrict a team to only assets tagged with their project name.
 
-The `tags` field is evaluated using string matching operators (`contains`, `does_not_contain`, `equals`). For example, a deny constraint with `tags contains "locked"` prevents modification of any asset whose tag list includes the value `locked`.
+An asset carries a list of tags, so the `tags` field is evaluated with the membership operators `is_one_of` and `is_not_one_of` rather than the pattern-matching operators used on single-valued fields. For example, a deny constraint with `tags is_one_of "locked"` prevents modification of any asset whose tag list includes the value `locked`; supply several values to match any of them.
+
+:::note
+The pattern-matching operators (`equals`, `contains`, `does_not_contain`, `starts_with`, `ends_with`) compare one string, so they cannot be applied to a tag list. A constraint that pairs them with the `tags` field is rejected when it is saved, with a message naming the two operators to use instead.
+:::
 
 :::warning[Tags are shared across databases]
 Tags and tag types are global resources -- they are not scoped to individual databases. When configuring permissions for database-scoped roles, it is recommended to grant read-only access to tags and tag types to prevent users from modifying shared resources. See the [Permissions Model](permissions-model.md) for recommended constraint patterns.

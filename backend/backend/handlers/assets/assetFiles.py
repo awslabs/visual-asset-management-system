@@ -48,7 +48,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -3675,7 +3675,7 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3759,7 +3759,7 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3844,7 +3844,7 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3931,7 +3931,7 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4016,7 +4016,7 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4115,7 +4115,7 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4207,7 +4207,7 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4291,7 +4291,7 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4456,7 +4456,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4540,7 +4540,7 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4626,7 +4626,7 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4711,7 +4711,7 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

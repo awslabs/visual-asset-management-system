@@ -25,7 +25,7 @@ import { appCache } from "../../../services/appCache";
  * Two constraints have to hold at once:
  *
  * 1. The backend's `SearchFilterModel` REQUIRES a `query_string` key (models/search.py) — a bare
- *    `term` filter is rejected with `filters -> 0 -> query_string: field required` (400).
+ *    `term` filter is rejected with `filters.0.query_string: field required` (400).
  * 2. These id fields are analyzed, so the standard analyzer splits on hyphens. A quoted phrase on the
  *    ANALYZED field searches for adjacent tokens: `str_databaseid:("smoke-db")` matches [smoke, db],
  *    which `smoke-db-2` ([smoke, db, 2]) also contains. Verified against the deployed index — that

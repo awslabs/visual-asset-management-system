@@ -4,9 +4,10 @@ description: >-
     Operate a Visual Asset Management System (VAMS) deployment through the
     installed `vamscli` command-line tool. Use for searching, inspecting,
     researching, bulk-updating, cross-linking, or processing VAMS databases,
-    assets, files, metadata, versions, tags, asset links, and workflows. The
-    skill self-discovers the current commands via `vamscli --help` (no hardcoded
-    command references) and operates in READ-ONLY mode by default.
+    assets, files, metadata, versions, tags, asset links, and the pipeline /
+    workflow / execution processing engine. The skill self-discovers the current
+    commands via `vamscli --help` (no hardcoded command references) and operates
+    in READ-ONLY mode by default.
 ---
 
 # VAMS Agent Skill
@@ -62,8 +63,10 @@ allowed API routes** and use them to scope which commands you offer and run.
    route is in the allowed set. If the user is not authorized for an action,
    say so plainly and do not attempt it — do not try to work around the
    permission boundary.
-4. Treat the allowed-routes set as authoritative for access control; the user's
-   token/role determines it, and it can differ per user and per session.
+4. Treat the allowed-routes set as authoritative for **route** access. It is only
+   the first of two authorization tiers, so a route being allowed does not mean
+   every entity behind it is — see
+   [Authorization: two tiers, and reading a 403](#authorization-two-tiers-and-reading-a-403).
 
 ### Step 2: Discover the available commands (do not assume them)
 
@@ -120,7 +123,10 @@ bulk operations before executing.
 
 Summarize results with the relevant IDs. For mutating tasks, state exactly what
 changed. On errors, act on the CLI message (auth error → re-check auth; unknown
-command/flag → re-run `--help`).
+command/flag → re-run `--help`; `403` → identify the tier per
+[Authorization](#authorization-two-tiers-and-reading-a-403) and report rather than
+retry). Relay any `warnings` an execute or re-run returned; they mean the run
+started with inputs that differ from what was named.
 
 ## VAMS structure (overview, not commands)
 
@@ -133,13 +139,234 @@ command/flag → re-run `--help`).
     (may be governed by metadata schemas).
 -   **Tag / Tag type** — categorization for assets.
 -   **Asset link** — a typed relationship between assets (related/parent/child).
--   **Workflow / Pipeline** — configured processing (conversion, previews,
-    extraction, GenAI) run against assets.
+-   **Pipeline / Template / Workflow / Execution** — the processing engine. These
+    are four distinct entities with their own command groups; see
+    [Processing: pipelines, templates, workflows, executions](#processing-pipelines-templates-workflows-executions).
 -   **Search** — full-text and metadata search across assets and files, including
     geospatial queries.
 
 Most operations key off a **database ID** and an **asset ID** — capture these
 whenever you list or search.
+
+## Authorization: two tiers, and reading a 403
+
+VAMS authorizes every request through **two independent tiers**, both powered by
+Casbin. Both must allow, so either one can produce a `403 Forbidden`. Knowing which
+tier refused is the difference between a useful report and a wrong guess.
+
+| Tier                | Question it answers                       | Keyed on                                  |
+| ------------------- | ----------------------------------------- | ----------------------------------------- |
+| **Tier 1** — route  | May this role call this endpoint at all?  | HTTP method + route path                  |
+| **Tier 2** — object | May this role do this to **this** entity? | HTTP method + the entity's own attributes |
+
+**Why this matters to you:** the allowed-routes listing from Step 1b is Tier 1
+**only**. A route appearing there means the user may call it — not that they may
+touch every database, asset, pipeline, or workflow behind it. So:
+
+-   A `403` on a route that **is** in the allowed set is a Tier-2 refusal: the
+    route is permitted, this specific entity is not. Do not retry, and do not
+    conclude the entity is missing.
+-   A `403` on a route **not** in the allowed set is a Tier-1 refusal: the user
+    cannot use that capability at all. Say so and stop.
+-   A `404` and a Tier-2 `403` can look alike from the outside. Report what the
+    API said rather than inferring "does not exist" from a permission error.
+
+**Tier 2 is per object type, and does not cascade.** Access to a database does
+**not** imply access to the assets, pipelines, workflows, or metadata schemas
+inside it — each object type carries its own constraints, matched on its own
+fields (a database on its ID; an asset on database, name, type, and tags; a
+pipeline on database, ID, category, name, and execution type; a workflow on
+database, ID, category, and name). This is why a user can list a database and be
+refused every asset in it, which is a permission boundary rather than an empty
+database.
+
+**`GLOBAL` is granted separately.** Because pipelines, workflows, and metadata
+schemas may be scoped to the literal `GLOBAL`, access to them is usually a second,
+distinct grant. A user permitted on their own database's workflows may still be
+refused every `GLOBAL` one — a common reason a built-in pipeline appears
+unreachable.
+
+**A deny always wins.** Constraints carry allow and deny effects, and one matching
+deny overrides every allow. So a broadly-permitted user can be refused a narrow
+slice — assets carrying a particular tag, for instance. A refusal like that is
+deliberate policy, not a misconfiguration to work around.
+
+**Listings are permission-filtered, not permission-blocked.** Many list endpoints
+silently omit what the caller cannot see rather than failing. An execution listing
+is visible only when the caller can view the workflow **and** every asset the run
+read. So a short list may be a complete answer for this user and an incomplete
+picture of the deployment — say which you are reporting.
+
+**Never work around a boundary.** Do not try an alternate route, a different
+scope, or a broader query to get past a `403`. Report it, name the tier if you can
+tell, and stop. Your permissions are exactly the authenticated user's.
+
+## Processing: pipelines, templates, workflows, executions
+
+Processing is four entities, not one, and they live in **three separate command
+groups** (discover each with `--help`; typically `pipeline`, `workflow`, and
+`execution`). Reaching for the wrong one is the most common way a request fails.
+
+| Entity        | What it is                                                                        | Lives in                              |
+| ------------- | --------------------------------------------------------------------------------- | ------------------------------------- |
+| **Pipeline**  | ONE processing step bound to a compute resource. Does not run on its own.         | pipeline group                        |
+| **Template**  | A reusable config body for a pipeline, with a typed **tag schema** of its inputs. | pipeline group, template sub-group    |
+| **Workflow**  | An ordered chain of one or more pipelines. **This is the only runnable thing.**   | workflow group                        |
+| **Execution** | One run of a workflow. Asynchronous, with its own status/logs/outputs.            | execution group (plus workflow group) |
+
+**You cannot execute a pipeline.** Only a workflow executes. To run a single
+pipeline, find (or create) a workflow that lists just that pipeline.
+
+**Identifiers.** A pipeline ID and a workflow ID are each unique across **every**
+database including `GLOBAL`, so an ID identifies the entity on its own. Both are
+caller-chosen at creation (omit to have one generated). A pipeline or workflow is
+still addressed as _(database ID, entity ID)_ on most commands. Executions are
+identified by an execution ID alone — no database needed.
+
+**`GLOBAL` scope.** Pipelines and workflows are scoped to a database or to the
+literal string `GLOBAL` (available across all databases; built-in pipelines are
+registered this way). A `GLOBAL` workflow may reference only `GLOBAL` pipelines. So
+when a workflow is not in the asset's database, look in `GLOBAL` before concluding
+it does not exist, and read the workflow's **own** database from the listing — the
+execute command needs both it and the input files' databases, which often differ.
+
+### Executing a workflow
+
+The execute request is **asset-less and multi-file**. There is no "run on this
+asset" argument. Instead you pass input-file references, each an independent
+`databaseId:assetId:relativeFileKey` triple, and they may span several assets:
+
+-   `relativeFileKey` is asset-relative and begins with `/`.
+-   `/` alone selects the **whole asset**; `/folder/` selects a folder. Both are
+    allowed only when the workflow's asset scope permits them.
+-   Per-pipeline parameters (which template, its tag values, or a one-off custom
+    config body) are supplied **keyed by pipeline ID**, because a workflow's steps
+    are configured independently.
+
+Confirm the exact option names via `--help` before composing a call; the shape
+above is what the options carry.
+
+**Output target.** Where output goes is decided by the workflow, not by you:
+
+-   Inputs resolving to a **single** asset lock output to that asset, unless the
+    workflow allows override.
+-   Inputs resolving to **zero or several** assets require you to name both an
+    output asset and its database.
+-   A **results-only** workflow (output location type `none`) takes no output
+    asset at all — it records results text and logs and writes no files. Naming
+    one is an error.
+
+An optional output path prefix places files beneath a base path in the output
+asset. Omitting it inherits the workflow's own default prefix, which may contain
+`{{tag}}` placeholders resolved per run. Passing an **empty string** is different
+from omitting: it forces the asset root, overriding that default.
+
+### Templates and tag schemas
+
+A pipeline may **require** a template, and may or may not allow a custom override
+body. Before running a workflow, for each of its pipelines: list the pipeline's
+templates, read the chosen template's tag schema, and supply values for the
+required tags. A template can also **override** parts of its pipeline's
+configuration (arity, asset scope, metadata inputs, file filters) for runs that
+choose it — so what a pipeline accepts can narrow once a template is selected.
+
+### What a workflow will accept
+
+Three things get validated at launch, and a mismatch rejects the whole execution
+rather than failing one step:
+
+-   **Input file arity** — `none`, `one`, or `multi`.
+-   **Asset scope** — whether cross-asset, whole-asset, and folder selections are
+    allowed, or single-asset only.
+-   **Input file filters** — `allow` and `exclude` lists matched by extension,
+    exact path, file name, or wildcard, case-insensitively. An **absent or `*`
+    allow list means everything**, so a filter only ever narrows eligibility.
+    `exclude` is applied last and always wins.
+
+Filters resolve down a chain — workflow, then pipeline, then the chosen template's
+overrides — and a file must satisfy every level. When the workflow's allow list
+names specific types it is the hard boundary and no pipeline can widen it; when it
+is open, a file is eligible if **any** step accepts it. A workflow response reports
+the restriction it effectively imposes as an aggregate field, but that aggregate
+**excludes template overrides** (a template is chosen per run). Treat it as a guide
+when browsing, and resolve the full chain for a specific set of files.
+
+### Metadata inputs
+
+An execution also gathers **stored metadata** and hands it to the pipeline steps.
+Four kinds are gated independently by booleans on both the workflow and each
+pipeline — asset metadata, file metadata, file attributes, and database metadata —
+and a kind reaches a step only when both have it on.
+
+Which entities are read follows from the selection: every asset an input file
+belongs to, every asset named purely as a **metadata source**, and every distinct
+database of those assets. A run with **no input files** derives nothing, so it
+reads only the one database explicitly named as a metadata source.
+
+Naming metadata sources is **always optional** and never enforced. A metadata
+source asset is not an input file: it carries no file key and takes no part in
+arity, filters, or output resolution. A pipeline that genuinely needs metadata
+checks for it and fails its own step, so omitting a source is never rejected up
+front. Database metadata is read-only — a database is never an output target, and
+the unscoped `GLOBAL` keyword is rejected as a metadata source database.
+
+Captured metadata is **bounded per entity**. A run that hit a bound still starts,
+and says so in the `warnings` array of the execute response. Relay those warnings
+rather than dropping them: the run succeeded, but its inputs are not what was
+named.
+
+### Triggers
+
+A workflow can auto-launch from an event rather than a command. A `fileUpload`
+trigger fires when uploaded files match its own filters, and supplies the default
+template each pipeline uses. A workflow may carry **several triggers of one type**,
+each addressed by a **trigger key**: the bare type (e.g. `fileUpload`) for the
+first of that type, or `type#triggerId` for an additional one. An upload launches
+the workflow once per matching trigger.
+
+Trigger-launched executions run as the reserved **system identity**, not as the
+uploading user — so an execution can appear that no user started. Executions
+started through the execute command run as the calling user.
+
+### Reading executions
+
+Executions are asynchronous. Executing returns an execution ID; never report
+success from the launch alone — read the execution back.
+
+-   There are **two listings**: a global, filterable, cross-asset execution list
+    (execution group), and a per-asset execution history (workflow group). Use the
+    global one for status/date/group/trigger filtering; use the per-asset one to
+    answer "what has run against this asset".
+-   **Statuses** are `NEW`, `RUNNING`, `SUCCEEDED`, `FAILED`, `TIMED_OUT`, and
+    `ABORTED`. The last four are terminal.
+-   **Details** give per-step status, the rendered config each step ran with,
+    inputs, gathered metadata, and outputs — this is what to read when asked why a
+    run failed. The response can be **partial**: bounded collections are named in a
+    truncation list, so check it before reporting a count or concluding something
+    is absent. Metadata arrives in two separate collections (asset/file scope and
+    database scope), and each row carries both a metadata map and an attributes
+    map — reading only one understates what a step received.
+-   **Logs** are a separate command, and are redacted of credential-bearing values
+    before storage. They can be narrowed to a single pipeline step.
+-   **Abort** stops a run where it is; partial output may already be written.
+    **Re-run** creates a NEW execution from the stored inputs and runs with **your**
+    permissions, not the original runner's — so the new ID, not the old one, is
+    what to report. Executions can be grouped, and abort and re-run can address a
+    whole group at once.
+
+### Archive, and the disable trap
+
+Pipelines and workflows are **archived** (soft, reversible), not deleted.
+Archiving also **disables** the entity. Clearing the archived flag alone therefore
+restores something that lists normally but silently will not run — re-enable it in
+the same operation unless the user asked for it to stay disabled.
+
+### Cost and confirmation
+
+Workflows run real AWS compute (GPU batch jobs and GenAI inference among them) and
+can incur meaningful cost. Executing, re-running, and enabling a trigger are all
+ways to start compute. Confirm scope before any of them, and especially before a
+bulk run.
 
 ## Order-of-operations rules
 
@@ -190,16 +417,24 @@ errors, so plan around them rather than discovering them by failure.
     search results immediately. Read the entity directly to confirm a write, and
     do not treat an empty search result right after a write as proof of failure.
 
-**Workflows**
+**Processing (pipelines, workflows, executions)**
 
--   A workflow belongs to a database, or is **global**. Executing one requires
-    both the asset's database and the workflow's own database — they are not
-    always the same, so read the workflow's database from the workflow listing
-    rather than assuming the asset's.
--   Execution is asynchronous. It returns an execution ID; poll the executions
-    list for status instead of assuming success.
--   Workflows run real AWS compute and can incur meaningful cost, especially GenAI
-    and 3D processing pipelines. Confirm scope (how many assets) before bulk runs.
+The entity model and the execute contract are described in
+[Processing: pipelines, templates, workflows, executions](#processing-pipelines-templates-workflows-executions).
+The ordering rules that follow from it:
+
+1. A pipeline must exist before a workflow can reference it, and a workflow is the
+   only runnable entity — you never execute a pipeline directly.
+2. A template belongs to a pipeline, so create the pipeline first. Read the
+   template's tag schema before supplying tag values, and check whether its
+   pipeline **requires** a template at all.
+3. Input files must already exist in their assets before an execution names them.
+4. Execution is asynchronous: it returns an execution ID, so read the execution
+   back rather than assuming success.
+5. Archiving a pipeline or workflow also disables it; restoring means clearing
+   archived **and** re-enabling.
+6. A database cannot be deleted while it still holds active assets, workflows, or
+   pipelines.
 
 **Pagination**
 
@@ -226,6 +461,8 @@ Useful entry points:
 | Metadata and schemas                   | `/concepts/metadata-and-schemas`    |
 | Pipelines and workflows                | `/concepts/pipelines-and-workflows` |
 | Permissions model (two-tier ABAC/RBAC) | `/concepts/permissions-model`       |
+| Pipelines API (templates, system tags) | `/api/pipelines`                    |
+| Workflows API (triggers, executions)   | `/api/workflows`                    |
 | REST API reference                     | `/api/overview`                     |
 | Troubleshooting common issues          | `/troubleshooting/common-issues`    |
 
@@ -263,8 +500,17 @@ Rules for using it:
     iterate and apply → report successes/failures with IDs.
 -   **Cross-linking**: identify related assets → confirm pairs and link type →
     create links → verify by reading links back.
--   **Processing**: identify targets + workflow → confirm (may incur AWS cost) →
-    execute per asset → monitor executions.
+-   **Processing**: list workflows (check the asset's database **and** `GLOBAL`) →
+    read the chosen workflow to learn its pipelines, arity, asset scope, filters,
+    and output target → for each pipeline, list templates and read the tag schema
+    of the one you will use → build the input-file references
+    (`databaseId:assetId:relativeFileKey`) → confirm scope and cost with the user →
+    execute → capture the execution ID and any warnings → read the execution back
+    for status, and its details/logs if it failed.
+-   **Diagnosing a failed run**: list executions filtered to the failed status (or
+    the asset's own history) → read the execution's details for the failing step,
+    its rendered config, and its error → read that step's logs → check the
+    truncation list before stating what the run did or did not read.
 -   **Create / upload**: ensure the database exists → create the asset (discover
     required fields via `--help`) → upload files → optionally set
     metadata/tags/links → verify by reading the asset back.
@@ -284,8 +530,12 @@ session, default to read-only. Do not hardcode environment-specific commands.
 
 -   Default to read-only; require explicit authorization to mutate.
 -   Scope every action to the user's **allowed API routes** (Step 1b); never
-    attempt or work around actions outside the permission boundary.
--   Confirm destructive and bulk operations before executing.
+    attempt or work around actions outside the permission boundary. Route access
+    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal, to be
+    reported rather than retried.
+-   Confirm destructive and bulk operations before executing. Executing a
+    workflow, re-running an execution, and enabling a trigger all start real AWS
+    compute.
 -   Never fabricate commands, flags, IDs, or results.
 -   Treat API keys and tokens as secrets; never echo or store them.
 -   Your permissions are exactly the authenticated VAMS user's permissions.

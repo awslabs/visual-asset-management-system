@@ -17,6 +17,7 @@ Ask the user for:
 -   **Description**: What the pipeline does
 -   **GPU required**: Whether the container needs GPU access (affects `batch-gpu-pipeline` vs `batch-fargate-pipeline` construct)
 -   **Output type**: File-level outputs (new files, `.previewFile.X` thumbnails), asset-level preview, metadata, or auxiliary/viewer data — this determines which output S3 path the pipeline writes to
+-   **Per-run execution options**: which settings an operator should be able to choose at launch — a prompt, a seed, a quality preset, a target format, a mode. Each becomes a typed tag in a template's `tagSchema`, referenced as `{{tagName}}` in its config body (see Step 4, "Templates"). Ask specifically: does the pipeline generate **more than one output format or mode**? If so it wants several templates over one pipeline, not several pipelines.
 
 ### Step 2: Understand the Pipeline Architecture
 
@@ -146,6 +147,83 @@ Verify these seven things, each of which silently produces an unusable pipeline 
     `allowWorkflowTriggerChaining: true` only if this workflow should run on ANOTHER workflow's output
     (a preview or metadata built-in acting on a conversion's result); a workflow never fires on its own
     output regardless.
+
+#### Templates: turning a pipeline into a form operators fill in
+
+A template is the mechanism that gives a pipeline **per-run, operator-facing execution options** —
+a generation prompt, a seed, an output format, a quality preset — without a code change and without a
+separate pipeline per variation. It has two halves:
+
+-   **`configBody`** — the configuration document delivered to the container, containing
+    `{{tagName}}` placeholders.
+-   **`tagSchema`** — the typed declaration of those placeholders. It is what the execute form renders
+    as fields, and what the API validates a run's supplied values against.
+
+At launch, VAMS substitutes the values into the body and writes the result to the run's
+`config.json`; the container reads it via `manifestHelper.fetch_input_configuration()`. Nothing in the
+container needs to know a template exists.
+
+Two kinds of placeholder resolve in a config body, and the distinction decides who supplies the value:
+
+| Placeholder                                    | Who supplies it                          | Resolved                                  |
+| ---------------------------------------------- | ---------------------------------------- | ----------------------------------------- |
+| **User tags** — the template's own `tagSchema` | The operator, per run (or the `default`) | At launch, from the execute request       |
+| **System tags** — the fixed catalog            | VAMS, automatically                      | Per pipeline task, from execution context |
+
+System tags are never declared in a `tagSchema` and never supplied by a caller — they are always
+available. They cover execution/workflow identity, timestamps, the first input file's location and
+name parts, input-file collections, every output prefix, auxiliary paths, and the metadata/config S3
+locations. The catalog is `backend/backend/common/workflows/templateTags.py`, mirrored for authors in
+`web/src/features/orchestration/components/SystemTagHelp.tsx`; a `tagKey` that collides with a reserved
+system tag name is rejected at save.
+
+**A `tagSchema` field** (`TemplateTagFieldModel`, `backend/backend/models/pipelines.py`):
+
+| Field         | Required | Notes                                                                                     |
+| ------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `tagKey`      | yes      | `[A-Za-z0-9_]+` only, so `{{tagKey}}` is substitutable. Max 128 chars.                    |
+| `type`        | no       | One of `string`, `integer`, `number`, `boolean`, `string-list`, `enum`. Default `string`. |
+| `required`    | no       | Default `false`. A required tag with no value fails the launch.                           |
+| `default`     | no       | Used when the operator supplies nothing. Must itself be valid for `type`.                 |
+| `enumValues`  | for enum | Non-empty list; `enum` without it is rejected at save.                                    |
+| `label`       | no       | Field label in the execute form.                                                          |
+| `description` | no       | Helper text in the execute form — where you explain units, ranges, and fallbacks.         |
+
+**Quoting in a `json` config body is validated at save, and it is the one thing authors get wrong.**
+A placeholder for a tag typed `integer`, `number`, `boolean`, or `string-list` renders a JSON _value_
+and therefore takes **no quotes**; a `string` or `enum` tag renders text and must sit **inside** the
+quotes of the string it fills:
+
+```json
+{ "steps": {{STEPS}}, "scale": {{SCALE}}, "debug": {{DEBUG}}, "prompt": "{{PROMPT}}" }
+```
+
+Quoting a typed tag would deliver `"150"` where the pipeline expects `150`, so the save is rejected
+rather than the mistake surfacing as a malformed config at run time. The same rule applies to the two
+"JSON value" system-tag groups (e.g. `"files": {{assetFileKeyArray}}`). This gate is **json-only** —
+`yaml`, `xml`, `openjd`, and `raw` bodies are stored verbatim and are not shape-checked, and their tag
+substitution is unaffected.
+
+**One pipeline per MODEL, one template per MODE.** Prefer several templates over several
+near-identical pipelines. A template may also narrow its pipeline's own settings through `overrides`,
+limited to exactly four keys (`TEMPLATE_OVERRIDABLE_KEYS`): `inputFileArity`, `assetScope`,
+`metadataInputs`, `inputFileFilters`. Any other key is rejected at save rather than ignored at execute
+time. That is what lets one pipeline carry a text-to-video mode needing no input file and a
+video-to-video mode needing one — see rule 6 above.
+
+Give a template `inputInstructions` (max 4096 chars) when an operator needs guidance the field
+descriptions cannot carry; it is displayed on the execute form.
+
+A run may bypass the stored body entirely with a `customTemplateOverride`, but only when the pipeline
+sets `allowCustomTemplateOverride` or the chosen template sets `allowCustomEdit`. A `json`-format
+override is held to the same shape rules as a stored body — an unparseable one is refused at launch,
+because every pipeline-side config reader treats an unreadable configuration as _absent_ and falls back
+to its defaults, which would otherwise mean a SUCCESSFUL run with the caller's parameters silently
+dropped.
+
+Authoring limits (all reject at save; see `documentation/docusaurus-site/docs/additional/quotas.md`):
+250 tag definitions per schema, 128-char `tagKey`, 1024-char `label`/`description`, 250 `enumValues` of
+256 chars, 4096-char serialized `default`.
 
 Register the bundle from the pipeline's nested stack with the `VamsSchemaRegistration` construct,
 passing the deploy-time resolved resource values:
@@ -279,6 +357,11 @@ After creating all files, verify:
 -   [ ] The container's support package is NOT named `utils` when the container also vendors upstream source (import-name collision)
 -   [ ] `vamsSchema/pipeline.json` exists, carries no ARNs, and its `inputFileFilters.allow` matches the file types the container handles
 -   [ ] A `requireTemplate: true` pipeline has a default template (auto-promoted only when the bundle ships exactly one)
+-   [ ] Every per-run option the operator should control is a `tagSchema` tag with a `type`, a `label`, and a `description` — not a hardcoded value in the config body
+-   [ ] Every `{{tag}}` in the config body is either declared in that template's `tagSchema` or a reserved system tag; no `tagKey` collides with a system tag name
+-   [ ] In a `json` config body, typed tags (`integer`/`number`/`boolean`/`string-list`) are UNQUOTED and `string`/`enum` tags are quoted
+-   [ ] A template's `overrides` uses only `inputFileArity`, `assetScope`, `metadataInputs`, `inputFileFilters`
+-   [ ] The container reads its configuration via `manifestHelper.fetch_input_configuration()` and FAILS on a present-but-unparseable body rather than falling back to defaults (a silent fallback reports success while dropping every caller parameter)
 -   [ ] `VamsSchemaRegistration` is wired in the nested stack with the correct `resourceOverrides`
 -   [ ] Lambda handler paths in CDK match actual file locations in `backendPipelines/`
 -   [ ] Step Functions state machine references correct Lambda ARNs
@@ -304,7 +387,7 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
 1. Gather requirements from the user (or parse from $ARGUMENTS)
 2. Determine pipeline category and processing type; pick a reference pipeline to copy from
 3. Create all backend pipeline files (lambda + container)
-4. Author the `vamsSchema/` registration bundle (pipeline.json, optional workflow.json + templates)
+4. Author the `vamsSchema/` registration bundle (pipeline.json, optional workflow.json + templates) — including a `tagSchema` per template for the per-run execution options the operator should control
 5. Create CDK infrastructure (construct, nested stack, lambda builder) and wire `VamsSchemaRegistration`
 6. Register in pipelineBuilder-nestedStack.ts and update the VPC builder
 7. Add config flag (interface, getConfig defaults/validation, ALL templates, config.json)

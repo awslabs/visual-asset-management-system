@@ -368,7 +368,10 @@ class TestContainerReadsFromS3:
     def test_fetch_input_configuration_reads_flags(self):
         mio = self._container_manifest_io()
         cfg = {"DISABLE_GUARDRAILS": "false", "CONTROL_WEIGHT": "0.5"}
-        with patch.object(mio, "_get_json", MagicMock(return_value=cfg)):
+        # fetch_input_configuration reads the RAW text and parses it itself, so a present-but-
+        # unparseable body can be told apart from an absent one (it raises rather than returning {},
+        # which would look like "no configuration" and silently drop the caller's parameters).
+        with patch.object(mio, "_read_text", MagicMock(return_value=json.dumps(cfg))):
             got = mio.fetch_input_configuration("s3://abkt/.../config.json")
         assert got == cfg
         # The container's main flag derivation reads these keys from the config dict.
@@ -386,7 +389,18 @@ class TestContainerReadsFromS3:
 
     def test_empty_or_unreadable_yields_empty_dict(self):
         mio = self._container_manifest_io()
-        # _get_json returns None for an empty/unreadable location -> best-effort {}.
-        with patch.object(mio, "_get_json", MagicMock(return_value=None)):
+        # An EMPTY location means "no configuration was supplied" -> {} for both readers, and neither
+        # reader touches S3 at all. An unreadable NON-empty configuration location is a different
+        # case and raises (see test_a_present_but_unreadable_configuration_raises).
+        with patch.object(mio, "_get_json", MagicMock(return_value=None)),              patch.object(mio, "_read_text", MagicMock(return_value=None)):
             assert mio.fetch_input_configuration("") == {}
             assert mio.fetch_metadata("") == {}
+
+    def test_a_present_but_unreadable_configuration_raises(self):
+        # The distinction the loud reader exists for: a supplied-but-unreadable configuration must
+        # NOT degrade to {}, or the job runs on its defaults and reports SUCCESS with the caller's
+        # parameters silently gone.
+        mio = self._container_manifest_io()
+        with patch.object(mio, "_read_text", MagicMock(return_value=None)):
+            with pytest.raises(mio.InputConfigurationError):
+                mio.fetch_input_configuration("s3://abkt/.../config.json")

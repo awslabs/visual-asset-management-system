@@ -241,12 +241,23 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                             )}
                         </div>
                     </div>
+                    {/* A labelled button rather than a bare glyph: a muted "×" with no button chrome
+                        reads as decoration, so the only way to undo a mis-added step looked like
+                        leaving the wizard and starting over. type="button" keeps it from submitting
+                        should this list ever be placed inside a form.
+
+                        Destructive colouring at REST, not only on hover: this is the one control in
+                        the list that discards work, and in the secondary text colour it read as
+                        another neutral affordance among the step's labels. */}
                     <button
+                        type="button"
                         onClick={() => onRemove(index)}
-                        aria-label="Remove pipeline"
-                        className="text-text-secondary hover:text-gray-700 dark:hover:text-gray-200"
+                        aria-label={`Remove step ${index + 1}`}
+                        title="Remove this step from the workflow"
+                        className="flex shrink-0 items-center gap-1 rounded border border-vams-error/60 px-2 py-1 text-sm text-vams-error hover:border-vams-error hover:bg-vams-error/10 focus:outline-none focus:ring-2 focus:ring-vams-error/40"
                     >
-                        ×
+                        <span aria-hidden="true">×</span>
+                        Remove
                     </button>
                 </div>
             </div>

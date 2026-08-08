@@ -15,10 +15,14 @@ use [`workflow execute`](workflows.md#workflow-execute); for a single asset's ex
 ## execution list
 
 List workflow executions globally, permission-filtered. You only see executions whose workflow you
-can read and whose input or output asset you can read. Supports rich filters and pagination. By
-default only recent executions — those started within the last 90 days — are listed; use
-`--filter-start-date` and `--filter-end-date` to query an explicit date range. The applied window is
-returned as `filterStartDate` (and `filterEndDate` when supplied) in the response.
+can read and every one of whose assets you can read — each input file's asset plus each asset named as
+a metadata source, or the output asset for a run with no inputs. An asset that has been permanently
+deleted is authorized on the database it lived in, so a run against a deleted asset stays listed for
+whoever can read that database; an archived asset is unaffected and stays authorized on its own record.
+
+Supports rich filters and pagination. By default only recent executions — those started within the last
+90 days — are listed; use `--filter-start-date` and `--filter-end-date` to query an explicit date range.
+The applied window is returned as `filterStartDate` (and `filterEndDate` when supplied) in the response.
 
 Each execution reports its output target — `Output Type` (`asset`, or `none` for a results-only run)
 and `Output Asset` as `databaseId:assetId`. Both lines are omitted for a results-only execution, which
@@ -32,19 +36,19 @@ vamscli execution list --group-id batch-2026-01 --auto-paginate
 vamscli execution list --triggered-by user@example.com --json-output
 ```
 
-| Option                            | Description                                                                      |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| `-w, --workflow-id`               | Filter by workflow ID                                                            |
-| `--workflow-database-id`          | Filter by workflow database ID                                                   |
-| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`)               |
-| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                |
-| `--group-id`                      | Filter by `executionGroupId`                                                     |
-| `--triggered-by`                  | Filter by the user ID that triggered the execution                               |
-| `--filter-start-date`             | Only executions started on/after this ISO-8601 date-time (default: 90 days ago)  |
-| `--filter-end-date`               | Only executions started on/before this ISO-8601 date-time (optional upper bound) |
-| `--page-size`                     | Items per page (max 100)                                                         |
-| `--auto-paginate` / `--max-items` | Fetch all pages (up to max-items)                                                |
-| `--starting-token`                | Continuation token for manual pagination                                         |
+| Option                            | Description                                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `-w, --workflow-id`               | Filter by workflow ID                                                                                  |
+| `--workflow-database-id`          | Filter by workflow database ID                                                                         |
+| `--status`                        | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`)                                     |
+| `--trigger-type`                  | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
+| `--group-id`                      | Filter by `executionGroupId`                                                                           |
+| `--triggered-by`                  | Filter by the user ID that triggered the execution                                                     |
+| `--filter-start-date`             | Only executions started on/after this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (default: 90 days ago)  |
+| `--filter-end-date`               | Only executions started on/before this UTC date-time, as `YYYY-MM-DDTHH:MM:SSZ` (optional upper bound) |
+| `--page-size`                     | Items per page (max 100)                                                                               |
+| `--auto-paginate` / `--max-items` | Fetch all pages (up to max-items)                                                                      |
+| `--starting-token`                | Continuation token for manual pagination                                                               |
 
 ---
 
@@ -57,6 +61,75 @@ input configurations, and outputs (files, metadata, results).
 vamscli execution details my-execution-id
 vamscli execution details my-execution-id --json-output
 ```
+
+Asset and file metadata and database metadata are reported as separate row counts, each marked
+independently when the response returned only part of that collection, and the metadata sources the run
+read are named. The metadata rows themselves, and the full list of collections the response trimmed,
+are available with `--json-output`. A pipeline step whose configuration body was too large to store
+inline reports the Amazon S3 location of the complete body.
+
+To read the metadata rows themselves in the formatted output — or to read a collection this command
+reports as partial in full — use [`execution details-metadata`](#execution-details-metadata).
+
+---
+
+## execution details-metadata
+
+Page one metadata collection of an execution's detail view. `execution details` bounds its metadata
+collections and reports each as a row count; this command reads a named collection a page at a time,
+one row per line, until every row has been returned. Rows carry the same shape the details view returns
+plus the pipeline that produced or read them.
+
+```bash
+vamscli execution details-metadata my-execution-id
+vamscli execution details-metadata my-execution-id --collection output --auto-paginate
+vamscli execution details-metadata my-execution-id --pipeline-id my-pipeline --page-size 500
+```
+
+| Option             | Description                                                                       |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `--collection`     | `input` (default), `inputDatabase`, or `output` — case-sensitive                  |
+| `--pipeline-id`    | Only rows produced or read by this pipeline (one workflow step)                   |
+| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
+| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
+| `--starting-token` | Continuation token for manual pagination                                          |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
+| `--json-output`    | Output the raw JSON response                                                      |
+
+`--collection` selects which of the detail view's metadata collections is read: `input` the asset and
+file metadata the run read, `inputDatabase` the metadata-source databases' own metadata, and `output`
+the metadata the pipelines wrote against their output files.
+
+The row lines differ by collection. An `input` or `inputDatabase` row prints the entity it was read
+from — `databaseId:assetId` and the asset-relative path — with its `scope` and the number of metadata
+entries it carries, followed by the pipeline in brackets. A database-scope row belongs to no asset, so
+its asset position renders as `-` and `scope=database` names it:
+
+```text
+Collection: input
+Found 2 row(s):
+  my-database:a1b2c3/models/building.fbx  scope=asset  4 entries  [convert-to-glb]
+  my-database:-/  scope=database  2 entries  [convert-to-glb]
+```
+
+An `output` row prints the output file the metadata applies to and the key/value written against it:
+
+```text
+Collection: output
+Found 1 row(s):
+  /models/building.gltf  triangleCount=18204  [3d-conversion-pipeline]
+```
+
+The metadata key/value pairs of an input row are reported as an entry count rather than printed; use
+`--json-output` for the pairs themselves.
+
+Without `--auto-paginate` the command fetches one page and prints the continuation token when more rows
+remain. A token is only valid alongside the `--collection` and `--pipeline-id` it was issued with, so
+pass the same ones when resuming with `--starting-token`. `--auto-paginate` cannot be combined with
+`--starting-token`, and `--max-items` without `--auto-paginate` is reported and ignored.
+
+Auto-pagination stops at `--max-items`, or after 200 pages, whichever comes first. When it stops with
+rows still available it says so, and reports the token to resume from.
 
 ---
 
@@ -133,6 +206,10 @@ execution ID); optionally reuse or assign an execution group.
 vamscli execution rerun my-execution-id
 vamscli execution rerun my-execution-id --execution-group-id batch-2026-02
 ```
+
+A re-run reconstructs the original run's metadata sources along with its input files, so it reads the
+same metadata the first run did. It reports the same warnings an execute does — a database whose
+metadata could not be read, or metadata trimmed at the per-entity limit.
 
 ---
 

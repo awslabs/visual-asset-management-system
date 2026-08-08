@@ -41,7 +41,8 @@ class TestPipelineRecords:
         assert sc["inputFileArity"] == "one"
         assert sc["assetScope"]["singleAssetOnly"] is True
         assert sc["metadataInputs"] == {
-            "assetMetadata": True, "fileMetadata": True, "fileAttributes": True}
+            "assetMetadata": True, "fileMetadata": True, "fileAttributes": True,
+            "databaseMetadata": True}
         assert sc["requireTemplate"] is False
         assert sc["inputFileFilters"] == {"allow": [], "exclude": []}
         # allowNoTemplate is fully removed — only requireTemplate remains

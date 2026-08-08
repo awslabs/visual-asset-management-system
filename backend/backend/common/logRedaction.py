@@ -20,7 +20,8 @@ import re
 
 REDACTED = "<redacted>"
 
-# Sensitive key names — mirrors customLogging.logger.mask_sensitive_data. Matched case-insensitively.
+# Sensitive key names — mirrors the credential keys in customLogging.logger.SENSITIVE_KEYS. Matched
+# case-insensitively.
 SENSITIVE_KEYS = [
     "authorization",
     "idJwtToken",

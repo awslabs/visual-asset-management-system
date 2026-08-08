@@ -406,10 +406,64 @@ Two behaviors are worth knowing:
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
     target (`outputAssetId` / `outputDatabaseId`).
--   **Metadata arrives as a grouped envelope** (`{"schemaVersion": 2, "assets": [...]}`) at
-    `inputMetadataS3Location`, grouped by asset. Use the helper's accessors -- `asset_metadata_for`,
-    `file_metadata_for`, `file_attributes_for` -- to resolve records for a specific
-    `(databaseId, assetId, fileKey)` rather than indexing the envelope directly.
+-   **Metadata arrives as a grouped envelope** at `inputMetadataS3Location`. Use the helper's
+    accessors -- `asset_metadata_for`, `file_metadata_for`, `file_attributes_for`, and
+    `database_metadata_for` -- to resolve records for a specific `(databaseId, assetId, fileKey)`
+    rather than indexing the envelope directly.
+
+### The metadata envelope
+
+Asset, file, and database metadata travel in one envelope. Asset metadata and per-file metadata and
+attributes are grouped under `assets`; database metadata belongs to no asset and sits in its own
+top-level `databases` list:
+
+```json
+{
+    "schemaVersion": 2,
+    "assets": [
+        {
+            "databaseId": "engineering",
+            "assetId": "building-01",
+            "assetData": { "assetName": "Building 01", "description": "", "tags": [] },
+            "files": [
+                { "fileKey": "/", "metadata": { "site": "north" } },
+                {
+                    "fileKey": "/models/building.fbx",
+                    "metadata": { "revision": "C" },
+                    "attributes": { "units": "meters" }
+                }
+            ]
+        }
+    ],
+    "databases": [{ "databaseId": "engineering", "metadata": { "program": "apollo" } }]
+}
+```
+
+Read the envelope through the accessors rather than by indexing it:
+
+-   The `fileKey` `/` record holds the **asset-level** metadata; a named key such as
+    `/models/building.fbx` holds that file's metadata and attributes. `attributes` is present only
+    where a file carries them.
+-   `databases` carries **one entry per database** the run captured metadata from — a run whose input
+    files span several databases carries several entries. The key is present only when the run
+    captured database metadata at all, so treat its absence as "no database metadata" rather than
+    expecting an empty list. `database_metadata_for(body, databaseId)` returns that database's
+    metadata, or an empty object when the envelope holds no entry for it.
+-   Database metadata is input only. A pipeline writes metadata back to assets and files; there is no
+    database metadata output.
+
+The entities a run captures follow from its own selection: every input file's asset, every asset the
+execution named purely as a metadata source, and every distinct database of those assets. A run with
+no input files captures the single database the execution named. Naming metadata sources is optional
+at every arity and nothing enforces it, so a pipeline that requires particular metadata to run checks
+for it itself and fails its own step when it is absent.
+
+Metadata is bounded per entity, so a pipeline should not assume it received every key a large entity
+holds. Each database, each asset, each file's metadata, and each file's attributes carries at most
+1,000 entries and 300 KB, each measured on its own — a run over three databases, five assets, and ten
+files therefore carries up to 1,000 entries for each of the three databases, each of the five assets,
+and each of the ten files. Entries are retained in key order, so a bounded entity yields the same
+subset on every run, and the execution that captured it returns a warning naming the bounded entity.
 
 ### Writing outputs
 
@@ -640,7 +694,8 @@ partition. Include the block for the execution type with its resource fields lef
         "metadataInputs": {
             "assetMetadata": false,
             "fileMetadata": false,
-            "fileAttributes": false
+            "fileAttributes": false,
+            "databaseMetadata": false
         },
         "requireTemplate": true,
         "allowCustomTemplateOverride": true,
@@ -651,20 +706,42 @@ partition. Include the block for the execution type with its resource fields lef
 
 `systemConfig` is the admin-only contract that governs how the pipeline may be run:
 
-| Field                         | Purpose                                                                                |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline. |
-| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                       |
-| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes). |
-| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.         |
-| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                   |
-| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                 |
+| Field                         | Purpose                                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                  |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                        |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`. |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                          |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                    |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                  |
 
 **Declare only what differs from the defaults.** Registration completes the block before storing it: every
 field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and
 `metadataInputs` are filled key by key, so naming one rule does not drop its siblings. The stored record
 replaces `systemConfig` wholesale rather than merging into it. This is also what keeps a newly added
 `systemConfig` field from changing the meaning of bundles written before it existed.
+
+#### What a bundle must declare
+
+A bundle written against an earlier version of VAMS keeps registering, so an external solution that
+pins a bundle shape does not have to track every field VAMS adds. Two properties make that hold:
+
+-   **Two fields are required — `pipeline.pipelineId` and `pipeline.pipelineName`.** Everything else is
+    optional, including the whole `systemConfig` block, the whole `executionConfig` block, `workflow`,
+    and `templates`. A bundle declaring only those two registers a pipeline whose every setting is the
+    documented default. `pipelineId` may instead be supplied as a deploy-time id override, which is how
+    the VAMS CDK names its built-ins. A `workflow` needs only `workflowId` and `workflowName`, a
+    template only `templateId` and `templateName`, and a trigger only `triggerType`.
+-   **Unknown fields are ignored rather than rejected.** A bundle carrying a field a given VAMS version
+    does not recognize — because it was written for a newer one — still registers. Fields inside
+    `systemConfig` are preserved on the stored record; fields elsewhere in the bundle are dropped. A
+    bundle declaring a higher `schemaVersion` is likewise accepted, since records read their version
+    with a default rather than matching it exactly.
+
+The exception is a value that is present but invalid: an unknown key inside `metadataInputs`,
+`assetScope`, or `inputFileFilters`, an `inputFileArity` outside `none | one | multi`, or a
+match-everything exclude pattern is rejected at import, because silently ignoring one would leave a
+pipeline running under a filter or scope its author did not write.
 
 These points determine whether a registered pipeline is actually usable:
 
@@ -831,10 +908,24 @@ pipeline is responsible for calling `SendTaskSuccess` or `SendTaskFailure` with 
 
 A pipeline's input configuration (the input parameters supplied when the pipeline is registered or overridden at execute time) may contain `{{tagName}}` template tags. VAMS substitutes these tags with values from the running execution before the pipeline receives its configuration, so a pipeline can ship a fixed configuration file with placeholders instead of building it field-by-field. Tags are replaced **per pipeline run**, and — in a multi-pipeline workflow — **per pipeline step**, so each step's tags reflect its own inputs.
 
+Two kinds of tag resolve in a configuration body, and the difference is who supplies the value:
+
+| Tag kind        | Declared in                    | Value comes from                              |
+| --------------- | ------------------------------ | --------------------------------------------- |
+| **System tags** | Nothing — always available     | The running execution, resolved automatically |
+| **User tags**   | The template's own `tagSchema` | The operator, per run, on the execute form    |
+
+The system tags are catalogued under [Available tags](#available-tags) below. User tags are what turn a
+pipeline into a form an operator fills in — a generation prompt, a seed, a quality preset, a target
+format — and are described in
+[Configuration templates and per-run options](#configuration-templates-and-per-run-options).
+
 Substitution operates on the raw configuration text regardless of format, and comes in two forms:
 
 -   **Scalar tags** replace a value inside quotes: `"databaseId": "{{firstAssetFileDatabaseId}}"`.
--   **Array / object tags** replace a JSON value without quotes: `"files": {{assetFileKeyArray}}`.
+-   **Array / object tags** replace a JSON value without quotes: `"files": {{assetFileKeyArray}}`. These are the all-input-file arrays and the metadata-content objects listed below.
+
+A template body whose `configFormat` is `json` is checked against those two shapes when the template is saved, so a scalar tag used as a bare value, or an array/object tag written inside quotes, is rejected with a 400 rather than producing malformed configuration at run time.
 
 ```json
 {
@@ -865,15 +956,117 @@ An unrecognized tag causes the execution to fail, so a typo is caught rather tha
 
 **Metadata and configuration locations:** `{{inputMetadataS3Location}}`, `{{inputConfigurationS3Location}}`, `{{orchestrationBusArn}}`, `{{orchestrationEventPrefix}}`.
 
-**Metadata content** (inject the asset/file metadata directly, as JSON objects): `{{inputMetadataObject}}`, `{{assetMetadataObject}}`, `{{fileMetadataObject}}`, `{{fileAttributesObject}}`, `{{assetDataObject}}`.
+**Metadata content** (inject the asset/file/database metadata directly, as JSON objects): `{{inputMetadataObject}}`, `{{assetMetadataObject}}`, `{{fileMetadataObject}}`, `{{fileAttributesObject}}`, `{{assetDataObject}}`, `{{databaseMetadataObject}}`.
+
+Each of these resolves for the subject the pipeline task is running against: the task's input file supplies the file scopes, and that file's asset supplies the asset scopes. `{{databaseMetadataObject}}` resolves the database of that subject, with one refinement — when a run captured metadata from exactly one database, that database resolves whatever the subject is. This is what makes the tag usable for a run that takes no input file, where there is no asset to resolve a database through. A run that captured several databases resolves the subject's own database, and a database the run did not capture yields an empty object.
 
 **Deadline Cloud** (`{{deadlineFarmId}}`, `{{deadlineQueueId}}`, `{{deadlineStorageProfileId}}`): recognized so a Deadline Cloud job template can reference them today, but they resolve to empty values until a future pipeline configuration supplies the pipeline's farm, queue, and storage profile.
 
 The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs.
 
 :::note
-Two dynamic tag families are planned but not yet available: `{{metadata_<key>}}` for looking up an individual metadata field by name, and user-defined per-pipeline tags declared on the pipeline definition. Using either today fails the execution as an unrecognized tag.
+One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today fails the execution as an unrecognized tag, and the `metadata_` prefix is reserved so a template's own tag key cannot collide with it. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.
 :::
+
+## Configuration templates and per-run options
+
+A **template** is what gives a pipeline per-run, operator-facing options — a generation prompt, a seed,
+an output format, a quality preset — without a code change and without a separate pipeline for each
+variation. It pairs a configuration body with a typed declaration of the fields inside it:
+
+-   **`configBody`** — the configuration document delivered to the container, containing `{{tagName}}`
+    placeholders.
+-   **`tagSchema`** — the typed declaration of those placeholders. VAMS renders it as the fields on the
+    execute form and validates a run's values against it.
+
+At launch VAMS substitutes the supplied values, writes the result to the run's configuration object, and
+the container reads it exactly as it reads any other configuration. Nothing in the container needs to
+know a template was involved.
+
+A template ships in the pipeline's `vamsSchema/templates/{templateId}.json` bundle file, or is created
+through the API or the web console.
+
+### Declaring a tag schema
+
+Each entry in `tagSchema` describes one field:
+
+| Field         | Required   | Purpose                                                                                   |
+| ------------- | ---------- | ----------------------------------------------------------------------------------------- |
+| `tagKey`      | Yes        | The placeholder name. Letters, digits, and underscores only, so `{{tagKey}}` substitutes. |
+| `type`        | No         | `string` (default), `integer`, `number`, `boolean`, `string-list`, or `enum`.             |
+| `required`    | No         | Defaults to `false`. A required field with no value fails the launch.                     |
+| `default`     | No         | Applied when the operator supplies nothing. Must itself be valid for `type`.              |
+| `enumValues`  | For `enum` | The allowed values. An `enum` without them is rejected.                                   |
+| `label`       | No         | The field's label on the execute form.                                                    |
+| `description` | No         | Helper text on the execute form — where units, ranges, and fallbacks belong.              |
+
+```json
+{
+    "templateId": "text-to-video-720p",
+    "templateName": "Text to video (720p)",
+    "configFormat": "json",
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": true,
+            "label": "Prompt",
+            "description": "What to generate."
+        },
+        {
+            "tagKey": "SEED",
+            "type": "integer",
+            "required": false,
+            "default": 42,
+            "label": "Seed",
+            "description": "Fixed seed for a repeatable result."
+        },
+        {
+            "tagKey": "FORMAT",
+            "type": "enum",
+            "enumValues": ["mp4", "webm"],
+            "default": "mp4",
+            "label": "Output format"
+        }
+    ],
+    "configBody": "{\"prompt\": \"{{PROMPT}}\", \"seed\": {{SEED}}, \"format\": \"{{FORMAT}}\", \"runId\": \"{{executionId}}\"}"
+}
+```
+
+:::warning[Quoting a typed tag in a `json` body is rejected]
+A placeholder for a tag typed `integer`, `number`, `boolean`, or `string-list` renders a JSON **value**
+and takes no quotes. A `string` or `enum` tag renders text and belongs inside the quotes of the string it
+fills. Quoting a typed tag would deliver `"42"` where the pipeline expects `42`, so the template is
+refused when it is saved. This check applies to `json` bodies only — `yaml`, `xml`, `openjd`, and `raw`
+bodies are stored verbatim and are not shape-checked, though their tags still substitute.
+:::
+
+### One pipeline per model, one template per mode
+
+Prefer several templates on one pipeline over several near-identical pipelines. A template may also
+narrow its pipeline's own input rules through `overrides`, which accepts exactly four keys:
+`inputFileArity`, `assetScope`, `metadataInputs`, and `inputFileFilters`. Any other key is rejected when
+the template is saved rather than ignored at execute time.
+
+That is what lets one pipeline offer a text-to-video mode needing no input file alongside a
+video-to-video mode that requires one: set the pipeline's own `inputFileArity` to the lowest any template
+needs, and let each template raise it. The execute form then asks for a file only when the selected
+template consumes one.
+
+Set `inputInstructions` on a template when an operator needs guidance the field descriptions cannot
+carry; it is shown on the execute form.
+
+### Overriding a body for one run
+
+A run may replace the stored body entirely with a `customTemplateOverride`, but only when the pipeline
+sets `allowCustomTemplateOverride` or the chosen template sets `allowCustomEdit`. A `json`-format
+override is held to the same shape rules as a stored body, and an unparseable one is refused at launch —
+every pipeline-side configuration reader treats an unreadable configuration as _absent_ and falls back
+to its defaults, so accepting one would produce a run that reports success while silently discarding
+every parameter the caller set.
+
+For the authoring and per-run bounds on templates, tag schemas, and tag values, see
+[Service Quotas and Limits](../additional/quotas.md#pipeline-template-and-tag-schema-limits).
 
 ## Testing pipelines locally
 
@@ -894,22 +1087,38 @@ docker run -it \
 
 ### Lambda testing
 
-Test Lambda handlers locally with a mock event payload:
+Test Lambda handlers locally with a mock event payload that carries the same body fields the state
+machine sends — the identity fields plus the two S3 locations, and nothing else:
 
 ```python
 event = {
     "body": json.dumps({
-        "inputS3AssetFilePath": "s3://bucket/asset-id/model.glb",
-        "outputS3AssetFilesPath": "s3://bucket/asset-id/",
-        "outputS3AssetPreviewPath": "s3://bucket/asset-id/",
-        "outputS3AssetMetadataPath": "s3://bucket/asset-id/",
-        "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux-bucket/asset-id/",
+        "workflowDatabaseId": "my-database",
+        "workflowId": "my-workflow",
+        "workflowExecutionId": "3f7c1e9a2b4d48c6a1f05e8d7c9b0a12",
+        "workflowExecutionS3InputOutputBucket": "bucket",
+        "executingUserName": "test-user",
+        "executingRequestContext": {},
+        "inputManifestS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/manifest.json",
+        "inputConfigurationS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/config.json",
         "TaskToken": "test-token",
-        "inputParameters": "",
-        "inputMetadata": "",
     })
 }
 ```
+
+Input files, output paths, and asset identity are resolved from the **manifest**, so a local test also
+needs a manifest object at `inputManifestS3Location` (or a stubbed
+`manifestHelper.resolve_pipeline_inputs`). A mock event that hands the handler `inputS3AssetFilePath` or
+the output paths directly tests a contract the deployed state machine does not send, and a handler that
+passes such a test still fails on its first real invocation.
+
+:::warning[A run with no input files takes its identity from the manifest's `outputTarget`]
+For a pipeline whose `inputFileArity` is `none`, the manifest carries no input file to derive
+`assetId`/`databaseId` from, and the task body does not carry them either — they come from the
+manifest's `outputTarget` block. Cover that case in a local test, or the handler passes every
+input-file test and then delivers an empty `assetId` to the container on exactly the runs that have no
+input file.
+:::
 
 ## Development checklist
 

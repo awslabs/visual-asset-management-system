@@ -11,6 +11,7 @@ from customLogging.logger import safeLogger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success, 
     validation_error, general_error, authorization_error, 
     VAMSGeneralErrorResponse
@@ -343,7 +344,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)

@@ -237,10 +237,13 @@ describe("validateWorkflow", () => {
     });
 
     it("warns when a pipeline uses a metadata input the workflow gate has off", () => {
+        // The gate must be an EXPLICIT false. assetMetadata is turned off here; fileMetadata is on.
         const r = validateWorkflow(
             {
                 specifiedPipelines: [{ pipelineId: "p", pipelineDatabaseId: "db" }],
-                systemConfig: { metadataInputs: { fileMetadata: true } },
+                systemConfig: {
+                    metadataInputs: { assetMetadata: false, fileMetadata: true },
+                },
             } as any,
             {
                 "db:p": {
@@ -252,6 +255,32 @@ describe("validateWorkflow", () => {
         );
         expect(r.warnings.some((w) => /assetMetadata/.test(w))).toBe(true);
         expect(r.warnings.some((w) => /fileMetadata/.test(w))).toBe(false);
+    });
+
+    it("does not warn when the workflow merely OMITS the key the pipeline uses", () => {
+        // A key a map omits carries its builder default (ON), so an omission is not a gate. Reading
+        // the raw value would warn that the workflow suppresses metadata it actually provides — the
+        // rule validate_workflow_save applies in common/workflows/executionValidation.py.
+        const r = validateWorkflow(
+            {
+                specifiedPipelines: [{ pipelineId: "p", pipelineDatabaseId: "db" }],
+                systemConfig: { metadataInputs: {} },
+            } as any,
+            { "db:p": { systemConfig: { metadataInputs: { assetMetadata: true } } } as any }
+        );
+        expect(r.warnings.filter((w) => /metadata input/.test(w))).toEqual([]);
+    });
+
+    it("checks databaseMetadata too, not just the three file/asset keys", () => {
+        const r = validateWorkflow(
+            {
+                specifiedPipelines: [{ pipelineId: "p", pipelineDatabaseId: "db" }],
+                systemConfig: { metadataInputs: { databaseMetadata: false } },
+            } as any,
+            // The pipeline omits the key, which means it USES it (default ON).
+            { "db:p": { systemConfig: { metadataInputs: {} } } as any }
+        );
+        expect(r.warnings.some((w) => /databaseMetadata/.test(w))).toBe(true);
     });
 
     it("warns when the workflow and pipeline allow-filters are disjoint", () => {

@@ -156,8 +156,28 @@ class TestTriggersReferencingTemplate:
         ])
         hits = triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1")
         assert hits == [("db1", "wf1", "fileUpload")]
-        assert table.query.call_args.kwargs["IndexName"] == "TriggersByTypeGSI"
+        assert table.query.call_args.kwargs["IndexName"] == "TriggersByBaseTypeGSI"
         table.scan.assert_not_called()
+
+    def test_finds_a_reference_from_an_additional_trigger_of_a_type(self):
+        """A workflow may carry several triggers of one type, each picking its own default template.
+
+        The rows are keyed 'fileUpload' and 'fileUpload#<id>', so this lookup partitions on the BARE
+        type. Keying it on the sort key would find only the first trigger of each type, and a template
+        still referenced by an additional trigger would read as unreferenced — the caller uses this to
+        decide whether deleting the template breaks a trigger."""
+        table = _triggers_table_with([
+            {"workflowDatabaseId": "db1", "workflowId": "wf1", "triggerType": "fileUpload",
+             "triggerBaseType": "fileUpload",
+             "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": "other"}}},
+            {"workflowDatabaseId": "db1", "workflowId": "wf1", "triggerType": "fileUpload#nightly",
+             "triggerBaseType": "fileUpload", "triggerId": "nightly",
+             "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": "tmpl1"}}},
+        ])
+        hits = triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1")
+        # The returned triggerType is the row's KEY, so the caller can name the exact trigger.
+        assert hits == [("db1", "wf1", "fileUpload#nightly")]
+        assert table.query.call_args.kwargs["IndexName"] == "TriggersByBaseTypeGSI"
 
     def test_read_error_returns_empty(self):
         table = MagicMock()

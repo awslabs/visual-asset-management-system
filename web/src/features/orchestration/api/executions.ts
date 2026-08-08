@@ -44,6 +44,33 @@ export async function getExecutionDetails(
     return toTuple(() => apiClient.get(`workflows/executions/${executionId}/details`));
 }
 
+/** The metadata collections the paged detail-metadata route serves, in its own vocabulary. */
+export type DetailMetadataCollection = "input" | "inputDatabase" | "output";
+
+/** One page of one detail metadata collection. NextToken is absent on the last page. */
+export interface DetailMetadataPage {
+    Items: any[];
+    collection: string;
+    NextToken?: string;
+}
+
+/**
+ * One page of one of an execution's metadata collections.
+ *
+ * Rows carry the same scrubbed shape the details view returns (plus the producing pipelineId), so a
+ * caller renders them with the details view's own columns. `collection` selects which one:
+ * `input` (asset/file metadata), `inputDatabase`, `output`.
+ */
+export async function getExecutionDetailsMetadata(
+    executionId: string,
+    params?: Record<string, string>
+): Promise<[boolean, DetailMetadataPage | string]> {
+    return toTuple(() => {
+        const opts = params ? { queryStringParameters: params } : {};
+        return apiClient.get(`workflows/executions/${executionId}/details/metadata`, opts);
+    });
+}
+
 export async function getExecutionLogs(
     executionId: string,
     params?: Record<string, string>

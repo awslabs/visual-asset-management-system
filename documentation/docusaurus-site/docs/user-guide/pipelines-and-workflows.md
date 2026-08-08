@@ -87,7 +87,7 @@ These are the admin controls that govern how the pipeline may be run — the con
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Input file count**            | `None` (a results-only or generate-from-nothing pipeline), `One file`, or `Multiple files`.                                                                                                                                                                                           |
 | **Asset selection rules**       | Whether an execution may select a whole asset, a folder, files from more than one asset, or is limited to a single asset.                                                                                                                                                             |
-| **Metadata inputs**             | Which metadata the pipeline is given: asset metadata, per-file metadata, and file attributes.                                                                                                                                                                                         |
+| **Metadata inputs**             | Which metadata the pipeline is given: asset metadata, per-file metadata, file attributes, and database metadata. See [Metadata inputs](#metadata-inputs).                                                                                                                             |
 | **Template settings**           | Whether a configuration template must be resolved before the pipeline can run, and whether a caller may supply a one-off configuration body at run time.                                                                                                                              |
 | **Input file filters**          | Allow and exclude glob patterns for the file types the pipeline accepts. An empty allow list means any file; the exclude list is applied last and may not match everything.                                                                                                           |
 | **Aux Preview Pipeline Suffix** | A viewer-specific subfolder (for example `-preview`, `/PotreeViewer`) appended to the pipeline's auxiliary preview path, so a pipeline producing viewer data writes it where the matching viewer reads it. Leave empty unless the pipeline produces viewer-specific auxiliary output. |
@@ -139,6 +139,13 @@ A **file upload trigger** runs the workflow automatically when a matching file i
 -   **Allow filters** name the file patterns that fire the trigger. Leaving the list empty means any uploaded file fires it.
 -   **Exclude filters** are applied after the allow list and remove matches from it. Because exclude runs last, a pattern that matches everything is rejected — it would suppress every upload.
 -   **Default template IDs (per pipeline)** pick the template each pipeline step uses on an automatic run, since no one is present to choose one. `None (choose at run time)` leaves it to the pipeline's own default.
+
+A workflow can carry **more than one trigger of the same kind**, so the same workflow can react differently to different uploads — for example converting `.e57` uploads with one template and `.las` uploads with another. Each trigger has its own filters and its own default templates, and an upload runs the workflow once for every trigger whose filters match it.
+
+The **Trigger name** field is what separates them. Leave it empty for the workflow's first trigger of a kind; give a name (letters, numbers, hyphens and underscores) to add another. A name cannot be changed once the trigger is saved, because it identifies the trigger. Two conditions are refused:
+
+-   A workflow whose **concurrency restriction** is per-asset supports only one trigger of a kind, since several would compete for the same asset.
+-   Two triggers of a kind cannot use the **same default templates**. The templates are what distinguish them, so the same set twice describes the same trigger — including two that both choose no template.
 
 :::tip
 Triggers are how processing chains together. A workflow that generates preview thumbnails or extracts metadata can be set to fire on `.e57` point cloud uploads, so the work happens on ingest with no one starting it.
@@ -235,6 +242,34 @@ prefix, and each step's template and values. Launching from here starts the exec
 The workflow then runs asynchronously, processing the selected files through each pipeline step in
 sequence.
 
+### Metadata inputs
+
+Besides the files it processes, an execution collects the stored metadata its pipelines asked for and
+hands it to each step. Four kinds are collected independently, each switched on or off by the workflow's
+and the pipeline's **Metadata inputs** settings: each asset's own metadata, each input file's metadata,
+each input file's attributes, and each database's own metadata. A kind reaches a pipeline only when the
+workflow and that pipeline both have it on.
+
+Which entities a run collects from follows from what it processes: every asset the selected files belong
+to, every asset named as a metadata source, and every database those assets live in. A run that takes no
+input files has nothing to derive from, so it collects the one database named as its metadata source.
+
+Naming a metadata source is always optional. Nothing requires a source to be chosen, and a run launches
+without one. A pipeline that genuinely needs particular metadata checks for it and reports the failure on
+its own step, so a missing source shows up as that step failing rather than as a rejected launch.
+
+Database metadata is read-only: it is given to a pipeline as input, and no pipeline writes metadata back
+to a database. Pipeline metadata write-back applies to assets and files.
+
+The metadata collected for each entity is capped on its own rather than against a shared total: at most
+1,000 metadata entries and 300 KB for each database, each asset, each file's metadata, and each file's
+attributes. A run over three databases holding five assets and ten files therefore collects up to 1,000
+entries for each of the three databases, up to 1,000 for each of the five assets, and up to 1,000 for
+each of the ten files. Entries are kept in key order, so the same entity yields the same set each time
+it is read. Nothing is dropped silently — when an entity is capped, the launch reports a warning naming
+it, and the same happens when a source database's metadata cannot be read. A single run reads at most
+1,000 input files and 1,000 metadata-source assets.
+
 ### Automatic execution
 
 When a workflow has auto-trigger enabled, it runs automatically whenever a file matching the configured extensions is uploaded to an asset within the workflow's database. The uploaded file is passed as the input to the workflow.
@@ -248,7 +283,7 @@ Execution progress can be monitored from the **Executions** page or from the ass
 -   Start and end timestamps
 -   Error details for failed executions
 
-The **Executions** page lists every execution the user may see, across all workflows and databases. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
+The **Executions** page lists every execution the user may see, across all workflows and databases. A run is listed when you can view its workflow and every asset it read — each selected file's asset plus each asset named as a metadata source — or, for a run that read nothing, the asset it wrote to. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
@@ -266,13 +301,13 @@ output in the asset when several runs have written to the same place.
 
 The tabs below it break the run down:
 
-| Tab           | What it shows                                                                                                                                                                                                   |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Inputs**    | Each selected input file with the exact file version the run read, plus the metadata gathered from the input assets and files and passed to the pipelines                                                       |
-| **Pipelines** | One entry per pipeline step: its status and timings, the template it used, the dynamic tag values supplied, and the final configuration body actually delivered to it                                           |
-| **Outputs**   | The output target and path prefix, then everything the run produced: output **files** with their version and size, **preview** files, **metadata** written back to the asset, and any **results** text returned |
-| **Settings**  | The system settings the run was governed by — the workflow's own settings, and per step the settings that step ran under                                                                                        |
-| **Logs**      | The execution log, selectable per step (permission-gated)                                                                                                                                                       |
+| Tab           | What it shows                                                                                                                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Inputs**    | Each selected input file with the exact file version the run read, then the metadata gathered and passed to the pipelines in two blocks — each involved database's own metadata, then the asset and file metadata |
+| **Pipelines** | One entry per pipeline step: its status and timings, the template it used, the dynamic tag values supplied, and the final configuration body actually delivered to it                                             |
+| **Outputs**   | The output target and path prefix, then everything the run produced: output **files** with their version and size, **preview** files, **metadata** written back to the asset, and any **results** text returned   |
+| **Settings**  | The system settings the run was governed by — the workflow's own settings, and per step the settings that step ran under                                                                                          |
+| **Logs**      | The execution log, selectable per step (permission-gated)                                                                                                                                                         |
 
 :::note[Outputs lists tracked asset files only]
 A pipeline may also write to the auxiliary location — scratch space, and certain non-versioned viewer data

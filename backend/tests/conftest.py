@@ -95,15 +95,15 @@ sys.modules['common.s3PathPatterns'] = _s3pp_module
 # deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
 # strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which
 # re.compile()s them at class-definition time -- a MagicMock there crashes collection.
-# The validate() dispatcher is still overridden with the permissive test stub so
-# existing tests that rely on validation always passing are unaffected.
+# The validate() dispatcher is the REAL one: handlers bind it at import, so replacing it with a
+# permissive stub made every handler test fail open — a handler that skipped or mis-declared an
+# input check still passed. Tests that need validation bypassed should patch it locally.
 _validators_spec = _s3mk_importlib_util.spec_from_file_location(
     'common.validators',
     os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'validators.py')
 )
 _validators_module = _s3mk_importlib_util.module_from_spec(_validators_spec)
 _validators_spec.loader.exec_module(_validators_module)
-_validators_module.validate = lambda params: (True, "")
 sys.modules['common.validators'] = _validators_module
 # `common` is a MagicMock package, so bind the real submodule as an attribute too so
 # `from common import validators` resolves the real module rather than a mock attribute.

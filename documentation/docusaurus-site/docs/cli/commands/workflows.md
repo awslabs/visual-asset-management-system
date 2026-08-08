@@ -244,7 +244,16 @@ vamscli workflow execute --workflow-database-id global -w my-workflow \
 | `--pipeline-parameters[-file]`               | Per-pipeline `{templateId, templateTags, customTemplateOverride}` keyed by pipelineId                                                                                                                                                                              |
 | `--output-asset-id` / `--output-database-id` | Override the output target (when the workflow allows it)                                                                                                                                                                                                           |
 | `--output-path-prefix`                       | Base path under the output asset for output files, inserted just above each file's own name; supports dynamic tags (e.g. `{{firstAssetFileFileNameNoExt}}`). Omit to inherit the workflow's default prefix; pass `""` to force the asset root. No `..`/backslashes |
+| `--metadata-source-asset`                    | `databaseId:assetId` (repeatable) — an asset whose stored metadata the run reads. Two segments, not three: a metadata source is an entity, never a file                                                                                                            |
+| `--metadata-source-assets[-file]`            | Full `metadataSourceAssets` list as inline JSON or a file                                                                                                                                                                                                          |
+| `--metadata-source-database`                 | One database whose own metadata the run reads. Applies to a run with no input files; a run with input files reads the databases of its input files' assets instead. `GLOBAL` is not a database here                                                                |
 | `--execution-group-id`                       | Group this execution under an executionGroupId                                                                                                                                                                                                                     |
+
+Naming a metadata source is optional and never required: a run launches whether or not any source is
+named, and a pipeline that requires metadata validates that for itself. Both options are omitted from
+the request when unset. Metadata is captured up to a fixed number of entries and bytes per entity, and
+a run that hit that limit — or that could not read a database's metadata — reports it in the execute
+response warnings.
 
 A workflow may define a default output path prefix, which is used when `--output-path-prefix` is
 omitted. Because the stored default keeps its template tags unresolved, one setting such as
@@ -269,19 +278,24 @@ vamscli workflow list-executions -d my-db -a my-asset
 vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-paginate
 ```
 
-| Option                   | Description                                                        |
-| ------------------------ | ------------------------------------------------------------------ |
-| `-d, --database-id`      | Database containing the asset (required)                           |
-| `-a, --asset-id`         | Asset to list executions for (required)                            |
-| `-w, --workflow-id`      | Filter to one workflow                                             |
-| `--workflow-database-id` | The filtered workflow's database                                   |
-| `--auto-paginate`        | Fetch every page rather than the first                             |
-| `--page-size`            | Items per page (max 50)                                            |
-| `--max-items`            | Cap on total items fetched; only meaningful with `--auto-paginate` |
-| `--starting-token`       | Resume from a previous response's token (manual pagination)        |
+| Option                   | Description                                                                 |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `-d, --database-id`      | Database containing the asset (required)                                    |
+| `-a, --asset-id`         | Asset to list executions for (required)                                     |
+| `-w, --workflow-id`      | Filter to one workflow; works on its own                                    |
+| `--workflow-database-id` | Filter to workflows in one database; accepts `GLOBAL`. Works on its own too |
+| `--auto-paginate`        | Fetch every page rather than the first                                      |
+| `--page-size`            | Items per page (max 50)                                                     |
+| `--max-items`            | Cap on total items fetched; only meaningful with `--auto-paginate`          |
+| `--starting-token`       | Resume from a previous response's token (manual pagination)                 |
 
 The listing covers executions in both directions: those that read the asset as an input **and** those
 that wrote to it as their output target, merged newest-first.
+
+The two workflow filters are matched independently and AND-ed, so either narrows the list on its own.
+A workflow ID is unique only within its database, so pass both when the same ID exists in more than
+one. An ID that does not match the ID pattern returns a validation error rather than an empty list,
+so a typo is distinguishable from an asset that never ran that workflow.
 
 :::note
 Per-asset execution listing is limited to a page size of 50 due to Step Functions API throttling.

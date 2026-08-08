@@ -49,7 +49,7 @@ tools/VamsCLI/
       sync.py                # Directory sync (sync file push/pull)
       pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
       workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
-      execution.py           # Execution ops: list (global), details, logs, abort, rerun, permanent-delete
+      execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
       industry/
@@ -99,7 +99,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
 
 Industry has nested sub-command groups:
 
@@ -373,6 +373,8 @@ VamsCLI uses Unicode characters (e.g., `✓`, `✗`) in CLI output for status in
 
 | Fixture                    | Scope    | Purpose                                        |
 | -------------------------- | -------- | ---------------------------------------------- |
+| `isolate_logging_globals`  | autouse  | Restores `_verbose_mode` / `_logger` per test  |
+| `CoroutineClosingMock`     | class    | `asyncio.run` mock that closes the coroutine   |
 | `mock_logging`             | autouse  | Prevents file system operations during tests   |
 | `cli_runner`               | function | Pre-configured `CliRunner` instance            |
 | `mock_profile_manager`     | function | ProfileManager mock with `has_config()=True`   |
@@ -416,6 +418,9 @@ The `generic_command_mocks(command_module)` context manager patches:
 3. For nested modules like `roleUserConstraints`, use the actual module name: `'roleUserConstraints'`
 4. Use `no_setup_command_mocks` for testing setup-required error paths
 5. To disable the autouse `mock_logging`, mark the test: `@pytest.mark.no_mock_logging`
+6. Never leave `vamscli.utils.logging._verbose_mode` or `._logger` mutated. `main.py` binds `initialize_logging` at import, so `mock_logging`'s patch does not intercept the CLI group's call — every `cli_runner.invoke` writes those globals for real. In verbose mode each `log_*` call also writes to stderr, `CliRunner` merges stderr into `result.output`, and any later `json.loads(result.output)` fails on text wrapped around its JSON. The autouse `isolate_logging_globals` fixture restores both; `tests/test_logging_isolation.py` guards it in ordered pairs.
+7. Patch a command's `asyncio.run` with `new_callable=CoroutineClosingMock` (from `tests/conftest.py`). Commands call `asyncio.run(some_coro())`; Python evaluates the argument first, so the coroutine object is always built and a plain `MagicMock` then discards it un-awaited. The "coroutine ... was never awaited" `RuntimeWarning` surfaces whenever that object is later garbage collected, attributed to an unrelated test. `CoroutineClosingMock` closes the coroutine and otherwise behaves as a normal `MagicMock`, so `return_value`, `side_effect`, and call assertions are unaffected. Do not use `AsyncMock` here — it returns a coroutine instead of the canned value and leaks two coroutines instead of one.
+8. `tests/conftest.py` removes `--verbose` from `sys.argv` at import, before collection. `_is_verbose_mode()` treats that literal anywhere in `sys.argv` as a request for verbose output — including pytest's own argv — which would turn on stderr logging session-wide and break ~113 tests that parse `result.output` as JSON. No fixture can prevent it, because the helper is consulted per call rather than per test. Keep the strip: `pytest --verbose` is green only because of it. Its one visible cost is that pytest reads the same flag for its own progress display, so `pytest --verbose` renders as dots; use `-v` (a different string, never affected) for per-test output.
 
 ### Test Class Pattern
 

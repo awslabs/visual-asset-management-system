@@ -95,8 +95,12 @@ def lambda_handler(event, context):
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
 
-        # Read metadata + input configuration content from S3 (inline fallback for transition)
-        metadata = manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location'])
+        # Read metadata + input configuration content from S3 (inline fallback for transition). The
+        # metadata file is the grouped-by-asset envelope, projected onto the legacy {"VAMS": {...}}
+        # view for this run's subject that the scope below reads. This pipeline takes no input file,
+        # so that subject is the envelope's first metadata-source asset (manifestHelper.run_vams_view).
+        metadata = manifestHelper.run_vams_view(
+            manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']), resolved)
         if not metadata and data.get('inputMetadata'):
             inline = data.get('inputMetadata')
             metadata = json.loads(inline) if isinstance(inline, str) else inline

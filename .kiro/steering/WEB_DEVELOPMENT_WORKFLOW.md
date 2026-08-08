@@ -316,7 +316,7 @@ Cache.setItem("config", data);
 
 ### **Rule 12: Permission Graying (Orchestration Module)**
 
-The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden when the route is not allowed. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
 
 ```typescript
 const { can } = useAllowedRoutes();

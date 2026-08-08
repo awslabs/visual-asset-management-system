@@ -340,18 +340,19 @@ class IsaacVAMSConnector:
         file_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a workflow on an asset.
+        Execute a workflow on one file of an asset, or on the whole asset.
 
         Args:
             database_id: The database ID containing the asset.
             asset_id: The asset ID to run the workflow on.
             workflow_id: The workflow ID to execute.
             workflow_database_id: The database ID that owns the workflow.
-            file_key: Optional file key within the asset. If not specified,
-                      the workflow runs on the top-level asset ("/").
+            file_key: Optional relative file key within the asset. If not specified,
+                      the workflow runs on the whole asset ("/").
 
         Returns:
-            Dict with execution result (includes execution ID in 'message' field).
+            Dict with execution result (includes 'executionId', and 'warnings' when
+            the run started with a bounded metadata capture).
         """
         return self._cli.execute_workflow(
             database_id, asset_id, workflow_id, workflow_database_id, file_key

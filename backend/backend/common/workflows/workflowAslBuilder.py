@@ -226,6 +226,10 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                         f"States.Format('{input_folder_template}pipeline{i + 2}/config.json', "
                         f"$$.Execution.Name)"),
                     "nextPipelineAuxTempPrefix.$": next_aux_temp_prefix_uri,
+                    # The NEXT step's own narrowed input-metadata key, or "" when that step reads the
+                    # shared per-execution envelope. Resolved per execution (templates are chosen at
+                    # execute time, the ASL is baked at save time), so only the index is static here.
+                    "nextPipelineMetadataS3Key.$": f"$.stepMetadataS3Keys[{i + 1}]",
                     # Next pipeline identity for template-tag rendering of its input configuration
                     # (pipeline id + database id + job name are known at ASL-build time; the
                     # workflow ids and executing-user context come from the SFN input). The

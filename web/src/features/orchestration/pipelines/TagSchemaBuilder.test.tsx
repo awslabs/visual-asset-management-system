@@ -257,4 +257,41 @@ describe("TagSchemaBuilder", () => {
         expect(last[0].type).toBe("integer");
         expect(last[0].default).toBeUndefined();
     });
+
+    it("lets a comma be typed into the enum values field", async () => {
+        // The field is labelled "comma-separated" but a fully controlled value that re-parsed on
+        // every keystroke dropped the empty segment a just-typed comma creates, so the comma was
+        // erased as it was entered and the words ran together ("dev,staging" -> "devstaging").
+        const user = userEvent.setup();
+        const onChange = jest.fn();
+
+        render(<TagSchemaBuilder value={[]} onChange={onChange} />);
+        await user.click(screen.getByRole("button", { name: /add tag/i }));
+        await user.type(screen.getByLabelText(/tag key/i), "ENVIRONMENT");
+        await user.selectOptions(screen.getByLabelText(/^type/i), "enum");
+
+        const enumInput = screen.getByLabelText(/enum values/i) as HTMLInputElement;
+        await user.type(enumInput, "dev,staging");
+
+        // The typed text survives verbatim, commas included.
+        expect(enumInput.value).toBe("dev,staging");
+
+        // And it is committed upward as separate values, not one run-together string.
+        await waitFor(() => {
+            const last = onChange.mock.calls.at(-1)?.[0] as TagSchemaField[] | undefined;
+            expect(last?.[0]?.enumValues).toEqual(["dev", "staging"]);
+        });
+    });
+
+    it("keeps a trailing comma visible while the next value is being typed", async () => {
+        const user = userEvent.setup();
+        render(<TagSchemaBuilder value={[]} onChange={jest.fn()} />);
+        await user.click(screen.getByRole("button", { name: /add tag/i }));
+        await user.type(screen.getByLabelText(/tag key/i), "ENVIRONMENT");
+        await user.selectOptions(screen.getByLabelText(/^type/i), "enum");
+
+        const enumInput = screen.getByLabelText(/enum values/i) as HTMLInputElement;
+        await user.type(enumInput, "dev, ");
+        expect(enumInput.value).toBe("dev, ");
+    });
 });

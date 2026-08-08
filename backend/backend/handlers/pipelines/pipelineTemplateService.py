@@ -26,6 +26,7 @@ import json
 import boto3
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import ValidationError
 
 from common.validators import validate
 from common.resourceNames import get_table_name, ResourceKeys
@@ -34,6 +35,7 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -42,6 +44,7 @@ from models.common import (
     internal_error,
     general_error,
     VAMSGeneralErrorResponse,
+    validation_error_message,
 )
 from models.pipelines import (
     CreateTemplateRequestModel,
@@ -54,6 +57,7 @@ from models.pipelines import (
 )
 from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
+from common.workflows import templateRender as tr
 from common.workflows import templateTagSchema as tts
 from common.workflows.defaultBucket import resolve_default_bucket, DefaultBucketNotFoundError
 from common.workflows.triggerTemplateValidation import validate_template_not_breaking_triggers
@@ -416,7 +420,7 @@ def list_templates(database_id, pipeline_id, query_params=None):
     return result
 
 
-def create_template(database_id, pipeline_id, request, username):
+def create_template(database_id, pipeline_id, request, username, event=None):
     template_id = request.templateId or pr.new_guid()
     if _get_template_row(database_id, pipeline_id, template_id):
         logger.info(f"Template {database_id}:{pipeline_id}:{template_id} already exists")
@@ -453,6 +457,16 @@ def create_template(database_id, pipeline_id, request, username):
         created_by=username, modified_by=username,
     )
     _templates_table().put_item(Item=record)
+    # AUDIT LOG: template created. The configuration BODY is deliberately not logged — it can carry
+    # prompts and credential-shaped values; the id, format and default flag identify it.
+    log_actions(event or {}, "pipelineTemplateCreate", {
+        "databaseId": database_id,
+        "pipelineId": pipeline_id,
+        "templateId": template_id,
+        "configFormat": record.get("configFormat", ""),
+        "isDefault": bool(request.isDefault),
+        "operation": "create",
+    })
     # Enforce single-default-per-pipeline: unset any prior default when this one is the default.
     if request.isDefault:
         _clear_other_defaults(database_id, pipeline_id, template_id)
@@ -467,7 +481,7 @@ def create_template(database_id, pipeline_id, request, username):
     return success(body={"message": _template_to_response(record, tag_schema_fields=tag_fields).dict()})
 
 
-def update_template(database_id, pipeline_id, template_id, request, username):
+def update_template(database_id, pipeline_id, template_id, request, username, event=None):
     row = _get_template_row(database_id, pipeline_id, template_id)
     if not row:
         return validation_error(status_code=404, body={"message": "Template not found"})
@@ -495,8 +509,24 @@ def update_template(database_id, pipeline_id, template_id, request, username):
     if request.configBody is not None or format_changed:
         effective_body = (request.configBody if request.configBody is not None
                           else _rehydrate_template(row)["configBody"])
+        # The EFFECTIVE tag schema, for the same reason as the body and format: a body-only update must
+        # be checked against the tags the template already declares, or a typed placeholder that is
+        # legal for the stored schema would be rejected. Read from storage only when the request does
+        # not carry one AND the effective body actually references a tag — a body with no placeholders
+        # is parse-checked directly, so the schema cannot change the verdict and the read would be
+        # wasted work on the common case.
+        effective_tag_schema = request.tagSchema
+        if effective_tag_schema is None and tr.uses_template_tags(effective_body):
+            effective_tag_schema = _load_tag_schema_fields(database_id, pipeline_id, template_id)
         try:
-            _validate_template_bodies(effective_format, effective_body, None)
+            _validate_template_bodies(effective_format, effective_body, None, effective_tag_schema)
+        # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+        # below a model-validation failure is caught there and str()'d whole into the response —
+        # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+        # after the ValueError arm would make it dead code.
+        except ValidationError as ve:
+            logger.exception(f"Validation error: {ve}")
+            return validation_error(body={"message": validation_error_message(ve)})
         except ValueError as ve:
             return validation_error(body={"message": str(ve)})
 
@@ -542,6 +572,13 @@ def update_template(database_id, pipeline_id, template_id, request, username):
     row["dateModified"] = pr.iso_now()
     row["modifiedBy"] = username
     _templates_table().put_item(Item=row)
+    # AUDIT LOG: template updated (body omitted, as on create).
+    log_actions(event or {}, "pipelineTemplateUpdate", {
+        "databaseId": database_id,
+        "pipelineId": pipeline_id,
+        "templateId": template_id,
+        "operation": "update",
+    })
     if orphaned_storage:
         _delete_offloaded_objects(orphaned_storage)
     # Enforce single-default-per-pipeline when this update sets the template as the default.
@@ -573,7 +610,7 @@ def _delete_offloaded_objects(row):
                 logger.warning(f"Failed deleting offloaded template object {key}: {e}")
 
 
-def delete_template(database_id, pipeline_id, template_id):
+def delete_template(database_id, pipeline_id, template_id, event=None):
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
     row = _get_template_row(database_id, pipeline_id, template_id)
     if not row:
@@ -588,6 +625,13 @@ def delete_template(database_id, pipeline_id, template_id):
         if tag_row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and tag_row.get("fieldsS3Key"):
             _delete_tag_schema_object(tag_row["fieldsS3Key"])
     _delete_tag_schema_rows(tag_rows)
+    # AUDIT LOG: template deleted (a real delete, not an archive).
+    log_actions(event or {}, "pipelineTemplateDelete", {
+        "databaseId": database_id,
+        "pipelineId": pipeline_id,
+        "templateId": template_id,
+        "operation": "delete",
+    })
     return success(body={"message": "Template deleted"})
 
 
@@ -694,18 +738,18 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if method == "POST":
             request = CreateTemplateRequestModel(**_request_body(event))
-            return create_template(database_id, pipeline_id, request, username)
+            return create_template(database_id, pipeline_id, request, username, event)
 
         if method == "PUT":
             if not template_id:
                 return validation_error(body={"message": "templateId required"}, event=event)
             request = UpdateTemplateRequestModel(**_request_body(event))
-            return update_template(database_id, pipeline_id, template_id, request, username)
+            return update_template(database_id, pipeline_id, template_id, request, username, event)
 
         if method == "DELETE":
             if not template_id:
                 return validation_error(body={"message": "templateId required"}, event=event)
-            return delete_template(database_id, pipeline_id, template_id)
+            return delete_template(database_id, pipeline_id, template_id, event)
 
         return validation_error(body={"message": "Method not allowed"}, event=event)
 
@@ -719,6 +763,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return general_error(body={"message": str(v)}, event=event)
     except json.JSONDecodeError:
         return validation_error(body={"message": "Invalid JSON in request body"}, event=event)
+    # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
+    # below a model-validation failure is caught there and str()'d whole into the response —
+    # leaking the model class name and pydantic's error taxonomy (backend Rule 11). Placing it
+    # after the ValueError arm would make it dead code.
+    except ValidationError as ve:
+        logger.exception(f"Validation error: {ve}")
+        return validation_error(body={"message": validation_error_message(ve)}, event=event)
     except ValueError as ve:
         logger.exception(f"Validation error: {ve}")
         return validation_error(body={"message": str(ve)}, event=event)

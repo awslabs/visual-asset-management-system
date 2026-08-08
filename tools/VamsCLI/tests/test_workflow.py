@@ -409,6 +409,135 @@ class TestWorkflowExecute:
             assert result.exit_code != 0
 
 
+class TestWorkflowExecuteMetadataSources:
+    """The metadata-source selection: entities the run reads stored metadata from, which are not
+    input files. A source asset ref is 2-segment ('db:asset') precisely because it carries no file
+    key, so it must not be parsed by the 3-segment --input-file rule."""
+
+    def test_execute_sends_metadata_source_assets(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-asset', 'my-db:asset1',
+                '--metadata-source-asset', 'other-db:asset2'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert body['metadataSourceAssets'] == [
+                {'databaseId': 'my-db', 'assetId': 'asset1'},
+                {'databaseId': 'other-db', 'assetId': 'asset2'}]
+            # A source is never an input file, so it must not leak into inputFiles.
+            assert body['inputFiles'] == []
+
+    def test_execute_sends_the_metadata_source_database(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-database', 'my-db'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert body['metadataSourceDatabaseId'] == 'my-db'
+
+    def test_execute_omits_both_fields_when_no_source_is_named(self, cli_runner,
+                                                               generic_command_mocks):
+        """Naming a metadata source is always optional, so an unnamed selection must leave the keys
+        out of the body rather than send empty values."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert 'metadataSourceAssets' not in body
+            assert 'metadataSourceDatabaseId' not in body
+
+    def test_execute_accepts_metadata_source_assets_as_json(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-assets', '[{"databaseId": "my-db", "assetId": "asset1"}]'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert body['metadataSourceAssets'] == [{'databaseId': 'my-db', 'assetId': 'asset1'}]
+
+    @pytest.mark.parametrize('ref', [
+        'only-one-segment',
+        'my-db:asset1:/model.glb',   # a 3-segment input-file ref, not a metadata source
+        ':asset1',
+        'my-db:',
+        '',
+    ])
+    def test_execute_rejects_a_malformed_source_ref(self, ref, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-asset', ref])
+            assert result.exit_code != 0
+            assert not mocks['api_client'].execute_workflow.called
+
+    @pytest.mark.parametrize('value', ['GLOBAL', 'global', 'Global', ' global '])
+    def test_execute_rejects_global_as_the_metadata_source_database(self, value, cli_runner,
+                                                                   generic_command_mocks):
+        """GLOBAL is the all-databases keyword, not a readable database. It is legal for
+        --workflow-database-id and inside a source asset's ref, so it must be refused here by name."""
+        with generic_command_mocks('workflow') as mocks:
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-database', value])
+            assert result.exit_code != 0
+            assert 'GLOBAL' in result.output
+            assert not mocks['api_client'].execute_workflow.called
+
+    def test_execute_still_accepts_global_inside_a_source_asset_ref(self, cli_runner,
+                                                                   generic_command_mocks):
+        """An asset may live in the GLOBAL database, so a source asset's databaseId may be GLOBAL —
+        only the standalone database selection rejects it."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-asset', 'GLOBAL:asset1'])
+            assert result.exit_code == 0
+            body = mocks['api_client'].execute_workflow.call_args.args[2]
+            assert body['metadataSourceAssets'] == [{'databaseId': 'GLOBAL', 'assetId': 'asset1'}]
+
+    def test_execute_rejects_a_non_list_metadata_source_json(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-assets', '{"databaseId": "my-db"}'])
+            assert result.exit_code != 0
+            assert not mocks['api_client'].execute_workflow.called
+
+    def test_execute_surfaces_response_warnings(self, cli_runner, generic_command_mocks):
+        """A capped metadata capture or an unreadable source database comes back as a warning on an
+        otherwise successful execute. Swallowing it would report inputs the run never read."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {
+                'executionId': 'e1',
+                'warnings': ["Metadata for asset 'a1' was truncated at the per-entity cap.",
+                             "Database 'other-db' could not be read."]}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--metadata-source-database', 'my-db'])
+            assert result.exit_code == 0
+            assert 'Warnings:' in result.output
+            assert 'truncated at the per-entity cap' in result.output
+            assert "Database 'other-db' could not be read." in result.output
+
+    def test_execute_warnings_reach_json_output(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {
+                'executionId': 'e1', 'warnings': ['Metadata truncated.']}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['warnings'] == ['Metadata truncated.']
+
+
 class TestWorkflowListExecutions:
     def test_list_executions_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:

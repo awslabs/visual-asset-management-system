@@ -4,7 +4,7 @@ import json
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -33,7 +33,8 @@ from ..constants import (
     API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_DATABASE_WORKFLOW,
     API_WORKFLOW_TRIGGERS, API_WORKFLOW_TRIGGER,
     API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW, API_WORKFLOW_EXECUTIONS_GLOBAL,
-    API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS, API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
     API_AUTH_API_KEYS, API_AUTH_API_KEY
 )
@@ -3875,10 +3876,17 @@ class APIClient:
             raise APIError(f"Failed to list triggers: {e}")
 
     def get_workflow_trigger(self, database_id: str, workflow_id: str, trigger_type: str) -> Dict[str, Any]:
-        """Get a workflow trigger. GET .../triggers/{triggerType}."""
+        """Get a workflow trigger. GET .../triggers/{triggerType}.
+
+        `trigger_type` is the trigger's KEY: the bare type for a workflow's first trigger of that type,
+        or 'type#triggerId' for an additional one. It is percent-encoded into the path because a raw '#'
+        is a URL fragment delimiter — the server would receive only the bare type and act on the wrong
+        trigger.
+        """
         try:
             endpoint = API_WORKFLOW_TRIGGER.format(
-                databaseId=database_id, workflowId=workflow_id, triggerType=trigger_type)
+                databaseId=database_id, workflowId=workflow_id,
+                triggerType=quote(trigger_type, safe=''))
             response = self.get(endpoint, include_auth=True)
             return self._pwe_body(response)
         except requests.exceptions.HTTPError as e:
@@ -3895,7 +3903,8 @@ class APIClient:
         """Set (create/replace) a workflow trigger. PUT .../triggers/{triggerType}."""
         try:
             endpoint = API_WORKFLOW_TRIGGER.format(
-                databaseId=database_id, workflowId=workflow_id, triggerType=trigger_type)
+                databaseId=database_id, workflowId=workflow_id,
+                triggerType=quote(trigger_type, safe=''))
             response = self.put(endpoint, data=body, include_auth=True)
             return self._pwe_body(response)
         except requests.exceptions.HTTPError as e:
@@ -3913,7 +3922,8 @@ class APIClient:
         """Delete a workflow trigger. DELETE .../triggers/{triggerType}."""
         try:
             endpoint = API_WORKFLOW_TRIGGER.format(
-                databaseId=database_id, workflowId=workflow_id, triggerType=trigger_type)
+                databaseId=database_id, workflowId=workflow_id,
+                triggerType=quote(trigger_type, safe=''))
             response = self.delete(endpoint, include_auth=True)
             return self._pwe_body(response)
         except requests.exceptions.HTTPError as e:
@@ -3956,18 +3966,22 @@ class APIClient:
                                  workflow_database_id: Optional[str] = None,
                                  workflow_id: Optional[str] = None,
                                  params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """List an asset's workflow executions. GET .../assets/{assetId}/workflows/executions[/{workflowId}]."""
+        """List an asset's workflow executions. GET .../assets/{assetId}/workflows/executions.
+
+        The workflow filter is sent as QUERY parameters, which the route matches per field. The
+        alternative `.../executions/{workflowId}` path form compares against the joined
+        `workflowDatabaseId:workflowId` key and reads its companion database from a GET request body,
+        so a caller supplying only a workflow id there filters against ':<workflowId>' and receives an
+        empty list — indistinguishable from an asset with no matching history.
+        """
         try:
-            endpoint = (API_WORKFLOW_EXECUTIONS + f"/{workflow_id}") if workflow_id else API_WORKFLOW_EXECUTIONS
-            endpoint = endpoint.format(databaseId=database_id, assetId=asset_id)
+            endpoint = API_WORKFLOW_EXECUTIONS.format(databaseId=database_id, assetId=asset_id)
             query_params = dict(params or {})
-            # This route is GET-only; the optional workflowDatabaseId filter is read from the request
-            # body by the handler (ListExecutionsRequestModel), so send it as a GET body rather than
-            # a POST (no POST method is registered on this resource).
-            request_kwargs = {'include_auth': True, 'params': query_params}
+            if workflow_id:
+                query_params['workflowId'] = workflow_id
             if workflow_database_id:
-                request_kwargs['json'] = {'workflowDatabaseId': workflow_database_id}
-            response = self.get(endpoint, **request_kwargs)
+                query_params['workflowDatabaseId'] = workflow_database_id
+            response = self.get(endpoint, include_auth=True, params=query_params)
             return self._pwe_body(response)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -3998,7 +4012,13 @@ class APIClient:
             raise APIError(f"Failed to list executions: {e}")
 
     def get_execution_details(self, execution_id: str) -> Dict[str, Any]:
-        """Get an execution's full detail/traceability. GET /workflows/executions/{executionId}/details."""
+        """Get an execution's full detail/traceability. GET /workflows/executions/{executionId}/details.
+
+        Collections are bounded server-side; truncatedCollections names any that came back partial.
+        A pipeline entry carries renderedConfigLocation ({bucket, key}) whenever that object exists
+        — not only on truncation — because it is the FULLY substituted body the step ran with,
+        while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
+        whether the inline copy was shortened."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
             response = self.get(endpoint, include_auth=True)
@@ -4011,6 +4031,31 @@ class APIClient:
             raise APIError(f"Failed to get execution details: {self._pwe_error_message(e)}")
         except Exception as e:
             raise APIError(f"Failed to get execution details: {e}")
+
+    def get_execution_details_metadata(self, execution_id: str,
+                                       params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's detail metadata.
+        GET /workflows/executions/{executionId}/details/metadata.
+
+        params may include: collection (input | inputDatabase | output), pageSize, startingToken,
+        pipelineId. Rows carry the same scrubbed shape the details view returns plus the producing
+        pipelineId. NextToken is absent on the last page, so its presence is the only signal that
+        more rows exist. A token is only valid alongside the same collection and pipelineId it was
+        issued with."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_DETAILS_METADATA.format(executionId=execution_id)
+            response = self.get(endpoint, include_auth=True, params=params or {})
+            return self._pwe_body(response)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution detail metadata: {self._pwe_error_message(e)}")
+        except Exception as e:
+            raise APIError(f"Failed to get execution detail metadata: {e}")
 
     def get_execution_logs(self, execution_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get an execution's logs. GET /workflows/executions/{executionId}/logs.

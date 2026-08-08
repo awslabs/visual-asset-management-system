@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import datetime
+import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
 
@@ -127,7 +128,7 @@ def lambda_handler(event, context):
         }
 
     # Generate new job name
-    job_name = f"PipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    job_name = f"PipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}_{uuid.uuid4().hex[:8]}"
 
     # StateMachine Execution Input
     sfn_input = {

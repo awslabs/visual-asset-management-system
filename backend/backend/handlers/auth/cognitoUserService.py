@@ -18,6 +18,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_auth_changes
 from models.common import (
+    validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse
@@ -560,7 +561,7 @@ def handle_post_request(event):
                     request_model = parse(body, model=ResetPasswordRequestModel)
                 except ValidationError as v:
                     logger.exception(f"Validation error: {v}")
-                    return validation_error(body={'message': str(v)}, event=event)
+                    return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Reset password
             result = reset_user_password(user_id, claims_and_roles)
@@ -613,7 +614,7 @@ def handle_post_request(event):
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -690,7 +691,7 @@ def handle_put_request(event):
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -785,7 +786,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

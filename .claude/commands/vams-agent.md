@@ -20,6 +20,11 @@ hosts). This command is the Claude Code entry point for it.
     - **Default to read-only**; only use mutating commands (create, delete,
       edit/modify, execute, upload) if the user has explicitly authorized changes,
       and confirm destructive/bulk actions first.
+    - **Only workflows execute** — pipelines, templates, workflows, and executions
+      are four entities across three command groups, and the execute request takes
+      input-file references rather than an asset.
+    - **Authorization has two tiers**; a `403` on a route the user is allowed to
+      call is an entity-level refusal to report, not to retry.
 3. Treat the user's request in `$ARGUMENTS` as the task to accomplish.
 
 ## Workflow

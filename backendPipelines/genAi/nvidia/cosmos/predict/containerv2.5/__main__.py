@@ -26,7 +26,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import generate_preview_gif, run_inference
-from manifest_io import fetch_input_configuration
+from manifest_io import fetch_input_configuration, InputConfigurationError
 from model_manager import ensure_models_cached
 
 logger = logging.getLogger(__name__)
@@ -263,6 +263,12 @@ def main():
                 if generate_preview_gif_flag:
                     logger.info("GENERATE_PREVIEW_GIF=true: will generate preview GIF")
                 logger.info(f"Offloading: text_encoder={offload_text_encoder}, tokenizer={offload_tokenizer}, diffusion_model={offload_diffusion_model}")
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except InputConfigurationError:
+            raise
         except Exception:
             pass
 

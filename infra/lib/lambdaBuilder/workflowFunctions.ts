@@ -503,7 +503,7 @@ export function buildRegisterPipelineExecutionFunction(
  * File-upload workflow trigger dispatcher (Phase 2, WB5b). An asset file upload publishes an
  * `asset.file.uploaded` event to the orchestration bus; a standing rule (deployment event-source
  * prefix + that detail-type) targets a durable SQS buffer this lambda consumes. Per uploaded file it
- * enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByTypeGSI), matches
+ * enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByBaseTypeGSI), matches
  * inputFileFilters + database scope, and invokes executeWorkflowV2 (as SYSTEM_USER) per firing
  * trigger. Its own SQS buffer + DLQ isolate the fan-out from the V1 auto-execute queue.
  */

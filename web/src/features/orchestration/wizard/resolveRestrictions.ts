@@ -35,6 +35,40 @@ export function resolveEffectivePipelineConfig(
 }
 
 /**
+ * One assetScope selection rule, resolved across the workflow and every step.
+ *
+ * A selection is offered only when EVERY level accepts it: the run is submitted once and each step is
+ * checked against it, so the narrowest level decides. This is the opposite of the metadataInputs
+ * default — an OMITTED scope key is NOT a grant, matching `_scope_errors` in the backend, where a scope
+ * that does not say whole-asset is allowed rejects a whole-asset selection. A level that declares
+ * nothing at all (no assetScope block) is treated as declaring nothing to widen, so it neither grants
+ * nor blocks; the workflow gate is what must grant it.
+ *
+ * `wholeAsset` is the shorthand the vamsSchema bundles emit for `wholeAssetAllowed`; both spellings are
+ * accepted here exactly as the backend accepts them.
+ */
+function scopeKeyAllowedEverywhere(
+    workflowSystemConfig: Record<string, any>,
+    effectiveStepConfigs: Record<string, any>[],
+    key: "wholeAssetAllowed" | "folderAllowed"
+): boolean {
+    const read = (scope: Record<string, any> | undefined): boolean | undefined => {
+        if (!scope) return undefined;
+        if (key === "wholeAssetAllowed") {
+            if (scope.wholeAssetAllowed !== undefined) return !!scope.wholeAssetAllowed;
+            if (scope.wholeAsset !== undefined) return !!scope.wholeAsset;
+            return undefined;
+        }
+        return scope.folderAllowed === undefined ? undefined : !!scope.folderAllowed;
+    };
+
+    // The workflow must grant it: an absent or silent workflow scope is not a grant.
+    if (read(workflowSystemConfig.assetScope) !== true) return false;
+    // Any step that explicitly declines it removes the option.
+    return !effectiveStepConfigs.some((cfg) => read(cfg?.assetScope) === false);
+}
+
+/**
  * What a workflow will actually accept, resolved down the workflow -> pipeline -> template chain.
  *
  * This deliberately does NOT read the backend's `aggregateWorkflowPipelineInputFileFilters`. That
@@ -79,6 +113,8 @@ export interface ResolvedRestrictions {
     source: FilterSource;
     /** Metadata input types the steps will actually receive. */
     metadataInputs: string[];
+    /** The same set as `metadataInputs`, as the canonical config keys rather than display labels. */
+    metadataInputKeys: MetadataKey[];
     /** Metadata a pipeline asked for but the workflow gate suppresses (it runs without it). */
     metadataGatedOff: string[];
     /** How many input files the run takes. */
@@ -87,6 +123,14 @@ export interface ResolvedRestrictions {
     outputType: "asset" | "none";
     /** True once every step's template is known, so the resolution is final rather than indicative. */
     templatesResolved: boolean;
+    /**
+     * Whether a whole-asset ('/') selection is accepted by EVERY level — the workflow, every step, and
+     * each step's chosen template overrides. A run is submitted once and every step must accept the
+     * selection, so the narrowest level wins.
+     */
+    wholeAssetAllowed: boolean;
+    /** Whether a folder selection is accepted by every level, resolved the same way. */
+    folderAllowed: boolean;
 }
 
 /** One step of the chain: its pipeline's config plus the overrides of whichever template is chosen. */
@@ -98,17 +142,52 @@ export interface StepConfig {
     templateKnown?: boolean;
 }
 
-const METADATA_KEYS: Array<keyof typeof METADATA_LABELS> = [
+export const METADATA_LABELS = {
+    assetMetadata: "Asset metadata",
+    fileMetadata: "File metadata",
+    fileAttributes: "File attributes",
+    databaseMetadata: "Database metadata",
+};
+
+export type MetadataKey = keyof typeof METADATA_LABELS;
+
+/**
+ * Every metadata key, widest entity first, so anything derived from this list — the resolved-metadata
+ * summary and the forms' toggle rows — reads database -> asset -> file as the containment it describes.
+ */
+const METADATA_KEYS: MetadataKey[] = [
+    "databaseMetadata",
     "assetMetadata",
     "fileMetadata",
     "fileAttributes",
 ];
 
-export const METADATA_LABELS = {
-    assetMetadata: "Asset metadata",
-    fileMetadata: "File metadata",
-    fileAttributes: "File attributes",
+/**
+ * The value a metadataInputs map carries for a key it OMITS. A stored map may be partial two ways: a
+ * record written before a key existed cannot carry it, and the API stores systemConfig wholesale, so a
+ * client that sends only the keys it cares about persists exactly those. All four default ON, so a
+ * configuration that says nothing about a metadata type gets it. Mirrors METADATA_INPUT_DEFAULTS in
+ * common/workflows/executionRecords.py.
+ */
+export const METADATA_INPUT_DEFAULTS: Record<MetadataKey, boolean> = {
+    assetMetadata: true,
+    fileMetadata: true,
+    fileAttributes: true,
+    databaseMetadata: true,
 };
+
+/**
+ * One metadataInputs toggle, resolving a key the map omits to its builder default. Every read of a
+ * stored map goes through this — a form control bound with `|| false` instead would show an omitted
+ * key as off and then persist that opt-out on save, silently dropping metadata the run was gathering.
+ */
+export function metadataEnabled(
+    metadataInputs: Record<string, boolean> | undefined,
+    key: MetadataKey
+) {
+    const value = (metadataInputs || {})[key];
+    return value === undefined ? METADATA_INPUT_DEFAULTS[key] : !!value;
+}
 
 /**
  * Resolve the effective restrictions for a workflow and its steps.
@@ -160,11 +239,16 @@ export function resolveRestrictions(
     // A metadata type reaches a step only when the workflow gate loads it AND a step asks for it.
     const gate = wsc.metadataInputs || {};
     const metadataInputs: string[] = [];
+    const metadataInputKeys: MetadataKey[] = [];
     const metadataGatedOff: string[] = [];
     METADATA_KEYS.forEach((key) => {
-        const wanted = effective.some((cfg) => cfg.metadataInputs?.[key]);
-        if (wanted && gate[key]) metadataInputs.push(METADATA_LABELS[key]);
-        if (wanted && !gate[key]) metadataGatedOff.push(METADATA_LABELS[key]);
+        const wanted = effective.some((cfg) => metadataEnabled(cfg.metadataInputs, key));
+        const allowed = metadataEnabled(gate, key);
+        if (wanted && allowed) {
+            metadataInputs.push(METADATA_LABELS[key]);
+            metadataInputKeys.push(key);
+        }
+        if (wanted && !allowed) metadataGatedOff.push(METADATA_LABELS[key]);
     });
 
     return {
@@ -172,11 +256,14 @@ export function resolveRestrictions(
         exclude: dedupe(excludes),
         source,
         metadataInputs,
+        metadataInputKeys,
         metadataGatedOff,
         arity: (wsc.inputFileArity || "one") as ResolvedRestrictions["arity"],
         outputType: (wsc.outputTarget?.locationType ||
             "asset") as ResolvedRestrictions["outputType"],
         templatesResolved: (steps || []).every((s) => s.templateKnown !== false),
+        wholeAssetAllowed: scopeKeyAllowedEverywhere(wsc, effective, "wholeAssetAllowed"),
+        folderAllowed: scopeKeyAllowedEverywhere(wsc, effective, "folderAllowed"),
     };
 }
 

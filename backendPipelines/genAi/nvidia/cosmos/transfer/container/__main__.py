@@ -251,6 +251,12 @@ def main():
                 if not disable_guardrails:
                     logger.info("DISABLE_GUARDRAILS=false: guardrails will be enabled")
                 logger.info(f"Control weight: {control_weight}")
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except manifest_io.InputConfigurationError:
+            raise
         except Exception:
             pass
 

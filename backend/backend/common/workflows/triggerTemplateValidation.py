@@ -64,16 +64,22 @@ def validate_trigger_default_templates(default_template_ids, load_tag_schema_fie
 def triggers_referencing_template(triggers_table, workflows_table, pipeline_database_id,
                                   pipeline_id, template_id):
     """Return the list of (workflowDatabaseId, workflowId, triggerType) tuples whose trigger picks
-    this template as a default for this pipeline. Queries TriggersByTypeGSI once per trigger type
+    this template as a default for this pipeline. Queries TriggersByBaseTypeGSI once per trigger type
     (paginated to exhaustion) rather than scanning the table. Best-effort: returns [] on a read
-    error."""
+    error.
+
+    The index partitions on the BARE type: a workflow may carry several triggers of one type, whose sort
+    keys are suffixed ("fileUpload#nightly"), and each is a separate row that may pick its own default
+    template. Keying this lookup on the sort key would find only the first trigger of each type, so a
+    template still referenced by an additional trigger would read as unreferenced. The returned
+    triggerType is the row's KEY, so a caller can name the exact trigger."""
     composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
     hits = []
     try:
         for trigger_type in wr.TRIGGER_TYPES:
             kwargs = {
-                "IndexName": "TriggersByTypeGSI",
-                "KeyConditionExpression": Key("triggerType").eq(trigger_type),
+                "IndexName": "TriggersByBaseTypeGSI",
+                "KeyConditionExpression": Key("triggerBaseType").eq(trigger_type),
             }
             while True:
                 resp = triggers_table.query(**kwargs)

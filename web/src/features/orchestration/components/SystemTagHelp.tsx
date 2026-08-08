@@ -13,6 +13,11 @@ import React, { useState } from "react";
  *
  * These are distinct from a template's own tag schema (the per-template fields a person fills in):
  * system tags are always available and are never supplied by the caller.
+ *
+ * The two groups labelled "JSON value" render an object, array, or number and are the whole value, so
+ * they take no quotes in a json config body; every other tag renders escaped text that fills a JSON
+ * string and belongs inside that string's quotes. A json body is checked against these two shapes at
+ * save, so the wrong quoting is a 400 rather than a malformed config at run time.
  */
 
 interface TagEntry {
@@ -87,7 +92,7 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
         ],
     },
     {
-        title: "Input-file collections (JSON)",
+        title: "Input-file collections (JSON value — no quotes)",
         tags: [
             { tag: "assetFileKeyArray", desc: "All input-file full S3 keys." },
             { tag: "assetFileRelativePathArray", desc: "All input-file asset-relative paths." },
@@ -153,13 +158,14 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
         ],
     },
     {
-        title: "Metadata content (JSON)",
+        title: "Metadata content (JSON value — no quotes)",
         tags: [
             { tag: "inputMetadataObject", desc: "The full input metadata payload." },
             { tag: "assetMetadataObject", desc: "Asset metadata." },
             { tag: "fileMetadataObject", desc: "File metadata." },
             { tag: "fileAttributesObject", desc: "File attributes." },
             { tag: "assetDataObject", desc: "Asset data." },
+            { tag: "databaseMetadataObject", desc: "Database metadata." },
         ],
     },
     {
@@ -210,6 +216,19 @@ const SystemTagHelp: React.FC<SystemTagHelpProps> = ({ defaultOpen = false }) =>
                         {CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS} Fields like{" "}
                         <code>{"{{outputFileBaseExecutionPathExtension}}"}</code> expose the run's
                         output base path.
+                    </p>
+                    <p className="text-xs text-text-secondary">
+                        In a <strong>json</strong> config body, a placeholder that renders a JSON
+                        value is the whole value and takes no quotes — the two “JSON value” groups
+                        below, as in <code>{'"files": {{assetFileKeyArray}}'}</code>, and equally
+                        this template's own tags declared <strong>integer</strong>,{" "}
+                        <strong>number</strong>, <strong>boolean</strong>, or{" "}
+                        <strong>string-list</strong>, as in <code>{'"steps": {{STEPS}}'}</code>. A
+                        tag that renders text goes inside the string it fills — a{" "}
+                        <strong>string</strong> or <strong>enum</strong> tag and every remaining
+                        system tag, as in <code>{'"prompt": "{{PROMPT}}"'}</code>. Saving rejects
+                        the reverse of either: quoting a typed tag would deliver <code>"150"</code>{" "}
+                        where the pipeline expects <code>150</code>.
                     </p>
                     {SYSTEM_TAG_GROUPS.map((group) => (
                         <div key={group.title}>

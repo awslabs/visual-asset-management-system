@@ -38,7 +38,7 @@ from common.assetHistory import (
     build_asset_snapshot,
     write_asset_history_record,
 )
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
     ArchiveAssetRequestModel, UnarchiveAssetRequestModel, DeleteAssetRequestModel, 
@@ -1721,7 +1721,7 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)}, event=event)
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
             
             # Get the asset
             asset = get_asset_details(path_parameters['databaseId'], path_parameters['assetId'], show_archived)
@@ -2000,7 +2000,7 @@ def handle_put_request(event):
         
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2097,7 +2097,7 @@ def handle_delete_request(event):
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2137,7 +2137,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

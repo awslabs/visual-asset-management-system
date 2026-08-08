@@ -585,7 +585,8 @@ class VamsConnectorExtension(omni.ext.IExt):
                 ui.Label("  No workflows found.", height=20, style={"color": 0xFF888888})
             else:
                 for wf in self._workflows:
-                    desc = f"{wf.workflow_id} - {wf.description}" if wf.description else wf.workflow_id
+                    label = wf.workflow_name or wf.workflow_id
+                    desc = f"{label} - {wf.description}" if wf.description else label
                     with ui.HStack(height=24, spacing=HORIZONTAL_SPACING):
                         ui.Button(
                             f"  {desc}",
@@ -629,7 +630,7 @@ class VamsConnectorExtension(omni.ext.IExt):
         asset_id = self._selected_asset.asset_id
         asset_name = self._selected_asset.asset_name
         self._selected_workflow = wf
-        desc = wf.description or wf.workflow_id
+        desc = wf.workflow_name or wf.description or wf.workflow_id
         self._wf_stack.clear()
         with self._wf_stack:
             ui.Label(f"  Execute: {desc}", height=20, style={"font_size": 13})
@@ -657,14 +658,15 @@ class VamsConnectorExtension(omni.ext.IExt):
 
     def _execute_wf(self, wf, db_id, asset_id, file_key):
         target = file_key or "entire asset"
-        self._set_status(f"Executing {wf.description or wf.workflow_id} on {target}...")
+        label = wf.workflow_name or wf.description or wf.workflow_id
+        self._set_status(f"Executing {label} on {target}...")
         try:
             result = self._connector.execute_workflow(
                 database_id=db_id, asset_id=asset_id,
                 workflow_id=wf.workflow_id, workflow_database_id=wf.database_id,
                 file_key=file_key,
             )
-            self._set_status(f"Workflow started: {result.get('message', '?')}")
+            self._set_status(f"Workflow started: {result.get('executionId', '?')}")
         except VamsCliError as e:
             self._set_status(f"Workflow error: {e}")
 
