@@ -360,6 +360,7 @@ const COMMERCIAL: ConfigShape = {
                 globalBurstLimit: 100,
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
+                apiGatewayTimeoutTime: 29,
             },
         },
         metadataSchema: {

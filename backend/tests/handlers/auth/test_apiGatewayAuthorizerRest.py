@@ -25,6 +25,12 @@ class TestRestAuthorizer:
         assert rest._wildcard_resource(METHOD_ARN) == \
             "arn:aws:execute-api:us-east-1:123456789012:abc123/prod/*"
 
+    def test_wildcard_resource_matches_regardless_of_path_depth(self):
+        # Every method/path on the same api+stage collapses to one cacheable resource.
+        deep_arn = ("arn:aws:execute-api:us-east-1:123456789012:abc123/prod/POST/"
+                    "database/db1/assets/a1/uploads/u1/complete")
+        assert rest._wildcard_resource(deep_arn) == rest._wildcard_resource(METHOD_ARN)
+
     def test_allow_returns_allow_policy_with_context(self):
         with patch.object(rest, "authenticate_request",
                           return_value={"authorized": True, "context": {"sub": "u1"}, "reason": None}):

@@ -92,6 +92,7 @@ const sidebars: SidebarsConfig = {
                 "developer/opensearch",
                 "developer/viewer-plugins",
                 "developer/audit-logging",
+                "developer/security",
                 "developer/permissions",
                 "developer/workflow-execution-data-model-handoff",
                 {

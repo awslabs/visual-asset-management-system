@@ -178,6 +178,9 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("relativePath")]
         public string RelativePath { get; set; } = string.Empty;
 
+        [JsonPropertyName("key")]
+        public string FileKey { get; set; } = string.Empty;
+
         [JsonPropertyName("size")]
         public long? Size { get; set; }
 
@@ -190,11 +193,33 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("primaryType")]
         public string PrimaryType { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Creation date of the file's current version. This is the date the file listing
+        /// returns; a listing carries no separate last-modified value.
+        /// </summary>
+        [JsonPropertyName("dateCreatedCurrentVersion")]
+        public string DateCreatedCurrentVersion { get; set; } = string.Empty;
+
+        /// <summary>
+        /// MIME type of the file. Only populated by the file-info API for a single file —
+        /// a file listing does not include it, so it is empty on listing entries.
+        /// </summary>
         [JsonPropertyName("contentType")]
         public string ContentType { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Last-modified timestamp. Only populated by the file-info API for a single file —
+        /// a file listing does not include it. Use <see cref="DateCreatedCurrentVersion"/>
+        /// for listing entries.
+        /// </summary>
         [JsonPropertyName("lastModified")]
         public string LastModified { get; set; } = string.Empty;
+
+        [JsonPropertyName("versionId")]
+        public string VersionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("etag")]
+        public string ETag { get; set; } = string.Empty;
 
         [JsonPropertyName("storageClass")]
         public string StorageClass { get; set; } = string.Empty;
@@ -202,28 +227,45 @@ namespace VamsDatabaseExplorer.Models
         [JsonPropertyName("previewFile")]
         public string PreviewFile { get; set; } = string.Empty;
 
-        // Compatibility properties for existing code
+        // Compatibility properties for existing code. Each carries [JsonIgnore]: the
+        // serializer runs with PropertyNameCaseInsensitive, so a computed property whose
+        // name matches a mapped JSON field (Key vs. the "key" field) is treated as a
+        // duplicate and throws InvalidOperationException while building the type's
+        // metadata — before any data is returned.
+        [JsonIgnore]
         public string Path => RelativePath;
-        public string Key => RelativePath; // Simplified
+
+        /// <summary>Full S3 key when the response supplies one, otherwise the asset-relative path.</summary>
+        [JsonIgnore]
+        public string Key => string.IsNullOrEmpty(FileKey) ? RelativePath : FileKey;
+
+        [JsonIgnore]
         public string Type => PrimaryType ?? "unknown";
+
+        [JsonIgnore]
         public string State => IsArchived ? "archived" : "available";
-        public DateTime AddedAt
+
+        /// <summary>
+        /// Best available timestamp for the file: the current version's creation date from a
+        /// listing, falling back to lastModified when the entry came from the file-info API.
+        /// </summary>
+        [JsonIgnore]
+        public DateTime AddedAt => ParseTimestamp(DateCreatedCurrentVersion, LastModified);
+
+        /// <summary>
+        /// Best available modified timestamp: lastModified when present (file-info API),
+        /// otherwise the current version's creation date from a listing.
+        /// </summary>
+        [JsonIgnore]
+        public DateTime LastModifiedDateTime => ParseTimestamp(LastModified, DateCreatedCurrentVersion);
+
+        private static DateTime ParseTimestamp(string primary, string fallback)
         {
-            get
-            {
-                if (DateTime.TryParse(LastModified, out var date))
-                    return date;
-                return DateTime.MinValue;
-            }
-        }
-        public DateTime LastModifiedDateTime
-        {
-            get
-            {
-                if (DateTime.TryParse(LastModified, out var date))
-                    return date;
-                return DateTime.MinValue;
-            }
+            if (DateTime.TryParse(primary, out var parsed))
+                return parsed;
+            if (DateTime.TryParse(fallback, out parsed))
+                return parsed;
+            return DateTime.MinValue;
         }
     }
 

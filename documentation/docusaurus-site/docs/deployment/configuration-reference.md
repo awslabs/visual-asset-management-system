@@ -457,9 +457,18 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/api-nestedStack.ts` (`ApiNestedS
 | `app.api.apiGatewayRest.globalRateLimit`                   | number | `50`                | Global rate limit in requests per second for the Amazon API Gateway. Must be a positive number.                                                                                                                                                                                                                                                                                                                                    |
 | `app.api.apiGatewayRest.globalBurstLimit`                  | number | `100`               | Global burst limit for the Amazon API Gateway. Must be greater than or equal to `globalRateLimit`.                                                                                                                                                                                                                                                                                                                                 |
 | `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` | string | `""`                | Id of a pre-existing execute-api interface VPC endpoint to use for a `"PRIVATE"` endpoint when VAMS does not create one (`useGlobalVpc.addVpcEndpoints = false`). Applies only to `"PRIVATE"`; it is ignored (with a configuration warning) for a `"REGIONAL"` endpoint.                                                                                                                                                           |
+| `app.api.apiGatewayRest.apiGatewayTimeoutTime`             | number | `29`                | Integration timeout in seconds — how long Amazon API Gateway waits for a backend Lambda function to respond before returning a `504`. Must be a whole number between `29` and `300`. Applies to every API route, for both `"REGIONAL"` and `"PRIVATE"` endpoint types. Values above `29` require an approved account-level quota increase first (see the warning below).                                                           |
 
 :::warning[PRIVATE endpoint requirements]
 Setting `app.api.apiGatewayRest.endpointType` to `"PRIVATE"` requires `useGlobalVpc.enabled = true` and an execute-api interface VPC endpoint: either set `useGlobalVpc.addVpcEndpoints = true` so VAMS creates one, or set `app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId` to an existing endpoint id. A `PRIVATE` endpoint is incompatible with Amazon CloudFront (which cannot reach a private API); you must front it with the ALB (`useCloudFront.enabled = false`, `useAlb.enabled = true`), and that ALB must run in isolated (non-public) subnets (`useAlb.usePublicSubnet = false`). A public-subnet ALB would expose an internet-facing path to the private API, defeating its isolation. Configuration validation enforces all of these.
+:::
+
+:::warning[Raising the integration timeout requires an AWS quota increase first]
+`app.api.apiGatewayRest.apiGatewayTimeoutTime` defaults to `29` seconds, the Amazon API Gateway default integration timeout. Setting it higher requires an approved increase to the account-level **Integration timeout** quota (`L-E5AE38E3`) in the deployment Region, requested through the AWS Service Quotas console or AWS Support. Request and receive the increase **before** deploying with a higher value — Amazon API Gateway rejects an integration timeout above the account's approved quota, which fails the deployment.
+
+The increase applies to both `"REGIONAL"` and `"PRIVATE"` endpoint types, which are the two types VAMS supports. Raising this quota may require a compensating reduction in the Region-level request throttle quota for the account, so review both quotas together. A configuration warning is emitted at synthesis time whenever the value exceeds `29` seconds as a reminder.
+
+A longer timeout lets operations on assets with many files or many relationships complete within a single synchronous request instead of returning a `504` while the Lambda function continues working in the background. The AWS Lambda function timeout (15 minutes) remains the outer bound, so a value above the `300`-second maximum would not extend the useful window for a synchronous request.
 :::
 
 :::note[Execute-API VPC endpoint]
@@ -470,6 +479,21 @@ A `REGIONAL` endpoint is public and does not route through a VPC endpoint, even 
 Changing `app.api.apiGatewayRest.endpointType` on a deployment that already exists is fully supported. A `PRIVATE` endpoint carries an API Gateway resource policy that only allows invocation through the execute-api VPC interface endpoint (an `aws:SourceVpce` condition); a `REGIONAL` endpoint uses a public allow-all resource policy. VAMS sets the correct resource policy for each endpoint type on every deployment, so switching in either direction updates the policy — no manual action is required.
 
 Amazon API Gateway itself does **not** remove a previously-set resource policy when an update simply stops supplying one, which is why VAMS always writes an explicit policy: switching `PRIVATE` → `REGIONAL` overwrites the `aws:SourceVpce`-restricted policy with the public allow-all policy, and `REGIONAL` → `PRIVATE` re-applies the VPC-endpoint restriction. If a resource policy left over from an out-of-band change ever remains in place after a switch (for example, a `PRIVATE` policy on a now-public endpoint), every request — including the CORS preflight — is denied at the resource-policy layer with `403 AccessDeniedException` ("no resource-based policy allows the execute-api:Invoke action"). Because that denial precedes the CORS response, a browser reports it as a missing `Access-Control-Allow-Origin` / failed-preflight error rather than an authorization error. Re-running the VAMS deployment restores the correct policy for the configured `endpointType`.
+:::
+
+:::note[REST API TLS security policy]
+VAMS sets the minimum TLS version and cipher suite on the REST API itself, so it applies to the default `execute-api` endpoint. The policy is derived from the deployment configuration and is not a separate configuration option.
+
+| Deployment                                               | Security policy                          | TLS versions accepted |
+| -------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| Commercial                                               | `SecurityPolicy_TLS13_1_2_2021_06`       | TLS 1.3, TLS 1.2      |
+| GovCloud and EU Sovereign Cloud (`app.govCloud.enabled`) | Partition and Region default (unchanged) | TLS 1.3, TLS 1.2      |
+
+In the commercial partition, a Regional REST API would otherwise default to the `TLS_1_0` policy, which accepts TLS 1.0 and TLS 1.1. VAMS raises the floor to `SecurityPolicy_TLS13_1_2_2021_06` and sets the required endpoint access mode to `BASIC`, so the Amazon CloudFront origin request, the ALB redirect to `execute-api`, and direct `execute-api` access all continue to work. A TLS 1.3-only policy is not used because CloudFront negotiates at most TLS 1.2 to a custom origin.
+
+The GovCloud mode, which AWS European Sovereign Cloud deployments also enable, leaves the policy unset so the API keeps its partition and Region default. Those partitions do not offer the `TLS_1_0` policy for Regional APIs and their APIs are FIPS-compliant by default, so the minimum version is already TLS 1.2.
+
+A security policy change takes about 15 minutes to propagate, and the API stays invocable while its status is `UPDATING`. See [Security](../architecture/security.md) for the full description.
 :::
 
 ## Web UI (`app.webUi`)

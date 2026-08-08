@@ -648,6 +648,29 @@ export const RULES: Rule[] = [
         message: "API globalBurstLimit must be greater than or equal to globalRateLimit.",
     },
 
+    // ----- API integration timeout (config.ts:1547-1573) -----
+    {
+        id: "api-timeout-range",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.apiGatewayTimeoutTime"],
+        appliesWhen: (c) => {
+            const t = g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime");
+            if (t === undefined || t === null || t === "") return false;
+            const n = Number(t);
+            return !Number.isInteger(n) || n < 29 || n > 300;
+        },
+        message:
+            "app.api.apiGatewayRest.apiGatewayTimeoutTime must be a whole number of seconds between 29 and 300.",
+    },
+    {
+        id: "api-timeout-quota-notice",
+        severity: "warning",
+        fieldPaths: ["app.api.apiGatewayRest.apiGatewayTimeoutTime"],
+        appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime")) > 29,
+        message:
+            "An integration timeout above 29 seconds requires an approved account-level increase to the Amazon API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region. Request the increase before deploying, otherwise the deployment fails.",
+    },
+
     // ----- IP ranges (config.ts:903-926) -----
     {
         id: "ip-range-shape",

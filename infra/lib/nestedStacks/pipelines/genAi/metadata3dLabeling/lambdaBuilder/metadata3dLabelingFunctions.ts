@@ -228,7 +228,7 @@ export function buildMetadataGenerationPipelineFunction(
         handler: `${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer, lambdaMetadataGenerationLayer],
-        timeout: Duration.minutes(5),
+        timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas

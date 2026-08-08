@@ -14,6 +14,7 @@ const baseOpts = {
     },
     endpointType: "REGIONAL" as const,
     title: "VAMS",
+    timeoutSeconds: 29,
 };
 
 describe("buildOpenApiSpec", () => {
@@ -95,6 +96,37 @@ describe("buildOpenApiSpec", () => {
             authed.authorizerResultTtlInSeconds
         );
         expect(anon.authorizerResultTtlInSeconds).toBe(900);
+    });
+
+    it("applies the configured integration timeout, in milliseconds, to every route", () => {
+        const spec: any = buildOpenApiSpec(
+            [
+                { path: "/database", method: HttpMethod.GET, lambdaFn: fakeFn("a") },
+                {
+                    path: "/api/version",
+                    method: HttpMethod.GET,
+                    lambdaFn: fakeFn("v"),
+                    allowAnonymous: true,
+                },
+            ],
+            { ...baseOpts, timeoutSeconds: 120 }
+        );
+        expect(spec.paths["/database"].get["x-amazon-apigateway-integration"].timeoutInMillis).toBe(
+            120000
+        );
+        expect(
+            spec.paths["/api/version"].get["x-amazon-apigateway-integration"].timeoutInMillis
+        ).toBe(120000);
+    });
+
+    it("does not set a timeout on the CORS OPTIONS mock integration", () => {
+        const spec: any = buildOpenApiSpec(
+            [{ path: "/database", method: HttpMethod.GET, lambdaFn: fakeFn("a") }],
+            { ...baseOpts, timeoutSeconds: 120 }
+        );
+        const optionsInteg = spec.paths["/database"].options["x-amazon-apigateway-integration"];
+        expect(optionsInteg.type).toBe("mock");
+        expect(optionsInteg.timeoutInMillis).toBeUndefined();
     });
 
     it("adds private endpoint config + resource policy when PRIVATE", () => {

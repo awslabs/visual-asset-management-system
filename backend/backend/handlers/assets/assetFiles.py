@@ -43,7 +43,7 @@ from common.apiRoutes import (
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
@@ -1680,14 +1680,15 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
         if relativeFileKey:
             query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
 
-        response = asset_version_files_table.query(**query_kwargs)
-        
-        items = response.get('Items', [])
-        
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial file list would misreport the version. A
+        # single-file lookup (relativeFileKey set) returns one item and never pages.
+        items = query_all_items(asset_version_files_table, **query_kwargs)
+
         # If no items found, return None
         if not items:
             return None
-        
+
         # Reconstruct the file versions structure
         files = []
         for item in items:

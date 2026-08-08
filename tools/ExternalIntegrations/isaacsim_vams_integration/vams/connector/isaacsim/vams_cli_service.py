@@ -81,15 +81,26 @@ class Asset:
 
 @dataclass
 class AssetFile:
-    """Parsed file entry from vamscli file list."""
+    """Parsed file entry from vamscli file list.
+
+    ``content_type`` is not part of the file listing response — it is only returned by
+    ``vamscli file info`` for a single file. It stays on this dataclass so callers that
+    enrich a listing entry from ``get_file_info`` have somewhere to put it, and is left
+    empty by ``list_asset_files``.
+    """
     file_name: str = ""
     relative_path: str = ""
+    key: str = ""
     size: int = 0
     is_folder: bool = False
     is_archived: bool = False
     primary_type: str = ""
     content_type: str = ""
-    last_modified: str = ""
+    # Creation date of the file's current version, from the listing's
+    # dateCreatedCurrentVersion field.
+    date_created_current_version: str = ""
+    version_id: str = ""
+    etag: str = ""
     preview_file: str = ""
 
 
@@ -621,13 +632,17 @@ class VamsCliService:
             AssetFile(
                 file_name=item.get("fileName", ""),
                 relative_path=item.get("relativePath", ""),
-                size=item.get("size", 0),
+                key=item.get("key", ""),
+                size=item.get("size") or 0,
                 is_folder=item.get("isFolder", False),
                 is_archived=item.get("isArchived", False),
-                primary_type=item.get("primaryType", ""),
-                content_type=item.get("contentType", ""),
-                last_modified=item.get("lastModified", ""),
-                preview_file=item.get("previewFile", ""),
+                primary_type=item.get("primaryType") or "",
+                # The listing carries the current version's creation date; contentType and
+                # lastModified are file-info-only fields and are not present here.
+                date_created_current_version=item.get("dateCreatedCurrentVersion", ""),
+                version_id=item.get("versionId") or "",
+                etag=item.get("etag") or "",
+                preview_file=item.get("previewFile") or "",
             )
             for item in items
         ]

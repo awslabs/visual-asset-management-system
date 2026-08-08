@@ -51,6 +51,16 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // base URLs remain /api/*.
 export const API_GATEWAY_STAGE_NAME = "api";
 
+// REST API integration timeout bounds, in seconds. 29 seconds is the API Gateway default
+// integration timeout and the floor VAMS allows. Raising it above the default requires an
+// account-level quota increase for the "Integration timeout" quota (L-E5AE38E3) in the
+// deployment Region first — the increase applies to Regional and Private APIs (edge-optimized
+// cannot be raised, and VAMS uses neither). Without the approved quota the deployment fails
+// when API Gateway rejects the higher TimeoutInMillis. The 300-second ceiling is VAMS' own
+// cap, matching the practical upper bound for a synchronous request/response API.
+export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
+export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
+
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
         encoding: "utf8",
@@ -635,6 +645,7 @@ export function getConfig(app: cdk.App): Config {
                 globalBurstLimit: 100,
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
+                apiGatewayTimeoutTime: API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
             },
         };
     }
@@ -653,6 +664,8 @@ export function getConfig(app: cdk.App): Config {
             globalBurstLimit: legacyApi.globalBurstLimit ?? 100,
             endpointType: legacyApi.endpointType ?? "REGIONAL",
             optionalExternalPrivateApigVPCEId: legacyApi.externalRegionalAPIGatewayVPCEId ?? "",
+            apiGatewayTimeoutTime:
+                legacyApi.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
         };
     }
 
@@ -669,6 +682,9 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId == undefined) {
         config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId = "";
+    }
+    if (config.app.api.apiGatewayRest.apiGatewayTimeoutTime == undefined) {
+        config.app.api.apiGatewayRest.apiGatewayTimeoutTime = API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
     }
 
     // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
@@ -1662,6 +1678,28 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    if (
+        !Number.isInteger(apiGatewayRest.apiGatewayTimeoutTime) ||
+        apiGatewayRest.apiGatewayTimeoutTime < API_GATEWAY_DEFAULT_TIMEOUT_SECONDS ||
+        apiGatewayRest.apiGatewayTimeoutTime > API_GATEWAY_MAX_TIMEOUT_SECONDS
+    ) {
+        throw new Error(
+            `Configuration Error: app.api.apiGatewayRest.apiGatewayTimeoutTime must be a whole number of ` +
+                `seconds between ${API_GATEWAY_DEFAULT_TIMEOUT_SECONDS} and ${API_GATEWAY_MAX_TIMEOUT_SECONDS}. ` +
+                `Got: '${apiGatewayRest.apiGatewayTimeoutTime}'.`
+        );
+    }
+
+    if (apiGatewayRest.apiGatewayTimeoutTime > API_GATEWAY_DEFAULT_TIMEOUT_SECONDS) {
+        console.warn(
+            `Configuration Warning: app.api.apiGatewayRest.apiGatewayTimeoutTime is set to ` +
+                `${apiGatewayRest.apiGatewayTimeoutTime} seconds, above the ${API_GATEWAY_DEFAULT_TIMEOUT_SECONDS}-second ` +
+                `API Gateway default. This requires an approved account-level increase to the API Gateway ` +
+                `"Integration timeout" quota (L-E5AE38E3) in ${config.env.region} before deploying. Without it, ` +
+                `the deployment fails when API Gateway rejects the higher integration timeout.`
+        );
+    }
+
     const externalPrivateVpceId = apiGatewayRest.optionalExternalPrivateApigVPCEId || "";
 
     if (apiGatewayRest.endpointType === "PRIVATE") {
@@ -2433,6 +2471,7 @@ export interface ConfigPublic {
                 globalBurstLimit: number;
                 endpointType: "REGIONAL" | "PRIVATE";
                 optionalExternalPrivateApigVPCEId: string;
+                apiGatewayTimeoutTime: number;
             };
         };
         metadataSchema: {
