@@ -38,7 +38,29 @@ function g(cfg: ConfigShape, path: string): any {
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
 const IPV4_PATTERN =
     /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-const SQS_URL_PATTERN = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+// Partition-aware: commercial/GovCloud serve amazonaws.com, China amazonaws.com.cn, and EU Sovereign
+// Cloud amazonaws.eu. A .com-only pattern flags a valid queue URL in the other partitions as invalid.
+const SQS_URL_PATTERN =
+    /^https:\/\/sqs\.[a-z0-9-]+\.(?:amazonaws\.com(?:\.cn)?|amazonaws\.eu)\/\d+\/[a-zA-Z0-9_-]+$/;
+
+/** The four OpenSearch Serverless OCU fields config.ts bounds together (config.ts:1397-1450). */
+const OCU_FIELD_PATHS = [
+    "app.openSearch.useServerless.minIndexingOcu",
+    "app.openSearch.useServerless.maxIndexingOcu",
+    "app.openSearch.useServerless.minSearchOcu",
+    "app.openSearch.useServerless.maxSearchOcu",
+];
+
+/**
+ * OpenSearch Serverless accepts only 0, 2, 4, 8, 16, or any multiple of 16 (config.ts:1412-1418).
+ * A value that is not a non-negative integer fails the same rule, matching config.ts's ordering where
+ * the integer check runs first.
+ */
+function isAllowedOcu(value: unknown): boolean {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0) return false;
+    return n === 0 || n === 2 || n === 4 || n === 8 || (n >= 16 && n % 16 === 0);
+}
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
 
@@ -926,6 +948,93 @@ export const RULES: Rule[] = [
             !g(c, "app.openSearch.useProvisioned.enabled"),
         message:
             "Garnet Framework is enabled but OpenSearch is disabled. Garnet indexing works independently of VAMS search.",
+    },
+
+    // ----- OpenSearch Serverless generation + OCU bounds (config.ts:1358-1450) -----
+    {
+        id: "aoss-nextgen-not-in-govcloud",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useServerless.enabled",
+            "app.openSearch.useServerless.nextGen",
+            "app.govCloud.enabled",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            g(c, "app.openSearch.useServerless.nextGen") &&
+            g(c, "app.govCloud.enabled"),
+        message:
+            "openSearch.useServerless.nextGen is not supported when app.govCloud.enabled is true (GovCloud and EU Sovereign Cloud). Set nextGen to false for these partitions.",
+    },
+    {
+        id: "aoss-nextgen-requires-standby-replicas",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useServerless.enabled",
+            "app.openSearch.useServerless.nextGen",
+            "app.openSearch.useServerless.enableStandbyReplicas",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            g(c, "app.openSearch.useServerless.nextGen") &&
+            !g(c, "app.openSearch.useServerless.enableStandbyReplicas"),
+        message:
+            "openSearch.useServerless.nextGen requires enableStandbyReplicas to be true. NEXTGEN collection groups do not support disabled standby replicas.",
+    },
+    {
+        id: "aoss-scale-to-zero-requires-nextgen",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useServerless.enabled",
+            "app.openSearch.useServerless.nextGen",
+            "app.openSearch.useServerless.minIndexingOcu",
+            "app.openSearch.useServerless.minSearchOcu",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            !g(c, "app.openSearch.useServerless.nextGen") &&
+            (g(c, "app.openSearch.useServerless.minIndexingOcu") === 0 ||
+                g(c, "app.openSearch.useServerless.minSearchOcu") === 0),
+        message:
+            "A minimum OCU of 0 (scale-to-zero) requires next-gen Serverless. Set nextGen to true, or set minIndexingOcu and minSearchOcu to 1 or greater.",
+    },
+    {
+        id: "aoss-ocu-values-allowed",
+        severity: "error",
+        fieldPaths: OCU_FIELD_PATHS,
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            OCU_FIELD_PATHS.some((p) => !isAllowedOcu(g(c, p))),
+        message:
+            "Each OpenSearch Serverless OCU value must be a non-negative integer and one of 0, 2, 4, 8, 16, or any multiple of 16.",
+    },
+    {
+        id: "aoss-max-ocu-at-least-one",
+        severity: "error",
+        fieldPaths: [
+            "app.openSearch.useServerless.enabled",
+            "app.openSearch.useServerless.maxIndexingOcu",
+            "app.openSearch.useServerless.maxSearchOcu",
+        ],
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            (Number(g(c, "app.openSearch.useServerless.maxIndexingOcu")) < 1 ||
+                Number(g(c, "app.openSearch.useServerless.maxSearchOcu")) < 1),
+        message:
+            "openSearch.useServerless.maxIndexingOcu and maxSearchOcu must each be 1 or greater — a maximum of 0 would leave the collection with no capacity.",
+    },
+    {
+        id: "aoss-max-ocu-not-below-min",
+        severity: "error",
+        fieldPaths: OCU_FIELD_PATHS,
+        appliesWhen: (c) =>
+            g(c, "app.openSearch.useServerless.enabled") &&
+            (Number(g(c, "app.openSearch.useServerless.maxIndexingOcu")) <
+                Number(g(c, "app.openSearch.useServerless.minIndexingOcu")) ||
+                Number(g(c, "app.openSearch.useServerless.maxSearchOcu")) <
+                    Number(g(c, "app.openSearch.useServerless.minSearchOcu"))),
+        message:
+            "Each OpenSearch Serverless maximum OCU must be greater than or equal to its matching minimum (maxIndexingOcu >= minIndexingOcu, maxSearchOcu >= minSearchOcu).",
     },
 ];
 

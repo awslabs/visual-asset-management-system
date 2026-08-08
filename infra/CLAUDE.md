@@ -320,7 +320,14 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
 4. Update **ALL** config template files: `config.template.{commercial,govcloud,eusovereign}.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 5. Update `config.json` for the active deployment
 6. Document the option in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
-7. Mirror the change into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — see its `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`). **The drift check only verifies `schema.ts` fields and `defaults.ts` presets — it does NOT cover `validation.ts`. When you add or change `getConfig()` validation logic, hand-port the matching rule into `validation.ts`; nothing but review will catch validation drift.**
+7. Mirror the **field** into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) — `schema.ts` (the field) and `defaults.ts` (the presets); see its `README.md`. Then run the `infra/test/configBuilderSync.test.ts` drift check (part of `npm test`), which covers these two files.
+8. **Mirror every `getConfig()` VALIDATION rule into `ConfigBuilder/validation.ts` — by hand, in the same change.** This is the step the tooling cannot catch: the drift check verifies `schema.ts` and `defaults.ts` only, so a `throw new Error(...)` added to `getConfig()` without a matching `validation.ts` rule leaves the ConfigBuilder silently approving a configuration that fails at `cdk synth`. That is worse than no validation, because the operator has been told the config is valid.
+
+    Each rule is a `Rule` entry carrying `id`, `severity` (`error` | `warning`), `fieldPaths` (so the UI can highlight the offending fields), an `appliesWhen` predicate that returns **true when the rule is VIOLATED**, and a `message`. Keep the `// ----- Section (config.ts:NNN-NNN) -----` comment with the source line range — it is what makes the two files diffable later. Port a `console.warn` as `severity: "warning"`.
+
+    Two exclusions, so the mirror is not chased pointlessly: rules that read a value the browser cannot see are out of scope — notably the `app.iamRoleConfig` checks, which validate the contents of `infra/config/policy/iamRoleConfig.json`, a file the ConfigBuilder never loads. Everything derivable from `config.json` itself belongs in `validation.ts`.
+
+    Verify the port by reading both sides rather than trusting a text search: `getConfig()` and `validation.ts` word the same rule differently, so matching on message text under-reports. Compare the config field paths each rule references.
 
 ### 2. Adding a New Lambda Function
 

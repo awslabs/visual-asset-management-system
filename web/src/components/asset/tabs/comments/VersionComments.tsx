@@ -112,6 +112,9 @@ export default function VersionComments(props: VersionCommentsProps) {
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
+        // Jodit defaults width to 'auto' (content-sized), so without this the editor does not fill
+        // the edit dialog. Same setting as the comment-entry editor in CommentsTab.
+        width: "100%",
         maxWidth: "auto",
         placeholder: "",
         // The 'source' (HTML source-view) plugin lazy-loads ACE + js-beautify from cdnjs, which the

@@ -33,11 +33,19 @@ const optionalNumberSchema = z.preprocess(
     z.number().optional()
 );
 
-// Mirrors of the backend resource patterns (common/validators.py), so a malformed value is reported
-// inline beside its field instead of coming back as a save-time 400. Partition-aware.
-const AWS_PARTITION = "aws(?:-us-gov|-cn|-iso(?:-[a-z])?)?";
+// Mirrors of the backend resource patterns (common/validators.py: aws_partition_group and
+// aws_dns_suffix_group), so a malformed value is reported inline beside its field instead of coming
+// back as a save-time 400. Keep both constants in step with the backend — a form stricter than the API
+// blocks a value the deployment would have accepted, and the operator has no way to tell why.
+// Every partition the CDK layer can deploy into (infra/lib/helper/const.ts). `-eusc` is spelled out
+// because the EU Sovereign Cloud partition does not fit the -iso family shape.
+const AWS_PARTITION = "aws(?:-us-gov|-cn|-eusc|-iso(?:-[a-z])?)?";
+// Partitions do not share one DNS suffix: commercial/GovCloud amazonaws.com, China amazonaws.com.cn,
+// EU Sovereign amazonaws.eu, and the ISO partitions their own domains.
+const AWS_DNS_SUFFIX =
+    "(?:amazonaws\\.com(?:\\.cn)?|amazonaws\\.eu|c2s\\.ic\\.gov|sc2s\\.sgov\\.gov|cloud\\.adc-e\\.uk)";
 const SQS_QUEUE_URL = new RegExp(
-    `^https://(vpce-[a-z0-9\\-]+\\.)?sqs[\\-a-z]*\\.[a-z0-9\\-]+\\.(vpce\\.)?amazonaws\\.com(\\.cn)?/[0-9]{12}/[a-zA-Z0-9_\\-\\.]+$`
+    `^https://(vpce-[a-z0-9\\-]+\\.)?sqs[\\-a-z]*\\.[a-z0-9\\-]+\\.(vpce\\.)?${AWS_DNS_SUFFIX}/[0-9]{12}/[a-zA-Z0-9_\\-\\.]+$`
 );
 const EVENTBRIDGE_BUS_ARN = new RegExp(
     `^arn:(${AWS_PARTITION}):events:[a-z0-9\\-]+:[0-9]{12}:event-bus/[a-zA-Z0-9_\\-\\./]+$`

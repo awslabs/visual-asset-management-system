@@ -45,11 +45,21 @@ userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 # before 'Z'), so a caller supplying one must normalize before using it as a key bound.
 iso8601_utc_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)$'
 
-# AWS resource patterns - partition-aware (aws, aws-us-gov, aws-cn, aws-iso, aws-iso-b)
-aws_partition_group = r'aws(?:-us-gov|-cn|-iso(?:-[a-z])?)?'
-# SQS Queue URL: https://sqs[-fips].{region}.amazonaws.com[.cn]/{account}/{queue-name}
-# Also supports VPC endpoint URLs: https://vpce-xxx.sqs.{region}.vpce.amazonaws.com/{account}/{queue-name}
-sqs_queue_url_pattern = r'^https://(vpce-[a-z0-9\-]+\.)?sqs[\-a-z]*\.[a-z0-9\-]+\.(vpce\.)?amazonaws\.com(\.cn)?/[0-9]{12}/[a-zA-Z0-9_\-\.]+$'
+# AWS resource patterns - partition-aware. Must accept every partition the CDK layer can deploy into,
+# which is the authoritative list in infra/lib/helper/const.ts (SERVICE_LOOKUP): aws, aws-us-gov,
+# aws-cn, aws-iso, aws-iso-b, aws-iso-e, aws-iso-f, aws-eusc. A partition missing here rejects a
+# well-formed ARN that the deployment itself produced, so a pipeline registering its own sub-process
+# fails validation in that partition only — invisible in a commercial test.
+# `aws-eusc` (EU Sovereign Cloud) is spelled out because it does NOT fit the -iso family shape.
+aws_partition_group = r'aws(?:-us-gov|-cn|-eusc|-iso(?:-[a-z])?)?'
+# The DNS suffixes those partitions serve regional endpoints from, for URL-shaped values. Partitions
+# do not share one suffix: commercial/GovCloud use amazonaws.com, China amazonaws.com.cn, EU Sovereign
+# amazonaws.eu, and the ISO partitions use their own non-amazonaws domains.
+aws_dns_suffix_group = r'(?:amazonaws\.com(?:\.cn)?|amazonaws\.eu|c2s\.ic\.gov|sc2s\.sgov\.gov|cloud\.adc-e\.uk)'
+# SQS Queue URL: https://sqs[-fips].{region}.{dns-suffix}/{account}/{queue-name}
+# Also supports VPC endpoint URLs: https://vpce-xxx.sqs.{region}.vpce.{dns-suffix}/{account}/{queue-name}
+sqs_queue_url_pattern = (r'^https://(vpce-[a-z0-9\-]+\.)?sqs[\-a-z]*\.[a-z0-9\-]+\.(vpce\.)?'
+                         + aws_dns_suffix_group + r'/[0-9]{12}/[a-zA-Z0-9_\-\.]+$')
 # EventBridge Bus ARN: arn:{partition}:events:{region}:{account}:event-bus/{bus-name}
 eventbridge_bus_arn_pattern = r'^arn:(' + aws_partition_group + r'):events:[a-z0-9\-]+:[0-9]{12}:event-bus/[a-zA-Z0-9_\-\./]+$'
 # EventBridge source: reverse-DNS style, 1-256 chars, no aws. prefix (reserved)
@@ -381,12 +391,12 @@ def normalize_iso8601_utc(value):
 
 def validate_sqs_queue_url(name, value):
     if not sqs_queue_url_regex.fullmatch(value):
-        return (False, name + " is invalid. Must be a valid SQS queue URL (e.g., https://sqs.us-east-1.amazonaws.com/123456789012/my-queue). Supports all AWS partitions including GovCloud and China regions.")
+        return (False, name + " is invalid. Must be a valid SQS queue URL (e.g., https://sqs.us-east-1.amazonaws.com/123456789012/my-queue). Supports all AWS partitions including GovCloud, China, EU Sovereign Cloud, and ISO regions.")
     return (True, '')
 
 def validate_eventbridge_bus_arn(name, value):
     if not eventbridge_bus_arn_regex.fullmatch(value):
-        return (False, name + " is invalid. Must be a valid EventBridge bus ARN (e.g., arn:aws:events:us-east-1:123456789012:event-bus/my-bus). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), and ISO partitions.")
+        return (False, name + " is invalid. Must be a valid EventBridge bus ARN (e.g., arn:aws:events:us-east-1:123456789012:event-bus/my-bus). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), EU Sovereign Cloud (arn:aws-eusc), and ISO partitions.")
     return (True, '')
 
 def validate_eventbridge_source(name, value):
@@ -401,7 +411,7 @@ def validate_eventbridge_detail_type(name, value):
 
 def validate_arn(name, value):
     if not arn_regex.fullmatch(value):
-        return (False, name + " is invalid. Must be a valid AWS ARN (e.g., arn:aws:states:us-east-1:123456789012:execution:sm:exec). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), and ISO partitions.")
+        return (False, name + " is invalid. Must be a valid AWS ARN (e.g., arn:aws:states:us-east-1:123456789012:execution:sm:exec). Supports all AWS partitions including GovCloud (arn:aws-us-gov), China (arn:aws-cn), EU Sovereign Cloud (arn:aws-eusc), and ISO partitions.")
     return (True, '')
 
 def validate_cloudwatch_log_group_arn(name, value):
