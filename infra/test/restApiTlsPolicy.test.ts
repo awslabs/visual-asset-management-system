@@ -12,10 +12,16 @@
  * set on the underlying L1; that escape hatch is exactly the kind of thing a CDK upgrade or a
  * construct refactor drops silently, since nothing else observes it.
  *
- * The FIPS-compliant TLS 1.3 policy is used because it is available in every partition VAMS targets
- * (GovCloud requires FIPS endpoints), so it is applied unconditionally rather than gated per
- * partition. A non-FIPS commercial-only policy would have to be guarded, and an unrecognized value is
- * rejected at deploy time.
+ * The policy is `SecurityPolicy_TLS13_1_2_2021_06`: it raises the floor to TLS 1.2 while still
+ * accepting TLS 1.3. A TLS 1.3-ONLY policy cannot be used, because CloudFront negotiates at most
+ * TLS 1.2 to a custom origin and so could not reach the API at all — the reason the ungated TLS 1.3
+ * policy was replaced. Being an enhanced policy (the `SecurityPolicy_` prefix), it also requires an
+ * `EndpointAccessMode`; BASIC keeps CloudFront `/api/*` origin requests, the ALB-to-execute-api
+ * redirect, and direct execute-api access working, all of which are cross-host by design.
+ *
+ * It is applied only outside the GovCloud mode. Those partitions do not offer TLS_1_0 for Regional
+ * APIs and are FIPS-compliant by default, so their floor is already TLS 1.2 without VAMS asserting a
+ * policy — and asserting one there risks naming a value the partition does not publish.
  *
  * Asserted against the source rather than a synthesized stack: building the API construct requires a
  * fully-populated config plus the cross-stack route registry, so a synth here would be slow and
@@ -25,7 +31,6 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import * as apigw from "aws-cdk-lib/aws-apigateway";
 
 const SOURCE = fs.readFileSync(
     path.join(
@@ -40,43 +45,42 @@ const SOURCE = fs.readFileSync(
     "utf-8"
 );
 
+// Whitespace collapsed so a prettier reflow of a call cannot fail an assertion.
+const FLAT = SOURCE.replace(/\s+/g, " ");
+
 describe("REST API TLS policy", () => {
     it("sets SecurityPolicy on the underlying L1 RestApi", () => {
         // The L2 has no securityPolicy prop, so an addPropertyOverride on defaultChild is the only
         // way to express this.
-        // Matched with whitespace collapsed so a prettier reflow of the call cannot
-        // fail the test.
-        expect(SOURCE.replace(/[\s]+/g, " ")).toContain('addPropertyOverride( "SecurityPolicy"');
+        expect(FLAT).toContain('addPropertyOverride("SecurityPolicy"');
         expect(SOURCE).toContain("defaultChild as apigw.CfnRestApi");
     });
 
-    it("uses the TLS 1.3 policy from the CDK enum rather than a hardcoded string", () => {
-        // A literal would not fail when AWS renames or retires the policy; the enum member would.
-        expect(SOURCE).toContain("apigw.SecurityPolicy.TLS13_1_3_FIPS_2025_09");
+    it("uses the TLS 1.2 floor policy, which still accepts TLS 1.3", () => {
+        expect(SOURCE).toContain("SecurityPolicy_TLS13_1_2_2021_06");
     });
 
-    it("the enum member resolves to the expected AWS policy name", () => {
-        // Guards the assumption the assertion above rests on.
-        expect(apigw.SecurityPolicy.TLS13_1_3_FIPS_2025_09).toBe(
-            "SecurityPolicy_TLS13_1_3_FIPS_2025_09"
-        );
+    it("does NOT use a TLS 1.3-only policy, which CloudFront cannot reach as an origin", () => {
+        // The regression this replaced: CloudFront negotiates at most TLS 1.2 to a custom origin, so
+        // a 1.3-only API is unreachable through the default VAMS fronting.
+        expect(SOURCE).not.toContain("TLS13_1_3_FIPS_2025_09");
+        expect(SOURCE).not.toContain("TLS13_1_3_2025_09");
     });
 
-    it("applies the policy in EVERY partition, ungated", () => {
-        // The FIPS TLS 1.3 policy is available in all partitions VAMS targets, so gating it would
-        // leave GovCloud/ISO on the API Gateway default for no reason.
-        expect(SOURCE).not.toMatch(/if \(Partition\(\) === "aws"\)[\s\S]{0,400}SecurityPolicy/);
+    it("sets EndpointAccessMode, which an enhanced SecurityPolicy_ policy requires", () => {
+        expect(FLAT).toContain('addPropertyOverride("EndpointAccessMode", "BASIC")');
+        // STRICT would reject the cross-host requests VAMS makes by design (CloudFront origin, ALB
+        // redirect, direct execute-api).
+        expect(SOURCE).not.toContain('"STRICT"');
     });
 
-    it("uses the FIPS variant, which is the reason it needs no partition guard", () => {
-        expect(SOURCE).toContain("FIPS");
-        // The non-FIPS 2025-09 policy is NOT published everywhere; using it unguarded would break a
-        // GovCloud deploy.
-        expect(SOURCE).not.toContain("apigw.SecurityPolicy.TLS13_1_3_2025_09");
+    it("applies the policy only outside the GovCloud mode", () => {
+        // Those partitions already floor at TLS 1.2 and may not publish this policy name.
+        expect(FLAT).toMatch(/if \(!config\.app\.govCloud\.enabled\) \{[^}]*SecurityPolicy/);
     });
 
-    it("does not weaken other partitions", () => {
-        // Nothing may downgrade below TLS 1.2 anywhere.
+    it("does not weaken TLS anywhere", () => {
+        // Nothing may drop the floor below TLS 1.2 in any partition.
         expect(SOURCE).not.toMatch(/SecurityPolicy.*TLS_1_0/);
         expect(SOURCE).not.toContain("apigw.SecurityPolicy.TLS_1_0");
     });
