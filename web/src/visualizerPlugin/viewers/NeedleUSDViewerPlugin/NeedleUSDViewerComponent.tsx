@@ -1799,6 +1799,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         };
     }, [assetKey, multiFileKeys, assetId, databaseId, versionId, assetVersionId, config]);
 
+    // React 18 StrictMode reset effect — mirror SuperSplat pattern
+    // StrictMode double-invoke (mount→unmount→remount) defeats one-shot guards.
+    // Reset guards when deps change so re-mount re-initializes the viewer.
+    useEffect(() => {
+        return () => {
+            initializationRef.current = false;
+            loadingCancelledRef.current = false;
+        };
+    }, [assetKey, multiFileKeys, versionId, assetVersionId]);
+
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
             if (

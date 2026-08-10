@@ -41,6 +41,30 @@ class UpdateType(str, Enum):
     REPLACE_ALL = "replace_all"
 
 
+# Request-size limits.
+# Maximum metadata items accepted in a single create/update request. Mirrors
+# MAX_METADATA_RECORDS_PER_ENTITY in the metadata handlers: an entity holds at most
+# that many records, so a longer list could never be stored in full. Bounding it
+# here stops the per-item value validation from running unbounded work first.
+MAX_METADATA_ITEMS_PER_REQUEST = 500
+# Maximum metadata keys accepted in a single delete request. Each key costs one
+# read plus one delete, so this bounds the per-request fan-out to the same ceiling.
+MAX_METADATA_KEYS_PER_REQUEST = 500
+# Maximum length of a single metadata value. DynamoDB caps a whole item at 400 KB,
+# so a longer value could not be written regardless of this limit. Deliberately
+# generous so large GeoJSON geometries, 4x4 matrices, and JSON blobs stay valid.
+MAX_METADATA_VALUE_LENGTH = 400000
+# Maximum length of a caller-supplied pagination token. Tokens this service issues
+# are a base64 offset of a handful of bytes.
+MAX_PAGINATION_TOKEN_LENGTH = 4096
+# Maximum length of an asset version id. Version ids are generated as decimal
+# counters ("1", "2", ...); this leaves ample room for an alias-length value.
+MAX_ASSET_VERSION_ID_LENGTH = 64
+# Maximum length of an asset-relative file path. The path is concatenated with the
+# asset's S3 prefix to form an object key, and S3 caps a key at 1024 characters.
+MAX_FILE_PATH_LENGTH = 1024
+
+
 # GeoJSON geometry types that VAMS accepts for the GEOJSON metadata value type.
 # Mirrors the OpenSearch geo_shape mapping accepted on the asset/file indexes.
 _VALID_GEOJSON_GEOMETRY_TYPES = {
@@ -124,7 +148,7 @@ def _validate_geometry(geom: Any, label: str = "geometry") -> None:
     g_type = geom.get("type")
     if g_type not in _VALID_GEOJSON_GEOMETRY_TYPES:
         raise ValueError(
-            f"{label} type '{g_type}' is not a supported GeoJSON geometry type "
+            f"{label} type is not a supported GeoJSON geometry type "
             f"(expected one of: {', '.join(sorted(_VALID_GEOJSON_GEOMETRY_TYPES))})"
         )
     if g_type == "GeometryCollection":
@@ -219,7 +243,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
     # First check if the type is valid
     valid_types = [e.value for e in MetadataValueType]
     if value_type not in valid_types:
-        raise ValueError(f"Invalid metadata value type: {value_type}. Supported types are: {', '.join(valid_types)}")
+        raise ValueError(f"Invalid metadata value type. Supported types are: {', '.join(valid_types)}")
     
     # STRING type requires no additional validation
     if value_type == MetadataValueType.STRING:
@@ -376,7 +400,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
     else:
         # This should never be reached due to the check at the beginning,
         # but included as a safety measure
-        raise ValueError(f"Unsupported metadata value type: {value_type}")
+        raise ValueError("Unsupported metadata value type")
     
     return value
 
@@ -388,7 +412,7 @@ def validate_metadata_value_common(value: str, value_type: MetadataValueType) ->
 class MetadataItemModel(BaseModel, extra='ignore'):
     """Single metadata item with key, value, and type"""
     metadataKey: str = Field(..., min_length=1, max_length=256, description="Metadata key")
-    metadataValue: str = Field(..., description="Metadata value as string")
+    metadataValue: str = Field(..., max_length=MAX_METADATA_VALUE_LENGTH, description="Metadata value as string")
     metadataValueType: MetadataValueType = Field(default=MetadataValueType.STRING, description="Type of metadata value")
 
     @validator('metadataValueType', pre=True)
@@ -399,7 +423,7 @@ class MetadataItemModel(BaseModel, extra='ignore'):
             # Check if the lowercase value is a valid enum value
             valid_types = [e.value for e in MetadataValueType]
             if v_lower not in valid_types:
-                raise ValueError(f"Invalid metadataValueType '{v}'. Supported types are: {', '.join(valid_types)}")
+                raise ValueError(f"Invalid metadataValueType. Supported types are: {', '.join(valid_types)}")
             return v_lower
         return v
 
@@ -459,12 +483,12 @@ class GetAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting asset link metadata"""
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
 
 class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating asset link metadata (single or bulk)"""
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_metadata_list(cls, values):
@@ -476,7 +500,7 @@ class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating asset link metadata (single or bulk)"""
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -501,13 +525,27 @@ class UpdateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting asset link metadata"""
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_metadata_keys_list(cls, values):
-        """Validate metadataKeys list has at least one item"""
+        """Validate metadataKeys list has at least one item and each key is bounded"""
+        from common.validators import validate
+
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 
@@ -571,13 +609,13 @@ class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting asset metadata"""
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
-    assetVersionId: Optional[str] = Field(None, description="Optional asset version ID to retrieve metadata snapshot")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
+    assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
 
 
 class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating asset metadata (single or bulk)"""
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_metadata_list(cls, values):
@@ -589,7 +627,7 @@ class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating asset metadata (single or bulk)"""
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -614,13 +652,27 @@ class UpdateAssetMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteAssetMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting asset metadata"""
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_metadata_keys_list(cls, values):
-        """Validate metadataKeys list has at least one item"""
+        """Validate metadataKeys list has at least one item and each key is bounded"""
+        from common.validators import validate
+
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 
@@ -683,12 +735,12 @@ class FileMetadataPathRequestModel(BaseModel, extra='ignore'):
 
 class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting file metadata or attributes"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
-    assetVersionId: Optional[str] = Field(None, description="Optional asset version ID to retrieve metadata snapshot")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
+    assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
 
     @root_validator
     def validate_fields(cls, values):
@@ -721,9 +773,9 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
 
 class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating file metadata or attributes (single or bulk)"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_fields(cls, values):
@@ -766,9 +818,9 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating file metadata or attributes (single or bulk)"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -824,9 +876,9 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting file metadata or attributes"""
-    filePath: str = Field(..., description="Relative file path")
+    filePath: str = Field(..., min_length=1, max_length=MAX_FILE_PATH_LENGTH, description="Relative file path")
     type: Literal["metadata", "attribute"] = Field(..., description="Type: metadata or attribute")
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_fields(cls, values):
@@ -857,7 +909,18 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
         # Validate metadataKeys list has at least one item
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
-        
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 
@@ -918,12 +981,12 @@ class GetDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for getting database metadata"""
     maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
-    startingToken: Optional[str] = Field(None, description="Token for pagination")
+    startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
 
 class CreateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for creating database metadata (single or bulk)"""
-    metadata: List[MetadataItemModel] = Field(..., description="List of metadata items to create")
+    metadata: List[MetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to create")
 
     @root_validator
     def validate_metadata_list(cls, values):
@@ -935,7 +998,7 @@ class CreateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
 
 class UpdateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for updating database metadata (single or bulk)"""
-    metadata: List[BulkMetadataItemModel] = Field(..., description="List of metadata items to update")
+    metadata: List[BulkMetadataItemModel] = Field(..., max_items=MAX_METADATA_ITEMS_PER_REQUEST, description="List of metadata items to update")
     updateType: UpdateType = Field(default=UpdateType.UPDATE, description="Update type: 'update' (default) or 'replace_all'")
 
     @validator('updateType', pre=True)
@@ -960,13 +1023,27 @@ class UpdateDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
 
 class DeleteDatabaseMetadataRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting database metadata"""
-    metadataKeys: List[str] = Field(..., description="List of metadata keys to delete")
+    metadataKeys: List[str] = Field(..., max_items=MAX_METADATA_KEYS_PER_REQUEST, description="List of metadata keys to delete")
 
     @root_validator
     def validate_metadata_keys_list(cls, values):
-        """Validate metadataKeys list has at least one item"""
+        """Validate metadataKeys list has at least one item and each key is bounded"""
+        from common.validators import validate
+
         if not values.get('metadataKeys') or len(values.get('metadataKeys', [])) < 1:
             raise ValueError("metadataKeys must contain at least 1 item")
+
+        # Bound the per-element length: an element becomes a DynamoDB sort key.
+        (valid, message) = validate({
+            'metadataKeys': {
+                'value': values.get('metadataKeys'),
+                'validator': 'STRING_256_ARRAY'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            raise ValueError(message)
+
         return values
 
 

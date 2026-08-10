@@ -181,7 +181,7 @@ def get_single_item(event, item_id):
     # Step 3: Object-level authorization
     item['object__type'] = 'yourObjectType'
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    if not casbin_enforcer.enforce(event, item):
+    if not casbin_enforcer.enforce(item, "GET"):
         return authorization_error()
 
     # Step 4: Return response
@@ -215,15 +215,17 @@ if not casbin_enforcer.enforceAPI(event):
 
 ### Tier 2: Object-Level Authorization
 
-Controls which specific data entities a role can access. Performed in business logic functions using `enforce()`.
+Controls which specific data entities a role can access. Performed in business logic functions using `enforce(obj, act)`, where `obj` is the entity dictionary and `act` is the HTTP method the caller must be allowed to perform on it (`GET`, `POST`, `PUT`, `DELETE`).
 
 ```python
 # MUST annotate the object type before calling enforce()
 item['object__type'] = 'asset'
 casbin_enforcer = CasbinEnforcer(claims_and_roles)
-if not casbin_enforcer.enforce(event, item):
+if not casbin_enforcer.enforce(item, "GET"):
     return authorization_error()
 ```
+
+Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
 You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
@@ -254,11 +256,11 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new item"""
     databaseId: str = Field(
         min_length=4, max_length=256,
-        strip_whitespace=True, pattern=id_pattern
+        strip_whitespace=True, regex=id_pattern
     )
     itemName: str = Field(
         min_length=1, max_length=256,
-        strip_whitespace=True, pattern=object_name_pattern
+        strip_whitespace=True, regex=object_name_pattern
     )
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     tags: Optional[list[str]] = []
@@ -411,18 +413,24 @@ if not valid:
 
 ### Available Validators
 
-| Validator          | Pattern                      | Use For                |
-| ------------------ | ---------------------------- | ---------------------- |
-| `ID`               | `^[-_a-zA-Z0-9]{3,63}$`      | databaseId, pipelineId |
-| `ASSET_ID`         | filename pattern, max 256    | assetId                |
-| `UUID`             | Standard UUID format         | Unique identifiers     |
-| `OBJECT_NAME`      | `^[a-zA-Z0-9\-._\s]{1,256}$` | assetName, dbName      |
-| `EMAIL`            | Email regex                  | Email addresses        |
-| `USERID`           | `^[\w\-\.\+\@]{3,256}$`      | User identifiers       |
-| `FILE_NAME`        | No special characters        | File names             |
-| `STRING_256`       | Max 256 chars                | Medium strings         |
-| `ID_ARRAY`         | Array of IDs                 | Multiple IDs           |
-| `STRING_256_ARRAY` | Array of max-256 strings     | Tags, lists            |
+| Validator                   | Pattern                       | Use For                                         |
+| --------------------------- | ----------------------------- | ----------------------------------------------- |
+| `ID`                        | `^[-_a-zA-Z0-9]{3,63}$`       | databaseId, pipelineId                          |
+| `ASSET_ID`                  | filename pattern, max 256     | assetId                                         |
+| `UUID`                      | Standard UUID format          | Unique identifiers                              |
+| `OBJECT_NAME`               | `^[a-zA-Z0-9\-._\s]{1,256}$`  | assetName, dbName                               |
+| `EMAIL`                     | Email regex                   | Email addresses                                 |
+| `USERID`                    | `^[\w\-\.\+\@]{3,256}$`       | User identifiers                                |
+| `FILE_NAME`                 | No special characters         | File names                                      |
+| `STRING_256`                | Max 256 chars                 | Medium strings                                  |
+| `ID_ARRAY`                  | Array of IDs                  | Multiple IDs                                    |
+| `STRING_256_ARRAY`          | Array of max-256 strings      | Tags, lists                                     |
+| `ARN`                       | Partition-aware AWS ARN       | Any AWS resource ARN (sub-process registration) |
+| `CLOUDWATCH_LOG_GROUP_ARN`  | Partition-aware log-group ARN | Registered CloudWatch log-group locations       |
+| `CLOUDWATCH_LOG_GROUP_NAME` | 1-512 chars (`-_./#` + alnum) | Registered CloudWatch log-group names           |
+| `LOG_STREAM_NAME`           | 1-512 chars, no `:` or `*`    | Registered log-stream names / prefixes          |
+
+All AWS-resource validators are partition-aware (commercial, GovCloud, China, ISO).
 
 ### Regex Patterns for Pydantic Fields
 
@@ -471,7 +479,7 @@ from common.s3PathPatterns import (
     PIPELINE_OUTPUT_FILES_PREFIX,     # '/files/' (file-level outputs, outputS3AssetFilesPath)
     PIPELINE_OUTPUT_PREVIEWS_PREFIX,  # '/previews/' (asset-level previews, outputS3AssetPreviewPath)
     PIPELINE_OUTPUT_METADATA_PREFIX,  # '/metadata/' (metadata files, outputS3AssetMetadataPath)
-    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (reserved for a future feature)
+    PIPELINE_OUTPUT_RESULTS_PREFIX,   # '/results/' (structured pipeline result files, recorded by the end-state lambda)
 )
 ```
 
@@ -513,11 +521,14 @@ logger.exception(f"Unexpected error: {e}")   # Includes stack trace
 logger.warning(f"Potential issue: {details}")
 ```
 
-The logger automatically redacts sensitive fields at all nesting levels:
+The logger automatically redacts sensitive fields at all nesting levels, in both objects and arrays:
 
 -   `authorization`
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
+-   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
+
+Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
 
 ### Audit Logging
 

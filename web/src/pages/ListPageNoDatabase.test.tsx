@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render, waitFor } from "@testing-library/react";
-import { act } from "react-dom/test-utils";
+import { render, waitFor, act } from "@testing-library/react";
 
 import ListPageNoDatabase from "./ListPageNoDatabase";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";

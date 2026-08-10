@@ -50,11 +50,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-dev && 
 
 # Fix for Triton JIT compilation of cuda_utils.c in containerized environments.
 # 1. gcc needs an unversioned libcuda.so symlink — the compat dir only has .so.1
-# 2. Register the compat path system-wide via ldconfig so gcc can find it in all subprocesses
-# 3. Patch Triton's build.py to NOT suppress stderr, so we can see gcc errors in CloudWatch
+# 2. Patch Triton's build.py to NOT suppress stderr, so we can see gcc errors in CloudWatch
+#
+# The CUDA forward-compatibility libraries in /usr/local/cuda-12.8/compat are NOT registered with
+# ldconfig. Forward compatibility only works when the host driver is older than the container's CUDA
+# runtime; when the host driver is newer (the Amazon Linux 2023 NVIDIA AMI ships a CUDA 13 driver),
+# a system-wide compat libcuda.so.1 shadows the host driver and CUDA initialization fails with
+# error 803, "system has unsupported display driver / cuda driver combination". The compat path stays
+# on disk so the Triton JIT link step below can still reference it explicitly for compilation.
+# For the same reason, entrypoint.sh must not place the compat directory on LD_LIBRARY_PATH — that
+# reintroduces the shadowing at run time even though ldconfig never registered it.
 RUN ln -sf /usr/local/cuda-12.8/compat/libcuda.so.1 /usr/local/cuda-12.8/compat/libcuda.so && \
-    echo "/usr/local/cuda-12.8/compat" > /etc/ld.so.conf.d/cuda-compat.conf && \
-    ldconfig && \
     TRITON_BUILD_PY=$(find /opt/cosmos-reason2/.venv -path "*/triton/runtime/build.py" | head -1) && \
     if [ -n "$TRITON_BUILD_PY" ]; then \
         sed -i 's/subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)/subprocess.check_call(cc_cmd, stderr=subprocess.STDOUT)/' "$TRITON_BUILD_PY" && \
@@ -68,7 +74,7 @@ RUN ln -sf /usr/local/cuda-12.8/compat/libcuda.so.1 /usr/local/cuda-12.8/compat/
 
 # Create code directory and copy VAMS container code
 RUN mkdir -p /opt/ml/code
-COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
+COPY __main__.py model_manager.py inference.py manifest_io.py entrypoint.sh /opt/ml/code/
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.

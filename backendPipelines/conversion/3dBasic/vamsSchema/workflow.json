@@ -1,0 +1,5 @@
+{
+    "workflowName": "3D Basic Conversion",
+    "category": "Conversion",
+    "description": "Automated workflow for 3D mesh format conversion using the 3D Basic Conversion Pipeline (Trimesh)."
+}

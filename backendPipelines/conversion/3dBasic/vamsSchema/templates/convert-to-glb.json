@@ -1,0 +1,9 @@
+{
+    "templateId": "convert-to-glb",
+    "templateName": "Convert to GLB",
+    "description": "Convert a 3D mesh to GLB format using the Trimesh library.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\".glb\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Converts a 3D model to glTF Binary (.glb). Select the source model as the input file; the converted file is written back to the asset.\n\nThis pipeline reads no asset or file metadata — everything it needs comes from the selected file and this template."
+}

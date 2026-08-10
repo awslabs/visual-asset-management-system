@@ -1,0 +1,9 @@
+{
+    "templateId": "isaaclab-evaluation-cartpole",
+    "templateName": "Evaluate (Cartpole)",
+    "description": "Evaluate a trained RL policy with Isaac Lab (Isaac-Cartpole-Direct-v0, 100 envs, 50 episodes).",
+    "configFormat": "json",
+    "configBody": "{\"trainingConfig\":{\"mode\":\"evaluate\",\"task\":\"Isaac-Cartpole-Direct-v0\",\"numEnvs\":100,\"numEpisodes\":50,\"recordVideo\":false}}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Point the pipeline at a trained policy (.pt). Set trainingConfig.task to match the trained task, tune numEnvs / numEpisodes, and recordVideo to capture rollout video."
+}

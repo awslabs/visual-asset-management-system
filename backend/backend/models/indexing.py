@@ -4,13 +4,27 @@ Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.dynamoDbMetadataKeys import is_internal_metadata_field
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="DualIndexingModels")
+
+# Index request limits. These records are built from S3/DynamoDB values by the
+# indexer Lambdas rather than from an API caller, so the bounds are generous and
+# exist to keep a malformed upstream record from reaching OpenSearch.
+# S3 caps an object key at 1024 characters.
+MAX_S3_KEY_LENGTH = 1024
+# S3 bucket names are at most 63 characters.
+MAX_BUCKET_NAME_LENGTH = 63
+# Free-text bound for indexed strings with no stricter shape.
+MAX_INDEX_TEXT_LENGTH = 1024
+# Asset descriptions and version comments are longer free text.
+MAX_INDEX_DESCRIPTION_LENGTH = 4096
+# Maximum tags carried on one indexed record.
+MAX_INDEX_TAGS = 1000
 
 ######################## Field Name Sanitization ##########################
 
@@ -199,26 +213,26 @@ class FileIndexRequest(BaseModel, extra='ignore'):
     """Request model for file index operations"""
     
     # Primary identifiers
-    databaseId: str = Field(..., description="Database ID")
-    assetId: str = Field(..., description="Asset ID") 
-    filePath: str = Field(..., description="File path relative to asset")
-    
+    databaseId: str = Field(..., min_length=1, max_length=MAX_INDEX_TEXT_LENGTH, description="Database ID")
+    assetId: str = Field(..., min_length=1, max_length=MAX_INDEX_TEXT_LENGTH, description="Asset ID")
+    filePath: str = Field(..., min_length=1, max_length=MAX_S3_KEY_LENGTH, description="File path relative to asset")
+
     # S3 information
-    bucketName: str = Field(..., description="S3 bucket name")
-    s3Key: str = Field(..., description="Full S3 key")
-    
+    bucketName: str = Field(..., min_length=1, max_length=MAX_BUCKET_NAME_LENGTH, description="S3 bucket name")
+    s3Key: str = Field(..., min_length=1, max_length=MAX_S3_KEY_LENGTH, description="Full S3 key")
+
     # File metadata
-    fileSize: Optional[int] = Field(None, description="File size in bytes")
-    lastModified: Optional[str] = Field(None, description="Last modified timestamp")
-    etag: Optional[str] = Field(None, description="S3 ETag")
-    versionId: Optional[str] = Field(None, description="S3 version ID")
+    fileSize: Optional[int] = Field(None, ge=0, description="File size in bytes")
+    lastModified: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="Last modified timestamp")
+    etag: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="S3 ETag")
+    versionId: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="S3 version ID")
     isArchived: bool = Field(False, description="Whether file is archived")
-    
+
     # Additional metadata
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata fields")
-    
+
     # Operation type
-    operation: str = Field(..., description="Operation type: index, delete")
+    operation: Literal["index", "delete"] = Field(..., description="Operation type: index, delete")
 
 ######################## Asset Index Models ##########################
 
@@ -310,34 +324,34 @@ class AssetIndexRequest(BaseModel, extra='ignore'):
     """Request model for asset index operations"""
     
     # Primary identifiers
-    databaseId: str = Field(..., description="Database ID")
-    assetId: str = Field(..., description="Asset ID")
-    
+    databaseId: str = Field(..., min_length=1, max_length=MAX_INDEX_TEXT_LENGTH, description="Database ID")
+    assetId: str = Field(..., min_length=1, max_length=MAX_INDEX_TEXT_LENGTH, description="Asset ID")
+
     # Asset information
-    assetName: Optional[str] = Field(None, description="Asset name")
-    assetType: Optional[str] = Field(None, description="Asset type")
-    description: Optional[str] = Field(None, description="Asset description")
+    assetName: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="Asset name")
+    assetType: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="Asset type")
+    description: Optional[str] = Field(None, max_length=MAX_INDEX_DESCRIPTION_LENGTH, description="Asset description")
     isDistributable: Optional[bool] = Field(None, description="Distributable flag")
-    tags: Optional[List[str]] = Field(None, description="Asset tags")
-    
+    tags: Optional[List[str]] = Field(None, max_items=MAX_INDEX_TAGS, description="Asset tags")
+
     # Bucket information
-    bucketId: Optional[str] = Field(None, description="Bucket ID")
-    bucketName: Optional[str] = Field(None, description="Bucket name")
-    bucketPrefix: Optional[str] = Field(None, description="Bucket prefix")
-    
+    bucketId: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="Bucket ID")
+    bucketName: Optional[str] = Field(None, max_length=MAX_BUCKET_NAME_LENGTH, description="Bucket name")
+    bucketPrefix: Optional[str] = Field(None, max_length=MAX_S3_KEY_LENGTH, description="Bucket prefix")
+
     # Version information
-    currentVersionId: Optional[str] = Field(None, description="Current version ID")
-    versionCreatedAt: Optional[str] = Field(None, description="Version creation date")
-    versionComment: Optional[str] = Field(None, description="Version comment")
-    
+    currentVersionId: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="Current version ID")
+    versionCreatedAt: Optional[str] = Field(None, max_length=MAX_INDEX_TEXT_LENGTH, description="Version creation date")
+    versionComment: Optional[str] = Field(None, max_length=MAX_INDEX_DESCRIPTION_LENGTH, description="Version comment")
+
     # Archive status
     isArchived: bool = Field(False, description="Whether asset is archived")
-    
+
     # Additional metadata
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata fields")
-    
+
     # Operation type
-    operation: str = Field(..., description="Operation type: index, delete")
+    operation: Literal["index", "delete"] = Field(..., description="Operation type: index, delete")
 
 ######################## Common Response Models ##########################
 

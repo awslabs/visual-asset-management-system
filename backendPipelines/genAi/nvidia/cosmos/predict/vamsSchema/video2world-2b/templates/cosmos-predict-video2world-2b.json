@@ -1,0 +1,19 @@
+{
+    "templateId": "cosmos-predict-video2world-2b",
+    "templateName": "Video-to-World (2B)",
+    "description": "Extend a video world from an input video plus a text prompt with the Cosmos Predict 2B model.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL_TYPE\": \"video2world\", \"MODEL_SIZE\": \"2B\", \"DISABLE_GUARDRAILS\": \"true\", \"OFFLOAD_TEXT_ENCODER\": \"true\", \"OFFLOAD_TOKENIZER\": \"true\", \"OFFLOAD_DIFFUSION_MODEL\": \"true\", \"PROMPT\": \"{{PROMPT}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Continues or extends an existing video using Cosmos-Predict. Select the source video as the input file; the prompt describes what should happen next.\n\nAsset metadata this pipeline reads (optional):\n  COSMOS_PREDICT_PROMPT  The generation prompt. Used when the Prompt field is left blank.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Asset metadata is used only where the field is left blank, so a standing value on the asset acts as a per-asset default.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS_PREDICT_PROMPT key on the asset's metadata."
+        }
+    ]
+}

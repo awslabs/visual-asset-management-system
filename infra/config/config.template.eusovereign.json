@@ -86,6 +86,7 @@
             }
         },
         "pipelines": {
+            "deadlineCloudExecutionTypeEnabled": false,
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true
@@ -109,8 +110,7 @@
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true,
-                "sqsAutoRunOnAssetModified": false
+                "autoRegisterAutoTriggerOnFileUpload": true
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false,
@@ -120,6 +120,7 @@
             },
             "useSplatToolbox": {
                 "enabled": false,
+                "useCodeBuild": false,
                 "autoRegisterWithVAMS": true
             },
             "useRapidPipeline": {

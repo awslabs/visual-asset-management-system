@@ -262,7 +262,7 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
             # if we have an assetVersionId and assetId, call get_comments_version
             if "assetVersionId" in pathParameters and "assetId" in pathParameters:
                 logger.info("Validating parameters")
-                (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ID"}})
+                (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"}})
                 if not valid:
                     logger.warning(message)
                     response["body"] = json.dumps({"message": message})
@@ -288,7 +288,7 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
             # if we just have assetId, call get_comments
             if "assetId" in pathParameters:
                 logger.info("Validating parameters")
-                (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ID"}})
+                (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"}})
                 if not valid:
                     logger.warning(message)
                     response["body"] = json.dumps({"message": message})
@@ -319,7 +319,7 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
             logger.info("Validating parameters")
             (valid, message) = validate(
                 {
-                    "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
+                    "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
                     "commentId": {"value": split_arr[1], "validator": "ID"},
                 }
             )

@@ -62,7 +62,7 @@ RUN uv pip install --no-cache gpustat
 
 # Copy VAMS container code
 RUN mkdir -p /opt/ml/code
-COPY __main__.py inference.py model_manager.py entrypoint.sh /opt/ml/code/
+COPY __main__.py inference.py evaluation.py model_manager.py manifest_io.py entrypoint.sh /opt/ml/code/
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.

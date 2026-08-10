@@ -1,0 +1,29 @@
+{
+    "pipelineName": "Isaac Lab RL Evaluation",
+    "category": "Simulation",
+    "description": "Isaac Lab RL Evaluation Pipeline - Evaluate trained RL policies using NVIDIA Isaac Lab simulation.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "7200",
+        "taskHeartbeatTimeout": "1800",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.json"],
+            "exclude": []
+        }
+    }
+}

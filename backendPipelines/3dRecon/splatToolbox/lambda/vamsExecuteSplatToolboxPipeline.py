@@ -9,16 +9,19 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecuteSplatToolboxPipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
-                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata, input_parameters, external_task_token
-                                        , executing_userName, executing_requestContext):
+                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -27,11 +30,12 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
-        "executingRequestContext": executing_requestContext
+        "executingRequestContext": executing_requestContext,
+        "orchestrationEventPrefix": orchestration_event_prefix
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -48,8 +52,26 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
 
 
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so the pipeline task does not wait
+    for the full taskTimeout when this lambda cannot start the pipeline."""
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="SplatToolboxPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
+
 def lambda_handler(event, context):
     logger.info(event)
+
+    external_task_token = None
 
     try:
         # Parse request body (same pattern as rapidPipeline)
@@ -72,32 +94,31 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        # Get input parameters if defined
-        input_parameters = data.get('inputParameters', '')
-        logger.info(f"Input parameters received: {input_parameters}")
-
-        # Get input metadata if defined
-        input_metadata = data.get('inputMetadata', '')
-        logger.info(f"Input metadata received: {input_metadata}")
-
         # Get Executing username
         executing_userName = data.get('executingUserName', '')
 
         # Get Executing requestContext
         executing_requestContext = data.get('executingRequestContext', '')
 
+        # Resolve input/output locations from the workflow manifest (fallback to payload fields)
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
+
         # Starts execution of pipeline
         execute_pipeline(
-            data['inputS3AssetFilePath'],
-            data['outputS3AssetFilesPath'],
-            data['outputS3AssetPreviewPath'],
-            data['outputS3AssetMetadataPath'],
-            data['inputOutputS3AssetAuxiliaryFilesPath'],
-            input_metadata,
-            input_parameters,
+            resolved['inputS3AssetFilePath'],
+            resolved['outputS3AssetFilesPath'],
+            resolved['outputS3AssetPreviewPath'],
+            resolved['outputS3AssetMetadataPath'],
+            resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            resolved['inputMetadataS3Location'],
+            resolved['inputConfigurationS3Location'],
             external_task_token,
             executing_userName,
-            executing_requestContext
+            executing_requestContext,
+            resolved['orchestrationEventPrefix']
         )
 
         return {
@@ -106,6 +127,7 @@ def lambda_handler(event, context):
         }
     except Exception as e:
         logger.exception(e)
+        abort_external_workflow(e, external_task_token)
         return {
             'statusCode': 500,
             'body': json.dumps({"message": "Internal Server Error"})

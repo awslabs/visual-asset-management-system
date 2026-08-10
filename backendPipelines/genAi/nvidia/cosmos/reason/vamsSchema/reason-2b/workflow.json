@@ -1,0 +1,21 @@
+{
+    "workflowName": "NVIDIA Cosmos Reason 2B",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos Reason 2B - Vision Language Model for video/image analysis and captioning",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:nvidia-cosmos-reason2-2b": "cosmos-reason-2b"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one"
+    }
+}

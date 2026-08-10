@@ -11,9 +11,9 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as efs from "aws-cdk-lib/aws-efs";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
@@ -21,8 +21,12 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import { IsaacLabTrainingFunctions } from "../lambdaBuilder/isaacLabTrainingFunctions";
 import * as Config from "../../../../../../config/config";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
-import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
+import {
+    generateUniqueNameHash,
+    grantExternalAssetBucketKmsKeys,
+} from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { NagSuppressions } from "cdk-nag";
 import * as path from "path";
 
@@ -34,7 +38,7 @@ export interface IsaacLabTrainingConstructProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
     // Optional: CodeBuild-built image in ECR (bypasses local Docker build). Passing the
     // repository (rather than a URI string) lets the Batch container definition auto-grant the
     // execution role ECR pull + ecr:GetAuthorizationToken permissions.
@@ -149,6 +153,12 @@ export class IsaacLabTrainingConstruct extends Construct {
                 minvCpus: props.config.app.pipelines.useIsaacLabTraining.keepWarmInstance ? 8 : 0,
                 allocationStrategy: batch.AllocationStrategy.BEST_FIT_PROGRESSIVE,
                 launchTemplate: launchTemplate,
+                // NVIDIA-accelerated AMI for the GPU instance families above
+                images: [
+                    {
+                        imageType: batch.EcsMachineImageType.ECS_AL2023_NVIDIA,
+                    },
+                ],
             }
         );
 
@@ -314,11 +324,17 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "jobName.$": "$.openResult.Payload.jobName",
                 "definition.$": "$.openResult.Payload.definition",
                 "numNodes.$": "$.openResult.Payload.numNodes",
-                "inputMetadata.$": "$.openResult.Payload.inputMetadata",
-                "inputParameters.$": "$.openResult.Payload.inputParameters",
+                "inputMetadataS3Location.$": "$.openResult.Payload.inputMetadataS3Location",
+                "inputConfigurationS3Location.$":
+                    "$.openResult.Payload.inputConfigurationS3Location",
                 "externalSfnTaskToken.$": "$.openResult.Payload.externalSfnTaskToken",
                 "outputS3AssetFilesPath.$": "$.openResult.Payload.outputS3AssetFilesPath",
                 "inputS3AssetFilePath.$": "$.openResult.Payload.inputS3AssetFilePath",
+                // Read from the ORIGINAL state machine input, not from openResult: the open lambda
+                // does not echo this field. These parameters REPLACE the state, so a field omitted
+                // here is unreachable downstream — and the batch task references it by path, which
+                // makes an omission a States.Runtime failure rather than a skipped registration.
+                "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             },
         });
 
@@ -332,11 +348,15 @@ export class IsaacLabTrainingConstruct extends Construct {
                 "jobName.$": "$.jobName",
                 "definition.$": "$.definition",
                 "numNodes.$": "$.numNodes",
-                "inputMetadata.$": "$.inputMetadata",
-                "inputParameters.$": "$.inputParameters",
+                "inputMetadataS3Location.$": "$.inputMetadataS3Location",
+                "inputConfigurationS3Location.$": "$.inputConfigurationS3Location",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 "outputS3AssetFilesPath.$": "$.outputS3AssetFilesPath",
                 "inputS3AssetFilePath.$": "$.inputS3AssetFilePath",
+                // Needed so the lambda can register the submitted Batch job as an abortable
+                // sub-process: this pipeline submits under WAIT_FOR_TASK_TOKEN rather than the
+                // Batch .sync integration, so Step Functions does not stop the job on abort.
+                "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(8)),
@@ -381,9 +401,28 @@ export class IsaacLabTrainingConstruct extends Construct {
             .next(executeBatchJobState)
             .next(closePipelineState);
 
+        const stateMachineLogGroup = new logs.LogGroup(this, "IsaacLab-StateMachineLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSstateMachine-IsaacLabTrainingPipeline" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "IsaacLab-StateMachineLogGroup",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         const stateMachine = new sfn.StateMachine(this, "IsaacLabStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
             timeout: cdk.Duration.hours(8),
+            logs: {
+                destination: stateMachineLogGroup,
+                includeExecutionData: true,
+                level: sfn.LogLevel.ALL,
+            },
+            tracingEnabled: true,
         });
 
         // Grant vamsExecuteFunction permission to start the SFN
@@ -395,104 +434,72 @@ export class IsaacLabTrainingConstruct extends Construct {
             stateMachine.stateMachineArn
         );
 
+        lambdaFunctions.vamsExecuteFunction.addEnvironment(
+            "ORCHESTRATION_BUS_NAME",
+            props.storageResources.eventBridge.orchestrationBus.eventBusName
+        );
+        props.storageResources.eventBridge.orchestrationBus.grantPutEventsTo(
+            lambdaFunctions.vamsExecuteFunction
+        );
+
+        // Registered with the sub-execution so the execution log viewer can read this state
+        // machine's logs
+        lambdaFunctions.vamsExecuteFunction.addEnvironment(
+            "STATE_MACHINE_LOG_GROUP_NAME",
+            stateMachineLogGroup.logGroupName
+        );
+        lambdaFunctions.vamsExecuteFunction.addEnvironment(
+            "STATE_MACHINE_LOG_GROUP_ARN",
+            stateMachineLogGroup.logGroupArn
+        );
+
         // Set output
         this.pipelineVamsLambdaFunctionName = lambdaFunctions.vamsExecuteFunction.functionName;
 
-        // Register pipeline with VAMS if autoRegisterWithVAMS is enabled
+        // Register pipeline with VAMS if autoRegisterWithVAMS is enabled (V2 vamsSchema bundles ->
+        // V2 pipeline/workflow/template tables). Training and Evaluation are distinct pipelines (a
+        // train -> evaluate chain), each with its own bundle.
         if (props.config.app.pipelines.useIsaacLabTraining?.autoRegisterWithVAMS === true) {
-            const region = cdk.Stack.of(this).region;
-            const account = cdk.Stack.of(this).account;
-
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
+            const isaacLabVamsSchemaRoot = path.join(
+                __dirname,
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "backendPipelines",
+                "simulation",
+                "isaacLabTraining",
+                "vamsSchema"
             );
 
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            const currentTimestamp = new Date().toISOString();
-
-            // Register Isaac Lab Training pipeline
-            new cdk.CustomResource(this, "IsaacLabTrainingPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
+            new VamsSchemaRegistration(this, "IsaacLabTrainingRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(isaacLabVamsSchemaRoot, "training"),
+                resourceOverrides: {
+                    lambdaName: lambdaFunctions.vamsExecuteFunction.functionName,
+                },
+                idOverrides: {
                     pipelineId: "isaaclab-training",
-                    pipelineDescription:
-                        "Isaac Lab RL Training Pipeline - Train reinforcement learning policies using NVIDIA Isaac Lab on AWS Batch with GPU acceleration.",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".pt",
-                    waitForCallback: "Enabled",
-                    lambdaName: lambdaFunctions.vamsExecuteFunction.functionName,
-                    taskTimeout: "28800",
-                    taskHeartbeatTimeout: "3600",
-                    inputParameters: JSON.stringify({
-                        trainingConfig: {
-                            mode: "train",
-                            task: "Isaac-Cartpole-Direct-v0",
-                            numEnvs: 4096,
-                            maxIterations: 1500,
-                            rlLibrary: "rsl_rl",
-                        },
-                        computeConfig: {
-                            numNodes: 1,
-                        },
-                    }),
                     workflowId: "isaaclab-training",
-                    workflowDescription:
-                        "Automated workflow for RL policy training using Isaac Lab simulation on GPU instances.",
                 },
             });
 
-            // Register Isaac Lab Evaluation pipeline
-            new cdk.CustomResource(this, "IsaacLabEvaluationPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "isaaclab-evaluation",
-                    pipelineDescription:
-                        "Isaac Lab RL Evaluation Pipeline - Evaluate trained RL policies using NVIDIA Isaac Lab simulation.",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".pt",
-                    outputType: ".json",
-                    waitForCallback: "Enabled",
+            new VamsSchemaRegistration(this, "IsaacLabEvaluationRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(isaacLabVamsSchemaRoot, "evaluation"),
+                resourceOverrides: {
                     lambdaName: lambdaFunctions.vamsExecuteFunction.functionName,
-                    taskTimeout: "7200",
-                    taskHeartbeatTimeout: "1800",
-                    inputParameters: JSON.stringify({
-                        trainingConfig: {
-                            mode: "evaluate",
-                            task: "Isaac-Cartpole-Direct-v0",
-                            numEnvs: 100,
-                            numEpisodes: 50,
-                            recordVideo: false,
-                        },
-                    }),
+                },
+                idOverrides: {
+                    pipelineId: "isaaclab-evaluation",
                     workflowId: "isaaclab-evaluation",
-                    workflowDescription:
-                        "Automated workflow for evaluating trained RL policies using Isaac Lab simulation.",
                 },
             });
-
-            // Nag suppression for import provider
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "Wildcard permissions needed for pipeline/workflow import custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         // CDK-nag suppressions for IsaacLab pipeline
@@ -501,7 +508,7 @@ export class IsaacLabTrainingConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Wildcard permissions required: batch:DescribeComputeEnvironments does not support resource-level permissions, S3 bucket access needs object-level wildcards, and Batch job operations require dynamic resource access",
+                    reason: "Wildcard permissions required: batch:DescribeComputeEnvironments does not support resource-level permissions, S3 bucket access needs object-level wildcards, Batch job operations require dynamic resource access, and the state machine's CloudWatch Logs delivery + X-Ray trace actions are not resource-scopable",
                 },
                 {
                     id: "AwsSolutions-IAM4",
@@ -509,14 +516,6 @@ export class IsaacLabTrainingConstruct extends Construct {
                     appliesTo: [
                         "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
                     ],
-                },
-                {
-                    id: "AwsSolutions-SF1",
-                    reason: "CloudWatch logging will be added in future iteration",
-                },
-                {
-                    id: "AwsSolutions-SF2",
-                    reason: "X-Ray tracing will be added in future iteration",
                 },
             ],
             true

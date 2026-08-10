@@ -401,6 +401,9 @@ class CasbinEnforcerService:
         double-escape the escapes we add) and then the single quote keeps the value a
         single inert string literal.
 
+        Takes ONE value: a list-valued criterion is expanded by the caller into a clause per
+        element, so each element is escaped separately and reaches its own string literal.
+
         Note: this is defense-in-depth on top of the REGEX validator applied at constraint
         write time (see models/roleConstraints.py). The regex operators legitimately treat
         the value as a regular expression (e.g. ".*" is allowed), but it must remain
@@ -424,38 +427,86 @@ class CasbinEnforcerService:
                 logger.info(f"Skipping out-of-matrix field for objectType {object_type}: {criterion['field']}")
                 continue
 
-            # Escape the value so it cannot break out of its string literal and inject
-            # arbitrary expression syntax into the eval()'d matcher (authz expression injection).
-            value = self._escape_rule_value(criterion['value'])
+            field = criterion['field']
+            operator = criterion['operator']
 
-            if criterion["operator"] == "equals":
-                obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '^{value}$')"""
-                )
-            elif criterion["operator"] == "contains":
-                obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '.*{value}.*')"""
-                )
-            elif criterion["operator"] == "does_not_contain":
-                obj_rule.append(
-                    f"""!(regexMatch(r.obj.{criterion['field']}, '.*{value}.*'))"""
-                )
-            elif criterion["operator"] == "starts_with":
-                obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '^{value}.*')"""
-                )
-            elif criterion["operator"] == "ends_with":
-                obj_rule.append(
-                    f"""regexMatch(r.obj.{criterion['field']}, '.*{value}$')"""
-                )
-            elif criterion["operator"] == "is_one_of":
-                obj_rule.append(
-                    f"""'{value}' in r.obj.{criterion['field']}"""
-                )
-            elif criterion["operator"] == "is_not_one_of":
-                obj_rule.append(
-                    f"""!'{value}' in r.obj.{criterion['field']}"""
-                )
+            # A criterion value is either a single value or a list of alternatives. Each element
+            # gets its own comparison clause and its own escaping, so the elements stay separate
+            # values instead of collapsing into one stringified container that matches nothing.
+            # Escaping keeps a value from breaking out of its string literal and injecting
+            # arbitrary expression syntax into the eval()'d matcher (authz expression injection).
+            raw_value = criterion['value']
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            values = [self._escape_rule_value(entry) for entry in values]
+
+            # Two newline properties of Python's regex dialect decide the anchors and wildcards used
+            # below. `regexMatch` is `re.match` (casbin.util.regex_match), so:
+            #
+            #   '$' also matches immediately BEFORE a trailing newline, so '^value$' matches both
+            #   "value" and "value\n". On an allow rule that grants a second, distinct stored value;
+            #   '\Z' is the true end of string. Names reach here through OBJECT_NAME, whose charset
+            #   includes \s — so "value\n" is a storable name, not a hypothetical.
+            #
+            #   '.' does NOT cross a newline, so '.*value.*' fails to see "pre\nvalue". On a
+            #   containment DENY that is a bypass: the inner match returns False, the negation
+            #   returns True, and access is granted. The wildcards therefore use the SCOPED group
+            #   '(?s:.*)' rather than a leading '(?s)': a global flag would apply to the caller's
+            #   value too, so a value containing '.' would start spanning lines and the rule would
+            #   match more than it says.
+            #
+            # The two treatments are per-operator on purpose. '\Z' narrows, so it belongs on the
+            # operators that terminate a match; '(?s:.*)' widens the machine-generated wildcards, so
+            # it belongs only where under-matching is the hazard. Applying '(?s)' to `equals` would
+            # widen an allow rule instead of tightening it.
+            #
+            # Clauses stay None for an operator this generator does not know, so an unrecognized
+            # operator is skipped rather than emitting a rule.
+            clauses = None
+            negated = False
+            if operator == "equals":
+                clauses = [f"""regexMatch(r.obj.{field}, '^{value}\\\\Z')""" for value in values]
+            elif operator == "contains":
+                clauses = [
+                    f"""regexMatch(r.obj.{field}, '(?s:.*){value}(?s:.*)')""" for value in values
+                ]
+            elif operator == "does_not_contain":
+                clauses = [
+                    f"""regexMatch(r.obj.{field}, '(?s:.*){value}(?s:.*)')""" for value in values
+                ]
+                negated = True
+            elif operator == "starts_with":
+                # `re.match` already anchors at offset 0 and a trailing '.*' can
+                # always match empty, so '^value.*' is boolean-identical to '^value' — there is no
+                # forward over-match to close, and nothing a newline-crossing wildcard would alter.
+                clauses = [f"""regexMatch(r.obj.{field}, '^{value}.*')""" for value in values]
+            elif operator == "ends_with":
+                # The leading wildcard must span newlines (an under-matching
+                # deny is a bypass) and the terminator must be '\Z' rather than '$'.
+                clauses = [
+                    f"""regexMatch(r.obj.{field}, '(?s:.*){value}\\\\Z')""" for value in values
+                ]
+            elif operator == "is_one_of":
+                clauses = [f"""'{value}' in r.obj.{field}""" for value in values]
+            elif operator == "is_not_one_of":
+                clauses = [f"""'{value}' in r.obj.{field}""" for value in values]
+                negated = True
+
+            if clauses is None:
+                continue
+
+            # The alternatives are OR-joined, so a multi-value criterion matches ANY of its values.
+            # A negating operator wraps that same group in ONE '!', which is its complement: the
+            # rule holds only when NONE of the values match, so no value can be slipped past by
+            # pairing it with another. An empty value list contributes no alternative, and an
+            # OR over no alternatives is False — never-match on the positive operators, and
+            # vacuously true under the negation.
+            group = " || ".join(clauses) if clauses else "False"
+            if negated:
+                obj_rule.append(f"!({group})")
+            elif len(clauses) > 1:
+                obj_rule.append(f"({group})")
+            else:
+                obj_rule.append(group)
         return obj_rule
 
     # Returns a guaranteed valid policy statement.

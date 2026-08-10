@@ -116,7 +116,7 @@ Below the details pane, a tabbed interface provides access to the following sect
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **File Manager**  | A split-pane file browser with a directory tree on the left and file details on the right. Supports uploading, moving, copying, renaming, archiving, and deleting files. When viewing a specific version, the label updates to **File Manager (v\{versionId\})** and file operations are read-only. |
 | **Relationships** | View and manage asset-to-asset relationships. Supports parent, child, and related link types, including cross-database relationships.                                                                                                                                                               |
-| **Workflows**     | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
+| **Executions**    | View workflow execution history for this asset and trigger new workflow executions.                                                                                                                                                                                                                 |
 | **Comments**      | View and add comments on the asset using a rich text editor.                                                                                                                                                                                                                                        |
 | **Versions**      | View the full version history of the asset, including version aliases, comments, and archive status.                                                                                                                                                                                                |
 
@@ -164,20 +164,31 @@ The wizard consists of five steps:
 
 The **Pipelines** page lists all registered processing pipelines. Pipelines define individual processing steps such as 3D model conversion, point cloud processing, preview thumbnail generation, or AI-based labeling.
 
-Each pipeline entry shows its name, description, execution type (AWS Lambda, Amazon SQS, or Amazon EventBridge), and configuration details. Administrators can create, edit, and delete pipeline definitions from this page.
+Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled** or **Archived** where either applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database.
+
+Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one.
+
+![Pipelines page listing registered pipelines grouped by category](/img/pipelines_page_20260803_v2.6.png)
 
 ### Workflows Page
 
-The **Workflows** page lets you create and manage workflows that chain multiple pipelines into automated processing sequences. Workflows are triggered by asset uploads or executed manually from the asset detail page.
+The **Workflows** page lets you create and manage workflows that chain multiple pipelines into automated processing sequences. Workflows run automatically when one of their triggers matches an upload, or manually from the workflow's own **Execute** action or an asset's **Automation** menu.
 
-![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260323_v2.5.png)
+![Workflows page listing workflows with pipeline, execution, and trigger counts](/img/workflows_page_20260803_v2.6.png)
 
-From this page you can:
+Each entry shows the workflow's name and id, its database and category, how many pipelines it runs, how many executions it has, and how many triggers it defines — with the number currently enabled called out when some are off. Filters narrow the list by status, by whether the workflow has an enabled trigger, and by database.
 
--   View all workflows and their associated databases
--   Create new workflows with the workflow builder
--   Edit existing workflow configurations
--   View workflow execution history
+Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow.
+
+Creating or editing a workflow opens a step-by-step wizard, whose **Pipelines** step lists the steps in order alongside a graph of the resulting sequence.
+
+![Workflow editor showing pipeline steps and visual graph](/img/workflow_editor_20260803_v2.6.png)
+
+### Executions Page
+
+The **Executions** page lists workflow executions across every workflow and database you may see. Filters narrow the list by status, trigger, workflow, workflow database, and time window; the output columns identify the asset each run wrote to. Selecting a run opens its detail view, with tabs for its inputs, pipelines, outputs, settings, and logs.
+
+![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20260803_v2.6.png)
 
 ---
 

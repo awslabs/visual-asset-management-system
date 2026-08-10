@@ -1,0 +1,9 @@
+{
+    "templateId": "preview-3d-thumbnail-default",
+    "templateName": "GIF/JPG/PNG thumbnails",
+    "description": "Generate GIF, JPG, and PNG preview thumbnails, overwriting any existing preview files.",
+    "configFormat": "json",
+    "configBody": "{\"overwriteExistingPreviewFiles\":true,\"outputType\":\".gif,.jpg,.png\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "overwriteExistingPreviewFiles (true/false) controls whether existing .previewFile.* thumbnails are replaced. outputType is a comma-separated list of thumbnail formats to emit (.gif, .jpg, .png)."
+}

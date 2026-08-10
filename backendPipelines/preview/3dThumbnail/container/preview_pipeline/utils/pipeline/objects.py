@@ -72,8 +72,9 @@ class PipelineStage(JsonEncodable):
 class PipelineDefinition(JsonEncodable):
     jobName: str
     stages: list[PipelineStage]
-    inputMetadata: str
-    inputParameters: str
+    # S3 locations of the metadata + input configuration (not their content)
+    inputMetadataS3Location: str = ""
+    inputConfigurationS3Location: str = ""
     externalSfnTaskToken: str = ""
     localTest: str = "False"
     assetId: str = ""
@@ -86,7 +87,7 @@ class PipelineExecutionParams(JsonEncodable):
     jobName: str
     currentStageType: str
     definition: list[str]  # Serialized definition list array of PipelineDefinition for CommandInput
-    inputMetadata: str
-    inputParameters: str
+    inputMetadataS3Location: str = ""
+    inputConfigurationS3Location: str = ""
     externalSfnTaskToken: str = ""
     status: PipelineStatus = PipelineStatus.PENDING

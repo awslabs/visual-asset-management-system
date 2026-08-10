@@ -49,7 +49,7 @@ The details pane header includes three action buttons:
 
 ### Tabbed Container
 
-The tabbed container sits below the details pane and contains five tabs: File Manager, Relationships, Workflows, Comments, and Versions. Each tab is described in detail in the sections that follow.
+The tabbed container sits below the details pane and contains five tabs: File Manager, Relationships, Executions, Comments, and Versions. Each tab is described in detail in the sections that follow.
 
 ### Metadata Section
 
@@ -422,13 +422,13 @@ Comments are tied to the asset, not to a specific version. All comments remain v
 
 ## Workflow Executions
 
-The **Workflows** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
+The **Executions** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
 
-![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260323_v2.5.png)
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
 
 ### Viewing Execution History
 
-1. Select the **Workflows** tab on the asset detail page.
+1. Select the **Executions** tab on the asset detail page.
 2. Executions are grouped by workflow, with each workflow showing its list of individual executions.
 3. Each execution displays:
     - The workflow name
@@ -440,12 +440,12 @@ The **Workflows** tab shows the execution history of all workflows that have bee
 
 You can start a new workflow execution directly from the asset detail page:
 
-1. Select the **Execute Workflow** button above the workflows tab.
+1. Select the **Execute Workflow** button above the Executions tab.
 2. Choose the workflow to run from the dropdown.
 3. Select the input file(s) for processing (or select the entire asset).
 4. Confirm the execution.
 
-The new execution appears in the workflow tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
+The new execution appears in the Executions tab immediately with a **Running** status. The tab auto-refreshes to show status updates.
 
 ### Auto-Triggered Workflows
 

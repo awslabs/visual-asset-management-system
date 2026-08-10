@@ -16,9 +16,19 @@ logger = safeLogger(service_name="ApiKeyModels")
 # must rotate (create a new key).
 USER_API_KEY_MAX_EXPIRATION_DAYS = 365
 
+# The stored values the authorizer accepts for an API key's active flag. The
+# authorizer compares exactly (`isActive != 'true'` denies), so the literals are
+# case-sensitive: 'True' would store a key the authorizer treats as disabled.
+ALLOWED_API_KEY_ACTIVE_VALUES = ('true', 'false')
+
 
 def _validate_iso8601_date(value):
-    """Validate that a string is a valid ISO 8601 date/datetime."""
+    """Validate that a string is a valid ISO 8601 date/datetime.
+
+    The rejection message names the expected format only. Pydantic validation
+    errors are surfaced to the caller verbatim, so the submitted value is logged
+    rather than echoed back.
+    """
     if value is None:
         return value
     try:
@@ -29,7 +39,8 @@ def _validate_iso8601_date(value):
             # Try date-only format (e.g. 2026-12-31)
             datetime.strptime(value, '%Y-%m-%d')
         except (ValueError, TypeError):
-            raise ValueError(f"Invalid date format: '{value}'. Use ISO 8601 format (e.g. 2026-12-31 or 2026-12-31T23:59:59Z)")
+            logger.error(f"Rejected expiration value: {value}")
+            raise ValueError("Invalid date format. Use ISO 8601 format (e.g. 2026-12-31 or 2026-12-31T23:59:59Z)")
     return value
 
 
@@ -46,7 +57,7 @@ def parse_iso8601_datetime(value):
 
 class CreateApiKeyRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new API key"""
-    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     userId: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     expiresAt: Optional[str] = Field(None, max_length=30, strip_whitespace=True)
@@ -55,6 +66,10 @@ class CreateApiKeyRequestModel(BaseModel, extra='ignore'):
     def validate_fields(cls, values):
         logger.info("Validating API key creation parameters")
         validation_map = {
+            'apiKeyName': {
+                'value': values.get('apiKeyName'),
+                'validator': 'OBJECT_NAME'
+            },
             'userId': {
                 'value': values.get('userId'),
                 'validator': 'USERID'
@@ -80,12 +95,15 @@ class UpdateApiKeyRequestModel(BaseModel, extra='ignore'):
     """Request model for updating an API key"""
     description: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
     expiresAt: Optional[str] = Field(None, max_length=30, strip_whitespace=True)
-    isActive: Optional[str] = Field(None, pattern=r'^(true|false)$')
+    isActive: Optional[str] = Field(None, regex=r'^(true|false)$')
 
     @root_validator
     def validate_at_least_one_field(cls, values):
         if values.get('description') is None and values.get('expiresAt') is None and values.get('isActive') is None:
             raise ValueError("At least one of 'description', 'expiresAt', or 'isActive' must be provided")
+
+        if values.get('isActive') is not None and values.get('isActive') not in ALLOWED_API_KEY_ACTIVE_VALUES:
+            raise ValueError(f"isActive must be one of: {', '.join(ALLOWED_API_KEY_ACTIVE_VALUES)}")
 
         # Validate description with STRING_256 if provided
         if values.get('description') is not None:
@@ -113,7 +131,7 @@ class CreateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     expiration date is required. The handler enforces the maximum expiration
     window (USER_API_KEY_MAX_EXPIRATION_DAYS from creation).
     """
-    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    apiKeyName: str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     description: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     expiresAt: str = Field(min_length=1, max_length=30, strip_whitespace=True)
 
@@ -121,6 +139,10 @@ class CreateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     def validate_fields(cls, values):
         logger.info("Validating user API key creation parameters")
         (valid, message) = validate({
+            'apiKeyName': {
+                'value': values.get('apiKeyName'),
+                'validator': 'OBJECT_NAME'
+            },
             'description': {
                 'value': values.get('description'),
                 'validator': 'STRING_256'
@@ -145,12 +167,15 @@ class UpdateUserApiKeyRequestModel(BaseModel, extra='ignore'):
     """
     description: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
     expiresAt: Optional[str] = Field(None, min_length=1, max_length=30, strip_whitespace=True)
-    isActive: Optional[str] = Field(None, pattern=r'^(true|false)$')
+    isActive: Optional[str] = Field(None, regex=r'^(true|false)$')
 
     @root_validator
     def validate_fields(cls, values):
         if values.get('description') is None and values.get('expiresAt') is None and values.get('isActive') is None:
             raise ValueError("At least one of 'description', 'expiresAt', or 'isActive' must be provided")
+
+        if values.get('isActive') is not None and values.get('isActive') not in ALLOWED_API_KEY_ACTIVE_VALUES:
+            raise ValueError(f"isActive must be one of: {', '.join(ALLOWED_API_KEY_ACTIVE_VALUES)}")
 
         if values.get('description') is not None:
             (valid, message) = validate({

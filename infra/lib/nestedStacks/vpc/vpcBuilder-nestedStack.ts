@@ -536,6 +536,26 @@ export class VPCBuilderNestedStack extends NestedStack {
                 securityGroups: [vpceSecurityGroup],
             });
 
+            // Create VPC endpoint for AWS Deadline Cloud (management API) when the DeadlineCloud
+            // execution type is enabled. The job-callback lambda is the only in-VPC caller
+            // (deadline:GetJob), so the endpoint is created only when lambdas run in the VPC —
+            // job submission itself is a Step Functions service integration and never traverses
+            // the VPC. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so config
+            // validation blocks enabling the type there and this endpoint is never created in
+            // those partitions.
+            if (
+                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.pipelines.deadlineCloudExecutionTypeEnabled
+            ) {
+                new ec2.InterfaceVpcEndpoint(this, "DeadlineManagementEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: new ec2.InterfaceVpcEndpointAwsService("deadline.management"),
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
             //Add endpoints for Cognito when Cognito auth is enabled. The browser signs in
             //against cognito-idp (SRP/InitiateAuth) and exchanges tokens against
             //cognito-identity, so an isolated VPC needs both to authenticate without

@@ -10,9 +10,11 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="VamsExecuteCosmos3Pipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
@@ -62,8 +64,23 @@ def lambda_handler(event, context):
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Register this pipeline as needing a task token callback.")
         external_task_token = data['TaskToken']
 
-        input_parameters = data.get('inputParameters', '')
-        input_metadata = data.get('inputMetadata', '')
+        # Resolve input/output locations from the workflow manifest (legacy-payload fallback).
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
+
+        # Read metadata + input-configuration CONTENT from S3 (locations travel, content does not);
+        # inline fields remain a fallback for direct/local invocations. The COSMOS3_* extraction
+        # below stays at this boundary; only the S3 locations are forwarded to the container.
+        # The metadata file is the grouped-by-asset envelope, projected onto the legacy
+        # {"VAMS": {...}} view for this run's subject that the scopes below read: its input file, or —
+        # in the no-input-file modes — the envelope's first metadata-source asset.
+        input_metadata = manifestHelper.run_vams_view(
+            manifestHelper.fetch_metadata(s3_client, resolved['inputMetadataS3Location']), resolved) \
+            or data.get('inputMetadata', '')
+        input_parameters = manifestHelper.fetch_input_configuration(s3_client, resolved['inputConfigurationS3Location']) \
+            or data.get('inputParameters', '')
 
         # Variant + task mode come from inputParameters (set at registration)
         model_variant = "nano"
@@ -92,45 +109,53 @@ def lambda_handler(event, context):
                 task_mode = mode_override
                 logger.info(f"COSMOS3_TASK_MODE metadata overrode task mode to: {task_mode}")
 
-        # Metadata scope: input-file modes read file metadata, text modes read asset metadata
+        # Every generation setting resolves CONFIG-FIRST with an asset-metadata fallback (see
+        # manifestHelper.resolve_input_setting): what the operator supplied on the execute screen — a
+        # template's dynamic tag — wins, and a blank field falls back to a standing value on the asset.
+        # Only assetMetadata is consulted: these settings describe the RUN, not one file, and a workflow
+        # may select many files. An input-file mode additionally honours per-FILE metadata, since there
+        # the setting can legitimately belong to the file being converted.
         needs_input = task_mode in INPUT_FILE_MODES or model_variant == "super-image2video"
-        scopes = ("fileMetadata", "assetMetadata") if needs_input else ("assetMetadata", "fileMetadata")
+        scopes = ("fileMetadata", "assetMetadata") if needs_input else ("assetMetadata",)
 
-        cosmos_prompt = _extract_metadata_value(input_metadata, "COSMOS3_PROMPT", scopes)
-        cosmos_negative_prompt = _extract_metadata_value(input_metadata, "COSMOS3_NEGATIVE_PROMPT", scopes)
-        cosmos_seed = _extract_metadata_value(input_metadata, "COSMOS3_SEED", scopes)
-        cosmos_guidance = _extract_metadata_value(input_metadata, "COSMOS3_GUIDANCE", scopes)
-        cosmos_num_frames = _extract_metadata_value(input_metadata, "COSMOS3_NUM_FRAMES", scopes)
+        def _setting(config_keys, metadata_key):
+            return manifestHelper.resolve_input_setting(
+                input_parameters, input_metadata, config_keys, metadata_key,
+                metadata_scopes=scopes)
+
+        cosmos_prompt = _setting(("PROMPT", "prompt"), "COSMOS3_PROMPT")
+        cosmos_negative_prompt = _setting(
+            ("NEGATIVE_PROMPT", "negativePrompt"), "COSMOS3_NEGATIVE_PROMPT")
+        cosmos_seed = _setting(("SEED", "seed"), "COSMOS3_SEED")
+        cosmos_guidance = _setting(("GUIDANCE", "guidance"), "COSMOS3_GUIDANCE")
+        cosmos_num_frames = _setting(("NUM_FRAMES", "numFrames"), "COSMOS3_NUM_FRAMES")
 
         # Control-signal transfer fields (only meaningful when task_mode == "transfer")
-        cosmos_control_type = _extract_metadata_value(input_metadata, "COSMOS3_CONTROL_TYPE", scopes)
-        cosmos_control_path = _extract_metadata_value(input_metadata, "COSMOS3_CONTROL_PATH", scopes)
-        cosmos_control_weight = _extract_metadata_value(input_metadata, "COSMOS3_CONTROL_WEIGHT", scopes)
-        cosmos_control_guidance = _extract_metadata_value(input_metadata, "COSMOS3_CONTROL_GUIDANCE", scopes)
-
-        # Fallback: prompt from inputParameters
-        if not cosmos_prompt:
-            try:
-                params = json.loads(input_parameters) if isinstance(input_parameters, str) else (input_parameters or {})
-                cosmos_prompt = params.get("PROMPT") or params.get("prompt") or ""
-            except Exception:
-                pass
+        cosmos_control_type = _setting(("CONTROL_TYPE", "controlType"), "COSMOS3_CONTROL_TYPE")
+        cosmos_control_path = _setting(("CONTROL_PATH", "controlPath"), "COSMOS3_CONTROL_PATH")
+        cosmos_control_weight = _setting(
+            ("CONTROL_WEIGHT", "controlWeight"), "COSMOS3_CONTROL_WEIGHT")
+        cosmos_control_guidance = _setting(
+            ("CONTROL_GUIDANCE", "controlGuidance"), "COSMOS3_CONTROL_GUIDANCE")
 
         payload = {
             "modelVariant": model_variant,
             "taskMode": task_mode,
-            "inputS3AssetFilePath": data.get('inputS3AssetFilePath', ''),
-            "outputS3AssetFilesPath": data.get('outputS3AssetFilesPath', ''),
-            "outputS3AssetPreviewPath": data.get('outputS3AssetPreviewPath', ''),
-            "outputS3AssetMetadataPath": data.get('outputS3AssetMetadataPath', ''),
-            "inputOutputS3AssetAuxiliaryFilesPath": data['inputOutputS3AssetAuxiliaryFilesPath'],
-            "inputMetadata": "",
-            "inputParameters": input_parameters,
+            "inputS3AssetFilePath": resolved['inputS3AssetFilePath'],
+            "outputS3AssetFilesPath": resolved['outputS3AssetFilesPath'],
+            "outputS3AssetPreviewPath": resolved['outputS3AssetPreviewPath'],
+            "outputS3AssetMetadataPath": resolved['outputS3AssetMetadataPath'],
+            "inputOutputS3AssetAuxiliaryFilesPath": resolved['inputOutputS3AssetAuxiliaryFilesPath'],
+            # Metadata + input-configuration S3 LOCATIONS travel onward (never the inline content);
+            # the container reads them from S3 as needed.
+            "inputMetadataS3Location": resolved['inputMetadataS3Location'],
+            "inputConfigurationS3Location": resolved['inputConfigurationS3Location'],
+            "orchestrationEventPrefix": resolved['orchestrationEventPrefix'],
             "sfnExternalTaskToken": external_task_token,
             "executingUserName": data.get('executingUserName', ''),
             "executingRequestContext": data.get('executingRequestContext', ''),
-            "assetId": data.get('assetId', ''),
-            "databaseId": data.get('databaseId', ''),
+            "assetId": resolved['assetId'],
+            "databaseId": resolved['databaseId'],
             "cosmosPrompt": cosmos_prompt,
             "cosmosNegativePrompt": cosmos_negative_prompt,
             "cosmosSeed": cosmos_seed,

@@ -217,7 +217,16 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             // All other file types - use PointCloudModel with Potree metadata path
                             // This allows the plugin viewer system to control supported file types
                             // and makes it easier to add new point cloud formats later
-                            const potreeFileKey = fileKey + "/preview/PotreeViewer/metadata.json";
+                            // Pass only the asset-relative path (not the databaseId or the leading
+                            // assetId). The stream endpoint prepends {databaseId}/{assetLocationKey}
+                            // to resolve the database-scoped per-file aux preview location. If
+                            // fileKey is the full, assetId-prefixed key, strip that leading segment.
+                            let relativeFileKey = fileKey;
+                            if (relativeFileKey.startsWith(assetId + "/")) {
+                                relativeFileKey = relativeFileKey.slice(assetId.length + 1);
+                            }
+                            const potreeFileKey =
+                                relativeFileKey + "/preview/PotreeViewer/metadata.json";
                             const assetUrl = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
 
                             console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);

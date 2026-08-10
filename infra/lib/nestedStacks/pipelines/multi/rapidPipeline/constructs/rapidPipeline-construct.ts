@@ -11,7 +11,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -31,7 +30,7 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs"; // remove once ECS cluster is moved to VAMS vpc
 
@@ -43,7 +42,7 @@ export interface RapidPipelineConstructProps extends cdk.StackProps {
     pipelineSubnetsIsolated: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -445,6 +444,8 @@ export class RapidPipelineConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnetsIsolated,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -462,133 +463,35 @@ export class RapidPipelineConstruct extends NestedStack {
 
         this.pipelineVamsLambdaFunctionName = rapidPipelineExecuteFunction.functionName;
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables). The
+        // former per-output-format registrations (glb / gltf, with duplicates) collapse to ONE pipeline +
+        // two templates (rapid-pipeline-to-glb / rapid-pipeline-to-gltf) selected per execution.
         if (props.config.app.pipelines.useRapidPipeline.useEcs.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register GLTF to GLB optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineGltfToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-to-glb",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLB optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".glb",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "RapidPipelineRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "multi",
+                    "rapidPipeline",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-to-glb",
-                    workflowDescription:
-                        "Automated workflow for GLTF to GLB optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
+                },
+                idOverrides: {
+                    pipelineId: "rapid-pipeline",
+                    workflowId: "rapid-pipeline",
                 },
             });
-
-            // Register OBJ to GLTF optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineObjToGltfPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-to-gltf",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLTF optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gltf",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-obj-to-gltf",
-                    workflowDescription:
-                        "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            // Register FBX to GLB optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineFbxToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    pipelineId: "rapid-pipeline-to-glb",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLB optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".glb",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-to-glb",
-                    workflowDescription:
-                        "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            // Register USD to GLTF optimization pipeline and workflow
-            new cdk.CustomResource(this, "RapidPipelineUsdToGltfPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "rapid-pipeline-to-gltf",
-                    pipelineDescription:
-                        "RapidPipeline 3D Processor - X to GLTF optimization and conversion using DGG RapidPipeline",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gltf",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: rapidPipelineExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    // }),
-                    workflowId: "rapid-pipeline-to-gltf",
-                    workflowDescription:
-                        "Automated workflow for X to GLTF optimization using RapidPipeline 3D Processor",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            //Nag supression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         //Output VAMS Pipeline Execution Function name

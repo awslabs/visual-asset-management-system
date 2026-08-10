@@ -218,24 +218,38 @@ flowchart TD
 
 The following fields can be used in ABAC policy rules:
 
-| Field                      | Description                                        |
-| -------------------------- | -------------------------------------------------- |
-| `databaseId`               | Database identifier                                |
-| `assetName`                | Asset name                                         |
-| `assetType`                | Asset type classification                          |
-| `tags`                     | Asset tags                                         |
-| `tagName`                  | Tag name                                           |
-| `tagTypeName`              | Tag type name                                      |
-| `roleName`                 | Role name                                          |
-| `userId`                   | User identifier                                    |
-| `pipelineId`               | Pipeline identifier                                |
-| `pipelineType`             | Pipeline type                                      |
-| `pipelineExecutionType`    | Pipeline execution type (Lambda, SQS, EventBridge) |
-| `workflowId`               | Workflow identifier                                |
-| `metadataSchemaName`       | Metadata schema name                               |
-| `metadataSchemaEntityType` | Metadata entity type                               |
-| `object__type`             | Entity type for Tier 2 enforcement                 |
-| `route__path`              | API route path for Tier 1 enforcement              |
+| Field                      | Description                                                                   |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `databaseId`               | Database identifier                                                           |
+| `assetName`                | Asset name                                                                    |
+| `assetType`                | Asset type classification                                                     |
+| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of` |
+| `tagName`                  | Tag name                                                                      |
+| `tagTypeName`              | Tag type name                                                                 |
+| `roleName`                 | Role name                                                                     |
+| `userId`                   | User identifier                                                               |
+| `pipelineId`               | Pipeline identifier                                                           |
+| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)     |
+| `workflowId`               | Workflow identifier                                                           |
+| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created |
+| `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
+| `metadataSchemaName`       | Metadata schema name                                                          |
+| `metadataSchemaEntityType` | Metadata entity type                                                          |
+| `object__type`             | Entity type for Tier 2 enforcement                                            |
+| `route__path`              | API route path for Tier 1 enforcement                                         |
+
+Each object type accepts only the fields that are meaningful for it. `category` and `name` are valid on the
+`pipeline` and `workflow` object types, which lets a role be scoped to a family of pipelines or workflows
+without listing every identifier — for example allowing GET where `category equals conversion`, or denying
+PUT where `name starts_with prod-`. The authoritative per-type field matrix is returned by
+`GET /auth/constraints/permissionObjects`, which is the same mapping the backend validates a submitted
+constraint against.
+
+:::note
+A pipeline's `name` and `pipelineExecutionType` are stored structurally on the pipeline record
+(`pipelineName` and `executionConfig.executionType`) and are surfaced as these flat fields on the Tier 2
+object before enforcement, so a constraint on either one evaluates against the real value.
+:::
 
 ### MFA-Aware Roles
 

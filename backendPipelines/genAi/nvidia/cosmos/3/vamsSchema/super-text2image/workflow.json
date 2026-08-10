@@ -1,0 +1,12 @@
+{
+    "workflowName": "NVIDIA Cosmos 3 Super Text2Image (64B)",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos 3 Super Text2Image (64B)",
+    "systemConfig": {
+        "inputFileArity": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": true
+        }
+    }
+}

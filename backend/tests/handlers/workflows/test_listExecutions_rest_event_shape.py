@@ -69,6 +69,25 @@ def _load_list_executions_authorized():
     """
     os.environ.setdefault("WORKFLOW_EXECUTION_STORAGE_TABLE_NAME", "wf-exec-table")
     os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "assetStorageTable")
+    # executionService (the renamed listExecutions) resolves its full V2 execution
+    # table set at import; the env-var override path keeps resolution offline.
+    for env, val in {
+        "WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME": "t-exec-v2",
+        "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME": "t-wf-inputs",
+        "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-wf-cfg",
+        "PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME": "t-pexec",
+        "PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE_NAME": "t-pin-files",
+        "PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE_NAME": "t-pin-md",
+        "PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE_NAME": "t-pin-cfg",
+        "PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME": "t-of",
+        "PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME": "t-om",
+        "PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME": "t-or",
+        "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
+        "WORKFLOW_STORAGE_TABLE_NAME": "t-workflows",
+        "PIPELINE_STORAGE_TABLE_NAME": "t-pipelines",
+        "ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME": "t-afvh",
+    }.items():
+        os.environ.setdefault(env, val)
 
     real_ddb = _load_by_path("real_common_dynamodb", _module_path("backend", "common", "dynamodb.py"))
     sys.modules["common.dynamodb"].validate_pagination_info = real_ddb.validate_pagination_info
@@ -82,8 +101,8 @@ def _load_list_executions_authorized():
     sys.modules["handlers.authz"].CasbinEnforcer = MagicMock(return_value=allow_enforcer)
 
     module = _load_by_path(
-        "listExecutions_under_test",
-        _module_path("backend", "handlers", "workflows", "listExecutions.py"),
+        "executionService_under_test",
+        _module_path("backend", "handlers", "workflows", "executionService.py"),
     )
 
     # Stub the AWS resources the authorized path touches so it stays offline.
@@ -95,6 +114,8 @@ def _load_list_executions_authorized():
     module.dynamodb.meta.client.get_paginator.return_value.paginate.return_value.build_full_result.return_value = {
         "Items": []
     }
+    # V2 listing reads the inputs GSI + main table via dynamodb.Table(...); the MagicMock
+    # above returns empty Items so the authorized path completes with an empty page.
     return module
 
 
@@ -103,9 +124,9 @@ class TestListExecutionsRestEventShape:
     """listExecutions must tolerate the REST v1 null pathParameters/queryStringParameters."""
 
     def test_null_query_string_does_not_500(self):
-        listExecutions = _load_list_executions_authorized()
+        executionService = _load_list_executions_authorized()
 
-        response = listExecutions.lambda_handler(_rest_event_no_query(), MagicMock())
+        response = executionService.lambda_handler(_rest_event_no_query(), MagicMock())
 
         # The authorized path reaches get_executions and builds the paginator config from
         # the (now-normalized) query params. Without normalize_event it 500s on int(None).

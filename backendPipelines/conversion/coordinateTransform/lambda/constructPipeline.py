@@ -3,9 +3,13 @@
 
 import json
 import os
+import boto3
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="ConstructPipeline-CoordinateTransform")
+
+s3 = boto3.client('s3')
 
 
 def _merge_metadata_into_params(
@@ -79,6 +83,16 @@ def _merge_metadata_into_params(
     return json.dumps(params)
 
 
+def _asset_relative_file_key(input_key, asset_id):
+    """The asset-relative file key ('/folder/file.ext') of an input S3 key, sliced at the
+    threaded assetId path segment. Returns the asset-level key ('/') when the asset id is not a
+    segment of the key."""
+    parts = input_key.split("/")
+    if asset_id and asset_id in parts:
+        return "/" + "/".join(parts[parts.index(asset_id) + 1:])
+    return "/"
+
+
 def lambda_handler(event, context):
     """
     ConstructPipeline - Coordinate Transform
@@ -96,10 +110,24 @@ def lambda_handler(event, context):
 
     file_root, extension = os.path.splitext(input_key)
 
-    # Merge asset metadata into pipeline parameters (metadata wins)
+    # Read the input configuration + shared metadata content from their S3 locations
+    # (only the locations travel in the SFN payload), then merge asset metadata into
+    # pipeline parameters (metadata wins).
+    input_configuration = manifestHelper.fetch_input_configuration(
+        s3, event.get('inputConfigurationS3Location', '')) or {}
+    metadata_body = manifestHelper.fetch_metadata(
+        s3, event.get('inputMetadataS3Location', '')) or {}
+    # The metadata file is the grouped-by-asset envelope; project it onto the legacy
+    # {"VAMS": {...}} view for this pipeline's (databaseId, assetId, fileKey).
+    input_metadata = manifestHelper.to_legacy_vams_view(
+        metadata_body,
+        event.get('databaseId', ''),
+        event.get('assetId', ''),
+        _asset_relative_file_key(input_key, event.get('assetId', '')),
+    ) if metadata_body else {}
     input_parameters = _merge_metadata_into_params(
-        event.get('inputParameters', ''),
-        event.get('inputMetadata', ''),
+        json.dumps(input_configuration) if input_configuration else '',
+        json.dumps(input_metadata) if input_metadata else '',
     )
 
     # Build single-stage coordinate transform definition
@@ -121,12 +149,15 @@ def lambda_handler(event, context):
         "transformConfig": input_parameters,
     }
 
+    # The container consumes the resolved metadata/parameters CONTENT from the definition
+    # (it has no S3-location awareness), so the fetched values are embedded here.
+    resolved_metadata = json.dumps(input_metadata) if input_metadata else ""
     definition = {
         "jobName": event.get("jobName"),
         "stages": [transform_stage],
         "assetId": event.get("assetId", ""),
         "databaseId": event.get("databaseId", ""),
-        "inputMetadata": event.get("inputMetadata", ""),
+        "inputMetadata": resolved_metadata,
         "inputParameters": input_parameters,
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
@@ -137,8 +168,12 @@ def lambda_handler(event, context):
         "jobName": event.get("jobName"),
         "currentStageType": "COORD_TRANSFORM",
         "definition": [json.dumps(definition)],
-        "inputMetadata": event.get("inputMetadata", ""),
+        "inputMetadata": resolved_metadata,
         "inputParameters": input_parameters,
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+        # Re-emitted because this task's outputPath is $.Payload, which REPLACES the state — a value
+        # only present in the state machine's original input would be dropped here. The batch task
+        # reads it to register the Batch job as abortable.
+        "orchestrationEventPrefix": event.get("orchestrationEventPrefix", ""),
         "status": "STARTING",
     }

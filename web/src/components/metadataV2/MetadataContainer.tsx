@@ -12,6 +12,7 @@ import {
     MetadataValueType,
     EditMode,
     MetadataRecord,
+    MetadataRowState,
 } from "./types/metadata.types";
 import {
     useMetadataFetch,
@@ -595,7 +596,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
 
     // Handle bulk edit save
     const handleBulkEditSave = useCallback(
-        async (updatedRows) => {
+        async (updatedRows: MetadataRowState[]) => {
             // In bulk edit, we use REPLACE_ALL
             const metadataRecords = convertToMetadataRecords(updatedRows);
 

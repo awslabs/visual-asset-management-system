@@ -309,6 +309,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "route__path",
                                 },
                                 id: {
+                                    S: `7a_${roleNameIDClean}_web_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/executions",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
                                     S: `8_${roleNameIDClean}_web_paths`,
                                 },
                                 operator: {
@@ -651,6 +667,26 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        ...(props.config.app.addons.usePhysnaSync.enabled
+                            ? [
+                                  {
+                                      M: {
+                                          field: {
+                                              S: "route__path",
+                                          },
+                                          id: {
+                                              S: `16_${roleNameIDClean}_api_paths`,
+                                          },
+                                          operator: {
+                                              S: "starts_with",
+                                          },
+                                          value: {
+                                              S: "/addon/physna/viewer", //Physna viewer proxy (per-asset authorization is enforced server-side)
+                                          },
+                                      },
+                                  },
+                              ]
+                            : []),
                     ],
                 },
                 description: {
@@ -678,6 +714,86 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 },
                 name: {
                     S: `${roleNameIDClean}-allow-get-apis`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_deny_execution_logs`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_deny_execution_logs`,
+                },
+                criteriaOr: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_execution_logs`,
+                                },
+                                operator: {
+                                    S: "ends_with",
+                                },
+                                value: {
+                                    S: "/logs",
+                                },
+                            },
+                        },
+                    ],
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_execution_logs`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/workflows/executions/", //Scopes the /logs suffix to the execution logs route; "logs" is a legal pipeline/workflow/template/database/asset id
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Withhold the administrative execution logs route. A deny overrides the broader GET allow on /workflows.",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-deny-execution-logs`,
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "deny",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-deny-execution-logs`,
                 },
                 objectType: {
                     S: "api",

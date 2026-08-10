@@ -1,0 +1,30 @@
+{
+    "workflowName": "3D Gaussian Splat Toolbox",
+    "category": "3D Reconstruction",
+    "description": "3D Gaussian Splat Pipeline - auto process images and videos into 3D splats (objects and 360 environments).",
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": true
+        },
+        "inputFileFilters": {
+            "allow": ["*.zip", "*.mov", "*.mp4"],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": "/{{executionId}}/"
+    }
+}

@@ -26,111 +26,13 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
     kmsKeyPolicyStatementGenerator,
     grantExternalAssetBucketKmsKeys,
+    grantReadWritePermissionsToAllAssetBuckets,
 } from "../helper/security";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 
-export function buildCreatePipelineFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    enablePipelineFunction: lambda.Function,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "createPipeline";
-    const newPipelineLambdaRole = createRoleToAttachToLambdaPipelines(
-        scope,
-        storageResources.encryption.kmsKey
-    );
-    const newPipelineSubnetIds = buildPipelineLambdaSubnetIds(scope, subnets, config);
-    const newPipelineLambdaSecurityGroup = buildPipelineLambdaSecurityGroup(scope, vpc, config);
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.pipelines.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {
-            ENABLE_PIPELINE_FUNCTION_NAME: enablePipelineFunction.functionName,
-            ENABLE_PIPELINE_FUNCTION_ARN: enablePipelineFunction.functionArn,
-            LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY:
-                "sample_lambda_pipeline/lambda_pipeline_deployment_package.zip",
-            ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE: newPipelineLambdaRole.roleArn,
-            LAMBDA_PYTHON_VERSION: LAMBDA_PYTHON_RUNTIME.name,
-            SUBNET_IDS: newPipelineSubnetIds, //Determines if we put the pipeline lambdas in a VPC or not
-            SECURITYGROUP_IDS: newPipelineLambdaSecurityGroup
-                ? newPipelineLambdaSecurityGroup.securityGroupId
-                : "", //used if subnet IDs are passed in,
-            AWS_PARTITION: config.env.partition,
-        },
-    });
-    enablePipelineFunction.grantInvoke(fun);
-    storageResources.s3.artefactsBucket.grantRead(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["iam:PassRole"],
-            resources: [newPipelineLambdaRole.roleArn],
-        })
-    );
-
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
-            resources: [IAMArn("*" + config.name + "*").lambda],
-        })
-    );
-
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVpcs"],
-            //Note: needs to be * resource as ec2:Describe* actions do not support resource-level permissions - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-policies-ec2-console.html
-            resources: ["*"],
-        })
-    );
-
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: [
-                "states:CreateStateMachine",
-                "states:DescribeStateMachine",
-                "states:UpdateStateMachine",
-            ],
-            resources: [IAMArn("*" + config.name + "*").statemachine],
-        })
-    );
-
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["iam:PassRole"],
-            resources: [IAMArn("*" + config.name + "*").role],
-        })
-    );
-
-    suppressCdkNagErrorsByGrantReadWrite(fun);
-    return fun;
-}
+// Auto-provisioned pipeline Lambdas are named at runtime by pipelineService with a fixed lowercase
+// 'vams-' prefix that does not embed config.name, so both patterns are granted.
+const BACKEND_GENERATED_NAME_PATTERN = "vams-*";
 
 function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey) {
     const newPipelineLambdaRole = new iam.Role(scope, "lambdaPipelineRole", {
@@ -183,86 +85,6 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
     return newPipelineLambdaRole;
 }
 
-export function buildPipelineService(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-): lambda.Function {
-    const name = "pipelineService";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.pipelines.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {},
-    });
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-
-    const deletePipelineResources = [IAMArn("*" + config.name + "*").lambda];
-
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["lambda:DeleteFunction"],
-            resources: deletePipelineResources,
-        })
-    );
-    return fun;
-}
-
-export function buildEnablePipelineFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    storageResources: storageResources,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
-) {
-    const name = "enablePipeline";
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.pipelines.${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        environment: {},
-    });
-    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagLambda(fun);
-    return fun;
-}
-
 export function buildPipelineLambdaSecurityGroup(
     scope: Construct,
     vpc: ec2.IVpc,
@@ -279,6 +101,159 @@ export function buildPipelineLambdaSecurityGroup(
     } else {
         return undefined;
     }
+}
+
+/**
+ * Pipeline service (CRUD + enable/disable/archive). Reads/writes the pipeline table and reads the
+ * templates table (templates are listed on the details view). Reads the artefacts bucket for the
+ * sample package used when auto-provisioning a Lambda for a Lambda-type pipeline.
+ */
+export function buildPipelineServiceV2Function(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "pipelineService";
+    // A Lambda-type pipeline created through the API without referencing an existing function has one
+    // provisioned for it (seeded from the sample package). The role attached to the new function, its
+    // VPC placement, and the sample-package location are supplied here; the handler skips provisioning
+    // when the pipeline already references a function (built-ins inject their name at import).
+    const newPipelineLambdaRole = createRoleToAttachToLambdaPipelines(
+        scope,
+        storageResources.encryption.kmsKey
+    );
+    const newPipelineSubnetIds = buildPipelineLambdaSubnetIds(scope, subnets, config);
+    const newPipelineLambdaSecurityGroup = buildPipelineLambdaSecurityGroup(scope, vpc, config);
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.pipelines.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY:
+                "sample_lambda_pipeline/lambda_pipeline_deployment_package.zip",
+            ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE: newPipelineLambdaRole.roleArn,
+            LAMBDA_PYTHON_VERSION: LAMBDA_PYTHON_RUNTIME.name,
+            SUBNET_IDS: newPipelineSubnetIds,
+            SECURITYGROUP_IDS: newPipelineLambdaSecurityGroup
+                ? newPipelineLambdaSecurityGroup.securityGroupId
+                : "",
+            // Reject creating/updating a DeadlineCloud pipeline when the type is disabled (its
+            // workflow createJob task + callback lambda are only deployed when enabled).
+            DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED: config.app.pipelines
+                .deadlineCloudExecutionTypeEnabled
+                ? "true"
+                : "false",
+        },
+    });
+    storageResources.dynamo.pipelineStorageTableV2.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadData(fun);
+    // Saving a require-template pipeline emits a non-blocking warning when the pipeline is part of an
+    // auto-triggered workflow whose trigger picked no default template for it; that check reads the
+    // workflow + trigger tables.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    // Read the sample pipeline package for auto-provisioned Lambda pipelines.
+    storageResources.s3.artefactsBucket.grantRead(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    // Auto-provisioning permissions: pass the pipeline-execution role to the new function, create the
+    // function (scoped to VAMS-named functions), and describe VPC networking for its VpcConfig.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["iam:PassRole"],
+            resources: [newPipelineLambdaRole.roleArn],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
+            resources: [
+                IAMArn("*" + config.name + "*").lambda,
+                IAMArn(BACKEND_GENERATED_NAME_PATTERN).lambda,
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVpcs"],
+            // ec2:Describe* actions do not support resource-level permissions.
+            resources: ["*"],
+        })
+    );
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
+}
+
+/**
+ * Pipeline template + tag-schema service. Reads/writes the templates + tag-schema tables, reads the
+ * pipeline table (parent-object Casbin) + buckets table (default bucket), and reads/writes all asset
+ * buckets so it can offload/rehydrate large template bodies + tag schemas to the default bucket
+ * under pipelines/.
+ */
+export function buildPipelineTemplateServiceFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "pipelineTemplateService";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.pipelines.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {},
+    });
+    storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.pipelineTemplatesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.pipelineTemplateTagSchemaStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    // Saving a template that is chosen as a trigger default is rejected when it has a required tag
+    // with no default (a headless trigger run could never supply it); that check reads the workflow
+    // + trigger tables to find referencing triggers.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowTriggersStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    // Read/write all asset buckets (includes the default bucket) for template body + tag-schema
+    // S3 offload/rehydration under pipelines/.
+    grantReadWritePermissionsToAllAssetBuckets(fun);
+    grantExternalAssetBucketKmsKeys(fun);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
 }
 
 export function buildPipelineLambdaSubnetIds(

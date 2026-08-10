@@ -6,7 +6,9 @@ import boto3
 import json
 import datetime
 import time
+import uuid
 from customLogging.logger import safeLogger
+import manifestHelper
 
 logger = safeLogger(service="OpenPipelineEKS")
 
@@ -14,10 +16,55 @@ sfn = boto3.client(
     'stepfunctions',
     region_name=os.environ["AWS_REGION"]
 )
+events_client = boto3.client(
+    'events',
+    region_name=os.environ["AWS_REGION"]
+)
 
 # State Machine ARN for starting pipeline execution
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+# Orchestration bus + state-machine log group for optional sub-process registration
+ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
+STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+REGISTER_DETAIL_TYPE = "pipeline.execution.register"
+
+
+def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
+                           sub_execution_arn, state_machine_arn):
+    # Best-effort: report this sub-SFN execution to the orchestration bus; failures are swallowed
+    if not orchestration_bus_name or not orchestration_event_prefix:
+        logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
+        return
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        orchestration_event_prefix)
+    if not pipeline_execution_id:
+        logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
+        return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "stateMachineArn": state_machine_arn or "",
+            "executionArn": sub_execution_arn or "",
+        },
+    }
+    if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
+            "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
+            "logStreamName": "",
+        }]
+    try:
+        events_client.put_events(Entries=[{
+            "EventBusName": orchestration_bus_name,
+            "Source": orchestration_event_prefix,
+            "DetailType": REGISTER_DETAIL_TYPE,
+            "Detail": json.dumps(detail),
+        }])
+        logger.info(f"Registered sub-execution for pipeline execution {pipeline_execution_id}")
+    except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
+        logger.warning(f"Sub-process registration failed (non-critical): {e}")
 
 def abort_external_workflow(error, task_token, context_info=None):
     """
@@ -162,7 +209,6 @@ def lambda_handler(event, context):
             'outputS3AssetPreviewPath',
             'outputS3AssetMetadataPath',
             'inputOutputS3AssetAuxiliaryFilesPath',
-            'outputFileType'
         ]
 
         is_valid, error_message = validate_required_parameters(event, required_params)
@@ -182,8 +228,10 @@ def lambda_handler(event, context):
         # Extract and validate parameters with enhanced error handling
         try:
             # Get optional parameters with defaults
-            input_Metadata = event.get('inputMetadata', '')
-            input_Parameters = event.get('inputParameters', '')
+            input_metadata_s3_location = event.get('inputMetadataS3Location', '')
+            input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
+            orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
+            asset_id = event.get('assetId', '')
             external_sfn_task_token = event.get('sfnExternalTaskToken', '')
 
             # Get required parameters
@@ -192,7 +240,9 @@ def lambda_handler(event, context):
             output_s3_asset_preview_uri = event['outputS3AssetPreviewPath']
             output_s3_asset_metadata_uri = event['outputS3AssetMetadataPath']
             inputOutput_s3_assetAuxiliary_files_uri = event['inputOutputS3AssetAuxiliaryFilesPath']
-            output_file_type = event['outputFileType']
+            # outputType now travels in the input configuration (read by consolidated_handler);
+            # the threaded value is a transition fallback and may be empty.
+            output_file_type = event.get('outputFileType', '')
 
             logger.info(f"External task token present: {bool(external_sfn_task_token)}")
             logger.info(f"Input file: {input_s3_asset_files_uri}")
@@ -285,7 +335,7 @@ def lambda_handler(event, context):
         # Generate job name with enhanced uniqueness
         try:
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # Include milliseconds
-            job_name = f"PipelineJobEKS_{timestamp}"
+            job_name = f"PipelineJobEKS_{timestamp}_{uuid.uuid4().hex[:8]}"
             logger.info(f"Generated job name: {job_name}")
 
         except Exception as e:
@@ -340,8 +390,9 @@ def lambda_handler(event, context):
                 "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
                 "outputS3AssetMetadataPath": output_s3_asset_metadata_uri,
                 "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
-                "inputMetadata": input_Metadata,
-                "inputParameters": input_Parameters,
+                "inputMetadataS3Location": input_metadata_s3_location,
+                "inputConfigurationS3Location": input_configuration_s3_location,
+                "assetId": asset_id,
                 "externalSfnTaskToken": external_sfn_task_token,
                 "outputFileType": output_file_type
             }
@@ -398,6 +449,11 @@ def lambda_handler(event, context):
                     )
 
                     logger.info(f"SFN execution started successfully: {sfn_response['executionArn']}")
+
+                    # Best-effort: register this sub-SFN execution with the VAMS execution
+                    register_sub_execution(
+                        ORCHESTRATION_BUS_NAME, orchestration_event_prefix,
+                        sfn_response.get("executionArn", ""), STATE_MACHINE_ARN)
                     break
 
                 except Exception as e:

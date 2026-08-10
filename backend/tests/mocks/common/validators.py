@@ -1,57 +1,59 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import re
+"""Stand-in module for `common.validators`.
 
-# Pattern constants (match real validators.py exports)
-id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
-uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
-object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
-filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
-relative_file_path_pattern = r'^\/.*$'
-bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
-userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
+The real module is pure (`re`, `json`, and the pure-constant `common.s3PathPatterns`), so this
+mock loads it by path and re-exports it verbatim rather than re-implementing the rules. The
+`validate()` dispatcher and the regex pattern constants must be the real ones: models resolve
+`validate` through `sys.modules['common.validators']` at call time, so a re-implementation here
+decides what every model accepts in the suite while the deployed handler uses the real rules.
+Tests that need validation bypassed patch `validate` locally.
+"""
 
-id_regex = re.compile(id_pattern)
-userid_regex = re.compile(userid_pattern)
+import importlib.util
+import os
+import sys
 
-def validate(params):
-    """
-    Mock implementation of the validate function for testing purposes.
-    Implements basic validation for ID, USERID, and STRING_256 validators.
+_real_common_dir = os.path.join(
+    os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    ),
+    'backend',
+    'common',
+)
 
-    Args:
-        params: Dictionary of parameters to validate
+# The autouse mock fixture re-executes this module before every test; cache the loaded real
+# module under a private key so its regexes are compiled once per session.
+_REAL_MODULE_CACHE_KEY = '_vams_real_common_validators'
 
-    Returns:
-        Tuple of (valid, message)
-    """
-    for k, v in params.items():
-        optional = v.get('optional', False)
-        value = v['value']
-        validator = v['validator']
 
-        # Empty checks across types. If optional, return success. Otherwise error on empty.
-        if value is None:
-            if optional:
-                return (True, "")
-            else:
-                return (False, f"{k} is a required field.")
-        if isinstance(value, str) and value == '':
-            if optional:
-                return (True, "")
-            else:
-                return (False, f"{k} is a required field.")
+def _load_real_module(module_name, file_name):
+    spec = importlib.util.spec_from_file_location(
+        module_name, os.path.join(_real_common_dir, file_name)
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-        # Type-specific validation
-        if validator == 'ID':
-            if not id_regex.fullmatch(value):
-                return (False, f"{k} is invalid. Must follow the regexp {id_pattern}")
-        elif validator == 'USERID':
-            if not userid_regex.fullmatch(value):
-                return (False, f"{k} is invalid. Must follow the regexp {userid_pattern}")
-        elif validator == 'STRING_256':
-            if len(value) > 256:
-                return (False, f"{k} must be lower than 256 characters")
 
-    return (True, "")
+def _real_validators():
+    module = sys.modules.get(_REAL_MODULE_CACHE_KEY)
+    if module is None:
+        # validators.py imports these prefixes at module level.
+        if 'common.s3PathPatterns' not in sys.modules:
+            sys.modules['common.s3PathPatterns'] = _load_real_module(
+                'common.s3PathPatterns', 's3PathPatterns.py'
+            )
+        module = _load_real_module('common.validators', 'validators.py')
+        sys.modules[_REAL_MODULE_CACHE_KEY] = module
+    return module
+
+
+_real = _real_validators()
+
+for _name in dir(_real):
+    if not _name.startswith('_'):
+        globals().setdefault(_name, getattr(_real, _name))
+
+del _name

@@ -42,8 +42,15 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         showCharsCounter: false,
         showWordsCounter: false,
         showXPathInStatusbar: false,
+        // Jodit's own default width is 'auto', which sizes the editor to its content rather than to
+        // its parent — so the box stops short of the container's right edge however wide the tab is.
+        // The surrounding div is already width:100%, so only Jodit's setting has to change.
+        width: "100%",
         maxWidth: "auto",
         placeholder: "",
+        // Disable the 'source' plugin, which lazy-loads ACE + js-beautify from cdnjs (blocked by
+        // the VAMS CSP). Keeps all script loading same-origin.
+        disablePlugins: ["source"],
         buttons: [
             "bold",
             "italic",
@@ -333,7 +340,15 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                                 <td className="commentSectionTableBorder">
                                     <div>
                                         <form onSubmit={addComment}>
-                                            <div className="container">
+                                            {/* No `container` class here: VAMS defines no such rule, so
+                                                the only match is Tailwind's `.container` utility, which
+                                                carries responsive max-widths (640/768/1024/1280/1536px).
+                                                Tailwind is scoped to the orchestration module, but its
+                                                utility CSS is global, so that class capped this
+                                                Cloudscape tab's comment box at 1280px on a wider
+                                                viewport — the editor filled its parent correctly, the
+                                                parent was simply clamped. */}
+                                            <div>
                                                 <div className="commentSectionTextBoxContainer">
                                                     <JoditEditor
                                                         ref={editor}

@@ -1,0 +1,29 @@
+{
+    "pipelineName": "NVIDIA Cosmos 3 Nano (16B)",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos 3 Nano (16B) omni world model",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "28800",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "none",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [],
+            "exclude": []
+        }
+    }
+}

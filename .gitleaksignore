@@ -33,3 +33,6 @@ f923905eb64493090bfc705378a11baff3c77fb5:documentation/docusaurus-site/docs/api/
 a6c297675ed6e0bab028eb4601e8f4b3444e5070:documentation/docusaurus-site/docs/api/assets.md:generic-api-key:649
 b5a2243054908f0ea080ef2906fc689fc17cbef6:documentation/docusaurus-site/docs/api/auth.md:generic-api-key:735
 b5a2243054908f0ea080ef2906fc689fc17cbef6:documentation/docusaurus-site/docs/api/auth.md:generic-api-key:799
+c30d3b8c72951cab6fddfaeec565b20a87a41772:backend/tests/common/test_logRedaction.py:jwt:52
+c30d3b8c72951cab6fddfaeec565b20a87a41772:backend/tests/common/test_logRedaction.py:aws-access-token:46
+c30d3b8c72951cab6fddfaeec565b20a87a41772:backend/tests/common/test_logRedaction.py:aws-access-token:48

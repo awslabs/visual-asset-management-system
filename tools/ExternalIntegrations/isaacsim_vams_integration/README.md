@@ -305,16 +305,18 @@ connector.upload_directory("my-db", "my-asset", "/local/path/to/scene_files")
 # List available workflows
 workflows = connector.list_workflows()
 for wf in workflows:
-    print(f"{wf.workflow_id}: {wf.description}")
+    print(f"{wf.workflow_id} ({wf.workflow_name}): {wf.description}")
 
 # Check execution history on an asset
 executions = connector.list_workflow_executions("my-db", "my-asset")
 for ex in executions:
     print(f"{ex.execution_id}: {ex.execution_status}")
 
-# Execute a workflow
+# Execute a workflow on the whole asset, or pass file_key for a single file
 result = connector.execute_workflow("my-db", "my-asset", "wf-id", "wf-db-id")
-print(f"Started execution: {result.get('message')}")
+print(f"Started execution: {result.get('executionId')}")
+for warning in result.get("warnings", []):
+    print(f"  warning: {warning}")
 ```
 
 #### Isaac Sim Stage Operations

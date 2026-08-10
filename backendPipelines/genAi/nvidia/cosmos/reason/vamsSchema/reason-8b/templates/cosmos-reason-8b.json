@@ -1,0 +1,19 @@
+{
+    "templateId": "cosmos-reason-8b",
+    "templateName": "Reason 8B (analyze / reason)",
+    "description": "Analyze and reason over a video or image with the Cosmos Reason 8B vision-language model.",
+    "configFormat": "json",
+    "configBody": "{\"INVALIDATE_COSMOS_MODELS\": \"false\", \"PROMPT\": \"{{PROMPT}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Analyzes a video or image and returns text — a caption, description, or answer to a question. Select the file to analyze as the input file.\n\nAsset metadata this pipeline reads (optional):\n  COSMOS_REASON_PROMPT  The question or instruction to apply to the input. Used when the Prompt\n                        field is left blank.\n\nHow to supply metadata: set these as metadata on the ASSET (Metadata tab on the asset page, or `vamscli metadata create`). Keys are case-sensitive.\n\nPrecedence: a value you type into a field above WINS. Asset metadata is used only where the field is left blank, so a standing value on the asset acts as a per-asset default.",
+    "isDefault": true,
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Prompt",
+            "description": "The generation prompt. Leave blank to fall back to the COSMOS_REASON_PROMPT key on the asset's metadata."
+        }
+    ]
+}
