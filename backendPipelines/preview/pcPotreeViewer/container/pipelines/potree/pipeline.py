@@ -16,26 +16,10 @@ logger = log.get_logger()
 #docker build -f Dockerfile_Potree -t potree:v1 .
 #docker run -it -v ${PWD}/inputTest:/data/input:ro -v ${PWD}/outputTest:/data/output:rw potree:v1 "localTest" "POTREE"
 
-def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = '', localTest: bool = False) -> PipelineStage:
+def run(stage: PipelineStage, inputMetadataS3Location: str = '', inputConfigurationS3Location: str = '', localTest: bool = False) -> PipelineStage:
     """
     Run the Potree 2.0 Pipeline.
     """
-
-    #Get and parse input parameters
-    inputParametersObject = {}
-    if(isinstance(inputParameters,str) and inputParameters != ''):
-        try:
-            inputParametersObject = json.loads(inputParameters)
-        except:
-            logger.error("Input parameters is not valid JSON.")
-
-    #Get and parse input metadata
-    inputMetadataObject = {}
-    if(isinstance(inputMetadata,str) and inputMetadata != ''):
-        try:
-            inputMetadataObject = json.loads(inputMetadata)
-        except:
-            logger.error("Input metadata is not valid JSON.")
 
     # Debugging: Set to true and update path to point cloud file
     # Production: Set to false

@@ -245,6 +245,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useSplatToolbox.enabled = false;
     }
 
+    if (config.app.pipelines.useSplatToolbox.useCodeBuild == undefined) {
+        config.app.pipelines.useSplatToolbox.useCodeBuild = false;
+    }
+
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
@@ -443,6 +447,12 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    // Deadline Cloud pipeline execution-type support (workflow createJob task states +
+    // job-callback lambda). Off by default.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
+        config.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
+    }
+
     if (config.app.addons.useGarnetFramework == undefined) {
         config.app.addons.useGarnetFramework = {
             enabled: false,
@@ -481,9 +491,25 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
+    if (config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS == undefined) {
+        config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
+    }
 
     if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
         config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
+    }
+    if (
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS ==
+        undefined
+    ) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS = true;
+    }
+    if (
+        config.app.pipelines.useConversionCadMeshMetadataExtraction
+            .autoRegisterAutoTriggerOnFileUpload == undefined
+    ) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload =
+            false;
     }
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
@@ -493,6 +519,76 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
         };
+    }
+
+    // Pipeline constructs gate the VamsSchemaRegistration custom resource on
+    // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
+    // would deploy the pipeline stack with no VAMS registration. A partially-specified block
+    // defaults to registering (as the config templates do) with its upload trigger disarmed.
+    const defaultAutoRegisterFlags = (
+        block:
+            | { autoRegisterWithVAMS?: boolean; autoRegisterAutoTriggerOnFileUpload?: boolean }
+            | undefined,
+        hasUploadTrigger = false
+    ) => {
+        if (block == undefined) return;
+        if (block.autoRegisterWithVAMS == undefined) {
+            block.autoRegisterWithVAMS = true;
+        }
+        if (hasUploadTrigger && block.autoRegisterAutoTriggerOnFileUpload == undefined) {
+            block.autoRegisterAutoTriggerOnFileUpload = false;
+        }
+    };
+
+    defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
+    defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
+    defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
+    defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
+    defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
+    defaultAutoRegisterFlags(config.app.pipelines.useModelOps);
+    defaultAutoRegisterFlags(config.app.pipelines.useIsaacLabTraining);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.text2world2B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.video2world2B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.text2world14B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.video2world14B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsReason?.reason2B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsReason?.reason8B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsTransfer?.transfer2B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.nano16B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.super64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaGr00t.modelsFinetune?.gr00tN1_5_3B);
+
+    //The upload trigger ships with the VamsSchemaRegistration custom resource, which is created only
+    //when autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded.
+    for (const [name, block] of Object.entries<{
+        enabled?: boolean;
+        autoRegisterWithVAMS?: boolean;
+        autoRegisterAutoTriggerOnFileUpload?: boolean;
+    }>({
+        useConversionCadMeshMetadataExtraction:
+            config.app.pipelines.useConversionCadMeshMetadataExtraction,
+        useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
+        usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
+        useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
+    })) {
+        if (
+            block?.enabled &&
+            block.autoRegisterAutoTriggerOnFileUpload &&
+            block.autoRegisterWithVAMS !== true
+        ) {
+            console.warn(
+                `Configuration Warning: pipelines.${name}.autoRegisterAutoTriggerOnFileUpload is true but ` +
+                    "autoRegisterWithVAMS is not, so no registration and no upload trigger are created. " +
+                    "Set autoRegisterWithVAMS to true to arm the trigger."
+            );
+        }
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
@@ -740,6 +836,13 @@ export function getConfig(app: cdk.App): Config {
         if (config.app.useLocationService.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
+            );
+        }
+
+        if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+            throw new Error(
+                "Configuration Error: AWS Deadline Cloud is not available in GovCloud. " +
+                    "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
             );
         }
 
@@ -1032,6 +1135,25 @@ export function getConfig(app: cdk.App): Config {
             config.app.assetBuckets.externalAssetBuckets,
             config.env.partition,
             config.env.account
+        );
+    }
+
+    // Validate the default asset bucket (houses all VAMS-managed pipeline template + run I/O data).
+    // Exactly one bucket across the deployment is the default. An imported bucket marked
+    // isDefault=true is the default (and overrides the created bucket); otherwise the created bucket
+    // is the default. At most one external may be marked default, and when no bucket is created one
+    // external MUST be marked default.
+    const defaultExternalCount = (config.app.assetBuckets.externalAssetBuckets || []).filter(
+        (b) => b.isDefault
+    ).length;
+    if (defaultExternalCount > 1) {
+        throw new Error(
+            "Configuration Error: at most one app.assetBuckets.externalAssetBuckets entry may set isDefault=true"
+        );
+    }
+    if (!config.app.assetBuckets.createNewBucket && defaultExternalCount === 0) {
+        throw new Error(
+            "Configuration Error: exactly one app.assetBuckets.externalAssetBuckets entry must set isDefault=true when app.assetBuckets.createNewBucket is false"
         );
     }
 
@@ -1473,6 +1595,17 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //AWS Deadline Cloud is offered only in the commercial partition, so the execution type (and its
+    //VPC interface endpoint) cannot be enabled anywhere else. This partition check is authoritative
+    //regardless of the app.govCloud.enabled flag — a deployment into a GovCloud/EU-Sovereign
+    //partition without that flag set is still blocked.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled && config.env.partition !== "aws") {
+        throw new Error(
+            `Configuration Error: AWS Deadline Cloud is not available in the '${config.env.partition}' partition. ` +
+                "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
+        );
+    }
+
     if (
         config.app.authProvider.useExternalOAuthIdp.enabled &&
         (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
@@ -1683,11 +1816,17 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        // Validate SQS URL format (basic validation)
-        const sqsUrlPattern = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+        // Validate SQS URL format against the deployment partition's DNS suffix (amazonaws.com in
+        // the commercial and GovCloud partitions, amazonaws.com.cn in China, amazonaws.eu in the
+        // EU Sovereign Cloud, and the ISO suffixes). A queue lives in the deployment partition.
+        const sqsDnsSuffix =
+            region_info.RegionInfo.get(config.env.region).domainSuffix || "amazonaws.com";
+        const sqsUrlPattern = new RegExp(
+            `^https://sqs\\.[a-z0-9-]+\\.${sqsDnsSuffix.replace(/\./g, "\\.")}/\\d+/[a-zA-Z0-9_-]+$`
+        );
         if (!sqsUrlPattern.test(config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl)) {
             throw new Error(
-                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.amazonaws.com/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
+                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.${sqsDnsSuffix}/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
             );
         }
 
@@ -1993,6 +2132,12 @@ export interface ConfigPublicAssetS3Buckets {
     bucketArn: string;
     baseAssetsPrefix: string;
     defaultSyncDatabaseId: string;
+    // Marks this imported bucket as the VAMS default asset bucket (houses all pipeline template
+    // data + execution-time run I/O under the pipelines/ prefix). At most one bucket across the
+    // deployment may be the default. When createNewBucket is false, exactly one external bucket
+    // must set this true; when createNewBucket is true, an external bucket set true overrides the
+    // created bucket as the default.
+    isDefault?: boolean;
     // Optional cross-account / encryption fields. Required for buckets that live
     // in a different account (bucketAccountId) or use a customer managed KMS key
     // (bucketKmsKeyArn). bucketRegion defaults to the deployment region.
@@ -2091,6 +2236,7 @@ export interface ConfigPublic {
             };
         };
         pipelines: {
+            deadlineCloudExecutionTypeEnabled: boolean;
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
@@ -2110,12 +2256,11 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
-                sqsAutoRunOnAssetModified: boolean;
             };
             useSplatToolbox: {
                 enabled: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
-                sqsAutoRunOnAssetModified: boolean;
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;

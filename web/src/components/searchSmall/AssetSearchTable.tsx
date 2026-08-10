@@ -154,11 +154,14 @@ export function AssetSearchTable({
                 // Build filters array
                 const filters: object[] = [];
 
-                // Add database filter if specified and restricted to current database
+                // Add database filter if specified and restricted to current database. Exact match via
+                // the `.keyword` subfield: str_databaseid is analyzed, so a quoted query_string phrase
+                // for "smoke-db" matches the tokens [smoke, db], which "smoke-db-2" also contains —
+                // the restriction would then admit assets from another database.
                 if (currentDatabaseId && restrictToCurrentDatabase) {
                     filters.push({
                         query_string: {
-                            query: `(str_databaseid:("${currentDatabaseId}"))`,
+                            query: `str_databaseid.keyword:"${currentDatabaseId}"`,
                         },
                     });
                 }

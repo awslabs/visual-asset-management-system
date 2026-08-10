@@ -11,6 +11,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import { NestedStack } from "aws-cdk-lib";
 import * as Config from "../../../../../config/config";
+import { storageResources } from "../../../storage/storageBuilder-nestedStack";
 import {
     CoordinateTransformConstruct,
     CoordinateTransformConstructProps,
@@ -23,8 +24,9 @@ export interface CoordinateTransformBuilderNestedStackProps extends cdk.StackPro
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
     assetAuxiliaryBucket: s3.IBucket;
+    storageResources: storageResources;
     kmsKey?: kms.IKey;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 export class CoordinateTransformBuilderNestedStack extends NestedStack {
@@ -47,9 +49,10 @@ export class CoordinateTransformBuilderNestedStack extends NestedStack {
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
                 assetAuxiliaryBucket: props.assetAuxiliaryBucket,
+                storageResources: props.storageResources,
                 kmsKey: props.kmsKey,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
             }
         );
 

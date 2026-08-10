@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 from inference import generate_preview_gif, run_inference
 from model_manager import ensure_models_cached
+import manifest_io
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -168,14 +169,16 @@ def main():
         if hf_token:
             os.environ["HF_TOKEN"] = hf_token
 
-        # Optional flags from inputParameters
+        # Optional flags from the input configuration. Only the S3 LOCATION travels in the pipeline
+        # definition; the container reads the configuration file from S3 here (inline fallback for
+        # local-test invocations that pass a raw JSON string instead of an s3:// location).
         invalidate_models = False
         disable_guardrails = True
         generate_preview_gif_flag = False
         try:
-            input_params = definition.get("inputParameters", "")
-            if input_params:
-                params = json.loads(input_params) if isinstance(input_params, str) else input_params
+            params = manifest_io.fetch_input_configuration(
+                definition.get("inputConfigurationS3Location", ""))
+            if params:
                 invalidate_models = str(params.get("INVALIDATE_COSMOS_MODELS", "")).lower() == "true"
                 disable_guardrails = str(params.get("DISABLE_GUARDRAILS", "true")).lower() != "false"
                 generate_preview_gif_flag = str(params.get("GENERATE_PREVIEW_GIF", "")).lower() == "true"
@@ -183,6 +186,12 @@ def main():
                     task_mode = params.get("TASK_MODE", "") or task_mode
                 if not variant or variant == "nano":
                     variant = params.get("MODEL_VARIANT", variant) or variant
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except manifest_io.InputConfigurationError:
+            raise
         except Exception:
             pass
 

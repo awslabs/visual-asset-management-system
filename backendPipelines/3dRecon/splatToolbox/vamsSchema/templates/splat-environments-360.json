@@ -1,0 +1,9 @@
+{
+    "templateId": "splat-environments-360",
+    "templateName": "Environments (360 / spherical capture)",
+    "description": "Process 360/spherical videos (.zip, .mov, .mp4) into 3D Gaussian splat environments.",
+    "configFormat": "json",
+    "configBody": "{\"SPHERICAL_CAMERA\":true}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Use for 360/spherical captures of full environments. SPHERICAL_CAMERA=true enables the spherical-camera reconstruction path."
+}

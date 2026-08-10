@@ -94,6 +94,7 @@ const sidebars: SidebarsConfig = {
                 "developer/audit-logging",
                 "developer/security",
                 "developer/permissions",
+                "developer/workflow-execution-data-model-handoff",
                 {
                     type: "category",
                     label: "Data Syncing",
@@ -132,6 +133,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/rapidpipeline",
                         "pipelines/model-ops",
                         "pipelines/custom-pipelines",
+                        "pipelines/migrating-pipelines-v25-to-v26",
                     ],
                 },
                 {
@@ -155,7 +157,9 @@ const sidebars: SidebarsConfig = {
                                 "cli/commands/tags",
                                 "cli/commands/metadata",
                                 "cli/commands/search",
+                                "cli/commands/pipelines",
                                 "cli/commands/workflows",
+                                "cli/commands/executions",
                                 "cli/commands/permissions",
                                 "cli/commands/users-and-keys",
                                 "cli/commands/industry",

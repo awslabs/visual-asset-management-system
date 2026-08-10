@@ -51,19 +51,19 @@ class PhysnaViewerRequestModel(BaseModel, extra="ignore"):
         min_length=4,
         max_length=256,
         strip_whitespace=True,
-        pattern=id_pattern,
+        regex=id_pattern,
     )
     assetId: str = Field(
         min_length=1,
         max_length=256,
         strip_whitespace=False,
-        pattern=filename_pattern,
+        regex=filename_pattern,
     )
     relativePath: str = Field(
         min_length=2,
         max_length=1024,
         strip_whitespace=False,
-        pattern=relative_file_path_pattern,
+        regex=relative_file_path_pattern,
     )
 
     # ``skip_on_failure=True`` is a no-op under Pydantic v1 (Lambda runtime)

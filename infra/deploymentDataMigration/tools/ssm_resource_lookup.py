@@ -69,6 +69,24 @@ class ResourceParamKeys:
     WORKFLOW_EXECUTIONS_STORAGE_TABLE = "dynamoTables/workflowExecutionsStorage"
     API_KEY_STORAGE_TABLE = "dynamoTables/apiKeyStorage"
     WORKFLOW_STORAGE_TABLE = "dynamoTables/workflowStorage"
+    # Workflow-execution V2 data model tables
+    WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2 = "dynamoTables/workflowExecutionsStorageV2"
+    WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE = "dynamoTables/workflowExecutionInputsStorage"
+    WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE = "dynamoTables/workflowExecutionConfigurationStorage"
+    PIPELINE_EXECUTIONS_STORAGE_TABLE = "dynamoTables/pipelineExecutionsStorage"
+    PIPELINE_EXECUTION_INPUT_FILES_STORAGE_TABLE = "dynamoTables/pipelineExecutionInputFilesStorage"
+    PIPELINE_EXECUTION_INPUT_METADATA_STORAGE_TABLE = "dynamoTables/pipelineExecutionInputMetadataStorage"
+    PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE = "dynamoTables/pipelineExecutionInputConfigurationStorage"
+    PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE = "dynamoTables/pipelineExecutionOutputFilesStorage"
+    PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE = "dynamoTables/pipelineExecutionOutputMetadataStorage"
+    PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE = "dynamoTables/pipelineExecutionOutputResultsStorage"
+    PIPELINE_EXECUTION_LOGS_STORAGE_TABLE = "dynamoTables/pipelineExecutionLogsStorage"
+    # Pipeline + workflow V2 data model tables
+    PIPELINE_STORAGE_TABLE_V2 = "dynamoTables/pipelineStorageV2"
+    PIPELINE_TEMPLATES_STORAGE_TABLE = "dynamoTables/pipelineTemplatesStorage"
+    PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
+    WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
+    WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
 
     # Deprecated tables retained for data migration only
     LEGACY_ASSET_VERSIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/assetVersionsStorageV1"
@@ -80,6 +98,17 @@ class ResourceParamKeys:
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = "s3Buckets/assetAuxiliary"
     ARTEFACTS_BUCKET = "s3Buckets/artefacts"
+
+    # Audit CloudWatch log groups
+    AUDIT_LOG_AUTHENTICATION = "cloudwatchLogGroups/auditAuthentication"
+    AUDIT_LOG_AUTHORIZATION = "cloudwatchLogGroups/auditAuthorization"
+    AUDIT_LOG_FILEUPLOAD = "cloudwatchLogGroups/auditFileUpload"
+    AUDIT_LOG_FILEDOWNLOAD = "cloudwatchLogGroups/auditFileDownload"
+    AUDIT_LOG_FILEDOWNLOAD_STREAMED = "cloudwatchLogGroups/auditFileDownloadStreamed"
+    AUDIT_LOG_AUTHOTHER = "cloudwatchLogGroups/auditAuthOther"
+    AUDIT_LOG_AUTHCHANGES = "cloudwatchLogGroups/auditAuthChanges"
+    AUDIT_LOG_ACTIONS = "cloudwatchLogGroups/auditActions"
+    AUDIT_LOG_ERRORS = "cloudwatchLogGroups/auditErrors"
 
     # Lambda function names consumed by migration tooling
     CR_OS_REINDEXER_FUNCTION = "lambdaFunctions/crOsReindexer"

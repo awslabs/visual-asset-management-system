@@ -112,23 +112,31 @@ The steering document specifies that Synonyms must be used in headers, labels, d
 
 ### Example 3: Required Security Calls for Lambda Builders
 
-The CDK workflow documents mandate that every Lambda builder function includes four security-related calls. Omitting any of these calls results in deployment failures (CDK Nag violations) or security gaps.
+The CDK workflow documents mandate that every Lambda builder function includes five security-related calls, followed by the domain-specific resource grants. Omitting any of these calls results in deployment failures (CDK Nag violations) or security gaps.
 
 ```typescript
-// Every Lambda builder must include these four calls:
+// Every Lambda builder must include these five calls, in order:
 
-// 1. KMS key permissions for encryption/decryption
+// 1. AWS KMS key permissions for encryption/decryption
 kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
-// 2. Global environment variables and permissions
+// 2. Authorization table read grants + Amazon CloudWatch audit log group write grants
+setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+
+// 3. VAMS_RESOURCE_PARAM_PREFIX environment variable + AWS Systems Manager Parameter Store grant
 globalLambdaEnvironmentsAndPermissions(fun, config);
 
-// 3. CDK Nag suppression for S3 grant-based permissions
+// 4. Per-Lambda CDK Nag suppressions (IAM4/IAM5, wildcard AWS KMS)
+suppressCdkNagLambda(fun);
+
+// 5. CDK Nag suppression for grant-based permissions (only when using grantRead/grantReadWrite)
 suppressCdkNagErrorsByGrantReadWrite(scope);
 
-// 4. Domain-specific DynamoDB table grants
+// Plus the domain-specific Amazon DynamoDB table grants the handler needs
 storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
 ```
+
+`setupSecurityAndLoggingEnvironmentAndPermissions()` carries the two-tier authorization and audit-logging grants: read access to the constraints, user-roles, and roles tables that `CasbinEnforcer` reads, and `logs:CreateLogStream` and `logs:PutLogEvents` on the nine VAMS audit log groups. A builder that omits it synthesizes and deploys cleanly, then returns 403 on every request and writes no audit events.
 
 These patterns are documented with complete code templates in both `CDK_DEVELOPMENT_WORKFLOW.md` and `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`, ensuring that AI agents produce compliant Lambda builders on the first attempt.
 
@@ -173,13 +181,15 @@ vamscli auth login -u you@example.com
 
 Tools are organized into three tiers, gated by environment variable:
 
-| Tier            | Environment variable                                 | Contents                                                                                                                                                   |
-| :-------------- | :--------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read and search | Always available                                     | Databases, assets, files, metadata, versions, history, asset links, tags, workflows, metadata schemas, full-text and geospatial search, allowed API routes |
-| Write           | `VAMS_ENABLE_WRITES=true`                            | Create databases, assets, folders, and version snapshots; update assets and metadata; execute workflows                                                    |
-| Destructive     | `VAMS_ENABLE_DESTRUCTIVE=true` (plus writes enabled) | Archive, unarchive, and permanently delete assets; delete databases                                                                                        |
+| Tier            | Environment variable                                 | Contents                                                                                                                                                                                                                                                             |
+| :-------------- | :--------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read and search | Always available                                     | Databases, assets, files, metadata, versions, history, asset links, tags, metadata schemas, full-text and geospatial search, allowed API routes; pipelines, pipeline templates and their tag schemas, workflows and their triggers, executions with details and logs |
+| Write           | `VAMS_ENABLE_WRITES=true`                            | Create databases, assets, folders, and version snapshots; update assets and metadata; create and update pipelines, pipeline templates, workflows, and workflow triggers; execute workflows, re-run and abort executions                                              |
+| Destructive     | `VAMS_ENABLE_DESTRUCTIVE=true` (plus writes enabled) | Archive, unarchive, and permanently delete assets; delete databases; archive and unarchive pipelines and workflows; delete pipeline templates and workflow triggers; permanently delete executions                                                                   |
 
 Both mutation tiers are **off by default**, and a gated tool is not registered with the host at all — an agent cannot invoke a tool it never receives. Keep destructive tools out of the host's auto-approve list.
+
+Executing a workflow or re-running an execution launches the pipelines it references, which run real AWS compute and can incur cost. Keep those tools out of the auto-approve list as well, even though they sit in the write tier rather than the destructive one.
 
 The `list_allowed_api_routes` tool reports the routes the authenticated user is authorized to call. Calling it at the start of a session lets an agent scope its plan to what the user can actually do rather than discovering an authorization failure mid-task.
 

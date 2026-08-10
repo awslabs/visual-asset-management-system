@@ -1,6 +1,8 @@
 module.exports = {
     testEnvironment: "jsdom",
     setupFilesAfterEnv: ["<rootDir>/src/setupTests.ts"],
+    // Playwright specs under e2e/ use @playwright/test, not Jest — keep them out of the unit run.
+    testPathIgnorePatterns: ["/node_modules/", "<rootDir>/e2e/"],
     collectCoverageFrom: [
         "src/**/*.{js,jsx,ts,tsx}",
         "!<rootDir>/node_modules/",
@@ -24,6 +26,11 @@ module.exports = {
         "^axios$": "axios/dist/axios.js",
         "\\.(css|scss)$": "<rootDir>/src/__mocks__/styleMock.js",
         "\\.(png|jpg|jpeg|gif|svg)$": "<rootDir>/src/__mocks__/fileMock.js",
+        // Monaco: the real `monaco-editor` package is a UMD/AMD bundle (calls `define`) and its
+        // `?worker` imports are Vite-only — both break under jest. Stub them; component tests mock
+        // @monaco-editor/react separately, so the editor never actually renders in unit tests.
+        "\\?worker$": "<rootDir>/src/__mocks__/emptyModule.js",
+        "^monaco-editor$": "<rootDir>/src/__mocks__/emptyModule.js",
     },
     // Thresholds reflect the current sparse test coverage (~2% of a large
     // codebase). Raise them as coverage grows.

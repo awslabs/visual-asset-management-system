@@ -1,0 +1,43 @@
+{
+    "workflowName": "Isaac Lab RL Evaluation",
+    "category": "Simulation",
+    "description": "Automated workflow for evaluating trained RL policies using Isaac Lab simulation.",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.json"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:isaaclab-evaluation": "isaaclab-evaluation-cartpole"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": true,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "inputFileFilters": {
+            "allow": ["*.json"],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": "/{{executionId}}/"
+    }
+}

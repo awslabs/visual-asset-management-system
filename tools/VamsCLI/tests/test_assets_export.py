@@ -10,6 +10,7 @@ from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError, APIError
 )
+from tests.conftest import CoroutineClosingMock  # noqa: E402
 
 
 # File-level fixtures for assets-export-specific testing patterns
@@ -1083,7 +1084,7 @@ class TestAssetExportEdgeCases:
 class TestAssetExportWithDownload:
     """Test asset export with download functionality."""
     
-    @patch('vamscli.commands.assetsExport.asyncio.run')
+    @patch('vamscli.commands.assetsExport.asyncio.run', new_callable=CoroutineClosingMock)
     def test_export_download_with_unauthorized_assets(self, mock_asyncio_run, cli_runner, assets_export_command_mocks):
         """Test export with downloads when some assets are unauthorized."""
         with assets_export_command_mocks as mocks:
@@ -1143,7 +1144,7 @@ class TestAssetExportWithDownload:
             assert '✓ Export and download completed successfully!' in result.output
             assert 'Skipped (unauthorized): 1 asset(s)' in result.output
     
-    @patch('vamscli.commands.assetsExport.asyncio.run')
+    @patch('vamscli.commands.assetsExport.asyncio.run', new_callable=CoroutineClosingMock)
     def test_export_with_download_success(self, mock_asyncio_run, cli_runner, assets_export_command_mocks):
         """Test export with file downloads."""
         with assets_export_command_mocks as mocks:
@@ -1266,7 +1267,7 @@ class TestAssetExportWithDownload:
             assert result.exit_code == 1
             assert 'cannot be used together' in result.output
     
-    @patch('vamscli.commands.assetsExport.asyncio.run')
+    @patch('vamscli.commands.assetsExport.asyncio.run', new_callable=CoroutineClosingMock)
     def test_export_download_with_failures(self, mock_asyncio_run, cli_runner, assets_export_command_mocks):
         """Test export with some download failures."""
         with assets_export_command_mocks as mocks:
@@ -1328,7 +1329,7 @@ class TestAssetExportWithDownload:
             assert 'Failed downloads (1):' in result.output
             assert 'Connection timeout' in result.output
     
-    @patch('vamscli.commands.assetsExport.asyncio.run')
+    @patch('vamscli.commands.assetsExport.asyncio.run', new_callable=CoroutineClosingMock)
     def test_export_download_json_output(self, mock_asyncio_run, cli_runner, assets_export_command_mocks):
         """Test export with downloads in JSON output mode."""
         with assets_export_command_mocks as mocks:

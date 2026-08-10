@@ -6,7 +6,7 @@ This is the frontend-specific Claude Code steering document for the VAMS (Visual
 
 ## 1. Architecture Overview
 
-VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application built with Vite. All source files in `src/` are `.ts`/`.tsx` (only remaining `.js` files are Jest mocks in `src/__mocks__/`).
+VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application built with Vite. All source files in `src/` are `.ts`/`.tsx` (only remaining `.js` files are Jest mocks in `src/__mocks__/`).
 
 **Primary UI library:** AWS Cloudscape Design System (`@cloudscape-design/components ^3.0.196`).
 
@@ -29,17 +29,40 @@ VAMS frontend is a **React 17.0.2 + TypeScript 4.4.4** single-page application b
 
 ```
 web/
-  package.json              # npm, React 17, Vite scripts
+  package.json              # npm, React 18, Vite scripts
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
+  e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
     routes.tsx              # Centralized route table, React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
-    config.json             # Build-time config
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
-    index.tsx               # Entry point, ReactDOM.render
+    index.tsx               # Entry point, createRoot
     reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
+
+    features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
+      api/                  # Services + TanStack Query hooks + qk key factory
+                            #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
+                            #   client.ts queries.ts
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   ToastProvider.tsx — notifications for the whole module (see 6.5)
+      pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
+                            #   live under executionConfig.sqs / executionConfig.eventBridge),
+                            #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
+                            #   TemplateOverridesEditor.tsx pipelineValidation.ts
+      workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
+                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   WorkflowValidationPanel.tsx workflowValidation.ts
+      executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
+                            #   ExecutionQuickView.tsx ExecutionRowActions.tsx
+                            #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
+      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
+                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
+      types.ts reservedTagKeys.ts
 
     FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
@@ -53,34 +76,42 @@ web/
       MetadataSchemaService.ts
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
-      WorkflowContext.ts     # NOTE: typo is intentional, do NOT rename
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
         versions/             # Asset version management (list, comparison, edit/archive modals)
-      common/ containers/ createupdate/ filemanager/ form/
-      interactive/            # Map/geospatial components
+      common/ createupdate/ form/
+      filemanager/            # Asset file manager (Cloudscape)
+        components/             #   FileDetailsPanel toolbar: Export | Automation | operations.
+                                #   AutomationActions.tsx lazy-loads the orchestration execute modal,
+                                #   so this Cloudscape tree never bundles that module.
+        utils/                  #   automationSelection.ts — maps a selection (whole asset / folder /
+                                #   one file / many) to workflow input files
       list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - main search UI
       searchSmall/ selectors/
-      single/                 # Single-entity views (ViewPipeline, ViewFile, AssetIngestion)
+      single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
 
     pages/                  # Thin page wrappers composing components
-      AssetDownload.tsx AssetUpload/ Assets.tsx
+      AssetDownload.tsx AssetUpload/
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
-      CommentListPage.tsx Databases.tsx Executions.tsx
-      LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      Pipelines.tsx           # Pipeline list; create/edit forms show conditional fields for
-                              # SQS (sqsQueueUrl) and EventBridge (busArn, source, detailType)
-                              # based on pipelineExecutionType. Non-callback SQS/EventBridge
-                              # pipelines display a fire-and-forget alert.
+      Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
-      Subscription/ Tag/ Workflows.tsx
+      Subscription/ Tag/
+
+      # Orchestration route shells — each reads route params and renders the matching
+      # features/orchestration component; keep the page logic in the feature module.
+      PipelinesPage2.tsx PipelineBuilderPage.tsx
+      TemplateListPage.tsx TemplateBuilderPage.tsx
+      WorkflowsPage2.tsx WorkflowBuilderPage.tsx WorkflowTriggersPage.tsx
+      ExecutionsPage.tsx ExecutionDetail.tsx
 
     visualizerPlugin/       # 3D/media viewer plugin system — see CLAUDE.md there
       index.ts README.md
@@ -88,30 +119,34 @@ web/
       core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
       components/               # Shared viewer UI components
       viewers/                  # Individual viewer plugins + manifest.ts
-      test/
 
     common/                 # Shared utilities and helpers
-      apply-mode.ts clipboard.ts columnDefinitionsHelper.ts common-components.tsx
-      constants/ createPropertyStorage.ts External.tsx GlobalHeader.tsx helpers/
-      i18nStrings.ts localStorage.ts property-filter/ typeUtils.ts utils/
+      GlobalHeader.tsx common-components.tsx
+      constants/              # apiKeys.ts authRoutes.ts featuresEnabled.ts fileFormats.ts
+      helpers/                # labels.ts tableCounterStrings.ts
+      utils/                  # utils.ts fileSize.ts
 
     constants/uploadLimits.ts
-    external/               # External library integrations
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts
     layout/Navigation.tsx   # Left sidebar navigation
 
     utils/
+      apiEndpoint.ts        # Resolves the API base URL
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
 
-    styles/                 # Global styles (7-1 SCSS architecture)
+    styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
+      tailwind.css          # Tailwind entry (scoped content glob; preflight disabled — see Rule 2)
       index.scss base.scss dashboard.scss form.scss header.scss landing-page.scss
-      onboarding.scss wizard.scss
-      abstracts/ base/ components/ layout/ pages/ utilities/
+      onboarding.scss wizard.scss table-date-filter.scss table-select.scss
+      components/
 
     resources/              # Static assets (images, logos)
     @types/                 # Custom TypeScript declarations
+    __mocks__/              # Jest module mocks (the only .js files in src/)
 ```
 
 ---
@@ -131,21 +166,34 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 NEVER remove or modify these headers. Use the `2026` year for new files.
 
-### Rule 2: Use Cloudscape Components
+### Rule 2: Use Cloudscape Components (with orchestration exception)
 
-All UI components MUST use AWS Cloudscape Design System. Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library.
+The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module (`src/features/orchestration/**`) is built with **Tailwind CSS + Radix UI** (the seed of the future design system) and is Cloudscape-free. This boundary is intentional:
+
+-   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
+-   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. So a Cloudscape page that happens to use a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module, either use a VAMS-defined class or no class at all.
+
+    This is not hypothetical: `<div className="container">` wrapped the asset-view comment editor, and because VAMS defines no `.container` rule, the only match was Tailwind's `.container` utility with its responsive max-widths (640/768/1024/1280/1536px). It capped the comment box on any wide viewport. Nothing in the source pointed at it — the editor was filling its parent correctly, the parent was the clamped element — so the cause was only visible by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
+
+Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
 
 ```typescript
-// CORRECT
+// CORRECT (Cloudscape pages)
 import Button from "@cloudscape-design/components/button";
 import Table from "@cloudscape-design/components/table";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 
 // INCORRECT (barrel import — bundles entire library)
 import { Button, Table } from "@cloudscape-design/components";
+
+// CORRECT (orchestration module)
+import { Button } from "@radix-ui/themes";
+<div className="flex gap-2">...</div>;
 ```
 
-**Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size.
+**Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -161,7 +209,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -169,8 +217,9 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
 
 ### Rule 4: npm Only
 
@@ -221,7 +270,7 @@ import MyNewPage from "./pages/MyNewPage";
 
 ### 4.1 The Return Tuple Pattern
 
-Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
+Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. The new orchestration services (`features/orchestration/api/*.ts`) also use this pattern, wrapping raw API responses via a `toTuple` helper. TanStack Query hooks consume these tuples and expose the data to components:
 
 ```typescript
 // CORRECT - follow the established return pattern
@@ -382,6 +431,7 @@ This codebase uses NO global state library. State is managed through:
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
 5. **URL params** via React Router v6 `useParams()`
+6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
 
 ### 6.2 Context Pattern
 
@@ -417,7 +467,73 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 | -------------------- | ------------------------------- | -------------------------------- |
 | `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
 | `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
-| `WorkflowContext`    | `context/WorkflowContext.ts`    | Workflow state                   |
+
+The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
+
+### 6.4 Permission Graying (Orchestration Module)
+
+The orchestration module (`features/orchestration/`) implements **Tier-1 permission graying** via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly:
+
+```typescript
+const { can } = useAllowedRoutes();
+const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
+<Button disabled={!canDelete}>Permanent Delete</Button>;
+```
+
+**Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+
+A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
+
+---
+
+### 6.5 Toast Notifications (Orchestration Module)
+
+Every mutation in `features/orchestration/**` reports through `useToast()`
+(`components/ToastProvider.tsx`) — a failure is always visible and a success is always confirmed.
+
+**It renders through the same Cloudscape `Flashbar` the rest of the app notifies with**
+(`components/search/SearchNotifications/ToastManager.tsx`), in the same fixed top-right position, with
+the same durations (8s error / 5s otherwise) and the same shared `ToastNotification` shape from
+`components/search/types`. A pipeline notification is indistinguishable from a search one. This is a
+deliberate exception to the module's Cloudscape-free rule (Rule 2): that rule governs _page content_,
+whereas the toast layer is a global overlay mounted from `App.tsx`, which already renders Cloudscape
+(`TopNavigation`). Tailwind's preflight is disabled, so there is no style bleed either way.
+
+```typescript
+import { useToast, toastErrorMessage } from "../components/ToastProvider";
+
+const toast = useToast();
+try {
+    await archiveMutation.mutateAsync({ databaseId, pipelineId });
+    toast.success("Pipeline archived", { description: pipeline.pipelineName });
+} catch (err) {
+    toast.error("Archive failed", {
+        description: `${pipeline.pipelineName}: ${toastErrorMessage(err)}`,
+    });
+}
+```
+
+Rules:
+
+-   **Match the app's message convention**: a short header naming the outcome (`"Archive failed"`,
+    `"Pipeline archived"` — mirroring `"Search failed"` / `"Search completed"`), with the entity name
+    and the backend's message in the `description`. Do not put the entity name in the header.
+-   **Never leave a mutation's `catch` as `console.error` only, and never use `alert()`.** A silent
+    failure is indistinguishable from success; a native `alert()` is a blocking modal.
+-   **Always confirm success when the surface disappears.** A form that closes or a page that navigates
+    away on save gives no other feedback.
+-   **Keep an inline message too where it has context** — a dialog-scoped failure, or a validation
+    summary next to the offending fields. The toast is additive.
+-   **`toastErrorMessage(err)`** normalizes an `Error`, a raw string, or a `{message|error|detail}`
+    object into displayable text instead of `[object Object]`.
+-   Import Cloudscape from its **subpath** (`@cloudscape-design/components/flashbar`), never the barrel.
+
+What the provider adds over the search hook is lifecycle safety and mutation ergonomics: timers are
+cleared on unmount, identical repeats collapse instead of stacking, and the stack is capped at four (a
+group abort over many executions would otherwise fill the viewport). Its z-index is 4000 rather than
+the search manager's 1000, because the module's dialogs sit at 3001 — a failure raised from inside a
+modal would otherwise paint underneath it. `useToast()` outside a provider degrades to a logging no-op
+rather than throwing.
 
 ---
 
@@ -427,8 +543,10 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 -   **Pages** (`src/pages/`) — thin wrappers composing components, lazy-loaded in routes
 -   **Components** (`src/components/`) — organized by domain/feature
+-   **Features** (`src/features/orchestration/`) — the pipelines/workflows/executions module, which
+    owns its own pages, components, and API layer; its `src/pages/` entries are route shells only
 -   **Layout** (`src/layout/`) — Navigation shell components
--   **Common** (`src/common/`) — shared utilities, helpers, column definitions
+-   **Common** (`src/common/`) — shared utilities, helpers, labels, and feature-switch constants
 
 ### 7.2 Component Template (New Feature Component)
 
@@ -762,6 +880,20 @@ describe("MyComponent", () => {
 -   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
 -   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
 
+### 11.5 End-to-End Tests (Playwright)
+
+`web/e2e/` holds Playwright specs that drive the **deployed** application — the only layer that proves
+a frontend change reached users. Jest proves a component behaves; Playwright proves the published
+bundle behaves, so a fix living only in `src/` will still fail until the front end is rebuilt
+(`npm run build`) and deployed.
+
+Core specs (tracked) must pass against **any** sandbox — empty, freshly seeded, or long-lived — so
+they derive their subject from whatever exists and skip when a precondition is absent. Per-change
+specs stay untracked. Shared selector knowledge lives in `e2e/support/fixtures.ts`; `e2e/auth.setup.ts`
+performs the one-time Cognito login and saves `storageState` for the rest of the suite.
+
+See `web/e2e/CLAUDE.md` for the full rules, the tracked-vs-ad-hoc boundary, and the selector reference.
+
 ---
 
 ## 12. Development Workflow
@@ -811,6 +943,7 @@ After modifying code, verify: no new TypeScript errors (`npm run build`), no bro
 These extend the Critical Rules above. Where a rule already covers the anti-pattern in section 3, only the one-line reminder is repeated here.
 
 -   **Cloudscape barrel imports** — see Rule 2. Always import from the subpath.
+-   **Naming a div after a Tailwind utility outside the orchestration module** (`container`, `hidden`, `block`, `flex`, …) — see Rule 2. Tailwind's utility CSS is global even where its content glob is not, so the class silently applies its rule to a Cloudscape page.
 -   **`apiClient` / raw `fetch` / `axios` in components or pages** — see Rule 3. Only files in `src/services/` may import `apiClient`.
 -   **`BrowserRouter`** — see Rule 6. The app uses `HashRouter`.
 -   **Eagerly importing page components in `routes.tsx`** — see Rule 7. All pages must be `React.lazy`-loaded.
@@ -862,23 +995,33 @@ See section 9.4 for the full Synonyms rules.
 
 ## 14. Key Dependencies
 
-| Package                         | Version              | Purpose                     |
-| ------------------------------- | -------------------- | --------------------------- |
-| `react`                         | 17.0.2               | UI framework (NOT React 18) |
-| `typescript`                    | 4.4.4                | Type system                 |
-| `vite`                          | ^6.0.0               | Build tooling               |
-| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)       |
-| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI           |
-| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow   |
-| `react-router-dom`              | ^6.0.0               | Client-side routing         |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
-| `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^5.8.0               | Map rendering               |
-| `react-pdf`                     | ^10.1.0              | PDF viewing                 |
-| `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^3.4.11              | HTML sanitization           |
-| `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
-| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
+| Package                         | Version              | Purpose                              |
+| ------------------------------- | -------------------- | ------------------------------------ |
+| `react`                         | 18.3                 | UI framework (upgraded from 17.0.2)  |
+| `typescript`                    | ^5.0.0               | Type system (upgraded from 4.4.4)    |
+| `vite`                          | ^8.0.0               | Build tooling (upgraded from ^6)     |
+| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)                |
+| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI (existing pages)   |
+| `@tanstack/react-query`         | v5                   | Server-state (orchestration module)  |
+| `@tanstack/react-table`         | v8                   | Headless tables (orchestration)      |
+| `tailwindcss`                   | latest               | Utility-first CSS (orchestration)    |
+| `@radix-ui/*`                   | latest               | Headless primitives (orchestration)  |
+| `@rjsf/core`                    | v5                   | Dynamic tag forms (orchestration)    |
+| `@monaco-editor/react`          | latest               | Config editor (lazy-loaded)          |
+| `react-hook-form`               | v7                   | Form validation                      |
+| `zod`                           | latest               | Schema validation                    |
+| `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
+| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
+| `react-router-dom`              | ^6.0.0               | Client-side routing                  |
+| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
+| `three`                         | (via customInstalls) | 3D rendering engine                  |
+| `maplibre-gl`                   | ^5.8.0               | Map rendering                        |
+| `react-pdf`                     | ^10.1.0              | PDF viewing                          |
+| `papaparse`                     | ^5.4.1               | CSV parsing                          |
+| `dompurify`                     | ^3.4.11              | HTML sanitization                    |
+| `sanitize-html`                 | ^2.11.0              | HTML sanitization                    |
+| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop                        |
+| `@testing-library/react`        | 14                   | Testing utilities (upgraded from 11) |
 
 ### 14.1 Key Service Files
 
@@ -1018,12 +1161,4 @@ Development targets: Latest Chrome, Firefox, Safari.
 
 ### 18.6 React Version
 
-This project uses **React 17**, not React 18. Do NOT use:
-
--   `createRoot` (React 18)
--   `useId` (React 18)
--   `useSyncExternalStore` (React 18)
--   `useTransition` / `useDeferredValue` (React 18)
--   Automatic batching assumptions (React 18)
-
-The app uses `ReactDOM.render` (React 17 style).
+This project uses **React 18.3** (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot` (React 18 style). React 18 APIs (`useId`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.

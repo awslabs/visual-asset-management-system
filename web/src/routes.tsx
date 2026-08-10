@@ -16,12 +16,15 @@ const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
-const Pipelines = React.lazy(() => import("./pages/Pipelines"));
-const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
-const Workflows = React.lazy(() => import("./pages/Workflows"));
-const CreateUpdateWorkflow = React.lazy(
-    () => import("./components/createupdate/CreateUpdateWorkflow")
-);
+const PipelinesPage2 = React.lazy(() => import("./pages/PipelinesPage2"));
+const WorkflowsPage2 = React.lazy(() => import("./pages/WorkflowsPage2"));
+const WorkflowBuilderPage = React.lazy(() => import("./pages/WorkflowBuilderPage"));
+const PipelineBuilderPage = React.lazy(() => import("./pages/PipelineBuilderPage"));
+const TemplateListPage = React.lazy(() => import("./pages/TemplateListPage"));
+const TemplateBuilderPage = React.lazy(() => import("./pages/TemplateBuilderPage"));
+const WorkflowTriggersPage = React.lazy(() => import("./pages/WorkflowTriggersPage"));
+const ExecutionsPage = React.lazy(() => import("./pages/ExecutionsPage"));
+const ExecutionDetail = React.lazy(() => import("./pages/ExecutionDetail"));
 const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
 const Tags = React.lazy(() => import("./pages/Tag/Tags"));
 const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
@@ -87,34 +90,63 @@ export const routeTable: RouteOption[] = [
     //{ path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets"},
     {
         path: "/databases/:databaseId/pipelines",
-        Page: Pipelines,
+        Page: PipelinesPage2,
         active: "#/pipelines/",
     },
-    { path: "/pipelines", Page: Pipelines, active: "#/pipelines/" },
+    { path: "/pipelines", Page: PipelinesPage2, active: "#/pipelines/" },
     {
-        path: "/pipelines/:pipelineName",
-        Page: ViewPipeline,
+        path: "/databases/:databaseId/pipelines/create",
+        Page: PipelineBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates/create",
+        Page: TemplateBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates/:templateId",
+        Page: TemplateBuilderPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId/templates",
+        Page: TemplateListPage,
+        active: "#/pipelines/",
+    },
+    {
+        path: "/databases/:databaseId/pipelines/:pipelineId",
+        Page: PipelineBuilderPage,
         active: "#/pipelines/",
     },
     {
         path: "/databases/:databaseId/workflows",
-        Page: Workflows,
+        Page: WorkflowsPage2,
         active: "#/workflows/",
     },
-    { path: "/workflows", Page: Workflows, active: "#/workflows/" },
+    { path: "/workflows", Page: WorkflowsPage2, active: "#/workflows/" },
+    { path: "/executions", Page: ExecutionsPage, active: "#/executions/" },
+    { path: "/executions/:executionId", Page: ExecutionDetail, active: "#/executions/" },
+    {
+        path: "/databases/:databaseId/workflows/:workflowId/triggers",
+        Page: WorkflowTriggersPage,
+        active: "#/workflows/",
+    },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {
+        // Workflows are database-scoped, so the builder needs a :databaseId. The unscoped create
+        // path serves the workflows list, whose create action picks a database first.
         path: "/workflows/create",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowsPage2,
         active: "#/workflows/",
     },
     {
         path: "/databases/:databaseId/workflows/create",
-        Page: CreateUpdateWorkflow,
+        Page: WorkflowBuilderPage,
         active: "#/workflows/",
     },
     {

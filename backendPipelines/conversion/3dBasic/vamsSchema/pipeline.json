@@ -1,0 +1,40 @@
+{
+    "pipelineName": "3D Basic Conversion",
+    "category": "Conversion",
+    "description": "3D Basic Conversion Pipeline - convert between 3D mesh formats using the Trimesh library. Supported inputs: STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Disabled",
+        "taskTimeout": "900",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": [
+                "*.stl",
+                "*.obj",
+                "*.ply",
+                "*.gltf",
+                "*.glb",
+                "*.3mf",
+                "*.xaml",
+                "*.3dxml",
+                "*.dae",
+                "*.xyz"
+            ],
+            "exclude": []
+        }
+    }
+}

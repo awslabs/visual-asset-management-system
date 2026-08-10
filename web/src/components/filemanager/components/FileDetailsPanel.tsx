@@ -1,4 +1,4 @@
-import React, { useContext, useState, useEffect, useRef } from "react";
+import React, { useContext, useState, useEffect, useRef, useMemo } from "react";
 import {
     Alert,
     Box,
@@ -40,6 +40,8 @@ import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import Synonyms from "../../../synonyms";
+import AutomationActions from "./AutomationActions";
+import { deriveAutomationInputFiles, automationDisabledReason } from "../utils/automationSelection";
 
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
@@ -188,6 +190,37 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         selectedItem?.isFolder !== undefined
             ? selectedItem.isFolder
             : selectedItem?.subTree.length! > 0 || selectedItem?.keyPrefix.endsWith("/");
+
+    // The current selection expressed as workflow input files (extracted so the four selection
+    // shapes — whole asset, folder, one file, many files — are verifiable on their own).
+    const automationSelection = useMemo(
+        () => ({
+            databaseId,
+            assetId,
+            isMultiSelect,
+            selectedItems: selectedItems as any[],
+            selectedItem: selectedItem as any,
+            isFolder: !!isFolder,
+            assetVersionId: state.assetVersionId,
+        }),
+        [
+            databaseId,
+            assetId,
+            isMultiSelect,
+            selectedItems,
+            selectedItem,
+            isFolder,
+            state.assetVersionId,
+        ]
+    );
+    const automationInputFiles = useMemo(
+        () => deriveAutomationInputFiles(automationSelection),
+        [automationSelection]
+    );
+    const automationDisabled = useMemo(
+        () => automationDisabledReason(automationSelection, automationInputFiles),
+        [automationSelection, automationInputFiles]
+    );
 
     // Determine if metadata should be shown
     const shouldShowMetadata =
@@ -580,6 +613,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                         File Operations
                                                     </ButtonDropdown>
                                                 )}
+
+                                                {/* Automation sits immediately LEFT of Export (multi-file selection). */}
+                                                <AutomationActions
+                                                    databaseId={databaseId!}
+                                                    assetId={assetId!}
+                                                    inputFiles={automationInputFiles}
+                                                    disabledReason={automationDisabled}
+                                                />
 
                                                 <ButtonDropdown
                                                     items={[
@@ -1060,6 +1101,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     </ButtonDropdown>
                                 )}
 
+                                {/* Automation sits immediately LEFT of Export (folder selection). */}
+                                <AutomationActions
+                                    databaseId={databaseId!}
+                                    assetId={assetId!}
+                                    inputFiles={automationInputFiles}
+                                    disabledReason={automationDisabled}
+                                />
+
                                 <ButtonDropdown
                                     items={[
                                         {
@@ -1169,6 +1218,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 File Operations
                                             </ButtonDropdown>
                                         )}
+
+                                        {/* Automation sits immediately LEFT of Export (single-file selection). */}
+                                        <AutomationActions
+                                            databaseId={databaseId!}
+                                            assetId={assetId!}
+                                            inputFiles={automationInputFiles}
+                                            disabledReason={automationDisabled}
+                                        />
 
                                         <ButtonDropdown
                                             items={[

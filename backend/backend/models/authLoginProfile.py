@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional
+from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -11,7 +12,7 @@ logger = safeLogger(service_name="AuthLoginProfileModels")
 
 class UpdateLoginProfileRequestModel(BaseModel, extra='ignore'):
     """Optional request body for POST /auth/loginProfile/{userId}."""
-    email: Optional[str] = None
+    email: Optional[str] = Field(None, max_length=256, strip_whitespace=True)
 
     @root_validator
     def validate_fields(cls, values):

@@ -22,7 +22,8 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as Config from "../../../../../../config/config";
-import * as cr from "aws-cdk-lib/custom-resources";
+import * as path from "path";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import {
     buildConsolidatedHandlerFunction,
     buildOpenPipelineEKSFunction,
@@ -39,7 +40,7 @@ export interface RapidPipelineEKSConstructProps extends cdk.StackProps {
     lambdaCommonBaseLayer: lambda.LayerVersion;
     kubectlLayer: lambda.ILayerVersion; // kubectl binary layer for EKS cluster (supports multiple runtimes)
     kubernetesLayer: lambda.ILayerVersion; // Kubernetes Python client layer for Lambda functions
-    importGlobalPipelineWorkflowFunctionName: string; // Lambda function name for registering pipelines
+    importGlobalPipelineWorkflowV2FunctionName: string; // V2 vamsSchema import CR lambda name
 }
 
 /**
@@ -457,7 +458,7 @@ export class RapidPipelineEKSConstruct extends Construct {
         );
 
         // Grant access to any external asset bucket customer managed KMS keys so the
-        // container can read/write objects in cross-account encrypted buckets
+        // pod can read/write objects in cross-account encrypted buckets
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(serviceAccount.role);
 
@@ -508,8 +509,10 @@ export class RapidPipelineEKSConstruct extends Construct {
                     "$.inputOutputS3AssetAuxiliaryFilesPath"
                 ),
                 isTest: true,
-                inputMetadata: sfn.JsonPath.stringAt("$.inputMetadata"),
-                inputParameters: sfn.JsonPath.stringAt("$.inputParameters"),
+                inputMetadataS3Location: sfn.JsonPath.stringAt("$.inputMetadataS3Location"),
+                inputConfigurationS3Location: sfn.JsonPath.stringAt(
+                    "$.inputConfigurationS3Location"
+                ),
                 externalSfnTaskToken: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
                 outputFileType: sfn.JsonPath.stringAt("$.outputFileType"),
             }),
@@ -848,7 +851,9 @@ export class RapidPipelineEKSConstruct extends Construct {
             props.config,
             eksVpc,
             eksPrivateSubnets,
-            eksSecurityGroups
+            eksSecurityGroups,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup
         );
 
         // 10. Create vamsExecute Lambda function using builder
@@ -867,63 +872,33 @@ export class RapidPipelineEKSConstruct extends Construct {
         this.pipelineVamsLambdaFunctionName = vamsExecuteHandler.functionName;
         this.openPipelineLambdaFunctionName = openPipelineHandler.functionName;
 
-        // Create custom resource to automatically register pipeline with VAMS
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
         if (props.config.app.pipelines.useRapidPipeline.useEks.autoRegisterWithVAMS === true) {
-            const region = cdk.Stack.of(this).region;
-            const account = cdk.Stack.of(this).account;
-
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
+            new VamsSchemaRegistration(this, "RapidPipelineEKSRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "multi",
+                    "rapidPipelineEKS",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
+                    lambdaName: this.pipelineVamsLambdaFunctionName,
+                },
+                idOverrides: {
+                    pipelineId: "rapid-pipeline-eks-to-glb",
+                    workflowId: "rapid-pipeline-eks-to-glb",
+                },
             });
-
-            // Register X to GLB optimization pipeline and workflow using EKS
-            const customResource = new cdk.CustomResource(
-                this,
-                "RapidPipelineEKSToGlbPipelineWorkflow",
-                {
-                    serviceToken: importProvider.serviceToken,
-                    properties: {
-                        pipelineId: "rapid-pipeline-eks-to-glb",
-                        pipelineDescription:
-                            "RapidPipeline 3D Processor (EKS) - X to GLB optimization and conversion using DGG RapidPipeline on EKS",
-                        pipelineType: "standardFile",
-                        pipelineExecutionType: "Lambda",
-                        assetType: ".all", // Accepts any input format
-                        outputType: ".glb", // Outputs GLB format
-                        waitForCallback: "Enabled", // Asynchronous pipeline
-                        lambdaName: this.pipelineVamsLambdaFunctionName,
-                        taskTimeout: "14400", // 4 hours
-                        taskHeartbeatTimeout: "",
-                        inputParameters: "",
-                        workflowId: "rapid-pipeline-eks-to-glb",
-                        workflowDescription:
-                            "Automated workflow for X to GLB optimization using RapidPipeline 3D Processor on EKS",
-                        autoTriggerOnFileExtensionsUpload: "",
-                    },
-                }
-            );
-
-            // Add Nag suppression for the import provider
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
-
-            console.log("Custom resource for pipeline registration created");
         }
 
         // Outputs

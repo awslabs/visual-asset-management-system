@@ -14,6 +14,7 @@ from vamscli.utils.exceptions import (
     AssetDeletionError, PreviewNotFoundError, AssetNotDistributableError,
     FileDownloadError, DownloadError, AssetDownloadError, DownloadTreeError
 )
+from tests.conftest import CoroutineClosingMock  # noqa: E402
 
 
 # File-level fixtures for assets-specific testing patterns
@@ -1167,7 +1168,7 @@ class TestAssetDownloadCommand:
         assert '--shareable-links-only' in result.output
         assert '--json-output' in result.output
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_whole_asset_success(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading all files from an asset."""
         with assets_command_mocks as mocks:
@@ -1223,7 +1224,7 @@ class TestAssetDownloadCommand:
             # Verify file listing was called (URL generation happens inside streamed coroutine)
             mocks['api_client'].list_asset_files.assert_called_once()
 
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_single_file_success(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading a single file."""
         with assets_command_mocks as mocks:
@@ -1269,7 +1270,7 @@ class TestAssetDownloadCommand:
             # Verify API call
             mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', version_id=None, asset_version_id=None, asset_version_alias=None)
 
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_root_folder_filters_folders(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading from root folder filters out folder objects."""
         with assets_command_mocks as mocks:
@@ -1326,7 +1327,7 @@ class TestAssetDownloadCommand:
             # Verify file listing was called (folder filtering + URL generation happens inside streamed coroutine)
             mocks['api_client'].list_asset_files.assert_called_once()
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_recursive_folder(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading a folder recursively."""
         with assets_command_mocks as mocks:
@@ -1416,7 +1417,7 @@ class TestAssetDownloadCommand:
             assert result.exit_code == 1
             assert 'Filename conflicts detected' in result.output or 'Download Error' in result.output
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_asset_preview(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading asset preview."""
         with assets_command_mocks as mocks:
@@ -1461,7 +1462,7 @@ class TestAssetDownloadCommand:
             # Verify API call
             mocks['api_client'].download_asset_preview.assert_called_once_with('test-database', 'test-asset')
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_with_file_previews(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test downloading file with its preview."""
         with assets_command_mocks as mocks:
@@ -1512,7 +1513,7 @@ class TestAssetDownloadCommand:
             # Verify both main file and preview were requested
             assert mocks['api_client'].download_asset_file.call_count == 2
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_with_failures(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test download with some file failures."""
         with assets_command_mocks as mocks:
@@ -1569,7 +1570,7 @@ class TestAssetDownloadCommand:
             assert '/texture.jpg' in result.output
             assert 'Connection timeout' in result.output
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_verification_failure(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test download with file verification failure."""
         with assets_command_mocks as mocks:
@@ -1617,7 +1618,7 @@ class TestAssetDownloadCommand:
             # Streaming path skips file-by-file verification
             assert '✓ Download completed successfully!' in result.output
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_json_output(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test download with JSON output."""
         with assets_command_mocks as mocks:
@@ -1817,7 +1818,7 @@ class TestAssetDownloadCommand:
             mocks['api_client'].list_asset_files.assert_called_once()
             assert mocks['api_client'].download_asset_files_bulk.call_count == 1
     
-    @patch('vamscli.commands.assets.asyncio.run')
+    @patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock)
     def test_download_whole_asset_no_files(self, mock_asyncio_run, cli_runner, assets_command_mocks):
         """Test download command when asset has no files."""
         with assets_command_mocks as mocks:
@@ -1864,7 +1865,7 @@ class TestAssetDownloadCommand:
                                           'local_path': '/local/path/model.gltf', 'size': 10}],
                 'failed_downloads': []
             }
-            with patch('vamscli.commands.assets.asyncio.run', return_value=summary):
+            with patch('vamscli.commands.assets.asyncio.run', new_callable=CoroutineClosingMock, return_value=summary):
                 result = cli_runner.invoke(cli, [
                     'assets', 'download', '/local/path', '-d', 'test-database',
                     '-a', 'test-asset', '--file-key', '/model.gltf', '--version-id', 'ver-123'

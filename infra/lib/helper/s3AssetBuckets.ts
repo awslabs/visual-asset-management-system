@@ -22,6 +22,9 @@ export interface S3AssetBucketRecord {
     // KMS key ARN the bucket is encrypted with, if a customer managed key is used.
     // Used to grant the VAMS Lambda/pipeline roles access to a cross-account key.
     kmsKeyArn: string | undefined;
+    // Marks this bucket record as the VAMS default asset bucket (houses all pipeline template
+    // data + execution-time run I/O under the pipelines/ prefix). Exactly one record is default.
+    isDefault: boolean;
 }
 
 // Global array to store bucket records
@@ -33,7 +36,8 @@ export function addS3AssetBucket(
     prefix: string,
     defaultSyncDatabaseId: string,
     accountId?: string,
-    kmsKeyArn?: string
+    kmsKeyArn?: string,
+    isDefault?: boolean
 ): void {
     s3AssetBucketRecords.push({
         bucket,
@@ -43,6 +47,7 @@ export function addS3AssetBucket(
         snsS3ObjectDeletedTopic: undefined,
         accountId,
         kmsKeyArn,
+        isDefault: !!isDefault,
     });
 }
 

@@ -10,7 +10,7 @@ logger = safeLogger(service="RequestToClaims")
 def request_to_claims(request):
     normalize_event(request)
 
-    #Lambda cross-calling input short-circuit. 
+    #Lambda cross-calling input short-circuit.
     #mfaEnabled defaults to True (system/admin cross-calls run as MFA-satisfied), but a caller
     #delegating on behalf of an end user (e.g. execution re-run) MUST propagate that user's real
     #MFA state so MFA-gated roles are not silently activated for a non-MFA session. An explicit

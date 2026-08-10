@@ -1,0 +1,29 @@
+{
+    "pipelineName": "NVIDIA Cosmos Video-to-World 2B v2",
+    "category": "GenAI",
+    "description": "NVIDIA Cosmos Video-to-World 2B v2 - Generate videos from video + text input (Predict2.5)",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "28800",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": true,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.mp4", "*.mov", "*.jpg", "*.jpeg", "*.png", "*.webp"],
+            "exclude": []
+        }
+    }
+}

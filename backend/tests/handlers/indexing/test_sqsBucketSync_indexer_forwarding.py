@@ -14,7 +14,7 @@ _PATCHED_ATTRS = (
     "asset_bucket_name", "asset_bucket_prefix", "RESERVED_S3_PREFIX_FOLDERS",
     "get_bucket_id", "validate_asset_id", "lookup_asset",
     "delete_file_metadata_on_s3_delete", "update_asset_type",
-    "publish_to_file_indexer_sns", "publish_to_workflow_execution_sqs",
+    "publish_to_file_indexer_sns", "publish_to_orchestration_bus",
     "extract_asset_id_from_key", "parse_event", "process_s3_record",
 )
 
@@ -143,7 +143,7 @@ class TestCreatedHandlerForwardsToIndexers:
             (False, True, "Failed to update metadata for db/a2/bad.glb"),
         ])
         m.publish_to_file_indexer_sns = MagicMock()
-        m.publish_to_workflow_execution_sqs = MagicMock()
+        m.publish_to_orchestration_bus = MagicMock()
 
         event = {"Records": [record_ok, record_bad]}
         m.lambda_handler_created(event, MagicMock())
@@ -160,7 +160,7 @@ class TestCreatedHandlerForwardsToIndexers:
         record = {"eventSource": "aws:s3", "s3": {"bucket": {"name": "b"}, "object": {"key": "db/a1/gone.glb"}}}
         m.process_s3_record = MagicMock(return_value=(True, True, "Skipped stale create event for db/a1/gone.glb"))
         m.publish_to_file_indexer_sns = MagicMock()
-        m.publish_to_workflow_execution_sqs = MagicMock()
+        m.publish_to_orchestration_bus = MagicMock()
 
         m.lambda_handler_created({"Records": [record]}, MagicMock())
 
@@ -172,9 +172,9 @@ class TestCreatedHandlerForwardsToIndexers:
         record = {"eventSource": "aws:s3", "s3": {"bucket": {"name": "b"}, "object": {"key": "db/a1/folder/"}}}
         m.process_s3_record = MagicMock(return_value=(True, False, "Processed folder marker db/a1/folder/"))
         m.publish_to_file_indexer_sns = MagicMock()
-        m.publish_to_workflow_execution_sqs = MagicMock()
+        m.publish_to_orchestration_bus = MagicMock()
 
         m.lambda_handler_created({"Records": [record]}, MagicMock())
 
         m.publish_to_file_indexer_sns.assert_not_called()
-        m.publish_to_workflow_execution_sqs.assert_not_called()
+        m.publish_to_orchestration_bus.assert_not_called()

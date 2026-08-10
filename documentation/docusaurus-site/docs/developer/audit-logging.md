@@ -4,28 +4,27 @@ VAMS provides a comprehensive audit logging system that captures security-sensit
 
 ## Overview
 
-The audit logging system focuses on authorization decisions, file operations, and system changes that occur after successful authentication. Authentication events (user login, JWT token validation) are logged by Amazon Cognito or your external identity provider, not by the VAMS audit system.
+The audit logging system focuses on authorization decisions, file operations, and system changes that occur after successful authentication. Sign-in itself is recorded by Amazon Cognito or your external identity provider, not by the VAMS audit system; the API Gateway custom Lambda authorizer records the outcome of each token verification as an authorization event.
 
 :::info[Coverage Note]
-Audit logging is implemented in API handlers that use the refactored patterns introduced in VAMS v2.2. Some older handlers that have not yet been refactored may not emit audit events. As these handlers are updated, audit coverage will expand.
+Authorization decisions are recorded for every handler, because the entries are emitted from shared Casbin enforcement rather than from each handler. The remaining event types are emitted by the individual handlers, so a handler that does not call the matching function contributes no entry of that type.
 :::
 
 ## Amazon CloudWatch Log Groups
 
 VAMS creates nine dedicated log groups for different event types. Each log group name includes a unique hash derived from the stack name and account ID to prevent naming conflicts across deployments.
 
-| Log Group                         | Name Pattern                                           | Purpose                                                                                                   |
-| --------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| Authentication                    | `/aws/vendedlogs/VAMSAuditAuthentication-{hash}`       | Login attempts, token validation, session creation                                                        |
-| Authorization (API)               | `/aws/vendedlogs/VAMSAuditAuthorization-{hash}`        | API-level and data-level permission checks                                                                |
-| Authorization (Data-Unauthorized) | Subset of Authorization log                            | Data-level authorization failures (logged for performance -- only failures are captured at the data tier) |
-| Auth Other                        | `/aws/vendedlogs/VAMSAuditAuthOther-{hash}`            | Token refresh, session management, MFA challenges                                                         |
-| Auth Changes                      | `/aws/vendedlogs/VAMSAuditAuthChanges-{hash}`          | Role assignments, permission updates, user modifications                                                  |
-| File Upload                       | `/aws/vendedlogs/VAMSAuditFileUpload-{hash}`           | File uploads to Amazon S3, upload validations                                                             |
-| File Download                     | `/aws/vendedlogs/VAMSAuditFileDownload-{hash}`         | Direct file downloads, presigned URL generation                                                           |
-| File Download (Streamed)          | `/aws/vendedlogs/VAMSAuditFileDownloadStreamed-{hash}` | Streaming downloads, large file transfers                                                                 |
-| Actions                           | `/aws/vendedlogs/VAMSAuditActions-{hash}`              | CRUD operations, workflow executions, pipeline runs                                                       |
-| Errors                            | `/aws/vendedlogs/VAMSAuditErrors-{hash}`               | Application errors, validation failures, system exceptions                                                |
+| Log Group                | Name Pattern                                           | Purpose                                                                                                                                |
+| ------------------------ | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication           | `/aws/vendedlogs/VAMSAuditAuthentication-{hash}`       | Token validation results and session creation determined by a VAMS handler                                                             |
+| Authorization            | `/aws/vendedlogs/VAMSAuditAuthorization-{hash}`        | API-level permission checks, and data-level permission checks that fail (only failures are captured at the data tier, for performance) |
+| Auth Other               | `/aws/vendedlogs/VAMSAuditAuthOther-{hash}`            | User profile reads and updates, and other authentication-adjacent operations                                                           |
+| Auth Changes             | `/aws/vendedlogs/VAMSAuditAuthChanges-{hash}`          | Role, user-role, constraint, API key, and Amazon Cognito user changes                                                                  |
+| File Upload              | `/aws/vendedlogs/VAMSAuditFileUpload-{hash}`           | File uploads to Amazon S3, upload validations                                                                                          |
+| File Download            | `/aws/vendedlogs/VAMSAuditFileDownload-{hash}`         | Direct file downloads, bulk downloads, presigned URL generation                                                                        |
+| File Download (Streamed) | `/aws/vendedlogs/VAMSAuditFileDownloadStreamed-{hash}` | Streaming downloads, large file transfers                                                                                              |
+| Actions                  | `/aws/vendedlogs/VAMSAuditActions-{hash}`              | CRUD operations, workflow executions, pipeline runs                                                                                    |
+| Errors                   | `/aws/vendedlogs/VAMSAuditErrors-{hash}`               | Application errors, validation failures, system exceptions                                                                             |
 
 ### Log Group Configuration
 
@@ -35,31 +34,35 @@ VAMS creates nine dedicated log groups for different event types. Each log group
 
 ## Log Format
 
-All audit events follow a structured format with bracketed metadata fields followed by a JSON payload.
+All audit events follow a structured format with bracketed metadata fields followed by a JSON payload. Each entry ends with a `--- [event: {...}]` suffix carrying the masked echo of the triggering API event.
 
 ### Authentication Events
 
-```
-[AUTHENTICATION][authenticated: true][user: john.doe][roles: ["admin"]][mfaEnabled: true] {"method": "cognito", "ip": "192.168.1.1"}
+```text
+[AUTHENTICATION][authenticated: True] [user: john.doe] [roles: ["admin"]] [mfaEnabled: True] {"method": "cognito", "ip": "192.168.1.1"}
 ```
 
 ### Authorization Events
 
-```
-[AUTHORIZATION][authorized: false][user: jane.smith][roles: ["viewer"]][mfaEnabled: true] {"resource": "database:db-123", "action": "DELETE", "reason": "insufficient permissions"}
+```text
+[AUTHORIZATION][authorized: False] [user: jane.smith] [roles: ["viewer"]] [mfaEnabled: True] {"resource": "database:db-123", "action": "DELETE", "reason": "insufficient permissions"}
 ```
 
 ### File Operation Events
 
-```
-[FILEUPLOAD][user: john.doe][roles: ["editor"]][mfaEnabled: true] {"databaseId": "db-123", "assetId": "asset-456", "filePath": "/data/model.obj", "uploadDenied": false, "customData": {"fileSize": 1024000}}
+Uploads and downloads use the `[FILEUPLOAD]`, `[FILEDOWNLOAD]`, and `[FILEDOWNLOAD-STREAMED]` types.
+
+```text
+[FILEUPLOAD] [user: john.doe] [roles: ["editor"]] [mfaEnabled: True] {"databaseId": "db-123", "assetId": "asset-456", "filePath": "/data/model.obj", "uploadDenied": false, "customData": {"fileSize": 1024000}}
 ```
 
 ### Error Events
 
+```text
+[ERRORS][type: validation_error] [user: john.doe] [roles: ["editor"]] [mfaEnabled: True] {"error": "Invalid asset ID format", "assetId": "invalid-id"}
 ```
-[ERRORS][type: validation_error][user: john.doe][roles: ["editor"]][mfaEnabled: true] {"error": "Invalid asset ID format", "assetId": "invalid-id"}
-```
+
+The `[AUTHOTHER]`, `[AUTHCHANGES]`, and `[ACTIONS]` types follow the same shape as `[ERRORS]`, with the caller-supplied `secondary_type` in the `[type: ...]` field.
 
 ## How Audit Logging Works
 
@@ -82,21 +85,25 @@ def log_authorization(event, authorized, custom_data=None):
 
 ### Infrastructure Integration
 
-Every Lambda function automatically receives audit log group names as environment variables via the `setupSecurityAndLoggingEnvironmentAndPermissions()` CDK security helper:
+Audit log group names are resolved at runtime from AWS Systems Manager Parameter Store, the same mechanism that resolves Amazon DynamoDB table and Amazon S3 bucket names. CDK publishes each name as an SSM parameter under the deployment's resource-name prefix, and `globalLambdaEnvironmentsAndPermissions()` gives every Lambda function the `VAMS_RESOURCE_PARAM_PREFIX` environment variable plus read access to the parameters beneath it. The audit logging module calls `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which fetches all resource names in one paginated `GetParametersByPath` request and caches them in the module for 60 minutes.
 
-| Environment Variable              | Log Group                |
-| --------------------------------- | ------------------------ |
-| `AUDIT_LOG_AUTHENTICATION`        | Authentication events    |
-| `AUDIT_LOG_AUTHORIZATION`         | Authorization events     |
-| `AUDIT_LOG_FILEUPLOAD`            | File upload events       |
-| `AUDIT_LOG_FILEDOWNLOAD`          | File download events     |
-| `AUDIT_LOG_FILEDOWNLOAD_STREAMED` | Streamed download events |
-| `AUDIT_LOG_AUTHOTHER`             | Other auth events        |
-| `AUDIT_LOG_AUTHCHANGES`           | Auth change events       |
-| `AUDIT_LOG_ACTIONS`               | Action events            |
-| `AUDIT_LOG_ERRORS`                | Error events             |
+| Resource Key                      | SSM Parameter Key                               | Log Group                |
+| --------------------------------- | ----------------------------------------------- | ------------------------ |
+| `AUDIT_LOG_AUTHENTICATION`        | `cloudwatchLogGroups/auditAuthentication`       | Authentication events    |
+| `AUDIT_LOG_AUTHORIZATION`         | `cloudwatchLogGroups/auditAuthorization`        | Authorization events     |
+| `AUDIT_LOG_FILEUPLOAD`            | `cloudwatchLogGroups/auditFileUpload`           | File upload events       |
+| `AUDIT_LOG_FILEDOWNLOAD`          | `cloudwatchLogGroups/auditFileDownload`         | File download events     |
+| `AUDIT_LOG_FILEDOWNLOAD_STREAMED` | `cloudwatchLogGroups/auditFileDownloadStreamed` | Streamed download events |
+| `AUDIT_LOG_AUTHOTHER`             | `cloudwatchLogGroups/auditAuthOther`            | Other auth events        |
+| `AUDIT_LOG_AUTHCHANGES`           | `cloudwatchLogGroups/auditAuthChanges`          | Auth change events       |
+| `AUDIT_LOG_ACTIONS`               | `cloudwatchLogGroups/auditActions`              | Action events            |
+| `AUDIT_LOG_ERRORS`                | `cloudwatchLogGroups/auditErrors`               | Error events             |
 
-Lambda functions are granted `logs:CreateLogStream` and `logs:PutLogEvents` permissions on all audit log groups.
+The keys are defined in `ResourceKeys` in `backend/backend/common/resourceNames.py` and mirrored in `RESOURCE_PARAM_KEYS.cloudwatchLogGroups` in `infra/common/resourceParamKeys.ts`; the two lists must stay identical.
+
+Each key also accepts an environment variable of the same name as an override. When the variable is set, its value is used directly and no SSM lookup occurs. This is how the test suite and local utilities point the audit functions at a log group of their choosing, and it serves as a break-glass path for a deployed function; the deployment itself sets no `AUDIT_LOG_*` variables.
+
+The `setupSecurityAndLoggingEnvironmentAndPermissions()` CDK security helper grants each Lambda function `logs:CreateLogStream` and `logs:PutLogEvents` on all nine audit log groups, along with read access to the authorization tables.
 
 ## Available Logging Functions
 
@@ -107,7 +114,7 @@ The audit logging module is located at `backend/backend/customLogging/auditLoggi
 Log authentication-related events such as token validation results.
 
 ```python
-from backend.customLogging.auditLogging import log_authentication
+from customLogging.auditLogging import log_authentication
 
 log_authentication(
     event=event,
@@ -116,20 +123,28 @@ log_authentication(
 )
 ```
 
-### log_authorization
+### log_authorization and log_authorization_api
 
-Log authorization decisions. Should be called on all API-level checks and on data-level authorization failures (failures only, for performance).
+Log authorization decisions. Shared Casbin enforcement calls these on every API-level check and on data-level authorization failures (failures only, for performance), so a handler that enforces through `CasbinEnforcer` needs no call of its own. `log_authorization()` takes the claims dictionary returned by `request_to_claims()`; `log_authorization_api()` takes the full API Gateway event.
 
 ```python
-from backend.customLogging.auditLogging import log_authorization
+from customLogging.auditLogging import log_authorization, log_authorization_api
 
 log_authorization(
-    event=event,
+    claims_and_roles,
     authorized=False,
     custom_data={
-        "resource": "database:db-123",
         "action": "DELETE",
-        "reason": "insufficient permissions"
+        "obj": {"object__type": "database", "databaseId": "db-123"}
+    }
+)
+
+log_authorization_api(
+    event,
+    authorized=False,
+    custom_data={
+        "action": "DELETE",
+        "obj": {"object__type": "api", "route__path": "/database/db-123"}
     }
 )
 ```
@@ -139,7 +154,7 @@ log_authorization(
 Log file upload events including denied uploads.
 
 ```python
-from backend.customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import log_file_upload
 
 log_file_upload(
     event=event,
@@ -152,12 +167,14 @@ log_file_upload(
 )
 ```
 
-### log_file_download and log_file_download_streamed
+### log_file_download, log_file_download_bulk, and log_file_download_streamed
 
-Log file download events, distinguishing between direct downloads and streaming transfers.
+Log file download events, distinguishing between direct downloads and streaming transfers. `log_file_download_bulk()` records one entry per file for a multi-file download and writes them to the file download log group in a single Amazon CloudWatch call.
 
 ```python
-from backend.customLogging.auditLogging import log_file_download, log_file_download_streamed
+from customLogging.auditLogging import (
+    log_file_download, log_file_download_bulk, log_file_download_streamed
+)
 
 log_file_download(
     event=event,
@@ -166,6 +183,14 @@ log_file_download(
     file_path="/data/model.obj",
     custom_data={"downloadMethod": "direct"}
 )
+
+log_file_download_bulk(
+    event=event,
+    database_id="db-123",
+    asset_id="asset-456",
+    file_entries=[{"filePath": "/data/model.obj"}, {"filePath": "/data/texture.png"}],
+    custom_data_base={"downloadType": "archive"}
+)
 ```
 
 ### log_auth_other, log_auth_changes, log_actions, log_errors
@@ -173,7 +198,7 @@ log_file_download(
 Log additional event types with a `secondary_type` field for categorization.
 
 ```python
-from backend.customLogging.auditLogging import log_auth_changes, log_actions, log_errors
+from customLogging.auditLogging import log_auth_changes, log_actions, log_errors
 
 log_auth_changes(
     event=event,
@@ -199,16 +224,12 @@ log_errors(
 The following example shows the standard pattern for integrating audit logging into a Lambda handler:
 
 ```python
-from backend.customLogging.auditLogging import (
-    log_authentication, log_authorization, log_errors
-)
+from customLogging.auditLogging import log_authorization_api, log_errors
 
 def lambda_handler(event, context):
     try:
-        log_authentication(event, authenticated=True, custom_data={"method": "jwt"})
-
         authorized = check_permissions(event)
-        log_authorization(event, authorized=authorized, custom_data={"resource": "asset:123"})
+        log_authorization_api(event, authorized=authorized, custom_data={"resource": "asset:123"})
 
         if not authorized:
             return authorization_error()
@@ -228,7 +249,7 @@ Log retention is controlled at two levels:
 1. **Audit Log Groups** -- 10-year retention (3,653 days), configured in the storage nested stack
 2. **All Other Log Groups** -- 1-year retention, enforced by the `LogRetentionAspect` CDK aspect that applies to all `CfnLogGroup` resources in the stack
 
-To modify audit log retention, update the `retentionDays` parameter in `storageBuilder-nestedStack.ts` where the audit log groups are created.
+To modify audit log retention, update the `retention` property on the audit log groups in `storageBuilder-nestedStack.ts`.
 
 :::note[Cost Consideration]
 10-year retention for audit logs may incur significant Amazon CloudWatch storage costs. Review retention settings based on your organization's compliance requirements. Consider archiving logs to Amazon S3 for long-term storage beyond 10 years.
@@ -240,34 +261,35 @@ Amazon CloudWatch Logs Insights provides a powerful query language for analyzing
 
 ### Find All Failed Authorization Attempts
 
-```
+```text
 fields @timestamp, @message
-| filter @message like /\[AUTHORIZATION\]\[authorized: false\]/
+| filter @message like /\[AUTHORIZATION\]\[authorized: False\]/
 | sort @timestamp desc
 | limit 100
 ```
 
 ### Track File Uploads by User
 
-```
+```text
 fields @timestamp, @message
 | filter @message like /\[FILEUPLOAD\]/
 | parse @message /\[user: (?<user>[^\]]+)\]/
 | stats count() by user
 ```
 
-### Monitor Authentication Failures
+### Group Authorizer Denials by Reason
 
-```
+```text
 fields @timestamp, @message
-| filter @message like /\[AUTHENTICATION\]\[authenticated: false\]/
-| sort @timestamp desc
-| limit 100
+| filter @message like /\[AUTHORIZATION\]\[authorized: False\]/
+| parse @message /"failureReason": "(?<reason>[^"]+)"/
+| stats count() by reason
+| sort count() desc
 ```
 
 ### Find Errors by Type
 
-```
+```text
 fields @timestamp, @message
 | filter @message like /\[ERRORS\]/
 | parse @message /\[type: (?<errorType>[^\]]+)\]/
@@ -277,7 +299,7 @@ fields @timestamp, @message
 
 ### Track Auth Changes (Role Assignments)
 
-```
+```text
 fields @timestamp, @message
 | filter @message like /\[AUTHCHANGES\]/
 | parse @message /\[type: (?<changeType>[^\]]+)\]/
@@ -297,6 +319,7 @@ The audit logging system is designed with security-first principles and never lo
 -   API keys or access tokens
 -   AWS credentials (access keys, secret keys, session tokens)
 -   Token signatures or detailed token validation errors
+-   Pipeline template bodies -- stored or supplied inline as an execute-time override -- their form definitions and input instructions, and the tag values substituted into them
 
 ### What Is Logged
 
@@ -313,11 +336,25 @@ The system logs only non-sensitive operational data:
 
 ### Automatic Data Masking
 
-The `mask_sensitive_data()` function filters all audit log entries before writing to Amazon CloudWatch. It removes:
+Every audit entry carries an echo of the triggering API event, and the `mask_sensitive_data()` function filters that echo before it is written to Amazon CloudWatch. Matching is case-insensitive on the key name and applies at every nesting level, walking both objects and arrays. Two key families are replaced with `<redacted>`, and the distinction between them is why the second family exists at all: a credential key holds a value that is never safe to log, while a content key holds a document the caller authored, whose free-form text can contain a prompt, a file path, or a credential-shaped string that no key-name rule could find once it is inside the body.
+
+**Credential keys** -- the value is never safe to log
 
 -   `authorization` headers
 -   `idJwtToken` fields
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` objects
+
+**Content keys** -- caller-authored payloads. Every field that can deliver a template body belongs here, whichever request carries it:
+
+-   `configBody` -- a pipeline template body, which carries free-form content such as generative-AI prompts and model configuration
+-   `customTemplateOverride` -- the same kind of body supplied inline on an execute request instead of stored as a template
+-   `webFormJson` -- the form definition stored alongside a template body
+-   `inputInstructions` -- the authored guidance stored alongside a template body
+-   `templateTags` and `tagValues` -- the caller-supplied values substituted into a template body
+
+The field name is preserved when the value is redacted, so the audit trail still records that a template body, form definition, or tag value was submitted with the request. A request `body` is filtered whether it arrives as a JSON object or as a JSON string: the string is parsed, filtered, and re-serialized, and a string payload that names a redacted key but does not parse as JSON is dropped in full.
+
+The two families are declared as `SENSITIVE_KEYS` and `CONTENT_KEYS` in `backend/backend/customLogging/logger.py`. A new request field that carries a caller-authored body is protected only when its key is added to `CONTENT_KEYS`.
 
 ## Integration with SIEM Systems
 
@@ -339,10 +376,11 @@ VAMS audit logs can be forwarded to Security Information and Event Management (S
 
 Check Lambda Amazon CloudWatch logs for these error patterns to verify audit logging is functioning correctly:
 
-```
+```text
 Failed to write audit log to CloudWatch log group
 Failed to log [event_type] audit event
-AUDIT_LOG_[TYPE] environment variable not set
+AUDIT_LOG_[TYPE] resource name not resolved
+Failed loading resource name parameters from SSM
 CloudWatch Logs client not initialized
 ```
 
@@ -363,23 +401,52 @@ Create Amazon CloudWatch alarms on the patterns above to detect audit logging fa
 
 The following table provides guidance on which logging function to call in different operational contexts:
 
-| Function                       | When to Use                                                                                                                                                                                                                                     |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `log_authentication()`         | User login attempts, token validation results, session creation. Called by the custom Lambda authorizer and authentication-related handlers.                                                                                                    |
-| `log_authorization()`          | Permission checks using claims and roles directly. Called inside Casbin enforcement logic where the `claims_and_roles` dictionary is available (not the full API Gateway event). Only log on data-level authorization failures for performance. |
-| `log_authorization_api()`      | API-level permission checks using the full API Gateway event. Called in handler entry points where `enforceAPI()` is evaluated.                                                                                                                 |
-| `log_authorization_gateway()`  | Authorization events from the API Gateway custom Lambda authorizer. Uses enhanced security: never logs JWT tokens, uses generic failure categories only, and extracts user IDs only after successful JWT verification.                          |
-| `log_file_upload()`            | File uploads to Amazon S3, multipart uploads, and upload validation results (including denied uploads with reasons).                                                                                                                            |
-| `log_file_download()`          | Direct file downloads and presigned URL generation.                                                                                                                                                                                             |
-| `log_file_download_streamed()` | Streaming downloads and large file transfers via chunked protocols.                                                                                                                                                                             |
-| `log_auth_other()`             | Token refresh events, session management operations, and MFA challenge events.                                                                                                                                                                  |
-| `log_auth_changes()`           | Role assignments, permission constraint updates, user-role modifications, and any change to the authorization model.                                                                                                                            |
-| `log_actions()`                | CRUD operations on databases, assets, files, and metadata. Also covers workflow executions and pipeline runs.                                                                                                                                   |
-| `log_errors()`                 | Application errors, input validation failures, system exceptions, and any unhandled error conditions.                                                                                                                                           |
+| Function                       | When to Use                                                                                                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `log_authentication()`         | Authentication results a VAMS handler determines itself -- token validation outcomes and session creation. The identity provider records sign-in itself, so most deployments emit no entries here.                                                                                    |
+| `log_authorization()`          | Permission checks using claims and roles directly. Called inside Casbin enforcement logic where the `claims_and_roles` dictionary is available (not the full API Gateway event). Only log on data-level authorization failures for performance.                                       |
+| `log_authorization_api()`      | API-level permission checks using the full API Gateway event. Called in handler entry points where `enforceAPI()` is evaluated.                                                                                                                                                       |
+| `log_authorization_gateway()`  | Authorization events from the API Gateway custom Lambda authorizer. Uses enhanced security: never logs JWT tokens, uses generic failure categories only, and extracts user IDs only after successful JWT verification.                                                                |
+| `log_file_upload()`            | File uploads to Amazon S3, multipart uploads, and upload validation results (including denied uploads with reasons).                                                                                                                                                                  |
+| `log_file_download()`          | Direct file downloads and presigned URL generation.                                                                                                                                                                                                                                   |
+| `log_file_download_bulk()`     | Multi-file downloads, where one entry per file is written to the file download log group in a single Amazon CloudWatch call.                                                                                                                                                          |
+| `log_file_download_streamed()` | Streaming downloads and large file transfers via chunked protocols.                                                                                                                                                                                                                   |
+| `log_auth_other()`             | Authentication-adjacent reads and writes that do not change the authorization model, such as a user profile fetch or update.                                                                                                                                                          |
+| `log_auth_changes()`           | Role and user-role changes, permission constraint and constraint-template changes, API key lifecycle events, Amazon Cognito user management, and any other change to the authorization model.                                                                                         |
+| `log_actions()`                | Orchestration write operations: launching, aborting, re-running, and permanently deleting an execution, and creating, updating, archiving, or deleting a workflow, pipeline, pipeline template, or workflow trigger. See [Orchestration action events](#orchestration-action-events). |
+| `log_errors()`                 | Application errors, input validation failures, system exceptions, and any unhandled error conditions.                                                                                                                                                                                 |
 
 :::note[Function signature differences]
 `log_authorization()` accepts `claims_and_roles` as its first parameter (the claims dictionary from `request_to_claims()`), not the full API Gateway event. Use `log_authorization_api()` when you have the full event object, and `log_authorization_gateway()` in the API Gateway authorizer Lambda.
 :::
+
+### Orchestration action events
+
+Every write on the pipeline, workflow, and execution surface records an `ACTIONS` entry. The
+`secondary_type` names the operation, and the payload carries identifiers, counts, and flags:
+
+| `secondary_type`                                                               | Recorded when                                              | Payload highlights                                                                      |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `workflowExecute`                                                              | An execution is launched and its state machine has started | Workflow and execution ids, trigger type, input-file count, output target               |
+| `workflowExecutionAbort`                                                       | A single execution is aborted                              | Execution and workflow ids                                                              |
+| `workflowExecutionGroupAbort`                                                  | An execution group is aborted                              | Group id, how many this pass aborted, how many were withheld for access, more-remaining |
+| `workflowExecutionRerun`                                                       | An execution is re-run                                     | The replayed execution id and the new execution id                                      |
+| `workflowExecutionPermanentDelete`                                             | An execution's records are permanently deleted             | Execution and workflow ids                                                              |
+| `workflowCreate` / `workflowUpdate` / `workflowArchive`                        | A workflow is created, updated, or archived                | Database and workflow ids, pipeline count                                               |
+| `pipelineCreate` / `pipelineUpdate` / `pipelineArchive`                        | A pipeline is created, updated, or archived                | Database and pipeline ids, execution type, whether the execution config changed         |
+| `pipelineTemplateCreate` / `pipelineTemplateUpdate` / `pipelineTemplateDelete` | A template is created, updated, or deleted                 | Database, pipeline, and template ids, configuration format, default flag                |
+| `workflowTriggerSet` / `workflowTriggerDelete`                                 | A trigger is set or removed                                | Database and workflow ids, trigger type, enabled flag                                   |
+
+Three properties hold across all of them:
+
+-   **The entry follows the write.** It is emitted only after the operation succeeded, so a write that
+    failed — or a request rejected as not found — never appears as a completed action.
+-   **Configuration bodies and tag values are never recorded.** A rendered configuration body or a tag
+    value can carry a model prompt or a credential-shaped string, so the entry records the template id,
+    the format, and counts instead.
+-   **A trigger-launched execution is attributed to `SYSTEM_USER`.** A user may upload a file without
+    holding permission to run the workflow the upload fires, so the execution runs as the system
+    identity by design; the `triggerType` field records that the run was automatic rather than manual.
 
 ## Error Handling Details
 
@@ -397,7 +464,7 @@ All audit logging functions implement a consistent silent failure pattern with t
 The following failure scenarios are handled silently without disrupting Lambda execution:
 
 -   Amazon CloudWatch Logs client initialization failure (for example, missing IAM permissions at cold start)
--   Missing `AUDIT_LOG_*` environment variables (function logs an error and returns immediately)
+-   Log group name resolution failure -- an unreachable AWS Systems Manager Parameter Store, a missing `cloudwatchLogGroups/*` parameter, or an unset `VAMS_RESOURCE_PARAM_PREFIX` (the function logs the failure and returns without writing)
 -   Log group does not exist in Amazon CloudWatch
 -   Log stream creation failure
 -   Network timeouts when writing to Amazon CloudWatch
@@ -408,16 +475,17 @@ The following failure scenarios are handled silently without disrupting Lambda e
 
 While silent failure prevents API disruption, you should monitor for audit logging issues. Check Lambda Amazon CloudWatch logs for these error patterns:
 
-```
+```text
 Failed to write audit log to CloudWatch log group
 Failed to log [event_type] audit event
-AUDIT_LOG_[TYPE] environment variable not set
+AUDIT_LOG_[TYPE] resource name not resolved
+Failed loading resource name parameters from SSM
 CloudWatch Logs client not initialized
 ```
 
 ## API Gateway Authorizer Security
 
-The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerHttp.py`) uses a dedicated logging function, `log_authorization_gateway()`, that implements additional security measures beyond the standard audit logging functions.
+The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerRest.py`) uses a dedicated logging function, `log_authorization_gateway()`, that implements additional security measures beyond the standard audit logging functions.
 
 ### Security Controls
 
@@ -426,6 +494,7 @@ The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerHttp.py`) uses a 
     - "IP address not authorized"
     - "Token missing or invalid format"
     - "Token verification failed"
+    - "API key is disabled", "API key has expired", and the other API key denial categories
 3. **User context after verification only** -- User IDs are only extracted and logged after successful JWT verification. For failed authorization attempts, the user field is set to `"unknown"`.
 4. **Source IP only** -- The authorizer logs only the requesting IP address, not request headers or other potentially sensitive fields.
 
@@ -433,7 +502,7 @@ The API Gateway custom Lambda authorizer (`apiGatewayAuthorizerHttp.py`) uses a 
 
 The API Gateway authorizer runs before normal request processing and handles raw JWT tokens. A separate `log_authorization_gateway()` function ensures that:
 
--   The full API Gateway event (which contains the `Authorization` header) is passed to the standard `mask_sensitive_data()` filter before any CloudWatch write.
+-   The full API Gateway event (which contains the `Authorization` header) is passed to the standard `mask_sensitive_data()` filter before any Amazon CloudWatch write.
 -   Only the `context` field (populated after successful JWT verification) is used for user identity extraction.
 -   MFA status is read from verified claims only, never from unverified token contents.
 
@@ -482,10 +551,11 @@ The API Gateway authorizer runs before normal request processing and handles raw
 
 If audit events are not appearing in the expected log groups:
 
-1. Verify the Lambda function has the correct `AUDIT_LOG_*` environment variables set by checking the function configuration in the AWS Management Console.
-2. Confirm IAM permissions for `logs:CreateLogStream` and `logs:PutLogEvents` are present on the Lambda execution role.
-3. Check the Lambda function's standard Amazon CloudWatch log stream for audit logging error messages.
-4. Ensure the audit log group exists in the correct AWS Region.
+1. Verify the Lambda function has `VAMS_RESOURCE_PARAM_PREFIX` set by checking the function configuration in the AWS Management Console.
+2. Confirm the nine `cloudwatchLogGroups/*` parameters exist beneath that prefix in AWS Systems Manager Parameter Store and that the execution role can read them (`ssm:GetParametersByPath`).
+3. Confirm IAM permissions for `logs:CreateLogStream` and `logs:PutLogEvents` are present on the Lambda execution role.
+4. Check the Lambda function's standard Amazon CloudWatch log stream for audit logging error messages.
+5. Ensure the audit log group exists in the correct AWS Region.
 
 ### Performance Impact
 

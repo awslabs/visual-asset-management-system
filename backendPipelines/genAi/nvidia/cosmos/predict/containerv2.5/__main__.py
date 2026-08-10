@@ -26,6 +26,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import generate_preview_gif, run_inference
+from manifest_io import fetch_input_configuration, InputConfigurationError
 from model_manager import ensure_models_cached
 
 logger = logging.getLogger(__name__)
@@ -218,7 +219,9 @@ def main():
 
         # Extract required fields
         model_type = definition.get("modelType")  # "text2world" or "video2world"
-        model_size = definition.get("modelSize", "2B")
+        # The model size is fixed per registered pipeline and supplied by the job definition's
+        # MODEL_SIZE environment variable; a definition value overrides it.
+        model_size = definition.get("modelSize") or os.environ.get("MODEL_SIZE", "2B")
         cosmos_prompt = definition.get("cosmosPrompt")
         input_parameters_prompt = definition.get("inputParametersPrompt")
         input_s3_asset_file_path = definition.get("inputS3AssetFilePath")
@@ -237,7 +240,7 @@ def main():
         if hf_token:
             os.environ["HF_TOKEN"] = hf_token
 
-        # Check for optional flags from inputParameters
+        # Check for optional flags from input configuration (read from S3 location)
         invalidate_models = False
         disable_guardrails = True
         generate_preview_gif_flag = False
@@ -245,9 +248,8 @@ def main():
         offload_tokenizer = True
         offload_diffusion_model = True
         try:
-            input_params = definition.get("inputParameters", "")
-            if input_params:
-                params = json.loads(input_params) if isinstance(input_params, str) else input_params
+            params = fetch_input_configuration(definition.get("inputConfigurationS3Location", ""))
+            if params:
                 invalidate_models = str(params.get("INVALIDATE_COSMOS_MODELS", "")).lower() == "true"
                 disable_guardrails = str(params.get("DISABLE_GUARDRAILS", "true")).lower() != "false"
                 generate_preview_gif_flag = str(params.get("GENERATE_PREVIEW_GIF", "")).lower() == "true"
@@ -261,6 +263,12 @@ def main():
                 if generate_preview_gif_flag:
                     logger.info("GENERATE_PREVIEW_GIF=true: will generate preview GIF")
                 logger.info(f"Offloading: text_encoder={offload_text_encoder}, tokenizer={offload_tokenizer}, diffusion_model={offload_diffusion_model}")
+        # A configuration that EXISTS but cannot be parsed is not something to tolerate: the
+        # broad handler below would leave the run on its defaults and still report success,
+        # with every caller-supplied parameter silently dropped. Placed ABOVE that handler --
+        # below it this arm would be dead code.
+        except InputConfigurationError:
+            raise
         except Exception:
             pass
 

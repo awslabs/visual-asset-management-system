@@ -11,7 +11,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -31,7 +30,7 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
-import * as cr from "aws-cdk-lib/custom-resources";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 export interface ModelOpsConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -41,7 +40,7 @@ export interface ModelOpsConstructProps extends cdk.StackProps {
     pipelineSubnetsIsolated: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -389,6 +388,8 @@ export class ModelOpsConstruct extends NestedStack {
             props.config,
             props.vpc,
             props.pipelineSubnetsIsolated,
+            props.storageResources.eventBridge.orchestrationBus,
+            stateMachineLogGroup,
             props.storageResources.encryption.kmsKey
         );
 
@@ -406,210 +407,35 @@ export class ModelOpsConstruct extends NestedStack {
 
         this.pipelineVamsLambdaFunctionName = modelOpsExecuteFunction.functionName;
 
-        // Create custom resource to automatically register pipeline and workflow
+        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables). The
+        // former per-output-format registrations (usdz / glb / gltf, with a duplicate) collapse to ONE
+        // pipeline + three templates (model-ops-to-{usdz,glb,gltf}) selected per execution.
         if (props.config.app.pipelines.useModelOps.autoRegisterWithVAMS === true) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register GLTF to USDZ optimization pipeline and workflow
-            new cdk.CustomResource(this, "ModelOpsGltfToUsdzPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "vntana-model-ops-to-usdz",
-                    pipelineDescription:
-                        "ModelOps 3D Task Handler - X to USDZ optimization and conversion using VNTANA Intelligent 3D Optimization Engine",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".usdz",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
+            new VamsSchemaRegistration(this, "ModelOpsRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "multi",
+                    "modelOps",
+                    "vamsSchema"
+                ),
+                resourceOverrides: {
                     lambdaName: modelOpsExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    //     template: {
-                    //         modules: [
-                    //             {
-                    //                 type: "optimization",
-                    //                 settings: {
-                    //                     meshDecimation: true,
-                    //                     textureOptimization: true
-                    //                 }
-                    //             },
-                    //             {
-                    //                 type: "conversion",
-                    //                 settings: {
-                    //                     outputFormat: "usdz",
-                    //                     preserveAnimation: true
-                    //                 }
-                    //             }
-                    //         ]
-                    //     }
-                    // }),
-                    workflowId: "vntana-model-ops-to-usdz",
-                    workflowDescription:
-                        "Automated workflow for X to USDZ optimization using ModelOps 3D Task Handler",
-                    autoTriggerOnFileExtensionsUpload: "",
+                },
+                idOverrides: {
+                    pipelineId: "vntana-model-ops",
+                    workflowId: "vntana-model-ops",
                 },
             });
-
-            // Register OBJ to GLB optimization pipeline and workflow
-            new cdk.CustomResource(this, "ModelOpsObjToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "vntana-model-ops-to-glb",
-                    pipelineDescription:
-                        "ModelOps 3D Task Handler - X to GLB optimization and conversion using VNTANA Intelligent 3D Optimization Engine",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".glb",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: modelOpsExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    //     template: {
-                    //         modules: [
-                    //             {
-                    //                 type: "optimization",
-                    //                 settings: {
-                    //                     meshDecimation: true,
-                    //                     textureOptimization: true,
-                    //                     lodGeneration: true
-                    //                 }
-                    //             },
-                    //             {
-                    //                 type: "conversion",
-                    //                 settings: {
-                    //                     outputFormat: "glb",
-                    //                     embedTextures: true
-                    //                 }
-                    //             }
-                    //         ]
-                    //     }
-                    // }),
-                    workflowId: "vntana-model-ops-to-glb",
-                    workflowDescription:
-                        "Automated workflow for X to GLB optimization using ModelOps 3D Task Handler",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            // Register FBX to GLTF optimization pipeline and workflow
-            new cdk.CustomResource(this, "ModelOpsFbxToGltfPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "vntana-model-ops-to-gltf",
-                    pipelineDescription:
-                        "ModelOps 3D Task Handler - X to GLTF optimization and conversion using VNTANA Intelligent 3D Optimization Engine",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".gltf",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: modelOpsExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    //     template: {
-                    //         modules: [
-                    //             {
-                    //                 type: "optimization",
-                    //                 settings: {
-                    //                     meshDecimation: false,
-                    //                     textureOptimization: true,
-                    //                     preserveAnimation: true
-                    //                 }
-                    //             },
-                    //             {
-                    //                 type: "conversion",
-                    //                 settings: {
-                    //                     outputFormat: "gltf",
-                    //                     embedTextures: false
-                    //                 }
-                    //             }
-                    //         ]
-                    //     }
-                    // }),
-                    workflowId: "vntana-model-ops-to-gltf",
-                    workflowDescription:
-                        "Automated workflow for X to GLTF optimization using ModelOps 3D Task Handler",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            // Register STL to GLB optimization pipeline and workflow
-            new cdk.CustomResource(this, "ModelOpsStlToGlbPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "vntana-model-ops-to-glb",
-                    pipelineDescription:
-                        "ModelOps 3D Task Handler - X to GLB optimization and conversion using VNTANA Intelligent 3D Optimization Engine",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".glb",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: modelOpsExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hour
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    // inputParameters: JSON.stringify({
-                    //     template: {
-                    //         modules: [
-                    //             {
-                    //                 type: "optimization",
-                    //                 settings: {
-                    //                     meshDecimation: true,
-                    //                     surfaceSmoothing: true
-                    //                 }
-                    //             },
-                    //             {
-                    //                 type: "conversion",
-                    //                 settings: {
-                    //                     outputFormat: "glb",
-                    //                     generateNormals: true
-                    //                 }
-                    //             }
-                    //         ]
-                    //     }
-                    // }),
-                    workflowId: "vntana-model-ops-to-glb",
-                    workflowDescription:
-                        "Automated workflow for X to GLB optimization using ModelOps 3D Task Handler",
-                    autoTriggerOnFileExtensionsUpload: "",
-                },
-            });
-
-            //Nag supression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
-                    },
-                ],
-                true
-            );
         }
 
         //Output VAMS Pipeline Execution Function name

@@ -172,6 +172,12 @@ class UploadManager:
         connector = aiohttp.TCPConnector(limit=self.max_parallel * 2)
         timeout = aiohttp.ClientTimeout(total=3600)  # 1 hour timeout
         self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        # Serialize the API-Gateway calls that pass through the VAMS custom Lambda authorizer
+        # (initialize_upload / complete_upload). A directory upload creates many sequences; firing
+        # all their initialize/complete calls at once stampedes the authorizer, which 403s the burst.
+        # Part uploads go straight to S3 presigned URLs (no authorizer) and stay fully parallel via
+        # the separate max_parallel semaphore. Bounded low (2) to smooth the burst without serializing.
+        self._api_semaphore = asyncio.Semaphore(2)
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -192,14 +198,16 @@ class UploadManager:
                 "num_parts": len(parts)
             })
         
-        # Initialize upload (run synchronous API call in executor)
+        # Initialize upload (run synchronous API call in executor). Bounded by the API semaphore so
+        # concurrent sequence inits don't stampede the VAMS authorizer.
         try:
             loop = asyncio.get_event_loop()
-            init_response = await loop.run_in_executor(
-                None,
-                self.api_client.initialize_upload,
-                database_id, asset_id, upload_type, api_files
-            )
+            async with self._api_semaphore:
+                init_response = await loop.run_in_executor(
+                    None,
+                    self.api_client.initialize_upload,
+                    database_id, asset_id, upload_type, api_files
+                )
         except Exception as e:
             raise FileUploadError(f"Failed to initialize upload for sequence {sequence.sequence_id}: {e}")
         
@@ -289,16 +297,18 @@ class UploadManager:
                 else:
                     failed_files.add(file_key)
         
-        # Complete upload if we have any successful files (run synchronous API call in executor)
+        # Complete upload if we have any successful files (run synchronous API call in executor).
+        # Bounded by the API semaphore (authorizer-hitting call), like initialize.
         completion_result = None
         if completion_files:
             try:
                 loop = asyncio.get_event_loop()
-                completion_result = await loop.run_in_executor(
-                    None,
-                    self.api_client.complete_upload,
-                    init_result.upload_id, database_id, asset_id, upload_type, completion_files
-                )
+                async with self._api_semaphore:
+                    completion_result = await loop.run_in_executor(
+                        None,
+                        self.api_client.complete_upload,
+                        init_result.upload_id, database_id, asset_id, upload_type, completion_files
+                    )
             except Exception as e:
                 raise FileUploadError(f"Failed to complete upload for sequence {sequence.sequence_id}: {e}")
         

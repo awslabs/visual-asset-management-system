@@ -47,8 +47,8 @@ def run(params: dict) -> PipelineExecutionParams:
             definition.jobName,
             current_stage.type,
             [definition.to_json()],
-            definition.inputMetadata,
-            definition.inputParameters,
+            definition.inputMetadataS3Location,
+            definition.inputConfigurationS3Location,
             definition.externalSfnTaskToken,
             PipelineStatus.FAILED,
         )
@@ -59,7 +59,7 @@ def run(params: dict) -> PipelineExecutionParams:
         return output
 
     # run core pipeline
-    resultStageCompleted = pipeline.run(current_stage, definition.inputMetadata, definition.inputParameters, definition.localTest == 'True')
+    resultStageCompleted = pipeline.run(current_stage, definition.inputMetadataS3Location, definition.inputConfigurationS3Location, definition.localTest == 'True')
     logger.info(f"Pipeline Result: {resultStageCompleted}")
 
     if len(definition.stages) > 0 and definition.stages[0] != None:
@@ -78,8 +78,8 @@ def run(params: dict) -> PipelineExecutionParams:
         definition.jobName,
         next_stage_type,
         [definition.to_json()],
-        definition.inputMetadata,
-        definition.inputParameters,
+        definition.inputMetadataS3Location,
+        definition.inputConfigurationS3Location,
         definition.externalSfnTaskToken,
         resultStageCompleted.status,
     )

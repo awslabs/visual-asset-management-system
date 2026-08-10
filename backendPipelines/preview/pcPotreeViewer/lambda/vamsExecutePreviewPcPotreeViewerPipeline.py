@@ -9,16 +9,19 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import manifestHelper
 
 
 logger = safeLogger(service="VamsExecutePreviewPcPotreeViewerPipeline")
 lambda_client = boto3.client('lambda')
+s3_client = boto3.client('s3')
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
-                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata, input_parameters, external_task_token
-                                        , executing_userName, executing_requestContext):
+                                        , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -27,11 +30,12 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
-        "executingRequestContext": executing_requestContext
+        "executingRequestContext": executing_requestContext,
+        "orchestrationEventPrefix": orchestration_event_prefix
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -48,8 +52,26 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
 
 
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so the pipeline task does not wait
+    for the full taskTimeout when this lambda cannot start the pipeline."""
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="PcPotreeViewerPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
+
 def lambda_handler(event, context):
     logger.info(event)
+
+    external_task_token = None
 
     try:
         response = {
@@ -79,25 +101,7 @@ def lambda_handler(event, context):
         else:
             raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
-        #Get input parameters if defined
-        if 'inputParameters' in data:
-            input_parameters = data['inputParameters']
-        else:
-            input_parameters = ''
-
-        #Get input metadata if defined
-        if 'inputMetadata' in data:
-            input_metadata = data['inputMetadata']
-        else:
-            input_metadata = ''
-
-        #Get outputType if defined
-        if 'outputType' in data:
-            output_filetype = data['outputType']
-        else:
-            output_filetype = ''
-
-        #Get Executing username 
+        #Get Executing username
         if 'executingUserName' in data:
             executing_userName = data['executingUserName']
         else:
@@ -111,12 +115,24 @@ def lambda_handler(event, context):
 
         logger.info(data)
 
-        inputOutputS3AssetAuxiliaryFilesPath = f"s3://{data['bucketAssetAuxiliary']}/{data['inputAssetFileKey']}/preview/PotreeViewer" #override to proper preview location output
+        # Resolve input file + metadata/config S3 locations from the workflow manifest
+        resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
+        # Single input file per execution today (SFN/manifest layer is multi-file-ready).
+        manifestHelper.enforce_single_input_file(resolved)
+        logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
-        # Starts excution of pipeline   
-        execute_pipeline(data['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath
-                                            , input_metadata, input_parameters, external_task_token
-                                            , executing_userName, executing_requestContext)
+        # Potree writes its octree viewer data to the per-input-file aux preview location. The
+        # viewer subfolder comes from the manifest's auxPreviewPipelineSuffix; until that is
+        # sourced from the pipeline configuration it is empty, so fall back to the hardcoded
+        # "PotreeViewer" subfolder here to keep the viewer path intact.
+        inputOutputS3AssetAuxiliaryFilesPath = resolved['auxPreviewS3Path']
+        if not resolved.get('auxPreviewPipelineSuffix') and inputOutputS3AssetAuxiliaryFilesPath:
+            inputOutputS3AssetAuxiliaryFilesPath = inputOutputS3AssetAuxiliaryFilesPath.rstrip('/') + "/PotreeViewer"
+
+        # Starts excution of pipeline
+        execute_pipeline(resolved['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath
+                                            , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token
+                                            , executing_userName, executing_requestContext, resolved['orchestrationEventPrefix'])
 
         return {
             'statusCode': 200,
@@ -124,6 +140,7 @@ def lambda_handler(event, context):
         }
     except Exception as e:
         logger.exception(e)
+        abort_external_workflow(e, external_task_token)
         return {
             'statusCode': 500,
             'body': json.dumps({"message": "Internal Server Error"})

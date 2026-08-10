@@ -26,7 +26,7 @@ export interface CosmosBuilderNestedStackProps extends cdk.StackProps {
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -76,16 +76,25 @@ export class CosmosBuilderNestedStack extends NestedStack {
             storageResources: props.storageResources,
         });
 
-        // Conditionally create CodeBuild construct for container image builds
+        // Conditionally create CodeBuild construct for container image builds. Each Cosmos family
+        // opts in independently: `useNvidiaCosmos.useCodeBuild` covers Predict/Transfer/Reason and
+        // `useNvidiaCosmos3.useCodeBuild` covers Cosmos3 (omni). The construct is created when
+        // EITHER opts in and builds only the repos of the families that did, so a family left on
+        // the local Docker build never receives a CodeBuild-built image.
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
+        const cosmos3ConfigEarly = props.config.app.pipelines.useNvidiaCosmos3;
+        const cosmosUseCodeBuild = cosmosConfig.useCodeBuild === true;
+        const cosmos3UseCodeBuild = cosmos3ConfigEarly?.useCodeBuild === true;
         let codeBuildConstruct: CosmosCodeBuildConstruct | undefined;
-        if (cosmosConfig.useCodeBuild) {
+        if (cosmosUseCodeBuild || cosmos3UseCodeBuild) {
             codeBuildConstruct = new CosmosCodeBuildConstruct(this, "CosmosCodeBuild", {
                 config: props.config,
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 vpc: props.vpc,
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
+                buildCosmosRepos: cosmosUseCodeBuild,
+                buildCosmos3Repos: cosmos3UseCodeBuild,
             });
         }
 
@@ -101,8 +110,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                     // Shared resources from common construct
                     modelCacheBucket: cosmosCommon.modelCacheBucket,
                     efsFileSystem: cosmosCommon.efsFileSystem,
@@ -139,8 +148,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                     // Shared resources from common construct
                     modelCacheBucket: cosmosCommon.modelCacheBucket,
                     efsFileSystem: cosmosCommon.efsFileSystem,
@@ -170,8 +179,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
                 // Shared resources from common construct
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 efsFileSystem: cosmosCommon.efsFileSystem,
@@ -207,8 +216,8 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                importGlobalPipelineWorkflowFunctionName:
-                    props.importGlobalPipelineWorkflowFunctionName,
+                importGlobalPipelineWorkflowV2FunctionName:
+                    props.importGlobalPipelineWorkflowV2FunctionName,
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 efsFileSystem: cosmosCommon.efsFileSystem,
                 efsSecurityGroup: cosmosCommon.efsSecurityGroup,

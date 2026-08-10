@@ -5,7 +5,9 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as batch from "aws-cdk-lib/aws-batch";
+import * as events from "aws-cdk-lib/aws-events";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as kms from "aws-cdk-lib/aws-kms";
@@ -22,6 +24,7 @@ import {
     grantReadWritePermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     suppressCdkNagErrorsByGrantReadWrite,
+    suppressCdkNagLambda,
 } from "../../../../../helper/security";
 import path = require("path");
 
@@ -59,9 +62,13 @@ export function buildConstructPipelineFunction(
         environment: {},
     });
 
+    // Reads the input-configuration + shared metadata files from the asset bucket
+    // (inputConfigurationS3Location / inputMetadataS3Location).
+    grantReadPermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -75,6 +82,8 @@ export function buildOpenPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
+    orchestrationBus: events.IEventBus,
+    stateMachineLogGroup: logs.ILogGroup,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -104,15 +113,21 @@ export function buildOpenPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
+            // Orchestration bus + sub-SFN log group for optional sub-process registration
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -165,6 +180,7 @@ export function buildPipelineEndFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -186,6 +202,9 @@ export function buildVamsExecuteCoordinateTransformFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "vamsExecuteCoordinateTransformPipeline";
+    const region = cdk.Stack.of(scope).region;
+    const account = cdk.Stack.of(scope).account;
+
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
             path.join(
@@ -211,10 +230,22 @@ export function buildVamsExecuteCoordinateTransformFunction(
         },
     });
 
+    // Reads the per-pipeline manifest envelope from the asset bucket at inputManifestS3Location.
+    grantReadPermissionsToAllAssetBuckets(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
+
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+        })
+    );
 
     return fun;
 }
@@ -224,6 +255,7 @@ export function buildExecuteBatchJobFunction(
     lambdaCommonBaseLayer: LayerVersion,
     batchJobQueue: batch.JobQueue,
     batchJobDefinition: batch.IJobDefinition,
+    orchestrationBus: events.IEventBus,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -256,8 +288,12 @@ export function buildExecuteBatchJobFunction(
         environment: {
             BATCH_JOB_QUEUE: batchJobQueue.jobQueueName,
             BATCH_JOB_DEFINITION: batchJobDefinition.jobDefinitionName,
+            // Orchestration bus for registering the submitted Batch job as an abortable sub-process
+            ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
         },
     });
+
+    orchestrationBus.grantPutEventsTo(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -276,6 +312,7 @@ export function buildExecuteBatchJobFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }

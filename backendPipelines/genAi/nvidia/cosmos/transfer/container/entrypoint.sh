@@ -1,15 +1,14 @@
 #!/bin/bash
 set -e
 
-# Use CUDA forward-compat libraries to bridge host driver (550, CUDA 12.4) to
-# container requirements (CUDA 12.8). This is required because cosmos-transfer2.5
-# needs NVIDIA driver 570+ / CUDA 12.8, but ECS_AL2_NVIDIA AMI has driver 550.
-COMPAT_DIR=$(find /usr/local/cuda*/compat -maxdepth 0 2>/dev/null | head -1)
-if [ -n "$COMPAT_DIR" ] && [ -d "$COMPAT_DIR" ]; then
-    export LD_LIBRARY_PATH="${COMPAT_DIR}:${LD_LIBRARY_PATH}"
-fi
+# The CUDA forward-compatibility libraries in /usr/local/cuda*/compat are deliberately NOT placed on
+# LD_LIBRARY_PATH. cosmos-transfer2.5 needs CUDA 12.8, which the AL2023 NVIDIA AMI's driver satisfies
+# natively. Forward compatibility only applies when the host driver is OLDER than the container's CUDA
+# version, and it is not backwards compatible: a compat libcuda.so.1 that precedes the host-mounted
+# driver makes CUDA initialization fail with error 803, "system has unsupported display driver / cuda
+# driver combination". The compat directory stays on disk for Triton's compile-time linking.
 
-# Re-run ldconfig at runtime to pick up host-mounted NVIDIA driver libraries
+# Pick up the host-mounted NVIDIA driver libraries the container runtime injects.
 ldconfig 2>/dev/null || true
 
 # Ensure Python.h is findable for Triton JIT compilation.

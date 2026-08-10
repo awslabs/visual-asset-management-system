@@ -21,7 +21,6 @@ import {
 } from "../helper/security";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
@@ -242,8 +241,7 @@ export function buildSqsBucketSyncFunction(
     index: number,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    workflowAutoExecuteQueue: sqs.IQueue
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
     const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
@@ -264,10 +262,11 @@ export function buildSqsBucketSyncFunction(
 
         environment: {
             FILE_INDEXER_SNS_TOPIC_ARN: storageResources.sns.fileIndexerSnsTopic.topicArn,
-            WORKFLOW_AUTO_EXECUTE_SQS_URL: workflowAutoExecuteQueue.queueUrl,
             ASSET_BUCKET_NAME: bucketName,
             ASSET_BUCKET_PREFIX: bucketPrefix,
             DEFAULT_DATABASE_ID: defaultDatabaseId,
+            ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
 
@@ -285,8 +284,8 @@ export function buildSqsBucketSyncFunction(
     // Grant SNS publish permissions
     storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
 
-    // Grant SQS send message permissions for workflow auto-execute queue
-    workflowAutoExecuteQueue.grantSendMessages(fun);
+    // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery).
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
 
     fun.addToRolePolicy(
         new iam.PolicyStatement({

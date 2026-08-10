@@ -113,8 +113,9 @@ def lambda_handler(event, context):
         "jobName": job_name,
         "currentStageType": definition["stages"][0]["type"],
         "definition": ["python", "__main__.py", json.dumps(definition)],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        # Forward the metadata + input-configuration S3 locations, not their content
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "status": "STARTING"
     }
@@ -187,8 +188,9 @@ def construct_splattoolbox_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [splat_stage],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        # Metadata + input-configuration S3 locations travel with the definition, not their content
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 

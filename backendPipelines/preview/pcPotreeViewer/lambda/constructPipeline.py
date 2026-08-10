@@ -34,8 +34,8 @@ def lambda_handler(event, context):
         "jobName": event.get("jobName"),
         "currentStageType": definition["stages"][0]["type"],
         "definition": [json.dumps(definition)],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "status": "STARTING"
     }
@@ -107,8 +107,8 @@ def construct_pdal_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [pdal_stage, potree_stage],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 
@@ -160,8 +160,8 @@ def construct_potree_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [potree_stage],
-        "inputMetadata": event.get("inputMetadata", ""),
-        "inputParameters": event.get("inputParameters", ""),
+        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
+        "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 

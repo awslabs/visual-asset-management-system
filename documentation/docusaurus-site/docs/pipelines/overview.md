@@ -10,16 +10,21 @@ A pipeline is a registered processing unit that accepts input files from Amazon 
 
 ### Pipeline Execution Types
 
-VAMS supports three pipeline execution types, each suited for different processing patterns:
+VAMS supports four pipeline execution types, each suited for different processing patterns:
 
-| Execution Type  | Invocation                                                       | Callback                      | Best For                                |
-| :-------------- | :--------------------------------------------------------------- | :---------------------------- | :-------------------------------------- |
-| **Lambda**      | Synchronous or asynchronous invocation of an AWS Lambda function | Immediate response            | Lightweight operations under 15 minutes |
-| **SQS**         | Asynchronous message to an Amazon SQS queue                      | AWS Step Functions Task Token | Decoupled, long-running workloads       |
-| **EventBridge** | Asynchronous event to an Amazon EventBridge bus                  | AWS Step Functions Task Token | Event-driven architectures and fan-out  |
+| Execution Type    | Invocation                                                       | Callback                      | Best For                                |
+| :---------------- | :--------------------------------------------------------------- | :---------------------------- | :-------------------------------------- |
+| **Lambda**        | Synchronous or asynchronous invocation of an AWS Lambda function | Immediate response            | Lightweight operations under 15 minutes |
+| **SQS**           | Asynchronous message to an Amazon SQS queue                      | AWS Step Functions Task Token | Decoupled, long-running workloads       |
+| **EventBridge**   | Asynchronous event to an Amazon EventBridge bus                  | AWS Step Functions Task Token | Event-driven architectures and fan-out  |
+| **DeadlineCloud** | Asynchronous job submission to an AWS Deadline Cloud queue       | AWS Step Functions Task Token | Render-farm and batch job submission    |
 
 :::info[Task Token Callbacks]
-SQS and EventBridge pipelines are always asynchronous. They use AWS Step Functions Task Tokens to signal completion back to the orchestrating workflow. The workflow pauses until the pipeline sends a success or failure callback.
+SQS, EventBridge, and Deadline Cloud pipelines are always asynchronous. They use AWS Step Functions Task Tokens to signal completion back to the orchestrating workflow. The workflow pauses until the pipeline sends a success or failure callback. Deadline Cloud always requires the callback.
+:::
+
+:::note[Deadline Cloud availability]
+The Deadline Cloud execution type is available only when the deployment sets `app.pipelines.deadlineCloudExecutionTypeEnabled`. It is unavailable in the AWS GovCloud and European Sovereign Cloud partitions.
 :::
 
 ### Pipeline Lifecycle
@@ -74,21 +79,27 @@ sequenceDiagram
 
 VAMS includes the following built-in pipelines, each controlled by a configuration flag in `config.json`:
 
-| Pipeline                                               | Config Flag                              | Description                                                                                                                                                                        | Supported Formats                                                                                       | Execution Type      | VPC Required |
-| :----------------------------------------------------- | :--------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------ | :------------------ | :----------- |
-| [3D Basic Conversion](3d-conversion.md)                | `useConversion3dBasic`                   | Convert 3D mesh files between formats                                                                                                                                              | STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ                                                    | Lambda              | No           |
-| [CAD/Mesh Metadata Extraction](cad-mesh-extraction.md) | `useConversionCadMeshMetadataExtraction` | Extract metadata from CAD and mesh files                                                                                                                                           | STEP, STP, DXF, STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ                                    | Lambda              | No           |
-| [Coordinate Transform](coordinate-transform.md)        | `useConversionCoordinateTransform`       | Reproject point clouds between coordinate reference systems                                                                                                                        | E57, LAS, LAZ, PLY                                                                                      | AWS Batch (Fargate) | Yes          |
-| [Potree Point Cloud Viewer](potree-viewer.md)          | `usePreviewPcPotreeViewer`               | Convert point clouds to Potree octree format                                                                                                                                       | E57, PLY, LAS, LAZ                                                                                      | AWS Batch (Fargate) | Yes          |
-| [3D Preview Thumbnail](3d-thumbnail.md)                | `usePreview3dThumbnail`                  | Generate animated GIF/static image previews                                                                                                                                        | PLY, STL, OBJ, GLB, GLTF, FBX, DRC, LAS, LAZ, E57, PTX, PCD, FLS, FWS, STP, STEP, USD, USDA, USDC, USDZ | AWS Batch (Fargate) | Yes          |
-| [Gaussian Splatting](gaussian-splatting.md)            | `useSplatToolbox`                        | Generate 3D Gaussian splats from images/video                                                                                                                                      | ZIP (images), MP4, MOV                                                                                  | AWS Batch (GPU)     | Yes          |
-| [GenAI Metadata Labeling](genai-labeling.md)           | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling for 3D files                                                                                                                                          | GLB, FBX, OBJ                                                                                           | AWS Batch (Fargate) | Yes          |
-| [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)      | `useNvidiaCosmos`                        | Generate videos from text or image/video input using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes | Text2World: text only; Video2World: JPG, JPEG, PNG, GIF, MP4, MOV, AVI, MKV                             | AWS Batch (GPU)     | Yes          |
-| [NVIDIA Cosmos Reason](nvidia-cosmos-reason.md)        | `useNvidiaCosmos.modelsReason`           | Analyze video/image content and generate text-based analysis, captions, and reasoning using Cosmos-Reason2 (2B, 8B) Vision Language Models                                         | MP4, MOV, AVI (video); JPG, JPEG, PNG (image)                                                           | AWS Batch (GPU)     | Yes          |
-| [NVIDIA Cosmos Transfer](nvidia-cosmos-transfer.md)    | `useNvidiaCosmos.modelsTransfer`         | Transform videos with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and video-to-video transformation                                                 | MP4, MOV (source video); edge, depth, seg, vis (control signals)                                        | AWS Batch (GPU)     | Yes          |
-| [NVIDIA Cosmos 3](nvidia-cosmos-3.md)                  | `useNvidiaCosmos3`                       | Omnimodal world-model generation (text/image → image/video) using Cosmos3-Nano (16B) and Cosmos3-Super (64B) models with text2image, text2video, and image2video modes             | Text modes: text only; Image2Video: JPG, JPEG, PNG                                                      | AWS Batch (GPU)     | Yes          |
-| [NVIDIA Gr00t Fine-Tuning](nvidia-gr00t-finetune.md)   | `useNvidiaGr00t`                         | Fine-tune NVIDIA GR00T-N1.5-3B embodied AI model on custom LeRobot v2.1 robot manipulation datasets with LoRA or full fine-tuning support                                          | LeRobot v2.1 dataset (asset-level)                                                                      | AWS Batch (GPU)     | Yes          |
-| [NVIDIA Isaac Lab Training](nvidia-isaac-lab.md)       | `useIsaacLabTraining`                    | NVIDIA Isaac Lab reinforcement learning training and evaluation for robotic simulation                                                                                             | Custom simulation configs                                                                               | AWS Batch (GPU)     | Yes          |
+| Pipeline                                               | Config Flag                                            | Description                                                                                                                                                            | Supported Formats                                                                                       | Execution Type                     | VPC Required |
+| :----------------------------------------------------- | :----------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------ | :--------------------------------- | :----------- |
+| [3D Basic Conversion](3d-conversion.md)                | `useConversion3dBasic`                                 | Convert 3D mesh files between formats                                                                                                                                  | STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ                                                    | Lambda                             | No           |
+| [CAD/Mesh Metadata Extraction](cad-mesh-extraction.md) | `useConversionCadMeshMetadataExtraction`               | Extract metadata from CAD and mesh files                                                                                                                               | STEP, STP, DXF, STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ                                    | Lambda                             | No           |
+| [Coordinate Transform](coordinate-transform.md)        | `useConversionCoordinateTransform`                     | Reproject point clouds between coordinate reference systems                                                                                                            | E57, LAS, LAZ, PLY                                                                                      | AWS Batch (Fargate)                | Yes          |
+| [Potree Point Cloud Viewer](potree-viewer.md)          | `usePreviewPcPotreeViewer`                             | Convert point clouds to Potree octree format                                                                                                                           | E57, PLY, LAS, LAZ                                                                                      | AWS Batch (Fargate)                | Yes          |
+| [3D Preview Thumbnail](3d-thumbnail.md)                | `usePreview3dThumbnail`                                | Generate animated GIF/static image previews                                                                                                                            | PLY, STL, OBJ, GLB, GLTF, FBX, DRC, LAS, LAZ, E57, PTX, PCD, FLS, FWS, STP, STEP, USD, USDA, USDC, USDZ | AWS Batch (Fargate)                | Yes          |
+| [Gaussian Splatting](gaussian-splatting.md)            | `useSplatToolbox`                                      | Generate 3D Gaussian splats from images/video                                                                                                                          | ZIP (images), MP4, MOV                                                                                  | AWS Batch (GPU)                    | Yes          |
+| [GenAI Metadata Labeling](genai-labeling.md)           | `useGenAiMetadata3dLabeling`                           | AI-powered metadata labeling for 3D files                                                                                                                              | GLB, FBX, OBJ                                                                                           | AWS Batch (Fargate)                | Yes          |
+| [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)      | `useNvidiaCosmos.modelsPredict`                        | Generate videos from text or image/video input using Cosmos-Predict2.5 world foundation models in 2B and 14B sizes, in Text2World and Video2World modes                | Text2World: text only; Video2World: JPG, JPEG, PNG, GIF, MP4, MOV, AVI, MKV                             | AWS Batch (GPU)                    | Yes          |
+| [NVIDIA Cosmos Reason](nvidia-cosmos-reason.md)        | `useNvidiaCosmos.modelsReason`                         | Analyze video/image content and generate text-based analysis, captions, and reasoning using Cosmos-Reason2 (2B, 8B) Vision Language Models                             | MP4, MOV, AVI (video); JPG, JPEG, PNG (image)                                                           | AWS Batch (GPU)                    | Yes          |
+| [NVIDIA Cosmos Transfer](nvidia-cosmos-transfer.md)    | `useNvidiaCosmos.modelsTransfer`                       | Transform videos with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and video-to-video transformation                                     | MP4, MOV (source video); edge, depth, seg, vis (control signals)                                        | AWS Batch (GPU)                    | Yes          |
+| [NVIDIA Cosmos 3](nvidia-cosmos-3.md)                  | `useNvidiaCosmos3`                                     | Omnimodal world-model generation (text/image → image/video) using Cosmos3-Nano (16B) and Cosmos3-Super (64B) models with text2image, text2video, and image2video modes | Text modes: text only; Image2Video: JPG, JPEG, PNG                                                      | AWS Batch (GPU)                    | Yes          |
+| [NVIDIA Gr00t Fine-Tuning](nvidia-gr00t-finetune.md)   | `useNvidiaGr00t`                                       | Fine-tune NVIDIA GR00T-N1.5-3B embodied AI model on custom LeRobot v2.1 robot manipulation datasets with LoRA or full fine-tuning support                              | LeRobot v2.1 dataset (asset-level)                                                                      | AWS Batch (GPU)                    | Yes          |
+| [NVIDIA Isaac Lab Training](nvidia-isaac-lab.md)       | `useIsaacLabTraining`                                  | NVIDIA Isaac Lab reinforcement learning training and evaluation for robotic simulation                                                                                 | Custom simulation configs                                                                               | AWS Batch (GPU)                    | Yes          |
+| [RapidPipeline](rapidpipeline.md)                      | `useRapidPipeline.useEcs` or `useRapidPipeline.useEks` | Optimize and convert 3D models with the licensed DGG RapidPipeline engine                                                                                              | GLB, GLTF, OBJ, FBX, STL, PLY, USD, USDZ, DAE, ABC                                                      | Amazon ECS (Fargate) or Amazon EKS | Yes          |
+| [ModelOps](model-ops.md)                               | `useModelOps`                                          | Optimize and convert 3D models with the licensed VNTANA Intelligent 3D Optimization Engine                                                                             | GLB, GLTF, OBJ, FBX, STL, PLY, USD, USDZ, DAE, ABC                                                      | Amazon ECS (Fargate)               | Yes          |
+
+:::note[Licensed container pipelines]
+RapidPipeline and ModelOps run third-party container images that require a subscription from the vendor. Supply the image through the pipeline's `ecrContainerImageURI` option as an Amazon ECR image URI. See [RapidPipeline](rapidpipeline.md) and [ModelOps](model-ops.md) for licensing details and prerequisites.
+:::
 
 ## Pipeline Configuration
 
@@ -130,30 +141,34 @@ When `autoRegisterWithVAMS` is enabled, the CDK deployment creates a custom reso
 
 ### VPC and Network Requirements
 
-Pipelines that use AWS Batch (Fargate or GPU) require a VPC. When any VPC-requiring pipeline is enabled, `app.useGlobalVpc.enabled` must be set to `true` — VAMS does not enable it automatically, and configuration validation fails with an error listing the offending features if it is left `false`. With the VPC enabled, the VPC builder provisions the subnets, security groups, and VPC interface endpoints that each enabled pipeline needs.
+Pipelines that run containers on AWS Batch, Amazon ECS, or Amazon EKS require a VPC. When any VPC-requiring pipeline is enabled, `app.useGlobalVpc.enabled` must be set to `true` — VAMS does not enable it automatically, and configuration validation fails with an error listing the offending features if it is left `false`. With the VPC enabled, the VPC builder provisions the subnets, security groups, and VPC interface endpoints that each enabled pipeline needs.
 
 This chart is the single source of truth for per-pipeline networking requirements. The [Network Architecture](../architecture/networking.md) page references it rather than duplicating the list, so when a pipeline is added or changed, only this table needs updating.
 
-All AWS Batch pipelines share a common set of interface endpoints: **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** (created whenever any AWS Batch pipeline is enabled). The **Additional VPC Interface Endpoints** column lists endpoints required _beyond_ that shared set.
+All container pipelines share a common set of interface endpoints: **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** (created whenever any container pipeline is enabled). The **Additional VPC Interface Endpoints** column lists endpoints required _beyond_ that shared set.
 
-| Pipeline                                | VPC Required | Compute Target      | Additional VPC Interface Endpoints                 |
-| :-------------------------------------- | :----------- | :------------------ | :------------------------------------------------- |
-| 3D Basic Conversion                     | No           | AWS Lambda          | — (runs outside VPC)                               |
-| CAD/Mesh Metadata Extraction            | No           | AWS Lambda          | — (runs outside VPC)                               |
-| Coordinate Transform                    | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
-| Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
-| 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate) | — (shared Batch/ECR endpoints only)                |
-| GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate) | Amazon Bedrock Runtime, Amazon Rekognition¹        |
-| Gaussian Splatting                      | Yes          | AWS Batch (GPU)     | Amazon ECS                                         |
-| NVIDIA Cosmos (Predict/Reason/Transfer) | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
-| NVIDIA Cosmos 3                         | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
-| NVIDIA Gr00t Fine-Tuning                | Yes          | AWS Batch (GPU)     | Amazon EFS, Amazon ECS                             |
-| NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)     | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry |
+| Pipeline                                | VPC Required | Compute Target                     | Additional VPC Interface Endpoints                 |
+| :-------------------------------------- | :----------- | :--------------------------------- | :------------------------------------------------- |
+| 3D Basic Conversion                     | No           | AWS Lambda                         | — (runs outside VPC)                               |
+| CAD/Mesh Metadata Extraction            | No           | AWS Lambda                         | — (runs outside VPC)                               |
+| Coordinate Transform                    | Yes          | AWS Batch (Fargate)                | Amazon ECS                                         |
+| Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
+| 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
+| GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate)                | Amazon Bedrock Runtime, Amazon Rekognition¹        |
+| Gaussian Splatting                      | Yes          | AWS Batch (GPU)                    | Amazon ECS                                         |
+| NVIDIA Cosmos (Predict/Reason/Transfer) | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                             |
+| NVIDIA Cosmos 3                         | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                             |
+| NVIDIA Gr00t Fine-Tuning                | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                             |
+| NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)                    | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry |
+| RapidPipeline                           | Yes          | Amazon ECS (Fargate) or Amazon EKS | Amazon ECS²                                        |
+| ModelOps                                | Yes          | Amazon ECS (Fargate)               | Amazon ECS²                                        |
 
 ¹ Amazon Bedrock Runtime and Amazon Rekognition endpoints are created only when GenAI Metadata Labeling is enabled **and** all Lambda functions run in the VPC (`useGlobalVpc.useForAllLambdas`).
 
+² RapidPipeline and ModelOps containers run in private subnets with internet egress so they can reach the AWS Marketplace metering API. Enabling either pipeline adds public and private subnets to the VAMS VPC; when importing an external VPC, supply both public and private subnet IDs in `app.useGlobalVpc`, or configuration validation fails.
+
 :::info[Endpoint placement and ECS consolidation]
-Pipeline interface endpoints are placed in the isolated subnets, except the Amazon ECS endpoint, which is placed in private subnets for GPU/marketplace pipelines (Gaussian Splatting, NVIDIA Cosmos, NVIDIA Gr00t) and in isolated subnets for Isaac Lab Training. Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled, so VAMS consolidates ECS endpoint subnets across pipeline types — private subnets take priority over isolated subnets when both are needed. Amazon ECS Agent and Amazon ECS Telemetry are distinct services from Amazon ECS and do not conflict with that single ECS endpoint.
+Pipeline interface endpoints are placed in the isolated subnets, except the Amazon ECS endpoint, which is placed in private subnets for the container pipelines that need egress (Coordinate Transform, Gaussian Splatting, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, RapidPipeline, ModelOps) and in isolated subnets for Isaac Lab Training. Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled, so VAMS consolidates ECS endpoint subnets across pipeline types — private subnets take priority over isolated subnets when both are needed. Amazon ECS Agent and Amazon ECS Telemetry are distinct services from Amazon ECS and do not conflict with that single ECS endpoint.
 :::
 
 :::warning[VPC Endpoint Costs]
@@ -179,6 +194,6 @@ The workflow orchestrator generates specific S3 paths for each pipeline step. Un
 
 ## Custom Pipelines
 
-In addition to the built-in pipelines, you can register custom pipelines through the VAMS API or web interface. Custom pipelines can use any of the three execution types (Lambda, SQS, EventBridge) and can target any compute resource accessible from your AWS account.
+In addition to the built-in pipelines, you can register custom pipelines through the VAMS API or web interface. Custom pipelines can use any of the four execution types (Lambda, SQS, EventBridge, Deadline Cloud) and can target any compute resource accessible from your AWS account.
 
 For detailed guidance on creating custom pipelines, see [Custom Pipelines](custom-pipelines.md).

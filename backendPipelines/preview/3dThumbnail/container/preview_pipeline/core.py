@@ -23,6 +23,7 @@ from .utils.pipeline.objects import (
 from .utils.pipeline import sfn
 from .utils.logging import get_logger
 from .utils import s3_utils as s3
+from .utils import manifest_io
 from .utils import image_utils
 from .format_handlers import mesh_handler, pointcloud_handler, cad_handler, usd_handler
 from . import renderer
@@ -45,6 +46,11 @@ def run(params: dict) -> PipelineExecutionParams:
     definition = PipelineDefinition(**params)
     logger.info(f"Pipeline Definition: {definition}")
 
+    # Read the metadata + input configuration from S3
+    input_metadata = manifest_io.fetch_metadata(definition.inputMetadataS3Location)
+    input_configuration = manifest_io.fetch_input_configuration(definition.inputConfigurationS3Location)
+    logger.info(f"Resolved input configuration keys: {list(input_configuration.keys())}")
+
     # Set pipeline current stage
     if definition.currentStage is None:
         current_stage = PipelineStage(**definition.stages.pop(0))
@@ -60,8 +66,8 @@ def run(params: dict) -> PipelineExecutionParams:
             definition.jobName,
             current_stage.type,
             [definition.to_json()],
-            definition.inputMetadata,
-            definition.inputParameters,
+            definition.inputMetadataS3Location,
+            definition.inputConfigurationS3Location,
             definition.externalSfnTaskToken,
             PipelineStatus.FAILED,
         )
@@ -76,8 +82,8 @@ def run(params: dict) -> PipelineExecutionParams:
     try:
         resultStageCompleted = _run_preview_pipeline(
             current_stage,
-            definition.inputMetadata,
-            definition.inputParameters,
+            input_metadata,
+            input_configuration,
             definition.localTest == "True",
             definition.assetId,
         )
@@ -104,8 +110,8 @@ def run(params: dict) -> PipelineExecutionParams:
         definition.jobName,
         next_stage_type,
         [definition.to_json()],
-        definition.inputMetadata,
-        definition.inputParameters,
+        definition.inputMetadataS3Location,
+        definition.inputConfigurationS3Location,
         definition.externalSfnTaskToken,
         resultStageCompleted.status,
     )
@@ -125,8 +131,8 @@ def run(params: dict) -> PipelineExecutionParams:
 
 def _run_preview_pipeline(
     stage: PipelineStage,
-    inputMetadata: str = "",
-    inputParameters: str = "",
+    inputMetadata: dict = None,
+    inputParameters: dict = None,
     localTest: bool = False,
     assetId: str = "",
 ) -> PipelineStage:
@@ -138,14 +144,11 @@ def _run_preview_pipeline(
     3. Render rotating preview frames
     4. Save as GIF (with size optimization / JPEG fallback)
     5. Upload to S3 output directory
+
+    inputMetadata / inputParameters are already-parsed objects read from S3 by the caller.
     """
-    # Parse input parameters
-    inputParametersObject = {}
-    if isinstance(inputParameters, str) and inputParameters != "":
-        try:
-            inputParametersObject = json.loads(inputParameters)
-        except Exception:
-            logger.error("Input parameters is not valid JSON.")
+    # Input parameters are already a parsed object
+    inputParametersObject = inputParameters if isinstance(inputParameters, dict) else {}
 
     # Create local working directories
     local_input_dir = _create_dir(["tmp", "input"])
@@ -158,27 +161,7 @@ def _run_preview_pipeline(
     stage_input = StageInput(**stage.inputFile)
     stage_output = StageOutput(**stage.outputFiles)
 
-    # Compute relative subdirectory from the input object key so the output
-    # preserves the same directory structure within the asset.
-    # The assetId is passed through the pipeline definition from the workflow state.
-    # We find the assetId in the input key, then everything after it
-    # (minus the filename) is the relative subdirectory.
-    # Example: assetId = "xd130a6d6...", input key = "xd130a6d6.../test/pump.e57"
-    #   → relative_subdir = "test"
-    # Example: input key = "xd130a6d6.../a/b/model.glb" → relative_subdir = "a/b"
-    # Example: input key = "xd130a6d6.../pump.e57" → relative_subdir = ""
-    relative_subdir = ""
-    if assetId and stage_input.objectKey:
-        input_parts = stage_input.objectKey.split("/")
-        try:
-            asset_id_idx = input_parts.index(assetId)
-            # Everything between the asset ID and the filename is the relative subdir
-            if asset_id_idx + 1 < len(input_parts) - 1:
-                relative_subdir = "/".join(input_parts[asset_id_idx + 1:-1])
-        except ValueError:
-            logger.warning(f"Asset ID '{assetId}' not found in input key '{stage_input.objectKey}'")
-    elif not assetId:
-        logger.warning("No assetId provided in pipeline definition — cannot compute relative subdir")
+    relative_subdir = _relative_subdir(stage_input, stage_output, assetId)
     logger.info(f"Input relative subdirectory: '{relative_subdir}'")
 
     # Parse overwriteExistingPreviewFiles parameter (default: False)
@@ -192,14 +175,13 @@ def _run_preview_pipeline(
     # Check if a preview file already exists for this input file
     input_basename = os.path.basename(stage_input.objectKey) if stage_input.objectKey else ""
     if input_basename:
-        existing_preview = _check_existing_preview(
-            stage_output, input_basename, localTest, relative_subdir
-        )
+        existing_preview = _check_existing_preview(stage_input, input_basename, localTest)
         if existing_preview and not overwrite_existing:
-            return _error_response(
+            return _success_response(
                 stage,
                 f"A preview file already exists for '{input_basename}': {existing_preview}. "
-                f"Set inputParameters.overwriteExistingPreviewFiles to true to overwrite.",
+                f"Skipping generation. Set inputParameters.overwriteExistingPreviewFiles to true "
+                f"to regenerate.",
             )
         elif existing_preview and overwrite_existing:
             logger.info(
@@ -363,6 +345,42 @@ def _run_preview_pipeline(
     return _success_response(stage)
 
 
+def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId: str) -> str:
+    """The input file's subdirectory within the asset, so its preview is written beside it.
+
+    A file an earlier workflow step produced or rewrote lives in the run's output FILES folder —
+    the same folder this stage writes to — keyed by its asset-relative path, so the path after
+    that prefix states where the file sits on the asset. An original asset file is keyed under its
+    asset location instead, where the segments between the asset id and the filename are the
+    subdirectory. The assetId is passed through the pipeline definition from the workflow state.
+
+    Example: input key "pipelines/convert/job/output/exec/files/test/pump.glb" with output dir
+      "pipelines/convert/job/output/exec/files/" → "test"
+    Example: assetId "xd130a6d6", input key "xd130a6d6/a/b/model.glb" → "a/b"
+    Example: input key "xd130a6d6/pump.e57" → ""
+    """
+    input_key = stage_input.objectKey or ""
+    output_dir = stage_output.objectDir or ""
+    if (input_key and output_dir and stage_output.bucketName
+            and stage_input.bucketName == stage_output.bucketName
+            and input_key.startswith(output_dir)):
+        relative_path = input_key[len(output_dir):].strip("/")
+        return relative_path.rsplit("/", 1)[0] if "/" in relative_path else ""
+
+    if not assetId:
+        logger.warning("No assetId provided in pipeline definition — cannot compute relative subdir")
+        return ""
+    if not input_key:
+        return ""
+    input_parts = input_key.split("/")
+    try:
+        asset_id_idx = input_parts.index(assetId)
+    except ValueError:
+        logger.warning(f"Asset ID '{assetId}' not found in input key '{input_key}'")
+        return ""
+    return "/".join(input_parts[asset_id_idx + 1:-1])
+
+
 def _load_file(file_path: str, ext: str):
     """
     Load a 3D file with the appropriate format handler.
@@ -516,34 +534,36 @@ def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: st
         s3.download(bucket_name, s3_key, local_path)
 
 
-def _check_existing_preview(stage_output: StageOutput, input_basename: str, localTest: bool, relative_subdir: str = "") -> str:
+def _check_existing_preview(stage_input: StageInput, input_basename: str, localTest: bool) -> str:
     """
     Check if a preview file already exists for the given input file.
     Returns the path/key of the existing preview file, or None if not found.
 
     Preview files follow the naming pattern: <input_basename>.previewFile.<ext>
     where ext is gif, jpg, or png.
+
+    A generated preview is written back beside its input file, so the check looks at the input
+    file's own directory. The stage output directory is a per-execution prefix that never holds a
+    prior run's previews.
     """
     preview_prefix = f"{input_basename}.previewFile."
 
     if localTest:
-        # Check local output directory (with relative subdir if present)
-        output_dir = os.path.join(stage_output.objectDir, relative_subdir) if relative_subdir else stage_output.objectDir
-        if os.path.isdir(output_dir):
-            for entry in os.listdir(output_dir):
+        # Check the input file's local directory
+        input_dir = os.path.dirname(stage_input.objectKey) or "."
+        if os.path.isdir(input_dir):
+            for entry in os.listdir(input_dir):
                 if entry.startswith(preview_prefix):
-                    existing_path = os.path.join(output_dir, entry)
+                    existing_path = os.path.join(input_dir, entry)
                     logger.info(f"Found existing local preview: {existing_path}")
                     return existing_path
     else:
-        # Check S3 output directory (with relative subdir if present)
-        if stage_output.bucketName and stage_output.objectDir:
-            if relative_subdir:
-                s3_prefix = stage_output.objectDir + relative_subdir + "/" + preview_prefix
-            else:
-                s3_prefix = stage_output.objectDir + preview_prefix
+        # Check the input file's directory in the asset bucket
+        if stage_input.bucketName and stage_input.objectKey:
+            input_dir = stage_input.objectKey.rsplit("/", 1)[0] + "/" if "/" in stage_input.objectKey else ""
+            s3_prefix = input_dir + preview_prefix
             existing_keys = s3.list_objects_with_prefix(
-                stage_output.bucketName, s3_prefix
+                stage_input.bucketName, s3_prefix
             )
             if existing_keys:
                 logger.info(f"Found existing S3 preview: {existing_keys[0]}")

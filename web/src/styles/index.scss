@@ -13,6 +13,12 @@ body {
     padding: 0;
 }
 
+/* Reserve the vertical scrollbar's space at all times so opening a modal/drawer (which locks body
+   scroll) does not remove the scrollbar and shift the fixed header, leaving a gap on the right. */
+html {
+    scrollbar-gutter: stable;
+}
+
 /* Firefox-specific rule to enable scrolling */
 @-moz-document url-prefix() {
     html,
