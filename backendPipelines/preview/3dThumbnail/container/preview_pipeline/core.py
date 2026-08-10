@@ -161,27 +161,7 @@ def _run_preview_pipeline(
     stage_input = StageInput(**stage.inputFile)
     stage_output = StageOutput(**stage.outputFiles)
 
-    # Compute relative subdirectory from the input object key so the output
-    # preserves the same directory structure within the asset.
-    # The assetId is passed through the pipeline definition from the workflow state.
-    # We find the assetId in the input key, then everything after it
-    # (minus the filename) is the relative subdirectory.
-    # Example: assetId = "xd130a6d6...", input key = "xd130a6d6.../test/pump.e57"
-    #   → relative_subdir = "test"
-    # Example: input key = "xd130a6d6.../a/b/model.glb" → relative_subdir = "a/b"
-    # Example: input key = "xd130a6d6.../pump.e57" → relative_subdir = ""
-    relative_subdir = ""
-    if assetId and stage_input.objectKey:
-        input_parts = stage_input.objectKey.split("/")
-        try:
-            asset_id_idx = input_parts.index(assetId)
-            # Everything between the asset ID and the filename is the relative subdir
-            if asset_id_idx + 1 < len(input_parts) - 1:
-                relative_subdir = "/".join(input_parts[asset_id_idx + 1:-1])
-        except ValueError:
-            logger.warning(f"Asset ID '{assetId}' not found in input key '{stage_input.objectKey}'")
-    elif not assetId:
-        logger.warning("No assetId provided in pipeline definition — cannot compute relative subdir")
+    relative_subdir = _relative_subdir(stage_input, stage_output, assetId)
     logger.info(f"Input relative subdirectory: '{relative_subdir}'")
 
     # Parse overwriteExistingPreviewFiles parameter (default: False)
@@ -363,6 +343,42 @@ def _run_preview_pipeline(
         return _error_response(stage, f"Failed to save/upload preview: {str(e)}")
 
     return _success_response(stage)
+
+
+def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId: str) -> str:
+    """The input file's subdirectory within the asset, so its preview is written beside it.
+
+    A file an earlier workflow step produced or rewrote lives in the run's output FILES folder —
+    the same folder this stage writes to — keyed by its asset-relative path, so the path after
+    that prefix states where the file sits on the asset. An original asset file is keyed under its
+    asset location instead, where the segments between the asset id and the filename are the
+    subdirectory. The assetId is passed through the pipeline definition from the workflow state.
+
+    Example: input key "pipelines/convert/job/output/exec/files/test/pump.glb" with output dir
+      "pipelines/convert/job/output/exec/files/" → "test"
+    Example: assetId "xd130a6d6", input key "xd130a6d6/a/b/model.glb" → "a/b"
+    Example: input key "xd130a6d6/pump.e57" → ""
+    """
+    input_key = stage_input.objectKey or ""
+    output_dir = stage_output.objectDir or ""
+    if (input_key and output_dir and stage_output.bucketName
+            and stage_input.bucketName == stage_output.bucketName
+            and input_key.startswith(output_dir)):
+        relative_path = input_key[len(output_dir):].strip("/")
+        return relative_path.rsplit("/", 1)[0] if "/" in relative_path else ""
+
+    if not assetId:
+        logger.warning("No assetId provided in pipeline definition — cannot compute relative subdir")
+        return ""
+    if not input_key:
+        return ""
+    input_parts = input_key.split("/")
+    try:
+        asset_id_idx = input_parts.index(assetId)
+    except ValueError:
+        logger.warning(f"Asset ID '{assetId}' not found in input key '{input_key}'")
+        return ""
+    return "/".join(input_parts[asset_id_idx + 1:-1])
 
 
 def _load_file(file_path: str, ext: str):

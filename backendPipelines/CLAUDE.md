@@ -49,6 +49,35 @@ Output dir: xd130a6d6.../
 ❌ Wrong output:   xd130a6d6.../pump.e57.previewFile.gif  (relative path lost)
 ```
 
+## Reporting Failure on a Task-Token Pipeline
+
+A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
+workflow's task stays `RUNNING` until something reports against that token. The pipeline owns both outcomes:
+`SendTaskSuccess` on completion and **`SendTaskFailure` on every failure route**. A route that returns or
+raises without reporting leaves the workflow task pending for its full `taskTimeout` — hours on the GPU
+pipelines — and the run reads as in-progress the whole time.
+
+Both halves are required, and each is inert without the other:
+
+-   **The handler** calls `SendTaskFailure` from every path that can fail — each `except` block _and_ every
+    early `return` that emits a 4xx. A pre-invoke rejection (a manifest that resolves to the wrong file
+    count, an unreadable input configuration) is the common case: the container never starts, so nothing
+    else can report.
+-   **The CDK lambda builder** grants `states:SendTaskFailure` on the `vamsExecute` function itself. Check
+    the function, not the file — a builder file often grants it on `openPipeline`/`pipelineEnd` while the
+    `vamsExecute` builder lacks it, which reads as present to a file-level grep:
+
+    ```bash
+    awk '/export function build.*VamsExecute/,/^}/' <builder>.ts | grep -c SendTaskFailure
+    ```
+
+    Without the grant the call raises `AccessDeniedException`, the handler logs it, and the task hangs
+    exactly as before — the only difference is one log line.
+
+Report the token before propagating, so the original error still reaches Amazon CloudWatch, and make the
+call conditional on a token being present: a direct invoke carries none and must not fail inside the
+callback helper. `cause` is truncated to 256 characters to match the peer implementations.
+
 ## `assetId` Threading
 
 **`assetId` is a workflow state variable — thread it, don't derive it.** The `assetId` is passed as a top-level field in the workflow event payload. It must be captured in the `vamsExecute` lambda, forwarded to `constructPipeline`, included in the pipeline definition, and used directly in the container. Never attempt to reverse-engineer the asset ID from S3 path segments.
@@ -85,6 +114,22 @@ backendPipelines/{useCase}/{name}/vamsSchema/
     workflow.json                  # optional (one built-in workflow per pipeline)
     templates/{templateId}.json    # optional, one file per template
 ```
+
+The registration custom resource re-fires only when the bundle changes: `schemaHash` in
+`vamsSchemaRegistration-construct.ts` covers `pipeline.json`, `workflow.json`, and the **top-level**
+`templates/*.json` (a subdirectory is skipped, not read). Two rules follow:
+
+-   **Never hash an unresolved CDK token.** Override values like `fn.functionName` stringify to
+    `${Token[TOKEN.n]}`, where `n` shifts when any unrelated construct is added. Hashing that text
+    re-fires every registration on an unrelated deploy, and each one overwrites operator edits to the
+    built-in (rename, retuned `systemConfig`, deliberate archive) from the schema files. Substitute a
+    placeholder for token values — the resolved value still reaches CloudFormation via the
+    `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
+    `infra/test/vamsSchemaRegistrationHash.test.ts`.
+-   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
+    deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
+    `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
+    registration resources still expect to read them. Test: `infra/test/artefactsBucketPrune.test.ts`.
 
 `pipeline.json` carries no ARNs — the execution target is injected at deploy time from
 `resource_overrides` per `executionConfig.executionType` (`lambda.resourceId`, `sqs.queueUrl`,
@@ -222,6 +267,16 @@ vamscli pipeline template list -d GLOBAL -p {pipelineId}
     - `customLogging/logger.py` (copy from any existing pipeline, e.g., `backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py`)
 
     Without these files, Lambda will fail at import time with `No module named 'customLogging'`. The Lambda layer provides a fallback, but the local `customLogging/` package is required in each pipeline's code asset.
+
+    A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
+    byte-identical** — verify with
+    `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`,
+    which must print exactly one hash. Edit one copy, then propagate to the rest in the same change.
+    `fetch_manifest` RAISES when a referenced manifest cannot be read (it returns `None` only when the
+    payload references no manifest at all): the manifest is the sole carrier of asset identity and the
+    output paths, so swallowing that error starts a job that fails only after its compute — a GPU
+    instance for the NVIDIA pipelines — is provisioned. Keep the token capture ahead of
+    `resolve_pipeline_inputs` in every `vamsExecute` handler so the raise reaches `SendTaskFailure`.
 
 3. Add container if needed in `container/` subdirectory.
 4. **Author the `vamsSchema/` bundle** (`pipeline.json`, plus `workflow.json` and `templates/` as

@@ -16,7 +16,7 @@ from common.workflows.stepfunctions_builder import (
     create_lambda_task_state,
     create_fail_state,
     create_retry_config,
-    create_catch_config,
+    create_catch_all_configs,
     create_workflow_definition,
     create_interim_tracking_state,
     create_error_handler_state,
@@ -178,8 +178,10 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         # Apply callback (adds TaskToken if enabled)
         payload = builder.apply_callback(payload, pipeline)
 
-        # Generate state name
-        state_name = (uuid.uuid1().hex[:5] + "-" + pipeline['name'])[:80]
+        # State name. The step position leads so it survives the 80-char trim, making the name
+        # unique within the definition even when two steps carry the same job name — states are
+        # keyed by name, so a repeated name would drop a step from the deployed workflow.
+        state_name = f"step{i + 1}-{uuid.uuid1().hex[:5]}-{pipeline['name']}"[:80]
 
         # Build the task state using the builder
         # EventBridge: payload is placed directly as the Detail object in Entries,
@@ -187,9 +189,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         task_state = builder.build_task_state(pipeline, state_name, payload)
 
         # Re-point the Catch to the error-handler state (caught error at $.errorInfo).
-        task_state["Catch"] = [create_catch_config(
-            error_equals=["States.ALL"], next_state=error_handler_state_id,
-            result_path="$.errorInfo")]
+        task_state["Catch"] = create_catch_all_configs(
+            next_state=error_handler_state_id, result_path="$.errorInfo")
 
         states.append((state_name, task_state))
 
@@ -230,6 +231,12 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                     # shared per-execution envelope. Resolved per execution (templates are chosen at
                     # execute time, the ASL is baked at save time), so only the index is static here.
                     "nextPipelineMetadataS3Key.$": f"$.stepMetadataS3Keys[{i + 1}]",
+                    # The NEXT step's effective input-file filters and arity, so the interim step
+                    # narrows its manifest to what that step accepts instead of handing it inputs its
+                    # own gate rejects. Indexed by static position for the same reason as the metadata
+                    # key above.
+                    "nextPipelineInputFileFilters.$": f"$.stepInputFilters[{i + 1}]",
+                    "nextPipelineInputFileArity.$": f"$.stepInputArity[{i + 1}]",
                     # Next pipeline identity for template-tag rendering of its input configuration
                     # (pipeline id + database id + job name are known at ASL-build time; the
                     # workflow ids and executing-user context come from the SFN input). The
@@ -328,11 +335,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         backoff_rate=2.0,
         max_attempts=3
     )
-    po_catch_config = [create_catch_config(
-        error_equals=["States.ALL"],
-        next_state=error_handler_state_id,
-        result_path="$.errorInfo",
-    )]
+    po_catch_config = create_catch_all_configs(
+        next_state=error_handler_state_id, result_path="$.errorInfo")
 
     process_output_state = create_lambda_task_state(
         state_id=process_output_state_id,

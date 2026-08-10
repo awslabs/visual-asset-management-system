@@ -77,19 +77,15 @@ export function buildExecutionServiceFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The shared workflow
-            // SFN log group ARN is not an SSM resource-name parameter: used to pull error
-            // logs for executions that ended in a non-success terminal status (e.g. a direct
-            // SFN abort) and for the full-search logs API.
-            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
-        },
+        // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The log group each execution
+        // was launched against is read from that execution's own record (executionLogGroupArn), so
+        // no log group ARN is set here; the read scope is granted on the role policy below.
+        environment: {},
     });
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort + permanent-delete
-    // WB5.3 adds permanent-delete (removes rows across every sub-table) + global-list/permanent
-    // output-asset access via the outputs-index table, so the execution sub-tables become
-    // read/WRITE and the outputs-index table is granted here.
+    // Permanent-delete removes an execution's rows across every sub-table, so the execution
+    // sub-tables are read/WRITE.
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED + delete
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
@@ -179,11 +175,11 @@ export function buildExecutionServiceFunction(
 }
 
 /**
- * Asset-less multi-file execute handler (Phase 2, WB5.2). Reads the V2 workflow/pipeline/template/
- * tag-schema tables + the buckets table (default run bucket + per-input asset buckets), writes the
- * V2 execution records, and starts the workflow state machine. Run I/O lives in the default asset
- * bucket; input files are read from their own asset buckets and output write-back targets the output
- * asset bucket, so it needs read/write across all asset buckets (like the V1 executeWorkflow).
+ * Asset-less multi-file execute handler. Reads the V2 workflow/pipeline/template/tag-schema tables +
+ * the buckets table (default run bucket + per-input asset buckets), writes the V2 execution records,
+ * and starts the workflow state machine. Run I/O lives in the default asset bucket; input files are
+ * read from their own asset buckets and output write-back targets the output asset bucket, so it
+ * needs read/write across all asset buckets.
  */
 export function buildExecuteWorkflowV2Function(
     scope: Construct,
@@ -250,8 +246,12 @@ export function buildExecuteWorkflowV2Function(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
+            // StopExecution compensates a launch whose execution records could not be written: the
+            // state machine is already running, so it is stopped rather than left with no VAMS
+            // records (invisible to the executions list and unreachable by the abort API).
             actions: [
                 "states:StartExecution",
+                "states:StopExecution",
                 "states:DescribeStateMachine",
                 "states:DescribeExecution",
             ],
@@ -306,7 +306,6 @@ export function buildProcessWorkflowExecutionOutputFunction(
     metadataServiceFunction.grantInvoke(fun);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
@@ -368,14 +367,15 @@ export function buildInterimPipelineTrackingFunction(
                 : undefined,
         environment: {
             // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Only non-SSM
-            // values are set here: the shared workflow SFN log group ARN and the orchestration
-            // bus ARN + event source prefix written into each next pipeline's manifest.
-            WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // values are set here: the orchestration bus ARN + event source prefix written into
+            // each next pipeline's manifest.
             ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
             ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
-    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
+    // The main execution row belongs to the launch, interim-status and end-state handlers; this
+    // lambda advances only the per-pipeline rows, so the main table is read only.
+    storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
@@ -500,12 +500,12 @@ export function buildRegisterPipelineExecutionFunction(
 }
 
 /**
- * File-upload workflow trigger dispatcher (Phase 2, WB5b). An asset file upload publishes an
- * `asset.file.uploaded` event to the orchestration bus; a standing rule (deployment event-source
- * prefix + that detail-type) targets a durable SQS buffer this lambda consumes. Per uploaded file it
- * enumerates the fileUpload trigger rows (WorkflowTriggersTable TriggersByBaseTypeGSI), matches
- * inputFileFilters + database scope, and invokes executeWorkflowV2 (as SYSTEM_USER) per firing
- * trigger. Its own SQS buffer + DLQ isolate the fan-out from the V1 auto-execute queue.
+ * File-upload workflow trigger dispatcher. An asset file upload publishes an `asset.file.uploaded`
+ * event to the orchestration bus; a standing rule (deployment event-source prefix + that detail-type)
+ * targets a durable SQS buffer this lambda consumes. Per uploaded file it enumerates the fileUpload
+ * trigger rows (WorkflowTriggersTable TriggersByBaseTypeGSI), matches inputFileFilters + database
+ * scope, and invokes executeWorkflowV2 (as SYSTEM_USER) per firing trigger. Its own SQS buffer + DLQ
+ * isolate the fan-out from the invoking upload request.
  */
 export function buildWorkflowTriggerDispatchFunction(
     scope: Construct,
@@ -935,8 +935,6 @@ export function buildImportGlobalPipelineWorkflowFunction(
             PIPELINE_TEMPLATE_SERVICE_FUNCTION_NAME: pipelineTemplateServiceFunction.functionName,
             WORKFLOW_SERVICE_V2_FUNCTION_NAME: workflowServiceV2Function.functionName,
             WORKFLOW_TRIGGER_SERVICE_FUNCTION_NAME: workflowTriggerServiceFunction.functionName,
-            // Artefacts bucket the CDK uploads the vamsSchema files to (S3-key delivery mode).
-            VAMS_SCHEMA_BUCKET: storageResources.s3.artefactsBucket.bucketName,
         },
     });
 
@@ -978,7 +976,7 @@ export function buildWorkflowServiceV2Function(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    // SFN execution role the deployed state machines assume (mirrors buildCreateWorkflowFunction).
+    // SFN execution role the deployed state machines assume (buildWorkflowRole).
     const role = buildWorkflowRole(
         scope,
         processWorkflowExecutionOutputFunction,

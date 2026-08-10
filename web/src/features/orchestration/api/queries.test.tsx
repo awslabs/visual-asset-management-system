@@ -6,7 +6,13 @@
 import React from "react";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { computeRefetchInterval, qk, useExecutions, useTemplateMutations } from "./queries";
+import {
+    computeListRefetchInterval,
+    computeRefetchInterval,
+    qk,
+    useExecutions,
+    useTemplateMutations,
+} from "./queries";
 import * as executionService from "./executions";
 import * as pipelineService from "./pipelines";
 
@@ -42,6 +48,33 @@ describe("computeRefetchInterval", () => {
                 { executionStatus: "ABORTED" },
             ])
         ).toBe(false);
+    });
+});
+
+/**
+ * The paged lists' cadence. A poll of an infinite query re-reads every loaded page in ONE pass, and
+ * each of those requests re-runs the backend's per-row asset resolution and authorization — so a
+ * fixed 5s cadence multiplies the server cost by the number of pages the reader has loaded. Spacing
+ * the ticks by the page count holds the rate at one page per cadence at any depth.
+ */
+describe("computeListRefetchInterval", () => {
+    it("keeps the base cadence for a single loaded page", () => {
+        expect(computeListRefetchInterval([{ executionStatus: "RUNNING" }], 1)).toBe(5000);
+    });
+
+    it("spaces the cadence by the number of loaded pages", () => {
+        const rows = [{ executionStatus: "RUNNING" }];
+        expect(computeListRefetchInterval(rows, 5)).toBe(25000);
+        expect(computeListRefetchInterval(rows, 10)).toBe(50000);
+    });
+
+    it("still stops entirely once every loaded row is terminal", () => {
+        expect(computeListRefetchInterval([{ executionStatus: "SUCCEEDED" }], 10)).toBe(false);
+        expect(computeListRefetchInterval([], 10)).toBe(false);
+    });
+
+    it("treats a page count of zero as one page rather than polling with no delay", () => {
+        expect(computeListRefetchInterval([{ executionStatus: "NEW" }], 0)).toBe(5000);
     });
 });
 
@@ -132,6 +165,56 @@ describe("useExecutions", () => {
         );
         const sent = (executionService.listExecutionsGlobal as jest.Mock).mock.calls[0][0];
         expect(sent.databaseId).toBeUndefined();
+    });
+
+    /**
+     * The poll cadence is read off the CACHED query, the way the observer reads it, so the pacing is
+     * asserted on what the hook actually wired rather than on the helper in isolation.
+     */
+    const listInterval = (qc: QueryClient, pages: any[]) => {
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
+        const interval = query.options.refetchInterval;
+        return interval({ state: { data: { pages } } });
+    };
+
+    it("paces the poll by the number of loaded pages instead of re-reading them all every 5s", async () => {
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        const { result } = renderHook(() => useExecutions({ kind: "global" }), {
+            wrapper: Wrapper,
+        });
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        const running = { Items: [{ executionStatus: "RUNNING" }] };
+        // One page open: the full cadence.
+        expect(listInterval(qc, [running])).toBe(5000);
+        // Eight "Load more" clicks: one tick re-reads all nine pages, so it fires nine times less
+        // often — the request rate stays one page per cadence.
+        expect(listInterval(qc, Array(9).fill(running))).toBe(45000);
+        // Every loaded row terminal: no polling at all, at any depth.
+        expect(listInterval(qc, Array(9).fill({ Items: [{ executionStatus: "SUCCEEDED" }] }))).toBe(
+            false
+        );
+    });
+
+    it("leaves background polling off, so a hidden tab issues no list requests", async () => {
+        // A tick only fetches when the document is visible unless refetchIntervalInBackground opts in.
+        // A board left open behind another tab must cost nothing until it is looked at again.
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        const { result } = renderHook(() => useExecutions({ kind: "global" }), {
+            wrapper: Wrapper,
+        });
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        const query: any = qc.getQueryCache().find({ queryKey: qk.executions({ kind: "global" }) });
+        expect(query.options.refetchIntervalInBackground).toBeFalsy();
     });
 });
 

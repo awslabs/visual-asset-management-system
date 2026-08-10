@@ -96,6 +96,83 @@ describe("resolveRestrictions", () => {
             );
             expect(r.wholeAssetAllowed).toBe(false);
         });
+
+        it("an arity-none step's scope does not narrow the selection", () => {
+            // An arity-'none' step receives no input files whatever the run selected, so the backend
+            // never applies its scope to the selection (_evaluate assigns it [] and continues before
+            // _scope_errors). Applying it here would withhold an option the backend accepts.
+            const r = resolveRestrictions(
+                wf({ assetScope: { wholeAssetAllowed: true, folderAllowed: true } }),
+                [
+                    {
+                        systemConfig: {
+                            inputFileArity: "none",
+                            assetScope: { wholeAsset: false, folderAllowed: false },
+                        },
+                    },
+                    {
+                        systemConfig: {
+                            inputFileArity: "one",
+                            assetScope: { wholeAssetAllowed: true, folderAllowed: true },
+                        },
+                    },
+                ] as any
+            );
+            expect(r.wholeAssetAllowed).toBe(true);
+            expect(r.folderAllowed).toBe(true);
+        });
+
+        it("a template override that makes a step arity-none also drops its scope", () => {
+            const r = resolveRestrictions(
+                wf({ assetScope: { wholeAssetAllowed: true, folderAllowed: true } }),
+                [
+                    {
+                        systemConfig: {
+                            inputFileArity: "one",
+                            assetScope: { wholeAssetAllowed: false, folderAllowed: false },
+                        },
+                        templateOverrides: { inputFileArity: "none" },
+                    },
+                ] as any
+            );
+            expect(r.wholeAssetAllowed).toBe(true);
+            expect(r.folderAllowed).toBe(true);
+        });
+
+        it("a template override that makes a step arity-one reinstates its scope", () => {
+            const r = resolveRestrictions(
+                wf({ assetScope: { wholeAssetAllowed: true, folderAllowed: true } }),
+                [
+                    {
+                        systemConfig: {
+                            inputFileArity: "none",
+                            assetScope: { wholeAssetAllowed: false, folderAllowed: false },
+                        },
+                        templateOverrides: { inputFileArity: "one" },
+                    },
+                ] as any
+            );
+            expect(r.wholeAssetAllowed).toBe(false);
+            expect(r.folderAllowed).toBe(false);
+        });
+
+        it("a step that omits its arity is treated as consuming files", () => {
+            // The backend's _arity defaults an absent value to 'one', so an omitted arity must not be
+            // read as 'none' and let a declining scope through.
+            const r = resolveRestrictions(
+                wf({ assetScope: { wholeAssetAllowed: true, folderAllowed: true } }),
+                [{ systemConfig: { assetScope: { wholeAssetAllowed: false } } }] as any
+            );
+            expect(r.wholeAssetAllowed).toBe(false);
+        });
+
+        it("still fails closed when the only step is arity-none and the workflow is silent", () => {
+            const r = resolveRestrictions(wf({ assetScope: {} }), [
+                { systemConfig: { inputFileArity: "none" } },
+            ] as any);
+            expect(r.wholeAssetAllowed).toBe(false);
+            expect(r.folderAllowed).toBe(false);
+        });
     });
 
     it("uses the workflow's allow list when it is restrictive", () => {

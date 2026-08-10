@@ -122,14 +122,14 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
 -   [ ] **Configure VPC**: Add VPC/subnet configuration based on config flags
 -   [ ] **Add KMS Permissions**: Include KMS key permissions for encryption
--   [ ] **Add API Routes**: Register routes in `apiBuilder-nestedStack.ts`
+-   [ ] **Add API Routes**: Register routes in `apiBuilder2-nestedStack.ts` (preferred; `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit)
 -   [ ] **Follow Naming Conventions**: Use consistent naming patterns
 
 #### **Step 4: API Gateway Integration**
 
 -   [ ] **Add Route Definitions**: Use `attachFunctionToApi` for route registration
 -   [ ] **Configure HTTP Methods**: Set appropriate HTTP methods for each endpoint
--   [ ] **Add Security**: Ensure Cognito authorizer is applied
+-   [ ] **Add Security**: Confirm the route resolves through the custom VAMS Lambda authorizer (never a built-in CDK authorizer); set `allowAnonymous` only for a deliberately unauthenticated path
 -   [ ] **Test Route Paths**: Verify route paths match API documentation
 
 ### **Phase 3: Quality Assurance**
@@ -696,7 +696,9 @@ return {
 };
 ```
 
-### **Rule 6: API Routes MUST Be Registered in apiBuilder-nestedStack.ts**
+### **Rule 6: API Routes MUST Be Registered in an apiBuilder Nested Stack**
+
+Prefer `apiBuilder2-nestedStack.ts` for new endpoints — the primary `apiBuilder-nestedStack.ts` is near the CloudFormation per-stack resource limit. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -710,22 +712,22 @@ const [domain]Service = build[Domain]Service(
 );
 
 // Attach routes following existing patterns
-attachFunctionToApi(scope, [domain]Service, {
+attachFunctionToApi(this, [domain]Service, {
     routePath: "/[domain]",
-    method: apigwv2.HttpMethod.GET,
-    api: api,
+    method: apigateway.HttpMethod.GET,
+    registry: registry,
 });
 
-attachFunctionToApi(scope, [domain]Service, {
+attachFunctionToApi(this, [domain]Service, {
     routePath: "/[domain]/{[domain]Id}",
-    method: apigwv2.HttpMethod.GET,
-    api: api,
+    method: apigateway.HttpMethod.GET,
+    registry: registry,
 });
 
-attachFunctionToApi(scope, [domain]Service, {
+attachFunctionToApi(this, [domain]Service, {
     routePath: "/[domain]",
-    method: apigwv2.HttpMethod.POST,
-    api: api,
+    method: apigateway.HttpMethod.POST,
+    registry: registry,
 });
 ```
 
@@ -1905,7 +1907,7 @@ if __name__ == '__main__':
 -   [ ] Error handling comprehensive with proper exceptions
 -   [ ] CDK lambda builders created with proper permissions
 -   [ ] Storage resources added to interface and builder
--   [ ] API routes registered in apiBuilder-nestedStack.ts
+-   [ ] API routes registered in apiBuilder2-nestedStack.ts (or apiBuilder for a shared function instance)
 -   [ ] Frontend service methods added with proper patterns
 -   [ ] CLI API client methods added with proper exceptions
 
@@ -2301,7 +2303,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 
 -   [ ] Follows `assetFunctions.ts` patterns for lambda builders
 -   [ ] Updates `storageBuilder-nestedStack.ts` for new resources
--   [ ] Registers routes in `apiBuilder-nestedStack.ts`
+-   [ ] Registers routes in `apiBuilder2-nestedStack.ts` (or `apiBuilder` for a shared function instance)
 -   [ ] Configures proper IAM permissions
 -   [ ] Includes KMS key permissions
 -   [ ] Configures VPC/subnet based on config flags
@@ -2482,8 +2484,8 @@ required_table = dynamodb.Table(required_table_name)
 #### **Step 5: Register API Routes**
 
 ```typescript
-// infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts
-// Add route registrations using attachFunctionToApi
+// infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts
+// Add route registrations using attachFunctionToApi (pass the cross-stack `registry`)
 ```
 
 #### **Step 6: Add Frontend Integration**
@@ -2568,7 +2570,7 @@ required_table = dynamodb.Table(required_table_name)
 
 1. **Always** follow `assetFunctions.ts` patterns for lambda builders
 2. **Always** update `storageBuilder-nestedStack.ts` for new resources
-3. **Always** register routes in `apiBuilder-nestedStack.ts`
+3. **Always** register routes in `apiBuilder2-nestedStack.ts` (or `apiBuilder` for a shared function instance)
 4. **Always** configure proper IAM permissions
 5. **Always** include KMS key permissions
 6. **Always** configure VPC/subnet based on config flags

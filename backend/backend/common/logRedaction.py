@@ -20,8 +20,11 @@ import re
 
 REDACTED = "<redacted>"
 
-# Sensitive key names — mirrors the credential keys in customLogging.logger.SENSITIVE_KEYS. Matched
-# case-insensitively.
+# Sensitive key names — the credential keys in customLogging.logger.SENSITIVE_KEYS plus the two that
+# reach a caller only through returned log text: the security-token header, and a Step Functions task
+# token (an opaque capability to complete or fail the pending pipeline task that no IAM policy can
+# resource-scope). Matched case-insensitively. `TaskToken` is unanchored in the JSON rule below, so it
+# also covers the prefixed spellings the pipelines use (`externalSfnTaskToken`, `sfnExternalTaskToken`).
 SENSITIVE_KEYS = [
     "authorization",
     "idJwtToken",
@@ -30,13 +33,23 @@ SENSITIVE_KEYS = [
     "SecretAccessKey",
     "SessionToken",
     "x-amz-security-token",
+    "TaskToken",
 ]
 
 _KEYS_ALT = "|".join(re.escape(k) for k in SENSITIVE_KEYS)
 
+# A quote delimiter, optionally backslash-escaped. CloudWatch stores Step Functions state input and
+# Lambda payloads as ESCAPED JSON, so the same pair reaches the redactor both as `"key": "value"` and
+# as `\"key\": \"value\"` — with more backslashes the deeper the payload was nested. The repeat is
+# BOUNDED: an unbounded `\\*` backtracks quadratically on a long run of backslashes, and log text is
+# caller-influenced content, so a single crafted event could outlast the Lambda timeout. Eight covers
+# three levels of re-encoding, well beyond anything the orchestration emits.
+_Q = r'''(?:\\{0,8}["'])'''
+
 # "key": "value"  /  "key": value  — JSON-style, value up to the next quote or delimiter.
 _JSON_KV = re.compile(
-    r'(?i)(["\']?(?:' + _KEYS_ALT + r')["\']?\s*[:=]\s*)(["\'])(.*?)(\2)'
+    r'(?i)(' + _Q + r'?(?:' + _KEYS_ALT + r')' + _Q + r'?\s*[:=]\s*)('
+    + _Q + r')([^"\']*?)(' + _Q + r')'
 )
 # key=value / key: value — bare (unquoted) value up to whitespace, comma, or delimiter.
 _BARE_KV = re.compile(

@@ -91,12 +91,60 @@ MAX_TAG_DEFAULT_LENGTH = 4096
 # Upper bound on the per-pipeline viewer subfolder appended to an input file's preview prefix.
 MAX_AUX_PREVIEW_SUFFIX_LENGTH = 256
 
+# Upper bound on a serialized systemConfig / executionConfig block. Both are free-form JSON objects
+# stored whole on their row, and systemConfig is snapshotted again per pipeline step on the execution's
+# config record, where it shares that item's text budget. 64 KB is ~100x the largest shipped block
+# (607 bytes), so it bounds a runaway request at parse time — a 400 — instead of an unpersistable item
+# discovered by put_item after the state machine has launched. It also bounds the filter lists as a
+# whole: the per-pattern caps multiply out to far more than one item can hold, while 64 KB still admits
+# the full pattern count at any realistic pattern length.
+MAX_CONFIG_BLOCK_BYTES = 64 * 1024
+
+# executionConfig gets its own ceiling because a DeadlineCloud block legitimately carries an OpenJD
+# template up to MAX_DEADLINE_TEMPLATE_LENGTH, which alone exceeds the systemConfig budget. The
+# allowance is that template plus room for the sibling execution-type blocks around it.
+MAX_EXECUTION_CONFIG_BYTES = MAX_DEADLINE_TEMPLATE_LENGTH + (64 * 1024)
+
 # systemConfig keys whose value is a plain boolean gate. The shared shape validator policies the
 # nested boolean MAPS (assetScope / metadataInputs); these are the top-level scalars, where a truthy
 # string like "false" is stored and read back as True — inverting the gate the author set. For
 # allowCustomTemplateOverride that means accepting caller-supplied template bodies on a pipeline
 # configured to refuse them.
 _SYSTEM_CONFIG_BOOLEAN_KEYS = ("requireTemplate", "allowCustomTemplateOverride")
+
+# Every key a systemConfig block may carry, across the pipeline and workflow vocabularies (the first
+# four are shared; auxPreviewPipelineSuffix / requireTemplate / allowCustomTemplateOverride are
+# pipeline-only, the remainder workflow-only). Both records store the block WHOLESALE and every reader
+# resolves a named key, so an unknown key is neither read nor reported — it is stored, snapshotted per
+# execution, and returned. Rejecting it turns an author's typo into a 400 instead of a setting that
+# silently does nothing.
+_SYSTEM_CONFIG_KEYS = (
+    "inputFileArity", "assetScope", "metadataInputs", "inputFileFilters",
+    "auxPreviewPipelineSuffix", "requireTemplate", "allowCustomTemplateOverride",
+    "concurrencyRestriction", "outputTarget", "allowWorkflowTriggerChaining",
+    "defaultOutputFileBaseExecutionPathExtension",
+)
+
+# Every key an executionConfig block may carry: the common scalars plus the four per-execution-type
+# resource sub-blocks (see pipelineRecords.build_pipeline_execution_config).
+_EXECUTION_CONFIG_KEYS = (
+    "executionType", "waitForCallback", "taskTimeout", "taskHeartbeatTimeout",
+    "lambda", "sqs", "eventBridge", "deadlineCloud",
+)
+
+
+def _validate_config_block_size(cfg, context, max_bytes=MAX_CONFIG_BLOCK_BYTES):
+    """Reject a systemConfig / executionConfig block whose serialized size exceeds `max_bytes`.
+    No-op for a non-dict (the caller reports the type) or an unserializable value (the field's own
+    type validation reports that)."""
+    if not isinstance(cfg, dict):
+        return
+    try:
+        size = len(json.dumps(cfg, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        return
+    if size > max_bytes:
+        raise ValueError(f"{context} must be at most {max_bytes} bytes when serialized")
 
 
 def validate_no_control_characters(value, field_name):
@@ -306,12 +354,26 @@ def _validate_system_config_booleans(system_config, context="systemConfig"):
             raise ValueError(f"{context}.{key} must be a boolean")
 
 
+def validate_system_config_keys(system_config, context="systemConfig"):
+    """Reject a top-level systemConfig key outside the documented set, and bound the block's
+    serialized size. Shared by the pipeline and workflow system-config validation, which accept the
+    same key set. No-op for a non-dict (the shape validator reports the type)."""
+    _validate_config_block_size(system_config, context)
+    if not isinstance(system_config, dict):
+        return
+    for key in system_config:
+        if key not in _SYSTEM_CONFIG_KEYS:
+            raise ValueError(
+                f"{context} has unknown key '{key}'; allowed: {_SYSTEM_CONFIG_KEYS}")
+
+
 def _validate_pipeline_system_config(system_config):
     """Validate a pipeline systemConfig block (inputFileArity enum + assetScope/metadataInputs/
-    inputFileFilters value shapes, the boolean gates, and the preview-suffix path shape). No-op when
-    absent."""
+    inputFileFilters value shapes, the boolean gates, the preview-suffix path shape, and the
+    top-level key set + size bound). No-op when absent."""
     _validate_system_config_shape(system_config, "systemConfig")
     _validate_system_config_booleans(system_config)
+    validate_system_config_keys(system_config)
     if isinstance(system_config, dict):
         _validate_aux_preview_pipeline_suffix(system_config.get("auxPreviewPipelineSuffix"))
 
@@ -480,16 +542,38 @@ MAX_TASK_TIMEOUT_SECONDS = 604800
 WAIT_FOR_CALLBACK_VALUES = ("Enabled", "Disabled")
 
 
-def _validate_execution_config(execution_config):
-    """Validate the executionConfig block beyond executionType: the per-type resource sub-fields
-    (which are baked into the deployed Step Functions definition) and the callback/timeout scalars.
+def _execution_config_sub_block(config, key):
+    """The named per-execution-type sub-block as a dict. An absent/empty value yields {}; a value of
+    any other JSON type is rejected, since every reader of these blocks calls .get() on them."""
+    block = config.get(key)
+    if not block:
+        return {}
+    if not isinstance(block, dict):
+        raise ValueError(f"executionConfig.{key} must be an object")
+    return block
 
-    Mirrors the V1 pipeline model's validation (models/pipelines.py) using the shared validators, so
-    a malformed SQS url / EventBridge ARN/source/detailType, an out-of-bounds taskTimeout, or an
-    invalid waitForCallback is rejected at parse time rather than emitted into a broken state machine.
+
+def _validate_execution_config(execution_config, require_lambda_resource_id=False):
+    """Validate the executionConfig block beyond executionType: the per-type resource sub-fields
+    (which are baked into the deployed Step Functions definition), the top-level key set and size, and
+    the callback/timeout scalars.
+
+    Mirrors the V1 pipeline model's validation using the shared validators, so a malformed SQS url /
+    EventBridge ARN/source/detailType, an out-of-bounds taskTimeout, or an invalid waitForCallback is
+    rejected at parse time rather than emitted into a broken state machine.
+
+    `require_lambda_resource_id` demands a Lambda target rather than accepting an empty one. It is set
+    on the update path, where the stored config is replaced wholesale and nothing fills an absent
+    resourceId, so an empty value would persist a state machine target of "". On create an empty value
+    is the request to auto-provision a function, which the handler does before the row is written.
     Raises ValueError on failure."""
     from common.validators import validate
     config = execution_config or {}
+    _validate_config_block_size(config, "executionConfig", max_bytes=MAX_EXECUTION_CONFIG_BYTES)
+    for key in config:
+        if key not in _EXECUTION_CONFIG_KEYS:
+            raise ValueError(
+                f"executionConfig has unknown key '{key}'; allowed: {_EXECUTION_CONFIG_KEYS}")
     exec_type = config.get("executionType", "Lambda")
 
     checks = {}
@@ -497,8 +581,12 @@ def _validate_execution_config(execution_config):
         # resourceId is the Lambda invoke target baked into the state machine. Accept either a
         # Lambda function ARN (partition-aware) or a bare function name/alias. Reject anything
         # else so a malformed target is caught at authoring time, not at execute time.
-        resource_id = (config.get("lambda") or {}).get("resourceId")
+        resource_id = _execution_config_sub_block(config, "lambda").get("resourceId")
+        if not resource_id and require_lambda_resource_id:
+            raise ValueError("lambda.resourceId is required for the Lambda execution type")
         if resource_id:
+            if not isinstance(resource_id, str):
+                raise ValueError("lambda.resourceId must be a string")
             if resource_id.startswith("arn:"):
                 checks["lambda.resourceId"] = {"value": resource_id, "validator": "ARN"}
             elif not _LAMBDA_FUNCTION_NAME_PATTERN.match(resource_id):
@@ -507,14 +595,14 @@ def _validate_execution_config(execution_config):
     elif exec_type == "SQS":
         # The queue URL becomes the sendMessage task's QueueUrl. An absent value would emit a state
         # machine with an empty target, so it is required here rather than at workflow-save time.
-        queue_url = (config.get("sqs") or {}).get("queueUrl")
+        queue_url = _execution_config_sub_block(config, "sqs").get("queueUrl")
         if not queue_url:
             raise ValueError("sqs.queueUrl is required for the SQS execution type")
         checks["sqs.queueUrl"] = {"value": queue_url, "validator": "SQS_QUEUE_URL"}
     elif exec_type == "EventBridge":
         # busArn is optional (an absent bus resolves to the account's default event bus); source and
         # detailType have task-state defaults as well.
-        eb = config.get("eventBridge") or {}
+        eb = _execution_config_sub_block(config, "eventBridge")
         if eb.get("busArn"):
             checks["eventBridge.busArn"] = {"value": eb["busArn"], "validator": "EVENTBRIDGE_BUS_ARN"}
         if eb.get("source"):
@@ -525,7 +613,7 @@ def _validate_execution_config(execution_config):
     elif exec_type == "DeadlineCloud":
         # createJob only queues the job; completion arrives through the task-token callback, so the
         # callback is mandatory and the farm/queue the job is submitted to must be named.
-        dc = config.get("deadlineCloud") or {}
+        dc = _execution_config_sub_block(config, "deadlineCloud")
         if config.get("waitForCallback") != "Enabled":
             raise ValueError(
                 "waitForCallback must be Enabled for the DeadlineCloud execution type: createJob "

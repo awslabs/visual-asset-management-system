@@ -18,6 +18,21 @@ def mock_client(monkeypatch):
     return client
 
 
+@pytest.fixture
+def real_paginate_client(mock_client):
+    """A mock client whose paginate/unwrap_message are the REAL implementations.
+
+    The page-metadata helpers wrap paginate() rather than replacing it, so a MagicMock paginate
+    cannot show what the assembled result holds.
+    """
+    mock_client.config = server.CONFIG
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.paginate = lambda *args, **kwargs: server.VamsClient.paginate(
+        mock_client, *args, **kwargs
+    )
+    return mock_client
+
+
 def test_list_databases_uses_pagination(mock_client):
     mock_client.paginate.return_value = {"Items": [{"databaseId": "db1"}], "count": 1}
     result = server.list_databases()
@@ -226,6 +241,30 @@ def test_mutating_tools_live_inside_their_gate_block():
         assert by_name[name] < writes, f"{name} is a read tool but sits in a gated block"
 
 
+def test_no_read_tool_calls_a_mutating_apiclient_method():
+    """The read section is registered unconditionally, so a mutating call placed there is reachable
+    with both gates off — a security defect, not a mis-filing. Checked over EVERY read tool rather
+    than a representative few."""
+    writes = _line_of("if CONFIG.enable_writes:")
+    mutating_prefixes = (
+        "create_", "update_", "delete_", "set_", "archive_", "unarchive_", "execute_", "rerun_",
+        "abort_", "permanent_", "revert_", "move_", "copy_", "import_", "reset_", "initialize_",
+        "complete_",
+    )
+
+    offenders = []
+    for line, name in _tool_definitions():
+        if line >= writes:
+            continue
+        source = _source_of(name)
+        for called in re.findall(r"CLIENT\.api\.(\w+)\(", source):
+            if called.startswith(mutating_prefixes):
+                offenders.append(f"{name} -> APIClient.{called}")
+        # A raw POST escape hatch would bypass the APIClient check above.
+        assert "CLIENT.post_json" not in source, f"{name} POSTs raw from the read section"
+    assert not offenders, f"read-section tools calling mutating APIClient methods: {offenders}"
+
+
 @pytest.mark.asyncio
 async def test_destructive_tools_gated_off_by_default():
     names = {t.name for t in await server.mcp.list_tools()}
@@ -275,6 +314,132 @@ def test_list_executions_caps_page_size(mock_client):
     mock_client.paginate.return_value = {"Items": [], "count": 0}
     server.list_executions()
     assert mock_client.paginate.call_args.kwargs["page_size"] <= 50
+
+
+# --- Page metadata a list must not swallow ---------------------------------
+#
+# paginate() rebuilds its result from the accumulated items alone. A `warnings` entry names rows a
+# page WITHHELD, so dropping it turns a short list into one that reads as complete — the agent then
+# reports an understated count or "no such execution".
+
+_WITHHELD_WARNING = (
+    "This page reached the limit of 200 distinct assets resolved for permission checks, so some "
+    "executions were not evaluated and are not listed."
+)
+
+
+def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginate_client):
+    # The final page reports no NextToken, so nothing else would mark this result incomplete.
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [{"workflowExecutionId": "e1"}], "NextToken": "t1",
+                     "warnings": [_WITHHELD_WARNING]}},
+        {"message": {"Items": [{"workflowExecutionId": "e2"}], "warnings": [_WITHHELD_WARNING]}},
+    ]
+
+    result = server.list_executions()
+
+    assert [row["workflowExecutionId"] for row in result["Items"]] == ["e1", "e2"]
+    # Reported once even though both pages carried it.
+    assert result["warnings"] == [_WITHHELD_WARNING]
+    assert result["truncated"] is True
+
+
+def test_list_executions_echoes_the_applied_date_window(real_paginate_client):
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "filterStartDate": "2026-05-11", "filterEndDate": "2026-08-09"}},
+    ]
+
+    result = server.list_executions()
+
+    # Without the echo an agent is never told it saw only the last 90 days.
+    assert result["filterStartDate"] == "2026-05-11"
+    assert result["filterEndDate"] == "2026-08-09"
+
+
+def test_list_executions_clean_walk_adds_no_warning_keys(real_paginate_client):
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [{"workflowExecutionId": "e1"}]}},
+    ]
+
+    result = server.list_executions()
+
+    assert result["count"] == 1, "items must still be read from the page (one unwrap, not two)"
+    assert "warnings" not in result
+    assert result.get("truncated") is None
+
+
+def test_list_executions_forwards_the_filters_on_every_page(real_paginate_client):
+    real_paginate_client.api.list_executions.side_effect = [
+        {"message": {"Items": [], "NextToken": "t1"}},
+        {"message": {"Items": []}},
+    ]
+
+    server.list_executions(status="FAILED", workflow_id="wf1")
+
+    for call in real_paginate_client.api.list_executions.call_args_list:
+        assert call.kwargs["params"]["status"] == "FAILED"
+        assert call.kwargs["params"]["workflowId"] == "wf1"
+
+
+# --- list_workflows include_archived --------------------------------------
+
+
+def test_list_workflows_forwards_include_archived(mock_client):
+    """An archived workflow is filtered out server-side, so unarchive_workflow's required id is
+    only discoverable through this flag."""
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_workflows(include_archived=True)
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    assert mock_client.api.list_workflows.call_args.kwargs["include_archived"] is True
+
+
+def test_list_workflows_excludes_archived_by_default(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.list_workflows()
+
+    mock_client.paginate.call_args.args[0]({"pageSize": 100})
+    assert mock_client.api.list_workflows.call_args.kwargs["include_archived"] is False
+
+
+# --- get_execution_logs full-mode paging ----------------------------------
+
+
+def test_get_execution_logs_forwards_the_full_mode_paging_params(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {"events": []}
+
+    server.get_execution_logs(
+        "e1", mode="full", limit=1000, next_token="tok", filter_pattern="Traceback",
+        start_time=1, end_time=2,
+    )
+
+    params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
+    assert params["limit"] == 1000
+    assert params["nextToken"] == "tok"
+    assert params["filterPattern"] == "Traceback"
+    assert params["startTime"] == 1
+    assert params["endTime"] == 2
+
+
+def test_get_execution_logs_omits_full_mode_params_in_truncated_mode(mock_client):
+    """Truncated mode serves stored text and acts on none of these, so they are not sent."""
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {}
+
+    server.get_execution_logs("e1", mode="truncated", limit=500, next_token="tok")
+
+    params = mock_client.api.get_execution_logs.call_args.kwargs["params"]
+    assert params == {"mode": "truncated"}
+
+
+def test_get_execution_logs_sends_only_mode_when_nothing_is_narrowed(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_logs.return_value = {}
+
+    server.get_execution_logs("e1")
+
+    assert mock_client.api.get_execution_logs.call_args.kwargs["params"] == {"mode": "full"}
 
 
 # --- page_execution_detail_metadata ---------------------------------------
@@ -416,6 +581,66 @@ def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
 
 
+def test_rerun_execution_docstring_says_the_group_id_assigns_rather_than_selects():
+    """executionGroupId sets the NEW execution's group membership; exactly one execution is
+    launched. A docstring promising a group re-run makes an agent report runs that never started."""
+    docstring = _docstring_of("rerun_execution").lower()
+    assert "assigns" in docstring
+    assert "does not select" in docstring
+    # And it must not still promise the inverted behaviour.
+    assert "re-run every execution in the group" not in docstring
+
+
+def test_get_execution_details_docstring_does_not_gate_the_config_location_on_truncation():
+    """renderedConfigLocation is emitted whenever the S3 object exists. Describing it as
+    truncation-only means an agent diagnoses from the pre-system-tag inline body instead."""
+    docstring = _docstring_of("get_execution_details")
+    assert "renderedConfigLocation" in docstring
+    assert "NOT only on truncation" in docstring
+    # The two fields are different stages of the same body, and the docstring must say which is which.
+    assert "PRE-system-tag" in docstring
+    assert "FULLY" in docstring
+    assert "When `renderedConfigTruncated` is true the entry also carries" not in docstring
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # An agent that cannot page cannot reach a real container's error, and reports a wrong
+    # conclusion from the first 100 events rather than an incomplete read. Matched
+    # case-insensitively; the docstring capitalizes the time unit for emphasis.
+    ["limit", "nextToken", "1000", "milliseconds"],
+)
+def test_get_execution_logs_docstring_describes_full_mode_paging(fragment):
+    assert fragment.lower() in _docstring_of("get_execution_logs").lower()
+
+
+def test_get_execution_logs_docstring_scopes_the_token_to_the_events_list():
+    """The token is CloudWatch's and continues `events` only; `sfnHistoryEvents` comes from the Step
+    Functions history and is served on a first call. Promising the token carries both makes an agent
+    page away from the one section that is always available."""
+    docstring = _docstring_of("get_execution_logs")
+    assert "sfnHistoryEvents" in docstring
+    assert "continues only the `events` list" in docstring
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    # A page can withhold rows; the docstring is where an agent learns a short list may be one.
+    ["warnings", "WITHHELD", "truncated", "filterStartDate"],
+)
+def test_list_executions_docstring_describes_withheld_rows(fragment):
+    assert fragment in _docstring_of("list_executions")
+
+
+@pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline"])
+def test_pipeline_save_docstrings_tell_the_agent_to_relay_warnings(tool):
+    assert "warnings" in _docstring_of(tool)
+
+
+def test_list_workflows_docstring_mentions_archived_discovery():
+    assert "include_archived" in _docstring_of("list_workflows")
+
+
 # Every pipeline/workflow/execution APIClient method returns the handler's raw
 # {"message": ...} envelope, unlike the asset/database methods. paginate() unwraps
 # it for list tools; single-object and write tools must unwrap it themselves, or an
@@ -500,3 +725,61 @@ def test_orchestration_destructive_tools_unwrap_the_message_envelope(tool):
     assert "unwrap_message" in _source_of(tool), (
         f"{tool} returns the raw {{'message': ...}} envelope, a nesting level no other tool has"
     )
+
+
+# A pipeline save reports its non-blocking warnings as a SIBLING of `message`, and the response model
+# has no warnings field — so plain unwrapping discards the only copy and the agent reports a clean
+# success for a pipeline that saved into a silently broken state.
+
+
+@pytest.fixture
+def sibling_warning_client(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    return mock_client
+
+
+def test_unwrap_message_with_warnings_keeps_the_sibling_array(sibling_warning_client):
+    payload = server._unwrap_message_with_warnings(
+        {"message": {"pipelineId": "p1"}, "warnings": ["no default template chosen"]}
+    )
+    assert payload == {"pipelineId": "p1", "warnings": ["no default template chosen"]}
+    assert "message" not in payload, "the envelope must still be unwrapped exactly once"
+
+
+def test_unwrap_message_with_warnings_matches_plain_unwrap_when_clean(sibling_warning_client):
+    page = {"message": {"pipelineId": "p1"}}
+    assert server._unwrap_message_with_warnings(page) == server.VamsClient.unwrap_message(page)
+
+
+def test_unwrap_message_with_warnings_passes_unenveloped_payloads_through(sibling_warning_client):
+    """Asset/database APIClient methods return already-unwrapped data. Re-unwrapping or copying one
+    would change the shape those tools return."""
+    asset = {"assetId": "a1", "warnings": ["ignored"]}
+    assert server._unwrap_message_with_warnings(asset) is asset
+
+
+def test_unwrap_message_with_warnings_handles_a_string_message(sibling_warning_client):
+    """An abort answers {"message": "Execution aborted"} — a string is not an envelope, so the whole
+    dict (warnings included) passes through."""
+    abort = {"message": "Execution aborted", "warnings": ["sub-process left running"]}
+    assert server._unwrap_message_with_warnings(abort) == abort
+
+
+@pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline", "unarchive_pipeline"])
+def test_pipeline_saves_preserve_sibling_warnings(tool):
+    source = _source_of(tool)
+    assert "_unwrap_message_with_warnings" in source, (
+        f"{tool} drops the sibling `warnings` array, so a broken save reports a clean success"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    # These either nest warnings inside the response model or answer with a string `message`, so
+    # plain unwrapping loses nothing.
+    ["create_workflow", "update_workflow", "execute_workflow", "rerun_execution", "abort_execution"],
+)
+def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
+    source = _source_of(tool)
+    assert "_unwrap_message_with_warnings" not in source
+    assert "unwrap_message" in source

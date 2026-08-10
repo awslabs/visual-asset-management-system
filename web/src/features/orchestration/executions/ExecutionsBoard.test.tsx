@@ -652,6 +652,136 @@ describe("ExecutionsBoard", () => {
         });
     });
 
+    /**
+     * A custom range's lower bound is not optional in the request, only in the form.
+     *
+     * The server applies a 90-day floor to any listing that arrives without a start date, so an
+     * end-only range would be clipped to the last 90 days — and inverted against an end date older
+     * than that, which the key-range BETWEEN rejects outright. "Everything before X" therefore has to
+     * send an explicit epoch lower bound.
+     */
+    it("sends an explicit lower bound for a custom range with only an end date", async () => {
+        const { useExecutions } = require("../api/queries");
+        renderBoard([]);
+
+        await userEvent.selectOptions(
+            screen.getByLabelText("Time window"),
+            screen.getByRole("option", { name: "Custom range…" })
+        );
+        await userEvent.type(screen.getByLabelText("Started on or before"), "2026-03-31");
+
+        await waitFor(() => {
+            const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+            expect(lastFilters.filterEndDate).toBe("2026-03-31T23:59:59Z");
+            expect(lastFilters.filterStartDate).toBe("1970-01-01T00:00:00Z");
+        });
+    });
+
+    it("keeps the chosen lower bound when both ends of a custom range are set", async () => {
+        const { useExecutions } = require("../api/queries");
+        renderBoard([]);
+
+        await userEvent.selectOptions(
+            screen.getByLabelText("Time window"),
+            screen.getByRole("option", { name: "Custom range…" })
+        );
+        await userEvent.type(screen.getByLabelText("Started on or after"), "2026-01-01");
+        await userEvent.type(screen.getByLabelText("Started on or before"), "2026-01-31");
+
+        await waitFor(() => {
+            const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+            expect(lastFilters.filterStartDate).toBe("2026-01-01T00:00:00Z");
+            expect(lastFilters.filterEndDate).toBe("2026-01-31T23:59:59Z");
+        });
+    });
+
+    it("sends the custom range on the asset tab too, where both bounds apply", async () => {
+        const { useExecutions } = require("../api/queries");
+        renderBoard([], { kind: "asset", databaseId: "db-1", assetId: "a-1" });
+
+        await userEvent.selectOptions(
+            screen.getByLabelText("Time window"),
+            screen.getByRole("option", { name: "Custom range…" })
+        );
+        await userEvent.type(screen.getByLabelText("Started on or before"), "2026-01-31");
+
+        await waitFor(() => {
+            const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+            expect(lastFilters.filterEndDate).toBe("2026-01-31T23:59:59Z");
+        });
+    });
+
+    /**
+     * A page can withhold rows it could not evaluate against the caller's constraints and say so in
+     * `warnings`. Dropping that leaves a short page reading as a quiet window.
+     */
+    it("shows the list response's warnings above the rows", () => {
+        const { useExecutions } = require("../api/queries");
+        useExecutions.mockReturnValue({
+            data: {
+                pages: [
+                    {
+                        Items: [],
+                        warnings: [
+                            "This page reached the limit of 500 distinct assets; some executions were not listed.",
+                        ],
+                    },
+                ],
+                pageParams: [],
+            },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: true,
+            isFetchingNextPage: false,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByRole("status")).toHaveTextContent(/limit of 500 distinct assets/);
+    });
+
+    it("reports each distinct warning once across loaded pages", () => {
+        const { useExecutions } = require("../api/queries");
+        const warning = "This page reached the limit of 500 distinct assets.";
+        useExecutions.mockReturnValue({
+            data: {
+                pages: [
+                    { Items: [], warnings: [warning] },
+                    { Items: [], warnings: [warning, "A second notice."] },
+                ],
+                pageParams: [],
+            },
+            isLoading: false,
+            error: null,
+            fetchNextPage: jest.fn(),
+            hasNextPage: false,
+            isFetchingNextPage: false,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionsBoard scope={{ kind: "global" }} />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getAllByText(warning)).toHaveLength(1);
+        expect(screen.getByText("A second notice.")).toBeInTheDocument();
+    });
+
+    it("renders no notice banner when the pages carry no warnings", () => {
+        renderBoard([]);
+        expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
     it("offers Load more when a page returns no visible rows but more pages remain", async () => {
         const { useExecutions } = require("../api/queries");
         const fetchNextPage = jest.fn();
@@ -708,7 +838,7 @@ describe("ExecutionsBoard re-run feedback", () => {
         executionStartDate: "2026-08-01T10:00:00Z",
     };
 
-    const setup = (rerunImpl: jest.Mock) => {
+    const setup = (rerunImpl: jest.Mock, row: Execution = ROW) => {
         queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         const { useExecutions, useExecutionActions } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
@@ -719,7 +849,7 @@ describe("ExecutionsBoard re-run feedback", () => {
             permanentDeleteExecution: { mutateAsync: jest.fn() },
         });
         useExecutions.mockReturnValue({
-            data: { pages: [{ Items: [ROW] }], pageParams: [] },
+            data: { pages: [{ Items: [row] }], pageParams: [] },
             isLoading: false,
             error: null,
             fetchNextPage: jest.fn(),
@@ -788,6 +918,24 @@ describe("ExecutionsBoard re-run feedback", () => {
         await clickRerun();
         await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
         expect(mockToast.success.mock.calls[0][1].description).toMatch(/new execution/i);
+    });
+
+    /**
+     * Re-running a row that belongs to a group launches exactly ONE execution — the group id rides
+     * along as a label so the new run files with its siblings. Claiming the group was replayed leaves
+     * the operator believing work happened that did not.
+     */
+    it("does not claim the whole group was re-run", async () => {
+        setup(jest.fn().mockResolvedValue({ executionId: "exec-new" }), {
+            ...ROW,
+            executionGroupId: "grp-7",
+        });
+        await clickRerun();
+        await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
+        const description = mockToast.success.mock.calls[0][1].description;
+        expect(description).not.toMatch(/re-ran every execution/i);
+        expect(description).toContain("grp-7");
+        expect(description).toMatch(/were not re-run/i);
     });
 });
 

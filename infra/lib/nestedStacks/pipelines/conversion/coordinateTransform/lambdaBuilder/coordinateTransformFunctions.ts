@@ -202,6 +202,9 @@ export function buildVamsExecuteCoordinateTransformFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "vamsExecuteCoordinateTransformPipeline";
+    const region = cdk.Stack.of(scope).region;
+    const account = cdk.Stack.of(scope).account;
+
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
             path.join(
@@ -234,6 +237,15 @@ export function buildVamsExecuteCoordinateTransformFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     suppressCdkNagLambda(fun);
+
+    // The workflow task waits on a callback token, so a failure in this lambda must be reported
+    // back to Step Functions instead of leaving the task pending until its timeout.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+            resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+        })
+    );
 
     return fun;
 }

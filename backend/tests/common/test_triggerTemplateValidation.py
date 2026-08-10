@@ -3,6 +3,8 @@
 
 """Unit tests for common.workflows.triggerTemplateValidation + required_tags_without_default."""
 
+import dis
+import inspect
 from unittest.mock import MagicMock
 
 import pytest
@@ -78,7 +80,7 @@ class TestTemplateNotBreakingTriggers:
              "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": "tmpl1"}}},
         ])
         errors = validate_template_not_breaking_triggers(
-            table, MagicMock(), "db1", "pipe1", "tmpl1",
+            table, "db1", "pipe1", "tmpl1",
             [{"tagKey": "q", "required": True, "default": "x"}])
         assert errors == []
 
@@ -88,7 +90,7 @@ class TestTemplateNotBreakingTriggers:
              "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": "tmpl1"}}},
         ])
         errors = validate_template_not_breaking_triggers(
-            table, MagicMock(), "db1", "pipe1", "tmpl1",
+            table, "db1", "pipe1", "tmpl1",
             [{"tagKey": "q", "required": True}])
         assert len(errors) == 1
         assert "q" in errors[0]
@@ -101,7 +103,7 @@ class TestTemplateNotBreakingTriggers:
              "triggerConfig": {"defaultTemplateIds": {"db1:other": "tmplX"}}},
         ])
         errors = validate_template_not_breaking_triggers(
-            table, MagicMock(), "db1", "pipe1", "tmpl1",
+            table, "db1", "pipe1", "tmpl1",
             [{"tagKey": "q", "required": True}])
         assert errors == []
 
@@ -154,7 +156,7 @@ class TestTriggersReferencingTemplate:
             {"workflowDatabaseId": "db1", "workflowId": "wf2", "triggerType": "fileUpload",
              "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": "other"}}},
         ])
-        hits = triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1")
+        hits = triggers_referencing_template(table, "db1", "pipe1", "tmpl1")
         assert hits == [("db1", "wf1", "fileUpload")]
         assert table.query.call_args.kwargs["IndexName"] == "TriggersByBaseTypeGSI"
         table.scan.assert_not_called()
@@ -174,7 +176,7 @@ class TestTriggersReferencingTemplate:
              "triggerBaseType": "fileUpload", "triggerId": "nightly",
              "triggerConfig": {"defaultTemplateIds": {"db1:pipe1": "tmpl1"}}},
         ])
-        hits = triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1")
+        hits = triggers_referencing_template(table, "db1", "pipe1", "tmpl1")
         # The returned triggerType is the row's KEY, so the caller can name the exact trigger.
         assert hits == [("db1", "wf1", "fileUpload#nightly")]
         assert table.query.call_args.kwargs["IndexName"] == "TriggersByBaseTypeGSI"
@@ -182,4 +184,37 @@ class TestTriggersReferencingTemplate:
     def test_read_error_returns_empty(self):
         table = MagicMock()
         table.query.side_effect = RuntimeError("throttled")
-        assert triggers_referencing_template(table, MagicMock(), "db1", "pipe1", "tmpl1") == []
+        assert triggers_referencing_template(table, "db1", "pipe1", "tmpl1") == []
+
+
+@pytest.mark.unit
+class TestTriggerLookupSignatures:
+    """The trigger-reference lookup reads only the triggers table (TriggersByBaseTypeGSI). A workflow
+    table parameter in either signature would read as a membership/archived filter this module does
+    not apply, and both public entry points must stay callable with the triggers table alone."""
+
+    def test_signatures_take_no_workflow_table(self):
+        for fn in (triggers_referencing_template, validate_template_not_breaking_triggers):
+            params = list(inspect.signature(fn).parameters)
+            assert params[0] == "triggers_table"
+            assert "workflows_table" not in params
+
+    def test_no_unused_parameters(self):
+        def loaded_names(code):
+            """Every local/closure name the code object actually READS (parameters are locals, so a
+            parameter that is never loaded emits no instruction naming it). LOAD_FAST_LOAD_FAST
+            carries a tuple of two names, so each argval is flattened."""
+            names = set()
+            for instr in dis.get_instructions(code):
+                if instr.opname.startswith(("LOAD_FAST", "LOAD_DEREF")):
+                    arg = instr.argval
+                    names.update(arg if isinstance(arg, tuple) else (arg,))
+            for const in code.co_consts:
+                if hasattr(const, "co_code"):  # nested function / comprehension
+                    names |= loaded_names(const)
+            return names
+
+        for fn in (validate_trigger_default_templates, triggers_referencing_template,
+                   validate_template_not_breaking_triggers, pipeline_trigger_template_warnings):
+            unused = set(inspect.signature(fn).parameters) - loaded_names(fn.__code__)
+            assert not unused, f"{fn.__name__} has unused parameter(s): {sorted(unused)}"

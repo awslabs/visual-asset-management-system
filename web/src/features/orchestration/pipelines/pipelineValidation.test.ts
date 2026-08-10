@@ -298,13 +298,17 @@ describe("pipelineValidation", () => {
         expect(r.ok).toBe(false);
     });
 
-    it("accepts valid DeadlineCloud with farmId+queueId and Enabled callback", () => {
+    it("accepts valid DeadlineCloud with farmId+queueId, a template and Enabled callback", () => {
         const r = validatePipeline({
             pipelineName: "x",
             executionConfig: {
                 executionType: "DeadlineCloud",
                 waitForCallback: "Enabled",
-                deadlineCloud: { farmId: "farm-123", queueId: "queue-123" },
+                deadlineCloud: {
+                    farmId: "farm-123",
+                    queueId: "queue-123",
+                    template: "specificationVersion: jobtemplate-2023-09",
+                },
             },
         } as any);
         expect(r.ok).toBe(true);
@@ -319,6 +323,7 @@ describe("pipelineValidation", () => {
                 deadlineCloud: {
                     farmId: "farm-123",
                     queueId: "queue-123",
+                    template: "specificationVersion: jobtemplate-2023-09",
                     // A blank number input yields NaN under valueAsNumber and "" without it.
                     priority: NaN,
                     maxRetriesPerTask: "",
@@ -335,5 +340,161 @@ describe("pipelineValidation", () => {
             executionConfig: { executionType: "InvalidType" as any },
         } as any);
         expect(r.ok).toBe(false);
+    });
+
+    // Every stored pipeline carries all four per-type sub-blocks, empty for the unused types
+    // (common/workflows/pipelineRecords.py build_pipeline_execution_config), so the irrelevant ones
+    // must not be judged against their required fields.
+    describe("the stored shape every pipeline record carries", () => {
+        const storedLambdaConfig = {
+            executionType: "Lambda" as const,
+            waitForCallback: "Disabled" as const,
+            taskTimeout: "",
+            taskHeartbeatTimeout: "",
+            lambda: {},
+            sqs: {},
+            eventBridge: {},
+            deadlineCloud: {},
+        };
+
+        it("accepts a stored Lambda pipeline whose unused sub-blocks are empty objects", () => {
+            const r = validatePipeline({
+                pipelineId: "stored-pipe",
+                pipelineName: "Stored",
+                executionConfig: storedLambdaConfig,
+            } as any);
+            expect(r.errors).toBeUndefined();
+            expect(r.ok).toBe(true);
+        });
+
+        it("accepts a stored SQS pipeline whose other sub-blocks are empty objects", () => {
+            const r = validatePipeline({
+                pipelineName: "Stored SQS",
+                executionConfig: {
+                    ...storedLambdaConfig,
+                    executionType: "SQS",
+                    sqs: { queueUrl: "https://sqs.us-east-1.amazonaws.com/123456789012/queue" },
+                },
+            } as any);
+            expect(r.ok).toBe(true);
+        });
+
+        it("accepts a stored DeadlineCloud pipeline whose other sub-blocks are empty objects", () => {
+            const r = validatePipeline({
+                pipelineName: "Stored DC",
+                executionConfig: {
+                    ...storedLambdaConfig,
+                    executionType: "DeadlineCloud",
+                    waitForCallback: "Enabled",
+                    deadlineCloud: {
+                        farmId: "farm-1",
+                        queueId: "queue-1",
+                        template: "specificationVersion: jobtemplate-2023-09",
+                    },
+                },
+            } as any);
+            expect(r.ok).toBe(true);
+        });
+
+        it("ignores a stale sub-block left by an abandoned execution type", () => {
+            const r = validatePipeline({
+                pipelineName: "Explored types",
+                executionConfig: {
+                    executionType: "Lambda",
+                    // What react-hook-form retains after the user selected SQS, typed nothing, and
+                    // switched back to Lambda (shouldUnregister defaults to false).
+                    sqs: { queueUrl: "" },
+                    eventBridge: { busArn: "", source: "", detailType: "" },
+                },
+            } as any);
+            expect(r.errors).toBeUndefined();
+            expect(r.ok).toBe(true);
+        });
+
+        it("still requires the ACTIVE type's fields", () => {
+            const r = validatePipeline({
+                pipelineName: "x",
+                executionConfig: { ...storedLambdaConfig, executionType: "SQS" },
+            } as any);
+            expect(r.ok).toBe(false);
+            expect((r.errors as Record<string, string>)["executionConfig.sqs.queueUrl"]).toBe(
+                "SQS queueUrl is required"
+            );
+        });
+    });
+
+    // The ASL builder embeds the OpenJD template verbatim and refuses to generate a task state
+    // without it (common/workflows/stepfunctions_builder.py DeadlineCloudTaskBuilder), so a pipeline
+    // saved without one breaks every workflow that references it.
+    describe("DeadlineCloud template and bounded settings", () => {
+        const dcConfig = (deadlineCloud: Record<string, any>) => ({
+            pipelineName: "x",
+            executionConfig: {
+                executionType: "DeadlineCloud" as const,
+                waitForCallback: "Enabled" as const,
+                deadlineCloud: { farmId: "farm-1", queueId: "queue-1", ...deadlineCloud },
+            },
+        });
+
+        it("requires the job template", () => {
+            const r = validatePipeline(dcConfig({}) as any);
+            expect(r.ok).toBe(false);
+            expect(
+                (r.errors as Record<string, string>)["executionConfig.deadlineCloud.template"]
+            ).toMatch(/template is required/);
+        });
+
+        it("rejects a lower-case templateType the backend refuses", () => {
+            const r = validatePipeline(dcConfig({ template: "t:", templateType: "yaml" }) as any);
+            expect(r.ok).toBe(false);
+            expect(
+                (r.errors as Record<string, string>)["executionConfig.deadlineCloud.templateType"]
+            ).toMatch(/JSON, YAML/);
+        });
+
+        it("accepts the two templateType values the backend allows", () => {
+            ["JSON", "YAML"].forEach((templateType) => {
+                expect(validatePipeline(dcConfig({ template: "t:", templateType }) as any).ok).toBe(
+                    true
+                );
+            });
+        });
+
+        it("rejects negative priority and retry counts", () => {
+            const r = validatePipeline(
+                dcConfig({
+                    template: "t:",
+                    priority: -5,
+                    maxRetriesPerTask: -3,
+                    maxFailedTasksCount: -1,
+                }) as any
+            );
+            expect(r.ok).toBe(false);
+            const errors = r.errors as Record<string, string>;
+            expect(errors["executionConfig.deadlineCloud.priority"]).toMatch(/negative/);
+            expect(errors["executionConfig.deadlineCloud.maxRetriesPerTask"]).toMatch(/negative/);
+            expect(errors["executionConfig.deadlineCloud.maxFailedTasksCount"]).toMatch(/negative/);
+        });
+
+        it("rejects a fractional priority the createJob task would truncate", () => {
+            const r = validatePipeline(dcConfig({ template: "t:", priority: 12.5 }) as any);
+            expect(r.ok).toBe(false);
+            expect(
+                (r.errors as Record<string, string>)["executionConfig.deadlineCloud.priority"]
+            ).toMatch(/whole number/);
+        });
+
+        it("accepts zero, the lowest valid priority", () => {
+            const r = validatePipeline(dcConfig({ template: "t:", priority: 0 }) as any);
+            expect(r.ok).toBe(true);
+        });
+
+        it("rejects a template beyond the state-machine definition budget", () => {
+            const r = validatePipeline(dcConfig({ template: "y".repeat(256 * 1024 + 1) }) as any);
+            expect(r.ok).toBe(false);
+            expect(
+                (r.errors as Record<string, string>)["executionConfig.deadlineCloud.template"]
+            ).toMatch(/Cannot exceed/);
+        });
     });
 });

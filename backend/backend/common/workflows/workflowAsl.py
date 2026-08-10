@@ -1,21 +1,21 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Workflow V2 -> Step Functions ASL adapter.
+"""Workflow record -> Step Functions ASL adapter.
 
-The shared ASL generator (common/workflows/workflowAslBuilder.generate_workflow_asl) consumes
-V1-shaped pipeline dicts — it reads each pipeline's `name`, `pipelineExecutionType`,
-`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, and a `userProvidedResource` JSON string.
-The pipeline V2 data model stores that information structurally in each pipeline record's
-`executionConfig` map. This module bridges the two: `to_asl_pipeline_dict` maps a V2 pipeline record +
-its workflow job name into the V1-shaped dict the generator/builders expect.
+The shared ASL generator (common/workflows/workflowAslBuilder.generate_workflow_asl) consumes flat
+pipeline dicts — it reads each pipeline's `name`, `pipelineExecutionType`, `waitForCallback`,
+`taskTimeout`, `taskHeartbeatTimeout`, and a `userProvidedResource` JSON string. A pipeline record
+stores that information structurally in its `executionConfig` map. This module bridges the two:
+`to_asl_pipeline_dict` maps a pipeline record + its workflow job name into the flat dict the
+generator/builders expect.
 
 `deploy_state_machine` generates the full ASL (per-pipeline task states + interim-tracking /
 error-handler / process-output scaffolding) and creates or updates the Step Functions state machine
-with create_state_machine/update_state_machine. The execution-overhaul Lambda names + IAM role +
-partition it needs are read LAZILY from the environment inside the function (not at import), so this
-module keeps its no-AWS/no-env import contract: importing it — as the pipeline/workflow read paths and
-tests do — triggers no boto3 client build and no env lookup.
+with create_state_machine/update_state_machine. The scaffolding Lambda names + IAM role + partition it
+needs are read LAZILY from the environment inside the function (not at import), so this module keeps
+its no-AWS/no-env import contract: importing it — as the pipeline/workflow read paths and tests do —
+triggers no boto3 client build and no env lookup.
 """
 
 import json
@@ -39,10 +39,10 @@ _retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
 
 def _execution_config_to_user_resource(execution_config):
-    """Map a V2 executionConfig map to the V1 `userProvidedResource` dict the task builders read.
+    """Map an executionConfig map to the `userProvidedResource` dict the task builders read.
 
     The builders read: resourceId (Lambda fn / SQS QueueUrl / EventBridge bus), resourceType,
-    eventSource / eventDetailType (EventBridge), and the deadline* fields (DeadlineCloud). The V2
+    eventSource / eventDetailType (EventBridge), and the deadline* fields (DeadlineCloud). The stored
     executionConfig nests these under per-type blocks (lambda/sqs/eventBridge/deadlineCloud)."""
     execution_config = execution_config or {}
     exec_type = execution_config.get("executionType", "Lambda")
@@ -82,9 +82,9 @@ def _execution_config_to_user_resource(execution_config):
 
 
 def to_asl_pipeline_dict(pipeline_record, job_name=""):
-    """Map a V2 pipeline record (+ workflow-ref job name) to the V1-shaped pipeline dict the shared
-    ASL generator + task builders consume. `name` uses the workflow ref's job name when provided,
-    else the pipeline id (the generator uses `name` for state/job names + output-path templates)."""
+    """Map a pipeline record (+ workflow-ref job name) to the flat pipeline dict the shared ASL
+    generator + task builders consume. `name` uses the workflow ref's job name when provided, else
+    the pipeline id (the generator uses `name` for state/job names + output-path templates)."""
     execution_config = pipeline_record.get("executionConfig", {}) or {}
     return {
         "name": job_name or pipeline_record.get("pipelineId", ""),
@@ -99,12 +99,12 @@ def to_asl_pipeline_dict(pipeline_record, job_name=""):
 
 
 def to_asl_pipeline_dicts(ref_records):
-    """Map a list of (ref, pipeline_record) tuples (workflow order) to V1-shaped pipeline dicts."""
+    """Map a list of (ref, pipeline_record) tuples (workflow order) to flat pipeline dicts."""
     return [to_asl_pipeline_dict(rec, getattr(ref, "jobName", "") or "") for ref, rec in ref_records]
 
 
 def _deploy_env():
-    """Read the execution-overhaul deployment values from the environment (lazily, so import stays
+    """Read the state-machine deployment values from the environment (lazily, so import stays
     AWS/env-free). Raises if a required value is unset."""
     return {
         "process_workflow_output_function": os.environ["PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME"],
@@ -151,14 +151,13 @@ def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="")
 
     Creates a new state machine when there is no existing ARN (or the recorded ARN no longer exists —
     the orphaned-record case), otherwise updates the existing one in place (preserving its ARN +
-    execution history). The ASL is produced by the shared generator from the V1-shaped pipeline dicts
-    to_asl_pipeline_dicts(ref_records) yields, using the execution-overhaul Lambda names + IAM role
-    read lazily from the environment.
+    execution history). The ASL is produced by the shared generator from the flat pipeline dicts
+    to_asl_pipeline_dicts(ref_records) yields, using the scaffolding Lambda names + IAM role read
+    lazily from the environment.
 
     job_names are the per-pipeline job names the generator baked into the ASL's output S3 paths
-    (ordered to match ref_records). The caller persists them on the workflow record so the execute
-    handler reconstructs the identical output prefixes — the same parity contract V1 keeps via the
-    workflow record's jobNames.
+    (ordered to match ref_records). The caller persists them on the workflow record's `jobNames` so
+    the execute handler reconstructs the identical output prefixes.
 
     Raises on a deployment failure (missing env, ASL/validation error, or a boto3 error) so the
     caller aborts the save rather than persisting a workflow whose state machine was not deployed."""

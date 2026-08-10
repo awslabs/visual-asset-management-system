@@ -54,6 +54,8 @@ from .exceptions import (
     RateLimitExceededError, RetryExhaustedError,
     PipelineNotFoundError, PipelineAlreadyExistsError, InvalidPipelineDataError,
     PipelineTemplateNotFoundError, PipelineTemplateAlreadyExistsError, InvalidPipelineTemplateDataError,
+    WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
+    InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
 )
@@ -99,9 +101,15 @@ class APIClient:
                     "'vamscli --token-override <new_token> <command>'"
                 )
     
-    def _make_request(self, method: str, endpoint: str, include_auth: bool = True, 
-                     retry_count: int = 0, throttle_retry_count: int = 0, **kwargs) -> requests.Response:
-        """Make HTTP request with error handling and retries for both auth and throttling."""
+    def _make_request(self, method: str, endpoint: str, include_auth: bool = True,
+                     retry_count: int = 0, throttle_retry_count: int = 0,
+                     raise_http_errors: bool = False, **kwargs) -> requests.Response:
+        """Make HTTP request with error handling and retries for both auth and throttling.
+
+        `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
+        of converting it to an `APIError` here, for callers that map the status code and the handler's
+        response body onto their own domain exception.
+        """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
         import time
@@ -171,8 +179,8 @@ class APIClient:
                     
                     # Retry the request
                     return self._make_request(
-                        method, endpoint, include_auth, retry_count, 
-                        throttle_retry_count + 1, **kwargs
+                        method, endpoint, include_auth, retry_count,
+                        throttle_retry_count + 1, raise_http_errors, **kwargs
                     )
                 else:
                     # All retry attempts exhausted
@@ -196,7 +204,7 @@ class APIClient:
                 if self._try_refresh_token(token_before=request_token):
                     return self._make_request(
                         method, endpoint, include_auth, retry_count + 1,
-                        throttle_retry_count, **kwargs
+                        throttle_retry_count, raise_http_errors, **kwargs
                     )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
@@ -222,7 +230,7 @@ class APIClient:
                 if self._try_refresh_token(token_before=request_token):
                     return self._make_request(
                         method, endpoint, include_auth, retry_count + 1,
-                        throttle_retry_count, **kwargs
+                        throttle_retry_count, raise_http_errors, **kwargs
                     )
                 else:
                     # Refresh failed - could be expired token or permission issue
@@ -245,9 +253,13 @@ class APIClient:
             # Re-raise specific errors without wrapping
             raise
         except requests.exceptions.HTTPError as e:
+            if raise_http_errors:
+                # The caller maps the status code and the handler's body itself.
+                raise
+
             # Handle other HTTP errors with appropriate messages
             status_code = e.response.status_code
-            
+
             if status_code == 429:
                 # This shouldn't happen due to the check above, but just in case
                 raise RateLimitExceededError(f"Rate limit exceeded: {e}")
@@ -3497,15 +3509,25 @@ class APIClient:
     # ------------------------------------------------------------------
     # Pipeline / Workflow / Execution V2 API Methods
     # ------------------------------------------------------------------
-    # Shared helpers keep the per-endpoint methods small: _pwe_body returns the body
-    # with the {"message": ...} envelope every V2 handler emits left intact, so callers
-    # decide whether to unwrap; _pwe_raise maps an HTTPError to the right
-    # BusinessLogicError for the domain.
+    # Shared helpers keep the per-endpoint methods small: _pwe_request issues the call and
+    # returns the body with the {"message": ...} envelope every V2 handler emits left intact,
+    # so callers decide whether to unwrap; _pwe_error_message extracts the handler's message
+    # for the per-method HTTPError mapping.
 
     @staticmethod
     def _pwe_body(response: "requests.Response") -> Dict[str, Any]:
         """Return the JSON body of a pipeline/workflow/execution response (raw, envelope intact)."""
         return response.json()
+
+    def _pwe_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Call a pipeline/workflow/execution route and return its raw body.
+
+        The non-2xx stays a requests HTTPError so each method can map the status code and the
+        handler's own message onto its domain exception.
+        """
+        verb = {'GET': self.get, 'POST': self.post, 'PUT': self.put, 'DELETE': self.delete}[method]
+        response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
+        return self._pwe_body(response)
 
     @staticmethod
     def _pwe_error_message(e: "requests.exceptions.HTTPError") -> str:
@@ -3545,8 +3567,7 @@ class APIClient:
             query_params = dict(params or {})
             if include_archived:
                 query_params['includeArchived'] = 'true'
-            response = self.get(endpoint, include_auth=True, params=query_params)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 if database_id:
@@ -3564,8 +3585,7 @@ class APIClient:
         try:
             endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
             query_params = {'includeArchived': 'true'} if include_archived else {}
-            response = self.get(endpoint, include_auth=True, params=query_params)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
@@ -3579,8 +3599,7 @@ class APIClient:
         """Create a pipeline. POST /database/{databaseId}/pipelines."""
         try:
             endpoint = API_DATABASE_PIPELINES.format(databaseId=database_id)
-            response = self.post(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 msg = self._pwe_error_message(e)
@@ -3599,8 +3618,7 @@ class APIClient:
         """Update a pipeline. PUT /database/{databaseId}/pipelines/{pipelineId}."""
         try:
             endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
-            response = self.put(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
@@ -3616,8 +3634,7 @@ class APIClient:
         """Archive (soft-delete) a pipeline. DELETE /database/{databaseId}/pipelines/{pipelineId}."""
         try:
             endpoint = API_DATABASE_PIPELINE.format(databaseId=database_id, pipelineId=pipeline_id)
-            response = self.delete(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineNotFoundError(f"Pipeline '{pipeline_id}' not found")
@@ -3636,15 +3653,15 @@ class APIClient:
         a single Items list."""
         try:
             endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
-            body = self._pwe_body(self.get(endpoint, include_auth=True))
+            body = self._pwe_request('GET', endpoint)
             message = body.get('message') if isinstance(body, dict) else None
             if not isinstance(message, dict):
                 return body
             items = list(message.get('Items') or [])
             next_token = message.get('NextToken')
             while next_token:
-                page = self._pwe_body(self.get(endpoint, include_auth=True,
-                                               params={'startingToken': next_token}))
+                page = self._pwe_request('GET', endpoint,
+                                         params={'startingToken': next_token})
                 page_message = page.get('message') if isinstance(page, dict) else None
                 if not isinstance(page_message, dict):
                     break
@@ -3665,8 +3682,7 @@ class APIClient:
         try:
             endpoint = API_PIPELINE_TEMPLATE.format(
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
-            response = self.get(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
@@ -3681,8 +3697,7 @@ class APIClient:
         """Create a template. POST .../pipelines/{pipelineId}/templates."""
         try:
             endpoint = API_PIPELINE_TEMPLATES.format(databaseId=database_id, pipelineId=pipeline_id)
-            response = self.post(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 msg = self._pwe_error_message(e)
@@ -3703,8 +3718,7 @@ class APIClient:
         try:
             endpoint = API_PIPELINE_TEMPLATE.format(
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
-            response = self.put(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
@@ -3721,8 +3735,7 @@ class APIClient:
         try:
             endpoint = API_PIPELINE_TEMPLATE.format(
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
-            response = self.delete(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
@@ -3740,8 +3753,7 @@ class APIClient:
         try:
             endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
-            response = self.get(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
@@ -3757,8 +3769,7 @@ class APIClient:
         try:
             endpoint = API_PIPELINE_TEMPLATE_TAG_SCHEMA.format(
                 databaseId=database_id, pipelineId=pipeline_id, templateId=template_id)
-            response = self.put(endpoint, data={'fields': fields}, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('PUT', endpoint, data={'fields': fields})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise PipelineTemplateNotFoundError(f"Template '{template_id}' not found")
@@ -3781,8 +3792,7 @@ class APIClient:
             query_params = dict(params or {})
             if include_archived:
                 query_params['includeArchived'] = 'true'
-            response = self.get(endpoint, include_auth=True, params=query_params)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise DatabaseNotFoundError(f"Database '{database_id}' not found")
@@ -3798,8 +3808,7 @@ class APIClient:
         try:
             endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
             query_params = {'includeArchived': 'true'} if include_archived else {}
-            response = self.get(endpoint, include_auth=True, params=query_params)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
@@ -3813,8 +3822,7 @@ class APIClient:
         """Create a workflow. POST /database/{databaseId}/workflows."""
         try:
             endpoint = API_DATABASE_WORKFLOWS.format(databaseId=database_id)
-            response = self.post(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 400:
                 raise InvalidWorkflowDataError(self._pwe_error_message(e))
@@ -3830,8 +3838,7 @@ class APIClient:
         """Update a workflow. PUT /database/{databaseId}/workflows/{workflowId}."""
         try:
             endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
-            response = self.put(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
@@ -3847,8 +3854,7 @@ class APIClient:
         """Archive (soft-delete) a workflow. DELETE /database/{databaseId}/workflows/{workflowId}."""
         try:
             endpoint = API_DATABASE_WORKFLOW.format(databaseId=database_id, workflowId=workflow_id)
-            response = self.delete(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
@@ -3864,8 +3870,7 @@ class APIClient:
         """List a workflow's triggers. GET .../workflows/{workflowId}/triggers."""
         try:
             endpoint = API_WORKFLOW_TRIGGERS.format(databaseId=database_id, workflowId=workflow_id)
-            response = self.get(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
@@ -3887,8 +3892,7 @@ class APIClient:
             endpoint = API_WORKFLOW_TRIGGER.format(
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=quote(trigger_type, safe=''))
-            response = self.get(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowTriggerNotFoundError(f"Trigger '{trigger_type}' not found")
@@ -3905,8 +3909,7 @@ class APIClient:
             endpoint = API_WORKFLOW_TRIGGER.format(
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=quote(trigger_type, safe=''))
-            response = self.put(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('PUT', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found")
@@ -3924,8 +3927,7 @@ class APIClient:
             endpoint = API_WORKFLOW_TRIGGER.format(
                 databaseId=database_id, workflowId=workflow_id,
                 triggerType=quote(trigger_type, safe=''))
-            response = self.delete(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('DELETE', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise WorkflowTriggerNotFoundError(f"Trigger '{trigger_type}' not found")
@@ -3943,8 +3945,7 @@ class APIClient:
         try:
             endpoint = API_EXECUTE_WORKFLOW.format(
                 workflowDatabaseId=workflow_database_id, workflowId=workflow_id)
-            response = self.post(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 msg = self._pwe_error_message(e)
@@ -3981,8 +3982,7 @@ class APIClient:
                 query_params['workflowId'] = workflow_id
             if workflow_database_id:
                 query_params['workflowDatabaseId'] = workflow_database_id
-            response = self.get(endpoint, include_auth=True, params=query_params)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=query_params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 msg = self._pwe_error_message(e)
@@ -4002,8 +4002,7 @@ class APIClient:
         triggerType, groupId, triggeredByUserId, plus pageSize/startingToken.
         """
         try:
-            response = self.get(API_WORKFLOW_EXECUTIONS_GLOBAL, include_auth=True, params=params or {})
-            return self._pwe_body(response)
+            return self._pwe_request('GET', API_WORKFLOW_EXECUTIONS_GLOBAL, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
@@ -4021,8 +4020,7 @@ class APIClient:
         whether the inline copy was shortened."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_DETAILS.format(executionId=execution_id)
-            response = self.get(endpoint, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
@@ -4044,8 +4042,7 @@ class APIClient:
         issued with."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_DETAILS_METADATA.format(executionId=execution_id)
-            response = self.get(endpoint, include_auth=True, params=params or {})
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
@@ -4065,8 +4062,7 @@ class APIClient:
         """
         try:
             endpoint = API_WORKFLOW_EXECUTION_LOGS.format(executionId=execution_id)
-            response = self.get(endpoint, include_auth=True, params=params or {})
-            return self._pwe_body(response)
+            return self._pwe_request('GET', endpoint, params=params or {})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
@@ -4084,8 +4080,7 @@ class APIClient:
         try:
             endpoint = API_WORKFLOW_EXECUTION.format(executionId=execution_id)
             params = {'groupId': group_id} if group_id else {}
-            response = self.delete(endpoint, include_auth=True, params=params)
-            return self._pwe_body(response)
+            return self._pwe_request('DELETE', endpoint, params=params)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(
@@ -4104,8 +4099,7 @@ class APIClient:
             body = {}
             if execution_group_id:
                 body['executionGroupId'] = execution_group_id
-            response = self.post(endpoint, data=body, include_auth=True)
-            return self._pwe_body(response)
+            return self._pwe_request('POST', endpoint, data=body)
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
@@ -4121,8 +4115,7 @@ class APIClient:
         """Permanently delete an execution's DynamoDB records (admin). DELETE .../{executionId}/permanent."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_PERMANENT.format(executionId=execution_id)
-            response = self.delete(endpoint, include_auth=True, json={'confirmDelete': True})
-            return self._pwe_body(response)
+            return self._pwe_request('DELETE', endpoint, json={'confirmDelete': True})
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")

@@ -90,8 +90,31 @@ class TestVamsExecute:
         mod = self._load()
         body = self._body()
         del body["TaskToken"]
-        resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
+        sfn = MagicMock()
+        with patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
         assert resp["statusCode"] == 500
+        # No token to report against, so no callback is attempted.
+        sfn.send_task_failure.assert_not_called()
+
+    def test_pre_invoke_failure_fails_the_task_token(self):
+        # A multi-file manifest is rejected before the pipeline starts; the workflow task waits on
+        # the callback token, so the rejection must be reported rather than only returned.
+        mod = self._load()
+        manifest = self._manifest()
+        manifest["inputFiles"].append(
+            {"bucket": "abkt", "key": "xidC/second.e57", "assetId": "xidC", "databaseId": "dbC"})
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
+        invoke = MagicMock(return_value={"StatusCode": 200})
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn), \
+                patch.object(mod.lambda_client, "invoke", invoke):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        invoke.assert_not_called()
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
 
 
 @pytest.mark.unit

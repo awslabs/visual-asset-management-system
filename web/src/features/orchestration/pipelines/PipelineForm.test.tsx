@@ -354,6 +354,7 @@ describe("PipelineForm", () => {
         await user.selectOptions(screen.getByLabelText(/Execution Type/), "DeadlineCloud");
         await user.type(screen.getByLabelText(/Farm ID/), "farm-1");
         await user.type(screen.getByLabelText(/Queue ID/), "queue-1");
+        await user.type(screen.getByLabelText(/Job Template/), "specificationVersion: x");
         fireEvent.submit(document.getElementById("pipeline-form")!);
 
         await waitFor(() => expect(mutateAsync).toHaveBeenCalled());

@@ -134,8 +134,15 @@ const TriggersEditor: React.FC<TriggersEditorProps> = ({
     // duplicate-templates / per-asset-concurrency rejections the backend applies to an extra trigger).
     const [saveError, setSaveError] = useState<string | null>(null);
 
-    const invalidate = () =>
+    // A trigger write changes what the workflow queries report as well as this list: the workflow
+    // LIST rows carry server-computed triggerCount/triggersEnabledCount (which the list's cards and
+    // trigger facet read), and the single-workflow response embeds the trigger rows themselves. All
+    // three are invalidated so a saved or deleted trigger is not contradicted by a cached workflow.
+    const invalidate = () => {
         queryClient.invalidateQueries({ queryKey: ["triggers", databaseId, workflowId] });
+        queryClient.invalidateQueries({ queryKey: ["workflows"] });
+        queryClient.invalidateQueries({ queryKey: ["workflow", databaseId, workflowId] });
+    };
 
     const setTriggerMutation = useMutation({
         // The service returns a [ok, data] tuple; throwing on a falsy `ok` is what routes the

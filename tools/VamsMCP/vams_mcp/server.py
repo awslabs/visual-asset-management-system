@@ -82,6 +82,66 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+# --- Response-shape helpers ----------------------------------------------
+#
+# These live here rather than on VamsClient deliberately: they are how the tool surface presents a
+# response, not part of the client's contract with the CLI (whose `message`-envelope asymmetry other
+# callers depend on). Moving them onto the client would couple the two again.
+
+
+def _unwrap_message_with_warnings(page: Any) -> Any:
+    """Unwrap the ``message`` envelope, keeping a sibling top-level ``warnings`` array.
+
+    A pipeline save reports its non-blocking warnings as a SIBLING of ``message`` — the response
+    model carries no warnings field, so that array is the only copy and plain unwrapping drops it.
+    """
+    payload = CLIENT.unwrap_message(page)
+    if not isinstance(page, dict) or not isinstance(payload, dict):
+        return payload
+    warnings = page.get("warnings")
+    if not warnings or payload is page:
+        return payload
+    return {**payload, "warnings": warnings}
+
+
+def _paginate_with_page_metadata(
+    fetch_page: Callable[[Dict[str, Any]], Any],
+    passthrough_keys: tuple = (),
+    **paginate_kwargs: Any,
+) -> Dict[str, Any]:
+    """Paginate, carrying each page's ``warnings`` and named echo fields onto the result.
+
+    ``CLIENT.paginate`` rebuilds its result from the accumulated items alone, so anything a page
+    reported alongside them is lost. A ``warnings`` entry names rows the page WITHHELD, which is
+    exactly the case where a short list must not read as a complete one — so it is collected here
+    (deduplicated, in order) and marks the result truncated. ``passthrough_keys`` carries a page's
+    self-describing echoes (e.g. the applied date window) through as well.
+    """
+    warnings: List[Any] = []
+    echoes: Dict[str, Any] = {}
+
+    def _collect(params: Dict[str, Any]) -> Any:
+        page = fetch_page(params)
+        payload = CLIENT.unwrap_message(page)
+        if isinstance(payload, dict):
+            for warning in payload.get("warnings") or []:
+                if warning not in warnings:
+                    warnings.append(warning)
+            for key in passthrough_keys:
+                if key not in echoes and payload.get(key):
+                    echoes[key] = payload[key]
+        # Returned untouched: paginate() reads the items off the same page itself.
+        return page
+
+    result = CLIENT.paginate(_collect, **paginate_kwargs)
+    result.update(echoes)
+    if warnings:
+        result["warnings"] = warnings
+        # Rows were withheld, so the walk did not see everything even when no token remains.
+        result["truncated"] = True
+    return result
+
+
 # =========================================================================
 # READ / SEARCH TOOLS (always available)
 # =========================================================================
@@ -307,10 +367,20 @@ def get_search_fields() -> Dict[str, Any]:
 
 @mcp.tool()
 @tool_result
-def list_workflows(database_id: Optional[str] = None, max_items: Optional[int] = None) -> Dict[str, Any]:
-    """List workflows, optionally scoped to a database (auto-paginated)."""
+def list_workflows(
+    database_id: Optional[str] = None,
+    include_archived: bool = False,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
+    """List workflows, optionally scoped to a database (auto-paginated).
+
+    Archived workflows are filtered out server-side unless include_archived is set, which is how an
+    archived workflow's id is found in order to restore it.
+    """
     return CLIENT.paginate(
-        lambda params: CLIENT.api.list_workflows(database_id=database_id, params=params),
+        lambda params: CLIENT.api.list_workflows(
+            database_id=database_id, include_archived=include_archived, params=params
+        ),
         max_items=max_items,
     )
 
@@ -532,6 +602,14 @@ def list_executions(
 
     Distinct from list_workflow_executions(), which is scoped to ONE asset's history. Optional
     filters narrow by status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED) and by workflow.
+
+    The listing is lower-bounded by start date: `filterStartDate` reports the applied window (90 days
+    back by default), so executions older than it are absent by design, not missing.
+
+    A `warnings` entry means the walk WITHHELD rows: a page can reach a cap on the distinct assets it
+    resolves for permission checks and skip the executions it could not evaluate. The result is then
+    also flagged `truncated`. Do not report a count or conclude an execution does not exist from a
+    result carrying warnings — narrow the filters and list again.
     """
     extra = {
         key: value
@@ -546,8 +624,9 @@ def list_executions(
     def _call(params: Dict[str, Any]) -> Dict[str, Any]:
         return CLIENT.api.list_executions(params={**params, **extra})
 
-    return CLIENT.paginate(
+    return _paginate_with_page_metadata(
         _call,
+        passthrough_keys=("filterStartDate", "filterEndDate"),
         max_items=max_items,
         # Same Step Functions throttling cap the per-asset listing respects.
         page_size=min(CONFIG.page_size, WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE),
@@ -584,9 +663,20 @@ def get_execution_details(execution_id: str) -> Dict[str, Any]:
     truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
     FILE collection has no paged equivalent, so the flag is the only signal it is incomplete.
 
-    A pipeline entry's `renderedConfig` is the configuration body the step ran with, held inline only
-    up to a size limit. When `renderedConfigTruncated` is true the entry also carries
-    `renderedConfigLocation` ({"bucket", "key"}) — the Amazon S3 object holding the complete body.
+    A pipeline entry reports its configuration in TWO places, at different STAGES of the same body:
+
+    - `renderedConfig` — the inline copy, post-user-tag but PRE-system-tag, so its system-tag
+      placeholders are still unsubstituted. Held inline only up to a size limit;
+      `renderedConfigTruncated` (emitted unconditionally) reports whether this copy was shortened,
+      and a bounded step section can also name "pipelines" / "inputConfigurations" in
+      `truncatedCollections`.
+    - `renderedConfigLocation` ({"bucket", "key"}) — the Amazon S3 object holding the FULLY
+      substituted body the pipeline actually read. Present whenever that object exists, NOT only on
+      truncation.
+
+    So to report what a step really ran with, read the location's object even when the inline copy is
+    complete — which is the common case. Diagnosing from `renderedConfig` alone reports a config the
+    step never saw.
     """
     return CLIENT.unwrap_message(CLIENT.api.get_execution_details(execution_id))
 
@@ -644,7 +734,14 @@ def page_execution_detail_metadata(
 @mcp.tool()
 @tool_result
 def get_execution_logs(
-    execution_id: str, mode: str = "full", pipeline_execution_id: Optional[str] = None
+    execution_id: str,
+    mode: str = "full",
+    pipeline_execution_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    next_token: Optional[str] = None,
+    filter_pattern: Optional[str] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Retrieve an execution's logs.
 
@@ -652,12 +749,39 @@ def get_execution_logs(
     end-state lambda captures it before CloudWatch finishes ingesting). mode="truncated" reads the
     stored text with a server-side live fallback. Pass pipeline_execution_id to scope to one step.
 
+    Full mode returns at most `limit` events (default 100, server cap 1000) and a `nextToken` when
+    more remain. A pipeline container emits thousands of lines, so the failure is routinely past the
+    first page: raise `limit`, then walk the rest by passing the returned `nextToken` back with the
+    SAME mode, pipeline_execution_id, limit, and filter_pattern. Reporting "the logs show no error"
+    from a page that returned a token is a wrong conclusion, not an incomplete read.
+
+    The other full-mode narrowing options: `filter_pattern` is matched as a literal substring (not
+    CloudWatch pattern syntax) on top of the execution scope, and `start_time` / `end_time` bound the
+    window in epoch MILLISECONDS.
+
+    `next_token` is a CloudWatch token and continues only the `events` list. With no pipeline scoped
+    the response also carries `sfnHistoryEvents` (the Step Functions timeline, which needs no
+    CloudWatch ingestion), and that section is served only on a tokenless first call — read it there
+    rather than expecting it on a continuation.
+
     This route is administrative — it exposes full execution logs — so a role without it will get a
     403 rather than empty output.
     """
     params: Dict[str, Any] = {"mode": mode}
     if pipeline_execution_id:
         params["pipelineExecutionId"] = pipeline_execution_id
+    # Sent in full mode only, as `vamscli execution logs` does: truncated mode joins its events into
+    # one text blob and returns no continuation token, so there is nothing there to page.
+    if mode == "full":
+        for key, value in (
+            ("limit", limit),
+            ("nextToken", next_token),
+            ("filterPattern", filter_pattern),
+            ("startTime", start_time),
+            ("endTime", end_time),
+        ):
+            if value:
+                params[key] = value
     return CLIENT.unwrap_message(CLIENT.api.get_execution_logs(execution_id, params=params))
 
 
@@ -765,14 +889,23 @@ if CONFIG.enable_writes:
         systemConfig.metadataInputs is a boolean map with exactly four keys — assetMetadata,
         fileMetadata, fileAttributes, databaseMetadata — each defaulting to true. Any other key is
         rejected. It gates which metadata a run captures, not whether a caller must supply it.
+
+        A successful save can still carry a `warnings` array — e.g. a requireTemplate pipeline in an
+        auto-triggered workflow with no default template chosen, whose trigger-launched runs will all
+        fail. The pipeline saved; relay the warnings rather than reporting a clean success.
         """
-        return CLIENT.unwrap_message(CLIENT.api.create_pipeline(database_id, body))
+        return _unwrap_message_with_warnings(CLIENT.api.create_pipeline(database_id, body))
 
     @mcp.tool()
     @tool_result
     def update_pipeline(database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a pipeline. Only the fields present in `body` change."""
-        return CLIENT.unwrap_message(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
+        """Update a pipeline. Only the fields present in `body` change.
+
+        Carries the same save `warnings` as create_pipeline. An executionConfig change adds a
+        stale-deployment warning: referencing workflows keep invoking the PREVIOUS execution target
+        until each one is re-saved, so the repoint is not live until then. Always relay it.
+        """
+        return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
     @mcp.tool()
     @tool_result
@@ -895,11 +1028,16 @@ if CONFIG.enable_writes:
     def rerun_execution(
         execution_id: str, execution_group_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Re-run an execution from its stored inputs, creating a NEW execution.
+        """Re-run ONE execution from its stored inputs, creating a NEW execution.
 
-        Re-launches with the CALLER's permissions, not the original runner's. Pass
-        execution_group_id to re-run every execution in the group. Returns the new execution's id —
-        the id passed in still refers to the original run.
+        Re-launches with the CALLER's permissions, not the original runner's. Returns the new
+        execution's id — the id passed in still refers to the original run.
+
+        execution_group_id ASSIGNS the new execution's group membership; it does not select what to
+        re-run. Exactly one execution is launched either way. Pass the original run's group id to
+        keep the re-run alongside its siblings, a new one to separate it, or omit it. There is no
+        re-run-the-whole-group operation: to re-run several, call this once per execution id (find
+        them with list_executions()).
 
         The re-run goes through the execute path, so the response carries the same `warnings` array
         (e.g. a metadata capture bounded by the per-entity cap). Relay them: the run started, but its
@@ -981,7 +1119,7 @@ if CONFIG.enable_destructive:
         body: Dict[str, Any] = {"archived": False}
         if not keep_disabled:
             body["enabled"] = True
-        return CLIENT.unwrap_message(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
+        return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
     @mcp.tool()
     @tool_result

@@ -360,9 +360,15 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-executions-admin-deny",
-            "description": "Withhold the admin-only execution routes (detailed logs GET and permanent-delete DELETE) from {{ROLE_NAME}}. A deny overrides the broad /workflows allow above.",
+            "description": "Withhold the admin-only execution routes (detailed logs GET, permanent-delete DELETE) from {{ROLE_NAME}}. The suffix criteria are anchored to the execution route, so they match only those endpoints and not an id ending in 'logs' or 'permanent'.",
             "objectType": "api",
-            "criteriaAnd": [],
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows/executions/"
+                }
+            ],
             "criteriaOr": [
                 {
                     "field": "route__path",

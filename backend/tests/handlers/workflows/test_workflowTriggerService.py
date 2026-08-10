@@ -237,3 +237,38 @@ class TestTriggerConfigBuilderDispatch:
             resp = wts.set_trigger("db1", "wflow1", "schedule", request)
         assert resp["statusCode"] == 400
         mock_table.return_value.put_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestOffloadedTagSchemaRead:
+    """An offloaded tag schema is read from the default bucket under the prefix that bucket is
+    registered with. A bucket-root-relative read lands outside the area a customer scoped to VAMS, so
+    it 403s under the normal cross-account bucket policy and the headless-template check silently
+    stops running."""
+
+    def _row(self):
+        from backend.backend.common.workflows import templateBodyStorage as tbs
+        return {"bodyStorage": tbs.BODY_STORAGE_S3,
+                "fieldsS3Key": "pipelines/templates/pdb/pipe1/tpl/tagSchema.json"}
+
+    def _load(self, base_prefix):
+        from backend.backend.handlers.workflows import workflowTriggerService as wts
+        schema_table = MagicMock()
+        schema_table.query.return_value = {"Items": [self._row()]}
+        with patch(f"{MOD}._tag_schema_table", return_value=schema_table), \
+             patch(f"{MOD}.resolve_default_bucket",
+                   return_value={"bucketId": "b1", "bucketName": "customer-bucket",
+                                 "baseAssetsPrefix": base_prefix}), \
+             patch(f"{MOD}.tbs.read_body_from_s3", return_value="[]") as m_read:
+            assert wts._load_template_tag_schema_fields("pdb", "pipe1", "tpl") == []
+        return m_read.call_args.args
+
+    def test_prefixed_default_bucket_read_stays_inside_the_prefix(self):
+        _client, bucket, key = self._load("vams/")
+        assert bucket == "customer-bucket"
+        assert key == "vams/pipelines/templates/pdb/pipe1/tpl/tagSchema.json"
+
+    def test_root_prefix_default_bucket_read_is_unchanged(self):
+        for root in ("/", ""):
+            _client, _bucket, key = self._load(root)
+            assert key == "pipelines/templates/pdb/pipe1/tpl/tagSchema.json"

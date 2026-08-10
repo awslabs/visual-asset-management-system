@@ -10,9 +10,12 @@ DynamoDB key or an S3 prefix builder) or an over-strict one (a legitimate identi
 endpoint while every other endpoint accepts it).
 
 The shapes:
-  GUID      `^[0-9a-f]{32}$`      system-generated, from executionRecords.new_guid() (uuid4().hex):
-                                  workflow-execution and pipeline-execution ids.
-  UUID      dashed 8-4-4-4-12     externally-issued ids such as an API key id. A .hex GUID does NOT
+  GUID      undashed 32-hex OR    execution ids. The undashed form comes from
+            dashed 8-4-4-4-12     executionRecords.new_guid() (uuid4().hex); the dashed form is the
+                                  uuid Step Functions assigns as the execution name when
+                                  StartExecution is called without one, which an execution row then
+                                  keeps for its whole life.
+  UUID      dashed 8-4-4-4-12     externally-issued ids such as an API key id. A .hex value does NOT
                                   match this, which is why GUID is a separate rule rather than reuse.
   ID        `^[-_a-zA-Z0-9]{3,63}$`  authored slugs: databaseId, pipelineId, workflowId, and the
                                   caller-authored executionGroupId label.
@@ -22,10 +25,11 @@ These tests pin the SELECTION, not just the regexes: a rule swapped back on a fi
 """
 import pytest
 
-from common.validators import validate, guid_pattern
+from common.validators import validate, execution_id_pattern
 
 
 REAL_GUID = "fd79afb2f12d4a10809c78c98007da91"          # a real execution id from a live deployment
+DASHED_EXECUTION_ID = "fd79afb2-f12d-4a10-809c-78c98007da91"  # a Step Functions-named execution id
 REAL_ASSET_ID = "xddcc84a4-b1c6-46a4-82d3-3568448b3a92"  # a real assetId (37 chars, dashed)
 
 
@@ -35,40 +39,53 @@ def _ok(field, value, rule, **extra):
 
 @pytest.mark.unit
 class TestGuidRule:
-    """The GUID rule accepts exactly what new_guid() emits and nothing else."""
+    """The GUID rule accepts both shapes a stored execution id can carry, and nothing else."""
 
     def test_a_real_execution_id_is_accepted(self):
         valid, message = _ok("executionId", REAL_GUID, "GUID")
         assert valid, message
 
+    def test_a_dashed_execution_id_is_accepted(self):
+        # An execution started without an explicit name is named by Step Functions with a dashed
+        # uuid, and the row keeps that id for its whole life — so details, logs, abort, rerun and
+        # permanent delete all have to accept it.
+        valid, message = _ok("executionId", DASHED_EXECUTION_ID, "GUID")
+        assert valid, message
+
     @pytest.mark.parametrize("value,why", [
         ("execution id with spaces", "spaces are not hex"),
         ("it's,a,test", "punctuation is not hex"),
-        ("FD79AFB2F12D4A10809C78C98007DA91", "uppercase: .hex emits lowercase, and the value is "
-                                             "compared as an exact DynamoDB key, so an uppercase "
-                                             "variant would match nothing"),
+        ("FD79AFB2F12D4A10809C78C98007DA91", "uppercase undashed: .hex emits lowercase, and the "
+                                             "value is compared as an exact DynamoDB key, so an "
+                                             "uppercase variant would match nothing"),
         ("fd79afb2f12d4a10809c78c98007da9", "31 chars, one short"),
         ("fd79afb2f12d4a10809c78c98007da911", "33 chars, one long"),
-        ("fd79afb2-f12d-4a10-809c-78c98007da91", "the DASHED uuid form is a different shape"),
+        ("fd79afb2-f12d-4a10-809c-78c98007da9", "dashed form, final group one short"),
+        ("fd79afb2-f12d-4a10-809c-78c98007da911", "dashed form, final group one long"),
+        ("fd79afb2-f12d-4a10-809c78c98007da91", "dashed form with a dash missing"),
+        ("fd79afb2_f12d_4a10_809c_78c98007da91", "underscores in place of the dashes"),
         ("../../etc/passwd", "path traversal"),
         ("a/b", "a path separator"),
         ("", "empty"),
     ])
-    def test_a_non_guid_is_rejected(self, value, why):
+    def test_a_non_execution_id_is_rejected(self, value, why):
         valid, _ = _ok("executionId", value, "GUID")
         assert not valid, f"GUID rule should reject {value!r} ({why})"
 
     def test_the_rule_is_anchored_at_both_ends(self):
-        # An unanchored or prefix-only rule would accept a GUID with a suffix appended, which is how a
+        # An unanchored or prefix-only rule would accept an id with a suffix appended, which is how a
         # separator could reach an S3 prefix builder.
-        for value in [REAL_GUID + "/x", "x" + REAL_GUID, REAL_GUID + " "]:
-            valid, _ = _ok("executionId", value, "GUID")
-            assert not valid, f"{value!r} must not pass an anchored GUID rule"
+        for base in (REAL_GUID, DASHED_EXECUTION_ID):
+            for value in [base + "/x", "x" + base, base + " "]:
+                valid, _ = _ok("executionId", value, "GUID")
+                assert not valid, f"{value!r} must not pass an anchored GUID rule"
 
-    def test_the_pattern_constant_is_the_lowercase_hex32_shape(self):
-        # Pinned literally: a future edit widening this to [0-9a-fA-F] or dropping an anchor fails here
-        # as well as in the behavioral tests above.
-        assert guid_pattern == r"^[0-9a-f]{32}$"
+    def test_the_pattern_constant_holds_both_shapes(self):
+        # Pinned literally: a future edit dropping either alternative, or an anchor, fails here as
+        # well as in the behavioral tests above.
+        assert execution_id_pattern == (
+            r'^(?:[0-9a-f]{32}'
+            r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$')
 
 
 @pytest.mark.unit

@@ -29,8 +29,11 @@ auxiliary bucket NAME, ``auxTempPrefix`` is bucket-relative, and each input file
 ``assetRootS3Key`` (bucket-relative asset root) and ``auxPreviewPrefix`` (bucket-relative, unique
 per file). ``resolve_inputs`` RECONSTRUCTS the ``s3://`` forms into the same flat field names the
 pipelines already forward (``inputS3AssetFilePath``, ``outputS3AssetFilesPath``, ...), preferring
-the manifest and falling back to the legacy payload fields when no manifest is present. This keeps
-the change non-breaking: a payload without a manifest resolves exactly to today's behavior.
+the manifest and falling back to the legacy payload fields when no manifest is present, so a payload
+without a manifest resolves to the pre-manifest behavior. A payload that DOES reference a manifest
+which cannot be read is an error, not a fallback: the manifest is the sole carrier of asset identity
+and the output paths, so resolving blanks would start a job that fails only after its compute is
+provisioned.
 """
 
 import json
@@ -66,18 +69,24 @@ def manifest_location(data):
 
 
 def fetch_manifest(s3_client, manifest_s3_location):
-    """Fetch + parse the manifest JSON from S3. Best-effort: returns ``None`` on a missing
-    location or any S3/parse failure so the caller falls back to the legacy payload fields."""
+    """Fetch + parse the manifest JSON from S3.
+
+    Returns ``None`` when no location is supplied, so a legacy payload carrying its fields inline
+    still resolves. A location that is supplied but cannot be read RAISES: the manifest is the only
+    carrier of the asset, database, and output paths, so continuing without it yields an execution
+    with blank identity that provisions its compute before failing."""
     if not manifest_s3_location:
         return None
     bucket, key = parse_s3_uri(manifest_s3_location)
     if not bucket or not key:
-        return None
+        raise Exception(
+            f"The workflow supplied a malformed input manifest location: {manifest_s3_location}")
     try:
         resp = s3_client.get_object(Bucket=bucket, Key=key)
         return json.loads(resp["Body"].read().decode("utf-8"))
-    except Exception:  # nosec B110 - best-effort; legacy fields are the fallback
-        return None
+    except Exception as e:
+        raise Exception(
+            f"Could not read the workflow input manifest at {manifest_s3_location}: {e}")
 
 
 def fetch_metadata(s3_client, input_metadata_s3_location):
@@ -458,9 +467,9 @@ def resolve_inputs(data, manifest=None):
 
 
 def resolve_pipeline_inputs(data, s3_client):
-    """Convenience wrapper: fetch the manifest referenced by the payload (best-effort) and
-    return the normalized resolved inputs. Falls back to the legacy payload fields when no
-    manifest is available."""
+    """Convenience wrapper: fetch the manifest referenced by the payload and return the normalized
+    resolved inputs. Falls back to the legacy payload fields only when the payload references no
+    manifest; a referenced manifest that cannot be read raises."""
     manifest = fetch_manifest(s3_client, manifest_location(data))
     return resolve_inputs(data, manifest)
 

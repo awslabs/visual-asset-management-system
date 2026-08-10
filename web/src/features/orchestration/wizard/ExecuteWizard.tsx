@@ -319,6 +319,18 @@ export function validateInputSelection(
     return errors;
 }
 
+/**
+ * The individual errors inside a rejection message. A backend 400 may carry a LIST of reasons — one
+ * per pipeline of a multi-step launch — which `apiClient` flattens into newline-joined text, so the
+ * lines are split back out and rendered as a list. Anything else yields a single line.
+ */
+export function launchErrorLines(message: string): string[] {
+    return message
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+}
+
 const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
     open,
     onClose,
@@ -659,7 +671,12 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
             // raise a toast, so it is visible even if the user has scrolled away from the banner.
             const message = toastErrorMessage(err, "Execution failed.");
             setLaunchError(message);
-            toast.error("Execution failed", { description: message });
+            // The toast is a single line of text, so several reasons are joined with punctuation —
+            // the line breaks the inline panel renders as list items would collapse to spaces here
+            // and run the reasons together. The panel carries the readable form.
+            toast.error("Execution failed", {
+                description: launchErrorLines(message).join("; ") || message,
+            });
         }
     };
 
@@ -856,7 +873,14 @@ const ExecuteWizard: React.FC<ExecuteWizardProps> = ({
                                 role="alert"
                                 className="p-4 bg-red-100 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded text-red-900 dark:text-red-200"
                             >
-                                <strong>Execution failed:</strong> {launchError}
+                                <strong>Execution failed:</strong>
+                                {/* One entry per rejection reason — a multi-step launch is rejected
+                                    per pipeline, and run together the reasons read as one sentence. */}
+                                <ul className="list-disc list-inside mt-2">
+                                    {launchErrorLines(launchError).map((line, idx) => (
+                                        <li key={idx}>{line}</li>
+                                    ))}
+                                </ul>
                             </div>
                         )}
                     </>

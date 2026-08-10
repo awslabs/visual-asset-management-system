@@ -229,6 +229,73 @@ class TestStrictUnknownTags:
 
 
 @pytest.mark.unit
+class TestConfigFormatIsThreaded:
+    """A body's declared format decides how a scalar tag value is escaped. The JSON escape leaves &, <
+    and > intact, so applying it to an xml body emits a value that its parser rejects or reads as
+    markup — every caller rendering a template's configuration body has to pass that template's
+    configFormat rather than relying on the default."""
+
+    def _xml_manifest(self):
+        m = _manifest()
+        m["inputFiles"][0]["key"] = "xidA/a & b<x>.e57"
+        return m
+
+    def test_an_xml_body_escapes_markup_in_a_system_tag_value(self):
+        rendered = tr.render_config("<key>{{firstAssetFileKey}}</key>", self._xml_manifest(),
+                                    _execution(), config_format=tr.CONFIG_FORMAT_XML)
+        assert rendered == "<key>xidA/a &amp; b&lt;x&gt;.e57</key>"
+
+    def test_the_default_is_the_json_escape(self):
+        # Which is why an xml body rendered without its format emits bare markup — the failure the
+        # explicit argument prevents.
+        rendered = tr.render_config("<key>{{firstAssetFileKey}}</key>", self._xml_manifest(),
+                                    _execution())
+        assert rendered == "<key>xidA/a & b<x>.e57</key>"
+
+    def test_yaml_openjd_and_raw_use_the_default_escape(self):
+        for fmt in ("yaml", "openjd", "raw", tr.CONFIG_FORMAT_JSON):
+            rendered = tr.render_config("key: {{firstAssetFileKey}}", self._xml_manifest(),
+                                        _execution(), config_format=fmt)
+            assert rendered == "key: xidA/a & b<x>.e57", fmt
+
+
+@pytest.mark.unit
+class TestRenderedSizeCap:
+    """A metadata-content tag emits the whole payload at every occurrence, so a small body that
+    repeats one renders to payload x occurrences. Without a cap that amplification is materialized as
+    one Python string inside the execute lambda."""
+
+    def _payload(self, size):
+        return {"VAMS": {"assetMetadata": {"blob": "x" * size}}}
+
+    def test_amplifying_body_is_refused_rather_than_materialized(self):
+        # 300 occurrences of a ~64 KiB payload renders past the cap; the body itself is ~8 KB.
+        body = "{" + ",".join(f'"k{i}": {{{{assetMetadataObject}}}}' for i in range(300)) + "}"
+        with pytest.raises(tr.RenderedConfigTooLargeError) as ei:
+            tr.render_config(body, _manifest(), _execution(),
+                             metadata_loader=lambda: self._payload(64 * 1024))
+        assert ei.value.limit == tr.MAX_RENDERED_CONFIG_LENGTH
+
+    def test_cap_measures_the_rendered_output_not_the_body(self):
+        # One occurrence of the same payload is well under the cap, so the body length is not what is
+        # being measured.
+        out = json.loads(tr.render_config(
+            '{"m": {{assetMetadataObject}}}', _manifest(), _execution(),
+            metadata_loader=lambda: self._payload(64 * 1024)))
+        assert len(out["m"]["blob"]) == 64 * 1024
+
+    def test_error_message_names_no_caller_content(self):
+        with pytest.raises(tr.RenderedConfigTooLargeError) as ei:
+            tr._substitute("{{executionId}}" * 20, {"executionId": ("scalar", "E1")}, limit=10)
+        assert "10" in str(ei.value) and "E1" not in str(ei.value)
+
+    def test_a_body_at_the_limit_still_renders(self):
+        # The boundary is inclusive: exactly `limit` characters is not too large.
+        rendered = tr._substitute("ab{{t}}", {"t": ("scalar", "cd")}, limit=4)
+        assert rendered == "abcd"
+
+
+@pytest.mark.unit
 class TestDeadlineCloudTags:
     def test_deadline_tags_defined_and_default_empty(self):
         # The Deadline Cloud tags are DEFINED (do not trip the strict unknown-tag check) but resolve

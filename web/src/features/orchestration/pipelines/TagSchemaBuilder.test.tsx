@@ -68,6 +68,33 @@ describe("TagSchemaBuilder", () => {
         });
     });
 
+    it.each(["env-name", "env.name", "env name"])(
+        "flags %s as outside the substitutable tag-key charset",
+        async (key) => {
+            // Mirrors _TAG_KEY_PATTERN in common/workflows/templateTagSchema.py — the backend
+            // rejects the key at save, so the form must say so before the wizard is finished.
+            const user = userEvent.setup();
+            const onValidityChange = jest.fn();
+
+            render(
+                <TagSchemaBuilder
+                    value={[]}
+                    onChange={jest.fn()}
+                    onValidityChange={onValidityChange}
+                />
+            );
+            await user.click(screen.getByRole("button", { name: /add tag/i }));
+            await user.type(screen.getByLabelText(/tag key/i), key);
+
+            await waitFor(() => {
+                expect(
+                    screen.getByText(/only letters, digits and underscores/i)
+                ).toBeInTheDocument();
+            });
+            expect(onValidityChange).toHaveBeenLastCalledWith(false);
+        }
+    );
+
     it("accepts a normal tag key", async () => {
         const user = userEvent.setup();
         const onChange = jest.fn();

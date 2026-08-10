@@ -3,9 +3,11 @@
 
 import os
 import boto3
-import botocore
 import json
 import uuid
+from botocore.config import Config
+from botocore.exceptions import ClientError
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
@@ -21,7 +23,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import success, validation_error, VAMSGeneralErrorResponse
-from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects
+from common.s3 import validateUnallowedFileExtensionAndContentType, list_all_objects
 from models.assetsV3 import AssetUploadTableModel
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
@@ -38,6 +40,10 @@ MAX_RECORDED_OUTPUT_METADATA_ROWS = 2000
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
+# Bound on the threads used to stamp staged output objects with their asset/upload provenance.
+# An output block can hold thousands of objects and each stamp is a full-object copy, so they run
+# in parallel to fit the lambda timeout; the S3 connection pool below is sized to match.
+MAX_PARALLEL_S3_WORKERS = 16
 
 try:
     s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
@@ -59,10 +65,17 @@ except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
-s3c = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
-client = boto3.client('lambda')
-logs_client = boto3.client('logs')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# Match the connection pool to the worker count so the parallel provenance stamps don't queue
+# on a too-small pool (botocore defaults to 10).
+s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                   max_pool_connections=MAX_PARALLEL_S3_WORKERS)
+
+s3c = boto3.client('s3', config=s3_config)
+s3r = boto3.resource('s3', config=s3_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+client = boto3.client('lambda', config=retry_config)
+logs_client = boto3.client('logs', config=retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 
@@ -120,16 +133,40 @@ def get_default_bucket_details(bucketId):
         logger.exception(f"Error getting bucket details: {e}")
         raise Exception(f"Error getting bucket details.")
 
-def verify_get_path_objects(bucketName: str, pathPrefix: str):
+def _head_listed_objects(bucketName: str, objects):
+    """HEAD every listed object once, annotating each with its 'ContentType', 'VersionId' and
+    'Metadata'.
 
-    #Do MIME check on whatever is uploaded to S3 at this point for this asset, before we do DynamoDB insertion, to validate it's not malicious
-    if(not validateS3AssetExtensionsAndContentType(bucketName, pathPrefix)):
-        raise Exception("Pipeline uploaded objects contains a potentially malicious executable type object. Unable to process asset upload.")
+    One HEAD per object serves the executable-type check below, the recorded output descriptors and
+    the provenance stamp, so an output block costs a single HEAD per object however many consumers
+    read it. The heads run in a bounded pool because a listing can hold thousands of objects."""
+    def _head_one(obj):
+        head = s3c.head_object(Bucket=bucketName, Key=obj['Key'])
+        obj['ContentType'] = head.get('ContentType', '') or ''
+        obj['VersionId'] = head.get('VersionId', '') or ''
+        obj['Metadata'] = head.get('Metadata', {}) or {}
+
+    if not objects:
+        return
+    max_workers = min(MAX_PARALLEL_S3_WORKERS, len(objects))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # list() drains the iterator so a head failure surfaces here rather than being dropped.
+        list(executor.map(_head_one, objects))
+
+
+def verify_get_path_objects(bucketName: str, pathPrefix: str):
 
     # Page the listing to exhaustion: an output block can hold more objects than a single
     # list_objects_v2 page returns. The result mirrors the list_objects_v2 response shape
     # ('Contents' present only when objects exist) that the callers read.
     objects = list_all_objects(bucketName, pathPrefix, client=s3c)
+
+    #Do MIME check on whatever is uploaded to S3 at this point for this asset, before we do DynamoDB insertion, to validate it's not malicious
+    _head_listed_objects(bucketName, objects)
+    for obj in objects:
+        if not validateUnallowedFileExtensionAndContentType(obj['Key'], obj.get('ContentType', '')):
+            raise Exception("Pipeline uploaded objects contains a potentially malicious executable type object. Unable to process asset upload.")
+
     all_outputs = {'Contents': objects} if objects else {}
     logger.info(all_outputs)
 
@@ -177,24 +214,28 @@ def create_external_upload_record(asset_id, database_id, upload_type, baseFileKe
         logger.exception(f"Error creating external upload record: {e}")
         raise e
 
-def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name):
-    """Update S3 object metadata with asset and upload information"""
+def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name,
+                              content_type=None, existing_metadata=None):
+    """Update S3 object metadata with asset and upload information.
+
+    content_type/existing_metadata carry the object's already-read HEAD so a caller that listed the
+    object does not re-read it; either being unset falls back to a head_object here."""
     try:
         # Get current object metadata
-        head_response = s3c.head_object(Bucket=bucket_name, Key=key)
-        content_type = head_response.get('ContentType', 'application/octet-stream')
-        current_metadata = head_response.get('Metadata', {})
-        
+        if content_type is None or existing_metadata is None:
+            head_response = s3c.head_object(Bucket=bucket_name, Key=key)
+            content_type = head_response.get('ContentType', 'application/octet-stream')
+            existing_metadata = head_response.get('Metadata', {})
+
         # Merge existing metadata with new metadata
-        metadata = {**current_metadata, DATABASE_ID_METADATA_KEY: database_id, ASSET_ID_METADATA_KEY: asset_id, UPLOAD_ID_METADATA_KEY: upload_id}
-        
+        metadata = {**existing_metadata, DATABASE_ID_METADATA_KEY: database_id, ASSET_ID_METADATA_KEY: asset_id, UPLOAD_ID_METADATA_KEY: upload_id}
+
         # Use boto3 resource copy() which automatically handles multipart for large files
-        s3_resource = boto3.resource('s3')
         copy_source = {
             'Bucket': bucket_name,
             'Key': key
         }
-        s3_resource.Object(bucket_name, key).copy(
+        s3r.Object(bucket_name, key).copy(
             copy_source,
             ExtraArgs={
                 'ContentType': content_type,
@@ -205,11 +246,52 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
                 'ACL': 'bucket-owner-full-control'
             }
         )
-        
+
         return True
     except Exception as e:
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
+
+
+def _stamp_output_objects(objects, asset_id, database_id, upload_id, bucket_name):
+    """Stamp every staged output object with its asset/upload provenance metadata, in a bounded pool
+    so a thousand-file output completes within the lambda timeout.
+
+    Each object carries the content type and user metadata read when it was listed, so no additional
+    head_object is issued. Returns True only when every stamp succeeded; ingesting an unstamped
+    object would land a file in the asset with no provenance."""
+    if not objects:
+        return True
+
+    def _stamp_one(obj):
+        return update_s3_object_metadata(
+            obj['Key'], asset_id, database_id, upload_id, bucket_name,
+            content_type=obj.get('ContentType') or None,
+            existing_metadata=obj.get('Metadata'))
+
+    max_workers = min(MAX_PARALLEL_S3_WORKERS, len(objects))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_stamp_one, objects))
+    return all(results)
+
+
+def _ingestion_outcome(result):
+    """Read a file-ingestion response body as (all_succeeded, ingested_relative_keys).
+
+    The ingestion API answers 200 whenever at least ONE file succeeded, reporting the all-succeeded
+    flag in overallSuccess and per-file outcomes in fileResults, so a partially failed write-back is
+    only visible in the body. ingested_relative_keys is None when the body carries no per-file
+    results (nothing to narrow the recorded outputs by)."""
+    if not result:
+        return False, None
+    all_succeeded = bool(result.get('overallSuccess', True))
+    file_results = result.get('fileResults')
+    if not isinstance(file_results, list):
+        return all_succeeded, None
+    ingested = {entry.get('relativeKey', '') for entry in file_results
+                if isinstance(entry, dict) and entry.get('success')}
+    return all_succeeded, ingested
+
 
 def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None):
     """Process an external upload using the fileIngestion Lambda.
@@ -356,10 +438,14 @@ def filter_attribute_files(objects_list):
     return filtered
 
 
-def extract_file_path_from_metadata_filename(s3_key, metadata_path_key):
+def extract_file_path_from_metadata_filename(s3_key, metadata_path_key,
+                                             file_base_execution_path_extension="/"):
     """
     Extract the target file path from metadata/attribute filename.
     Example: 'prefix/folder1/folder2/boopy.glb.metadata.json' -> 'folder1/folder2/boopy.glb'
+
+    The output base-execution path extension is applied to the result, so the derived path is where
+    the file output actually landed in the asset. Defaults to '/' (no extra segment).
     """
     try:
         # Remove the metadata_path_key prefix
@@ -377,8 +463,9 @@ def extract_file_path_from_metadata_filename(s3_key, metadata_path_key):
             relative_path = relative_path[:-len('.metadata.json')]
         elif relative_path.endswith('.attribute.json'):
             relative_path = relative_path[:-len('.attribute.json')]
-        
-        return relative_path
+
+        return ope.apply_output_path_extension(
+            relative_path, file_base_execution_path_extension)
     except Exception as e:
         logger.exception(f"Error parsing file path from metadata filename: {e}")
         return None
@@ -525,8 +612,10 @@ def _record_applied_metadata(collected, target_file_path, source_key, entries):
 
 def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
                                 file_base_execution_path_extension="/"):
-    """Build OutputFiles descriptors from an S3 listing relative to `prefix`, capturing each
-    object's S3 versionId (best-effort head_object; empty on failure).
+    """Build OutputFiles descriptors from an S3 listing relative to `prefix`, carrying each object's
+    contentType and S3 versionId from the HEAD verify_get_path_objects already performed, so a large
+    output block costs one HEAD per object rather than one per consumer. A listing that was not
+    annotated falls back to a best-effort per-object head_object (empty on failure).
 
     The recorded relativeFilePath reflects where the output lands in the asset, so the output
     base-execution path extension (inserted before the final filename) is applied here too, keeping
@@ -540,12 +629,15 @@ def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
         relative = key[len(prefix):] if key.startswith(prefix) else key
         relative = ope.apply_output_path_extension(
             relative, file_base_execution_path_extension)
-        version_id = ""
-        try:
-            head = s3c.head_object(Bucket=bucket_name, Key=key)
-            version_id = head.get('VersionId', '') or ''
-        except Exception as e:
-            logger.info(f"Could not read S3 version for {key} (non-critical): {e}")
+        content_type = obj.get('ContentType', '') or ''
+        version_id = obj.get('VersionId', '') or ''
+        if 'VersionId' not in obj:
+            try:
+                head = s3c.head_object(Bucket=bucket_name, Key=key)
+                content_type = head.get('ContentType', '') or ''
+                version_id = head.get('VersionId', '') or ''
+            except Exception as e:
+                logger.info(f"Could not read S3 version for {key} (non-critical): {e}")
         descriptors.append({
             "fileType": file_type,
             "relativeFilePath": relative,
@@ -555,7 +647,7 @@ def _collect_output_descriptors(objects_found, file_type, prefix, bucket_name,
             "s3Bucket": bucket_name,
             "s3Key": key,
             "fileSize": obj.get('Size', 0),
-            "contentType": "",
+            "contentType": content_type,
             "s3VersionId": version_id,
         })
     return descriptors
@@ -677,29 +769,37 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         log_group_arn=log_group_arn, log_stream_name=log_stream_name,
     ))
 
-    # Completion status on end-state pipeline-execution row
-    pexec_table = dynamo.Table(pipeline_executions_table)
-    pexec_table.update_item(
-        Key={"pipelineExecutionId": end_state_pipeline_execution_id,
-             "workflowExecutionId": workflow_execution_id},
-        UpdateExpression="SET executionStopDate = :s, executionStatus = :st",
-        ExpressionAttributeValues={":s": stop_date, ":st": execution_status},
-    )
+    # Completion status on the end-state pipeline-execution row, conditioned on the row not being
+    # terminal already so an in-flight task cannot regress a row the abort/error path finished.
+    eo.set_pipeline_status(dynamo, pipeline_executions_table, end_state_pipeline_execution_id,
+                           workflow_execution_id, execution_status, stop_date=stop_date)
 
-    # Completion status + full execution log on the main V2 row. The log is captured on
-    # every completed run (success or failure) for later debugging by limited roles.
+    # Completion status + full execution log on the main V2 row, under the same terminal guard. The
+    # log is captured on every completed run (success or failure) for later debugging by limited
+    # roles.
     main_table = dynamo.Table(workflow_execution_database_v2)
     expression = "SET executionStopDate = :s, executionStatus = :st, executionLog = :lg"
     values = {":s": stop_date, ":st": execution_status, ":lg": execution_log or ""}
     if execution_error:
         expression += ", executionError = :er"
         values[":er"] = execution_error
-    main_table.update_item(
-        Key={"workflowExecutionId": workflow_execution_id,
-             "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
-        UpdateExpression=expression,
-        ExpressionAttributeValues=values,
-    )
+    terminal_values = {f":term{index}": terminal
+                       for index, terminal in enumerate(eo.TERMINAL_STATUSES)}
+    values.update(terminal_values)
+    condition = ("attribute_not_exists(executionStatus) OR NOT executionStatus IN ("
+                 + ", ".join(terminal_values) + ")")
+    try:
+        main_table.update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression=expression,
+            ConditionExpression=condition,
+            ExpressionAttributeValues=values,
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        logger.info("Main execution row already holds a terminal status; completion write skipped")
 
 
 def _terminal_status(output_failures):
@@ -946,16 +1046,14 @@ def lambda_handler(event, context):
                     if image_files:
                         # Only process the first image file
                         preview_file = image_files[0]
+                        preview_objects = [obj for obj in objectsFound['Contents']
+                                           if obj['Key'] == preview_file]
 
                         # The preview lands on the asset under its basename, so the recorded
                         # descriptor covers just the ingested image at that flattened path.
                         preview_folder = preview_file.rsplit("/", 1)[0] + "/" if "/" in preview_file else ""
-                        collected_output_files.extend(
-                            _collect_output_descriptors(
-                                {'Contents': [obj for obj in objectsFound['Contents']
-                                              if obj['Key'] == preview_file]},
-                                "preview", preview_folder, source_bucket)
-                        )
+                        preview_descriptors = _collect_output_descriptors(
+                            {'Contents': preview_objects}, "preview", preview_folder, source_bucket)
 
                         try:
                             # Create external upload record
@@ -966,14 +1064,14 @@ def lambda_handler(event, context):
                                 previewPathKey
                             )
 
-                            # Update S3 object metadata (on the staged file in the source bucket)
-                            update_s3_object_metadata(
-                                preview_file,
-                                event['assetId'],
-                                event['databaseId'],
-                                upload_id,
-                                source_bucket
-                            )
+                            # Stamp the staged file (in the source bucket) with its provenance. An
+                            # unstamped object would be ingested carrying no asset/upload identity,
+                            # so a failed stamp fails the write-back.
+                            if not _stamp_output_objects(
+                                    preview_objects, event['assetId'], event['databaseId'],
+                                    upload_id, source_bucket):
+                                raise VAMSGeneralErrorResponse(
+                                    "Stamping the staged preview object failed")
 
                             # Process the external upload
                             result = process_external_upload(
@@ -991,7 +1089,14 @@ def lambda_handler(event, context):
                                 mfa_enabled=write_back_mfa_enabled
                             )
 
-                            if result:
+                            # Ingestion answers 200 when only SOME files landed, so read the
+                            # per-file outcome and record rows only for what actually landed.
+                            all_ingested, ingested_keys = _ingestion_outcome(result)
+                            collected_output_files.extend(
+                                d for d in preview_descriptors
+                                if result and (ingested_keys is None
+                                               or d["relativeFilePath"] in ingested_keys))
+                            if all_ingested and result:
                                 logger.info("Preview upload completed successfully")
                             else:
                                 logger.error("Preview upload failed")
@@ -1019,15 +1124,14 @@ def lambda_handler(event, context):
 
                 assets = []
                 if 'Contents' in objectsFound:
-                    files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
+                    file_objects = [x for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
+                    files = [x['Key'] for x in file_objects]
                     logger.info("Files present in pipeline output asset folder:")
                     logger.info(files)
 
-                    collected_output_files.extend(
-                        _collect_output_descriptors(
-                            objectsFound, "file", filesPathKey, source_bucket,
-                            file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
-                    )
+                    file_descriptors = _collect_output_descriptors(
+                        objectsFound, "file", filesPathKey, source_bucket,
+                        file_base_execution_path_extension=event.get('outputFileBaseExecutionPathExtension', '/'))
 
                     if files:
                         try:
@@ -1039,15 +1143,14 @@ def lambda_handler(event, context):
                                 filesPathKey
                             )
 
-                            # Update S3 object metadata for each staged file (in the source bucket)
-                            for file in files:
-                                update_s3_object_metadata(
-                                    file,
-                                    event['assetId'],
-                                    event['databaseId'],
-                                    upload_id,
-                                    source_bucket
-                                )
+                            # Stamp each staged file (in the source bucket) with its provenance. An
+                            # unstamped object would be ingested carrying no asset/upload identity,
+                            # so a failed stamp fails the write-back.
+                            if not _stamp_output_objects(
+                                    file_objects, event['assetId'], event['databaseId'],
+                                    upload_id, source_bucket):
+                                raise VAMSGeneralErrorResponse(
+                                    "Stamping the staged output objects failed")
 
                             # Process the external upload
                             result = process_external_upload(
@@ -1066,7 +1169,14 @@ def lambda_handler(event, context):
                                 mfa_enabled=write_back_mfa_enabled
                             )
 
-                            if result:
+                            # Ingestion answers 200 when only SOME files landed, so read the
+                            # per-file outcome and record rows only for what actually landed.
+                            all_ingested, ingested_keys = _ingestion_outcome(result)
+                            collected_output_files.extend(
+                                d for d in file_descriptors
+                                if result and (ingested_keys is None
+                                               or d["relativeFilePath"] in ingested_keys))
+                            if all_ingested and result:
                                 logger.info("Asset file upload completed successfully")
                             else:
                                 logger.error("Asset file upload failed")
@@ -1146,13 +1256,18 @@ def lambda_handler(event, context):
                             logger.exception(f"Error processing asset metadata: {e}")
                             output_failures.append(METADATA_WRITE_BACK_FAILURE)
 
+                    # File-level metadata/attributes target the file's placement in the asset, which
+                    # includes the output base-execution path extension the file write applied.
+                    output_extension = event.get('outputFileBaseExecutionPathExtension', '/')
+
                     # Process each file-level metadata
                     for file_obj in file_metadata_files:
                         try:
                             # Extract the file path from the metadata filename
                             file_path = extract_file_path_from_metadata_filename(
                                 file_obj['Key'],
-                                metadataPathKey
+                                metadataPathKey,
+                                file_base_execution_path_extension=output_extension
                             )
 
                             if file_path:
@@ -1186,7 +1301,8 @@ def lambda_handler(event, context):
                             # Extract the file path from the attribute filename
                             file_path = extract_file_path_from_metadata_filename(
                                 file_obj['Key'],
-                                metadataPathKey
+                                metadataPathKey,
+                                file_base_execution_path_extension=output_extension
                             )
 
                             if file_path:

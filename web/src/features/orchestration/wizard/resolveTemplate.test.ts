@@ -134,6 +134,38 @@ describe("resolveTemplate", () => {
             const tags: { key: string; value: any }[] = [];
             expect(missingRequiredTags(schema, tags)).toEqual([]);
         });
+
+        it("flags a required tag whose default round-tripped as null", () => {
+            // A schema saved through the tagSchema sub-resource comes back with pydantic's serialized
+            // absent default, so `null` must read as "no default" — the backend's test is `is not None`
+            // and it errors with "tag 'prompt' is required".
+            const schema: TagSchemaField[] = [
+                { tagKey: "prompt", type: "string", required: true, default: null },
+            ];
+            expect(missingRequiredTags(schema, [])).toEqual(["prompt"]);
+        });
+
+        it("does not flag a required tag whose default is falsy but declared", () => {
+            // "" / false / 0 are usable defaults on both sides.
+            expect(
+                missingRequiredTags(
+                    [{ tagKey: "a", type: "string", required: true, default: "" }],
+                    []
+                )
+            ).toEqual([]);
+            expect(
+                missingRequiredTags(
+                    [{ tagKey: "b", type: "boolean", required: true, default: false }],
+                    []
+                )
+            ).toEqual([]);
+            expect(
+                missingRequiredTags(
+                    [{ tagKey: "c", type: "number", required: true, default: 0 }],
+                    []
+                )
+            ).toEqual([]);
+        });
     });
 
     describe("resolvePipelineParams", () => {
@@ -382,6 +414,120 @@ describe("resolveTemplate", () => {
             expect(r.errors).toEqual([]);
             expect(r.mode).toBe(5);
             expect(r.params.customTemplateOverride).toBe('{"edited":true}');
+        });
+
+        it("case 1: a blank OPTIONAL string/enum/string-list tag referenced in the body is accepted", () => {
+            // The backend materializes the type's empty value for these three, so the {{tag}} renders
+            // empty rather than erroring as unmatched. Every shipped GenAI template relies on it —
+            // their prompt tags are optional and documented as "leave blank to fall back to asset
+            // metadata".
+            const template: Template = {
+                databaseId: "db",
+                pipelineId: "p",
+                templateId: "t",
+                templateName: "Test",
+                configFormat: "json",
+                configBody: '{"p":"{{ PROMPT }}","e":"{{ MODE }}","l":"{{ REGIONS }}"}',
+                tagSchema: [
+                    { tagKey: "PROMPT", type: "string" },
+                    { tagKey: "MODE", type: "enum", enumValues: ["fast", "slow"], required: false },
+                    { tagKey: "REGIONS", type: "string-list", required: false },
+                ],
+            };
+            const r = resolvePipelineParams({
+                pipeline: { systemConfig: {} } as any,
+                template,
+                templateId: "t",
+                tags: [],
+            });
+            expect(r.errors).toEqual([]);
+            expect(r.mode).toBe(1);
+        });
+
+        it.each(["integer", "number", "boolean"] as const)(
+            "case 1: a blank OPTIONAL %s tag referenced in the body is still unmatched",
+            (type) => {
+                // These three have no representable empty value, so the backend leaves them out of the
+                // filled map and the renderer fails on the placeholder.
+                const template: Template = {
+                    databaseId: "db",
+                    pipelineId: "p",
+                    templateId: "t",
+                    templateName: "Test",
+                    configFormat: "json",
+                    configBody: '{"n":{{ COUNT }}}',
+                    tagSchema: [{ tagKey: "COUNT", type, required: false }],
+                };
+                const r = resolvePipelineParams({
+                    pipeline: { systemConfig: {} } as any,
+                    template,
+                    templateId: "t",
+                    tags: [],
+                });
+                expect(r.errors.some((e) => /unmatched/i.test(e) && /COUNT/.test(e))).toBe(true);
+            }
+        );
+
+        it("case 1: a blank REQUIRED tag referenced in the body is still unmatched", () => {
+            // The backend errors on a blank required tag instead of filling it, so the web must not
+            // seed its key either — both the required and the unmatched message are expected.
+            const template: Template = {
+                databaseId: "db",
+                pipelineId: "p",
+                templateId: "t",
+                templateName: "Test",
+                configFormat: "json",
+                configBody: '{"p":"{{ PROMPT }}"}',
+                tagSchema: [{ tagKey: "PROMPT", type: "string", required: true }],
+            };
+            const r = resolvePipelineParams({
+                pipeline: { systemConfig: {} } as any,
+                template,
+                templateId: "t",
+                tags: [],
+            });
+            expect(r.errors.some((e) => /required/i.test(e) && /PROMPT/.test(e))).toBe(true);
+            expect(r.errors.some((e) => /unmatched/i.test(e) && /PROMPT/.test(e))).toBe(true);
+        });
+
+        it("case 1: a required tag whose default round-tripped as null blocks launch", () => {
+            const template: Template = {
+                databaseId: "db",
+                pipelineId: "p",
+                templateId: "t",
+                templateName: "Test",
+                configFormat: "json",
+                configBody: '{"p":"{{ PROMPT }}"}',
+                tagSchema: [{ tagKey: "PROMPT", type: "string", required: true, default: null }],
+            };
+            const r = resolvePipelineParams({
+                pipeline: { systemConfig: {} } as any,
+                template,
+                templateId: "t",
+                tags: [],
+            });
+            expect(r.errors.some((e) => /required/i.test(e) && /PROMPT/.test(e))).toBe(true);
+        });
+
+        it("case 2: the override body sees the same schema-filled keys", () => {
+            const template: Template = {
+                databaseId: "db",
+                pipelineId: "p",
+                templateId: "t",
+                templateName: "Test",
+                configFormat: "json",
+                configBody: "{}",
+                tagSchema: [{ tagKey: "PROMPT", type: "string" }],
+            };
+            const r = resolvePipelineParams({
+                pipeline: { systemConfig: { allowCustomTemplateOverride: true } } as any,
+                template,
+                templateId: "t",
+                tags: [],
+                customTemplateOverride: '{"p":"{{ PROMPT }}"}',
+            });
+            expect(r.errors).toEqual([]);
+            expect(r.mode).toBe(2);
         });
 
         it("case 5: validates unmatched tags against edited body", () => {

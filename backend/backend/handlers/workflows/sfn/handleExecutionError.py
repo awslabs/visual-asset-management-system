@@ -7,6 +7,9 @@ Every pipeline / interim / process-output state's Catch routes here (with the ca
 captured at $.errorInfo) before the terminal Fail state. It reconciles the execution's
 tables to a failed terminal state so a failure never leaves stale RUNNING rows:
 
+  - the sub-processes each in-flight pipeline registered (Step Functions sub-executions, AWS Batch
+    jobs) -> stopped, before their rows are stamped terminal (a terminal row is no longer a
+    candidate for the abort API, so anything left running here has no in-product remedy);
   - the V2 main row -> FAILED with a stop date, the specific executionError (from the caught
     Step Functions Error/Cause), and the full CloudWatch executionLog;
   - every non-terminal PipelineExecutions row -> FAILED with a stop date;
@@ -31,6 +34,8 @@ logger = safeLogger(service="HandleExecutionError")
 
 logs_client = boto3.client('logs')
 dynamodb = boto3.resource('dynamodb')
+sfn_client = boto3.client('stepfunctions')
+batch_client = boto3.client('batch')
 
 try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
@@ -114,8 +119,9 @@ def _get_pipeline_rows(execution_id):
 
 
 def reconcile_failed_execution(body, error_info):
-    """Mark the execution + in-flight pipeline rows FAILED with stop times and capture the
-    error message + full execution log. Best-effort per step; logs and continues on error."""
+    """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
+    rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
+    step; logs and continues on error."""
     execution_id = body.get('workflowExecutionId', '')
     workflow_database_id = body.get('workflowDatabaseId', '')
     workflow_id = body.get('workflowId', '')
@@ -128,11 +134,18 @@ def reconcile_failed_execution(body, error_info):
     error_message = _extract_error_message(error_info)
     execution_log = _fetch_execution_log(execution_id)
 
-    # 1) Fetch pipeline rows + mark the in-flight (non-terminal) ones FAILED.
+    # 1) Fetch pipeline rows, stop the in-flight ones' registered sub-processes, then mark those rows
+    #    FAILED. A sub-process that could not be stopped is named in the per-pipeline log row below,
+    #    which is the only record of what is still running once the rows are terminal.
+    stop_failures = []
     try:
         pipeline_rows = _get_pipeline_rows(execution_id)
-        eo.mark_inflight_pipelines_terminal(
-            dynamodb, pipeline_executions_table, pipeline_rows, FAILED_STATUS, now)
+        stop_failures = eo.mark_inflight_pipelines_terminal(
+            dynamodb, pipeline_executions_table, pipeline_rows, FAILED_STATUS, now,
+            sfn_client=sfn_client, batch_client=batch_client)
+        if stop_failures:
+            logger.warning(f"Sub-processes left running for execution {execution_id}: "
+                           f"{'; '.join(stop_failures)}")
     except Exception as e:
         logger.exception(f"Error marking pipeline rows failed (continuing): {e}")
         pipeline_rows = []
@@ -141,6 +154,14 @@ def reconcile_failed_execution(body, error_info):
     #    cannot inject the failing state's id into this handler's static payload, so attribute
     #    the failure log to the non-terminal pipeline rows (the ones that did not complete) --
     #    these are the pipelines affected by the failure.
+    error_log = execution_log or error_message
+    if stop_failures:
+        # Recorded on the row rather than only logged: once the rows are terminal this is the only
+        # in-product record of a sub-process still running. Placed FIRST so a log already at its
+        # budget cannot trim it away.
+        error_log, _ = er.truncate_text(
+            "\n".join(stop_failures + [error_log]) if error_log else "\n".join(stop_failures),
+            limit=MAX_ERROR_LOG_FIELD_BYTES)
     try:
         logs_table = dynamodb.Table(pipeline_execution_logs_table)
         for prow in pipeline_rows:
@@ -151,7 +172,7 @@ def reconcile_failed_execution(body, error_info):
                 continue
             logs_table.put_item(Item=er.build_log_record(
                 pipeline_execution_id=pexec_id, log_type="summary",
-                result_log="", error_log=execution_log or error_message,
+                result_log="", error_log=error_log,
                 log_group_arn=workflow_execution_log_group_arn, log_stream_name="",
             ))
     except Exception as e:

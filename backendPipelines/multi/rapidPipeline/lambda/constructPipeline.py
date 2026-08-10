@@ -56,8 +56,11 @@ def construct_rapidPipeline_definition(event) -> dict:
 
     # outputType is a VAMS-reserved key in the input configuration: it selects the output file
     # extension and is removed before the remainder is written as the rpdx rp_config.json. Fall
-    # back to the legacy threaded outputFileType for executions whose ASL predates this change.
-    output_s3_asset_extension = config.pop('outputType', None) or event.get('outputFileType', '')
+    # back to the threaded outputFileType, then to the input file's own extension so the written
+    # object always carries one — rpdx then optimizes the model without changing its format.
+    output_s3_asset_extension = (config.pop('outputType', None)
+                                 or event.get('outputFileType', '')
+                                 or input_s3_asset_extension)
 
     # Every value interpolated into the shell command below originates from asset
     # filenames / S3 keys / caller-supplied parameters, so each is shell-quoted with

@@ -13,7 +13,6 @@ import { Duration } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import * as s3AssetBuckets from "../../../helper/s3AssetBuckets";
-import * as ServiceHelper from "../../../../lib/helper/service-helper";
 import { suppressCdkNagLambda } from "../../../helper/security";
 
 /**
@@ -153,21 +152,28 @@ def lambda_handler(event, context):
     // Grant the Lambda function permissions to read/write to the DynamoDB table
     table.grantReadWriteData(populateS3AssetBucketsTableLambda);
 
-    // Grant the Lambda function permissions to check S3 bucket versioning status
-    populateS3AssetBucketsTableLambda.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["s3:GetBucketVersioning"],
-            resources: [`arn:${ServiceHelper.Partition()}:s3:::*`],
-            effect: iam.Effect.ALLOW,
-        })
+    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+
+    // Grant the Lambda function permissions to check S3 bucket versioning status. Scoped to the
+    // registered asset buckets; a bucket registered under several prefixes yields one ARN.
+    const registeredBucketArns = Array.from(
+        new Set(bucketRecords.map((record) => record.bucket.bucketArn))
     );
+    if (registeredBucketArns.length > 0) {
+        populateS3AssetBucketsTableLambda.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["s3:GetBucketVersioning"],
+                resources: registeredBucketArns,
+                effect: iam.Effect.ALLOW,
+            })
+        );
+    }
 
     suppressCdkNagLambda(populateS3AssetBucketsTableLambda);
 
     // Prepare bucket data for the custom resource. isDefault is resolved per bucket record at synth
     // time (exactly one record is the VAMS default), so the Lambda writes the flag directly with no
     // name/ARN matching.
-    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     const bucketData = bucketRecords.map((record) => ({
         bucketName: record.bucket.bucketName,
         prefix: record.prefix || "/",

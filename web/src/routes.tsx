@@ -138,8 +138,10 @@ export const routeTable: RouteOption[] = [
         active: "#/workflows/",
     },
     {
+        // Workflows are database-scoped, so the builder needs a :databaseId. The unscoped create
+        // path serves the workflows list, whose create action picks a database first.
         path: "/workflows/create",
-        Page: WorkflowBuilderPage,
+        Page: WorkflowsPage2,
         active: "#/workflows/",
     },
     {

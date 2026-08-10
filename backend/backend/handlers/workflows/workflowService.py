@@ -28,6 +28,7 @@ from datetime import datetime, timezone, timedelta
 
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
+from botocore.paginate import TokenEncoder
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 
@@ -77,15 +78,25 @@ except Exception as e:
 # executions without a scan; the SK lets the count be bounded to recent executions.
 WORKFLOW_EXECUTIONS_BY_WORKFLOW_GSI = "WorkflowExecutionsByWorkflowGSI"
 
-# Execution counts (and the default executions listing) reflect only RECENT executions — those
-# started within this many days. Keeps the count meaningful over time and bounds the COUNT query.
+# The list response's executionCount is a RECENT count — executions started within this many days —
+# not the workflow's lifetime total. The window is what bounds the COUNT query: an unbounded count
+# pages 1 MB of index at a time, so a heavily-used workflow would cost many round trips per listed row
+# and a page of 500 workflows would not complete. Every surface that shows the value labels it as this
+# window.
 EXECUTION_COUNT_LOOKBACK_DAYS = 90
 
 # Ceiling on the number of workflows one list page accumulates, regardless of the caller's
 # maxItems/pageSize. Each returned workflow costs one COUNT query for its executionCount, so this
-# bounds both the response size (6MB Lambda limit) and the per-request query fan-out; callers read
-# the rest of the set through NextToken.
+# bounds the per-request query fan-out; callers read the rest of the set through NextToken.
 MAX_LIST_PAGE_ITEMS = 500
+
+# Byte budget for one list page, measured over the serialized response items. The row cap alone does
+# not bound the response: a workflow row carries specifiedPipelines, systemConfig and the computed
+# aggregate filters, so a page at the row cap ranges from tens of KB to past the 6 MB Lambda
+# synchronous-response limit — which fails the whole request with a 502 carrying no body and no
+# NextToken, leaving the caller unable to page past it. The page stops accumulating at this budget and
+# continues from the last row it kept.
+MAX_LIST_PAGE_BYTES = 4 * 1024 * 1024
 
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
@@ -113,7 +124,11 @@ def _execution_count(database_id, workflow_id):
     executionStartDate, so the recency window is a key-condition range — the count stays meaningful
     as history grows and the query stays bounded. Pages through Count (DynamoDB caps a COUNT query at
     1MB of scanned index per page). Best-effort: returns None on any error so a count failure never
-    breaks the workflow listing."""
+    breaks the workflow listing.
+
+    This is NOT the workflow's lifetime total: a workflow last run before the window counts 0 here
+    while its executions are still listable through GET /workflows/executions with an explicit
+    filterStartDate. Callers presenting the number must name the window."""
     composite = f"{database_id}:{workflow_id}"
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=EXECUTION_COUNT_LOOKBACK_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -364,7 +379,40 @@ def _pagination_config(query_params):
     }
 
 
-def _filtered_page(page_iterator, include_archived, claims_and_roles, has_triggers=""):
+def _response_item_bytes(response_item):
+    """Serialized UTF-8 size of one list item, measured on the shape the response returns so the
+    budget reflects what the caller actually receives. An unserializable item measures as 0 rather
+    than raising — the response serializer is where that failure belongs."""
+    try:
+        return len(json.dumps(response_item.dict(), default=str).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def _list_resume_key(item, on_by_date_gsi):
+    """The ExclusiveStartKey that resumes the workflow listing after this row.
+
+    A GSI continuation names both the index's own keys and the base table's, so a token for the
+    by-date listing carries all four. Returns None when the row is missing any of them, so a
+    malformed row yields no token rather than one that resumes from the wrong place."""
+    key = {"databaseId": item.get("databaseId"), "workflowId": item.get("workflowId")}
+    if on_by_date_gsi:
+        key["allListPartition"] = item.get("allListPartition")
+        key["dateModified"] = item.get("dateModified")
+    return key if all(key.values()) else None
+
+
+def _resume_token(item, on_by_date_gsi):
+    """A paginator-compatible NextToken resuming after `item`, or None. Encoded exactly as the boto3
+    paginator encodes its own, so the caller passes it straight back as startingToken."""
+    key = _list_resume_key(item, on_by_date_gsi)
+    if not key:
+        return None
+    return TokenEncoder().encode({"ExclusiveStartKey": key})
+
+
+def _filtered_page(page_iterator, include_archived, claims_and_roles, has_triggers="",
+                   on_by_date_gsi=False):
     authorized = []
     for item in page_iterator.get("Items", []):
         if not include_archived and item.get("archived"):
@@ -377,6 +425,8 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles, has_trigge
     pipeline_configs = _batch_pipeline_system_configs(authorized)
 
     items = []
+    used_bytes = 0
+    budget_stopped_after = None
     for item in authorized:
         # Execution count is a bounded COUNT query per authorized workflow on this page
         # (MAX_LIST_PAGE_ITEMS caps the fan-out). Best-effort — None on failure.
@@ -389,10 +439,29 @@ def _filtered_page(page_iterator, include_archived, claims_and_roles, has_trigge
         # is absent, exactly as with the authorization filter above.
         if not _matches_trigger_filter(summary, has_triggers):
             continue
-        items.append(_item_to_response(
+        response_item = _item_to_response(
             item, execution_count=count, trigger_summary=summary,
-            pipeline_system_configs=_ordered_pipeline_system_configs(item, pipeline_configs)))
+            pipeline_system_configs=_ordered_pipeline_system_configs(item, pipeline_configs))
+        item_bytes = _response_item_bytes(response_item)
+        # The first item is always kept, whatever it measures: a page that came back empty would read
+        # as "no workflows" rather than as a bound, and the caller could not page past it either.
+        if items and used_bytes + item_bytes > MAX_LIST_PAGE_BYTES:
+            logger.info(f"Workflow list page trimmed to {len(items)} of {len(authorized)} authorized "
+                        f"workflows to stay within {MAX_LIST_PAGE_BYTES} bytes.")
+            break
+        items.append(response_item)
+        used_bytes += item_bytes
+        budget_stopped_after = item
     result = GetWorkflowsResponseModel(Items=items)
+    if len(items) < len(authorized) and budget_stopped_after is not None:
+        # The page stopped short of what it read, so the continuation resumes from the last row it
+        # kept rather than from the query's own end — otherwise the untrimmed rows would be
+        # unreachable instead of deferred. A row that cannot produce a key yields no token, and the
+        # paginator's own token (if any) still applies.
+        token = _resume_token(budget_stopped_after, on_by_date_gsi)
+        if token:
+            result.NextToken = token
+            return result
     if "NextToken" in page_iterator:
         result.NextToken = page_iterator["NextToken"]
     return result
@@ -409,7 +478,7 @@ def get_all_workflows(query_params, include_archived, claims_and_roles):
         PaginationConfig=_pagination_config(query_params),
     ).build_full_result()
     return _filtered_page(page_iterator, include_archived, claims_and_roles,
-                          has_triggers=query_params.get("hasTriggers", ""))
+                          has_triggers=query_params.get("hasTriggers", ""), on_by_date_gsi=True)
 
 
 def get_database_workflows(database_id, query_params, include_archived, claims_and_roles):

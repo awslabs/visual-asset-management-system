@@ -21,6 +21,24 @@ logger = safeLogger(service="VamsExecuteRapidPipelineEKS")
 lambda_client = boto3.client('lambda')
 s3_client = boto3.client('s3')
 region = os.environ.get("AWS_REGION", "us-west-2")
+sfn_client = boto3.client('stepfunctions', region_name=region)
+
+
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so the pipeline task does not wait
+    for the full taskTimeout when this lambda cannot start the pipeline."""
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="RapidPipelineEKSError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
 
 def validate_event_parameters(event, data=None):
     """
@@ -334,6 +352,7 @@ def lambda_handler(event, context):
     # Initialize execution context for error tracking
     execution_id = context.aws_request_id if context else "unknown"
     start_time = time.time()
+    external_task_token = None
 
     logger.info(f"Lambda execution started - Request ID: {execution_id}")
     logger.info(f"Function name: {context.function_name if context else 'unknown'}")
@@ -380,6 +399,8 @@ def lambda_handler(event, context):
         else:
             data = event
         if isinstance(data, dict):
+            # Capture the callback token before any resolution so every failure route can report it
+            external_task_token = data.get('TaskToken') or None
             resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
             # Single input file per execution today (SFN/manifest layer is multi-file-ready).
             manifestHelper.enforce_single_input_file(resolved)
@@ -412,6 +433,7 @@ def lambda_handler(event, context):
             }
 
             logger.error(f"Returning error response: {error_response}")
+            abort_external_workflow(error_message, external_task_token)
             return error_response
 
         logger.info("Event validation successful, proceeding with pipeline execution")
@@ -437,6 +459,7 @@ def lambda_handler(event, context):
         except KeyError as e:
             error_msg = f"Missing expected parameter in validated data: {e}"
             logger.error(error_msg)
+            abort_external_workflow(error_msg, external_task_token)
             return {
                 'statusCode': 500,
                 'body': json.dumps({
@@ -493,6 +516,7 @@ def lambda_handler(event, context):
         except ValueError as ve:
             # Configuration or validation errors
             logger.error(f"Configuration/validation error during pipeline execution: {str(ve)}")
+            abort_external_workflow(ve, external_task_token)
             return {
                 'statusCode': 400,
                 'body': json.dumps({
@@ -507,6 +531,7 @@ def lambda_handler(event, context):
         except Exception as pe:
             # Pipeline execution errors
             logger.exception(f"Pipeline execution error: {str(pe)}")
+            abort_external_workflow(pe, external_task_token)
             return {
                 'statusCode': 500,
                 'body': json.dumps({
@@ -525,6 +550,7 @@ def lambda_handler(event, context):
         logger.exception(f"Unexpected error in lambda handler: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
         logger.error(f"Execution time before error: {execution_time:.2f} seconds")
+        abort_external_workflow(e, external_task_token)
 
         # Log system information for debugging
         try:

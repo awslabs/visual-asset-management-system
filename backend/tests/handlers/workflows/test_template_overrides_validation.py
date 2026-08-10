@@ -16,6 +16,7 @@ import pytest
 from aws_lambda_powertools.utilities.parser import ValidationError
 
 from backend.backend.common.workflows import templateRender as tr
+from backend.backend.common.workflows import templateTagSchema as ts
 from backend.backend.models.pipelines import (
     CreateTemplateRequestModel,
     UpdateTemplateRequestModel,
@@ -193,6 +194,23 @@ class TestJsonBodyPlaceholderText:
     def test_the_count_tag_stands_in_as_a_number(self):
         assert tr.json_body_placeholder_text("{{assetFileCount}}") == "0"
 
+    @pytest.mark.parametrize("declared", ["integer", "INTEGER"])
+    def test_a_typed_user_tag_is_classified_by_its_normalized_type(self, declared):
+        # validate_tag_schema accepts a declared type in any casing, so the stand-in has to be chosen
+        # the same way: classifying "INTEGER" as text would reject the correct unquoted body and accept
+        # the quoted one, which renders the string "7" where the schema promised 7.
+        schema = [{"tagKey": "scale", "type": declared}]
+        assert tr.user_tag_shapes(schema) == {"scale": "0"}
+        assert tr.json_body_placeholder_text('{"s": {{scale}}}', tag_schema=schema) == '{"s": 0}'
+        assert CreateTemplateRequestModel(
+            templateName="t", configFormat="json", configBody='{"s": {{scale}}}',
+            tagSchema=schema)
+        with pytest.raises(ValidationError) as excinfo:
+            CreateTemplateRequestModel(
+                templateName="t", configFormat="json", configBody='{"s": "{{scale}}"}',
+                tagSchema=schema)
+        assert "takes no quotes" in str(excinfo.value)
+
     def test_scalar_and_unknown_tags_stand_in_as_bare_text(self):
         assert tr.json_body_placeholder_text(
             "{{firstAssetFileKey}}|{{PROMPT}}") == f"{tr.SCALAR_TAG_PLACEHOLDER}|{tr.SCALAR_TAG_PLACEHOLDER}"
@@ -244,6 +262,37 @@ class TestJsonBodyPlaceholderText:
         assert typed_schemas >= 1, (
             "no shipped template declares an integer/number/boolean/string-list tag, so this test no "
             "longer exercises the type-aware json gate")
+
+    def test_a_typed_tag_cannot_be_declared_optional_without_a_default(self):
+        # A blank integer/number/boolean has no value to materialize, so a body referencing one would
+        # fail EVERY execution as an unmatched tag — including headless trigger runs, whose only trace
+        # is a dispatcher log line. The declaration is where it is caught, so the tag is either
+        # required or carries a default and validate_tags can always fill it.
+        for tag_type in sorted(ts.TYPES_WITHOUT_EMPTY_VALUE):
+            errs = ts.validate_tag_schema([{"tagKey": "v", "type": tag_type}])
+            assert any("no blank form" in e for e in errs), tag_type
+            assert ts.validate_tag_schema(
+                [{"tagKey": "v", "type": tag_type, "required": True}]) == [], tag_type
+            assert ts.validate_tag_schema(
+                [{"tagKey": "v", "type": tag_type, "default": 1}]) == [], tag_type
+
+    def test_the_types_with_a_blank_form_stay_optional(self):
+        for tag_type, extra in ((ts.TAG_TYPE_STRING, {}), (ts.TAG_TYPE_ENUM, {"enumValues": ["a"]})):
+            assert ts.validate_tag_schema([dict({"tagKey": "v", "type": tag_type}, **extra)]) == []
+
+    def test_a_case_variant_type_is_held_to_the_same_rule(self):
+        # The type is normalized before the rule is applied, matching how it is normalized everywhere
+        # else — otherwise "INTEGER" would slip past the declaration gate.
+        errs = ts.validate_tag_schema([{"tagKey": "v", "type": "INTEGER"}])
+        assert any("no blank form" in e for e in errs)
+
+    def test_the_headless_guard_flags_a_typed_tag_with_no_default(self):
+        # required_tags_without_default backs the trigger-save / template-save guards, and a typed tag
+        # with no default is as unsupplyable headlessly as a required one.
+        assert ts.required_tags_without_default([{"tagKey": "n", "type": "integer"}]) == ["n"]
+        assert ts.required_tags_without_default(
+            [{"tagKey": "n", "type": "integer", "default": 0}]) == []
+        assert ts.required_tags_without_default([{"tagKey": "s", "type": "string"}]) == []
 
     def test_every_json_kind_tag_has_a_shape_and_no_scalar_tag_does(self):
         # The shapes are derived from the renderer's own context, so a new tag is classified by the kind

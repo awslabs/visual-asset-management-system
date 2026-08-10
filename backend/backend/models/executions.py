@@ -245,6 +245,15 @@ MAX_TEMPLATE_TAGS_PER_PIPELINE = 250
 MAX_TEMPLATE_TAG_KEY_LENGTH = 128
 # Serialized bound on one tag value. Generous: a tag may legitimately carry a long GenAI prompt.
 MAX_TEMPLATE_TAG_VALUE_LENGTH = 65536
+# Aggregate serialized bound on one pipeline's tag list, and on one entry once its non-contract keys
+# are counted. The per-entry bounds multiply out to far more than one DynamoDB item can hold, and the
+# list is persisted verbatim on the config-snapshot record alongside the rendered config, so an
+# oversized list is only discovered by put_item — after the state machine has started, which
+# force-stops the run and answers a valid-looking request with a 500. Bounding it here keeps that
+# rejection a 400 before launch. 128 KB admits the full entry count at a realistic value length, or a
+# long GenAI prompt on several tags, while leaving the config record's other fields room under the
+# 400 KB item limit; the record builder additionally holds the stored copy to its own byte budget.
+MAX_TEMPLATE_TAGS_TOTAL_LENGTH = 128 * 1024
 
 # Upper bound on a caller-supplied customTemplateOverride body, matching the absolute cap the stored
 # template bodies are held to (common/workflows/templateBodyStorage.ABSOLUTE_CAP_BYTES). The rendered

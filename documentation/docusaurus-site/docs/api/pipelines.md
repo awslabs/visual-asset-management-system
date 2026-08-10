@@ -7,7 +7,11 @@ VAMS supports these pipeline execution types: **Lambda** (synchronous or asynchr
 Pipelines are scoped to a database. A pipeline can carry one or more **templates** — reusable configuration bodies (for example JSON, YAML, OpenJD, or XML) that supply the parameters an execution passes to the pipeline. Each template can define a **tag schema** describing the typed tags that resolve `{{tagName}}` placeholders in the template body.
 
 :::info[Authorization]
-All pipeline endpoints require a valid JWT token in the `Authorization` header. Pipelines are subject to two-tier authorization: API-level access is checked first, followed by object-level Casbin policy enforcement on each pipeline resource.
+All pipeline endpoints require a valid JWT token in the `Authorization` header. Pipelines are subject to two-tier authorization: API-level access is checked first, followed by object-level Casbin policy enforcement on each pipeline resource. A template and tag-schema endpoint is authorized on its owning pipeline, with the object action mirroring the HTTP method.
+
+Reconfiguring the `GLOBAL` scope carries one additional requirement. A `GLOBAL` pipeline is visible and runnable from every database, so creating one — or creating, updating, or deleting one of its templates or tag schemas — additionally requires the pipeline-management action (`PUT`) on it. The pipeline object's `POST` action covers both "run this pipeline" and "create a pipeline", so a role scoped to running global pipelines holds `POST` on them; requiring `PUT` as well is what keeps such a role from reconfiguring the shared catalog.
+
+An update is enforced twice: once on the pipeline as stored and again on the pipeline as changed. `pipelineName` and `category` are policy-evaluated attributes, so a request moving a pipeline into a name or category scope the caller's own constraints deny is rejected even when the caller may write the pipeline it read.
 :::
 
 ---
@@ -22,12 +26,12 @@ GET /pipelines
 
 ### Query parameters
 
-| Parameter         | Type   | Required | Default | Description                                 |
-| ----------------- | ------ | -------- | ------- | ------------------------------------------- |
-| `maxItems`        | number | No       | `100`   | Maximum number of items to return           |
-| `pageSize`        | number | No       | `100`   | Number of items per page                    |
-| `startingToken`   | string | No       | `null`  | Pagination token from previous response     |
-| `includeArchived` | string | No       | `false` | Include archived pipelines (`true`/`false`) |
+| Parameter         | Type   | Required | Default | Description                                                                                                                                  |
+| ----------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxItems`        | number | No       | `100`   | Maximum number of items to return. Clamped to 500 — a larger request is served a 500-row page; the remainder is reached through `NextToken`. |
+| `pageSize`        | number | No       | `100`   | Number of items per page, clamped to `maxItems`.                                                                                             |
+| `startingToken`   | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                                   |
+| `includeArchived` | string | No       | `false` | Include archived pipelines (`true`/`false`)                                                                                                  |
 
 ### Response
 
@@ -55,7 +59,10 @@ GET /pipelines
                 "archived": false,
                 "templateCount": 2,
                 "dateCreated": "2026-03-15T10:30:00Z",
-                "dateModified": "2026-03-15T10:30:00Z"
+                "dateModified": "2026-03-15T10:30:00Z",
+                "createdBy": "user@example.com",
+                "modifiedBy": "user@example.com",
+                "schemaVersion": 1
             }
         ],
         "NextToken": null
@@ -63,10 +70,15 @@ GET /pipelines
 }
 ```
 
+`templates` is absent from a list item — it is returned only by [Get a pipeline](#get-a-pipeline). `templateCount` is best-effort and is `null` when the count could not be computed.
+
+`NextToken` is `null` on the last page. Pipelines the caller cannot read are dropped after the page is read, so a page may hold fewer items than requested while a token still remains — page until it is absent.
+
 ### Error responses
 
 | Status | Description           |
 | ------ | --------------------- |
+| `400`  | Invalid parameters    |
 | `403`  | Not authorized        |
 | `500`  | Internal server error |
 
@@ -88,12 +100,7 @@ GET /database/{databaseId}/pipelines
 
 ### Query parameters
 
-| Parameter         | Type   | Required | Default | Description                             |
-| ----------------- | ------ | -------- | ------- | --------------------------------------- |
-| `maxItems`        | number | No       | `100`   | Maximum number of items to return       |
-| `pageSize`        | number | No       | `100`   | Number of items per page                |
-| `startingToken`   | string | No       | `null`  | Pagination token from previous response |
-| `includeArchived` | string | No       | `false` | Include archived pipelines              |
+Same as [List all pipelines](#list-all-pipelines): `maxItems`, `pageSize`, `startingToken`, and `includeArchived`, under the same defaults and caps.
 
 :::note[Archived pipelines]
 Archived pipelines are hidden by default. Set `includeArchived=true` to include pipelines whose `archived` flag is set.
@@ -140,7 +147,9 @@ Archived pipelines are hidden by default. Set `includeArchived=true` to retrieve
 
 The response includes the pipeline's `executionConfig` and `systemConfig`, the optional `category` label, the `archived` flag, a `templateCount` of saved templates, and a `templates` array of lightweight descriptors for the templates that belong to the pipeline. `templateCount` is also present on each entry of the list responses.
 
-The inline `templates` array holds at most the first 10 descriptors, while `templateCount` always reports the pipeline's true total. A pipeline with more templates than that shows fewer entries than `templateCount` — read the full set from [List templates](#list-templates), which pages with a `NextToken` and is the only response that returns template bodies.
+The inline `templates` array holds at most the first 10 descriptors, and each carries only `templateId`, `templateName`, `configFormat`, and `allowCustomEdit`. `templateCount` always reports the pipeline's true total, so a pipeline with more templates than that shows fewer entries than the count — read the full set from [List templates](#list-templates), which pages with a `NextToken`.
+
+To read a template's `configBody` and `webFormJson`, call [Get a template](#get-a-template). It is the only response that rehydrates a body VAMS offloaded to Amazon S3; the list response returns an offloaded body as an empty string.
 
 ### Response
 
@@ -222,16 +231,16 @@ POST /database/{databaseId}/pipelines
 
 ### Request body
 
-| Field             | Type    | Required | Description                                                                                          |
-| ----------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `databaseId`      | string  | Yes      | Database identifier. Must match the `databaseId` path parameter. Use `GLOBAL` for a global pipeline. |
-| `pipelineId`      | string  | No       | Pipeline identifier. Send `null` or omit to have one generated. Must be unique across all databases. |
-| `pipelineName`    | string  | Yes      | Human-readable pipeline name.                                                                        |
-| `category`        | string  | No       | Optional grouping label.                                                                             |
-| `description`     | string  | No       | Pipeline description.                                                                                |
-| `executionConfig` | object  | Yes      | Execution binding. See [Execution configuration](#execution-configuration).                          |
-| `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration).           |
-| `enabled`         | boolean | No       | Whether the pipeline is enabled (default `true`).                                                    |
+| Field             | Type    | Required | Description                                                                                                                            |
+| ----------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`      | string  | Yes      | Database identifier. Must match the `databaseId` path parameter. Use `GLOBAL` for a global pipeline.                                   |
+| `pipelineId`      | string  | No       | Pipeline identifier. Send `null` or omit to have one generated. Must be unique across all databases.                                   |
+| `pipelineName`    | string  | Yes      | Human-readable pipeline name, at most 256 characters.                                                                                  |
+| `category`        | string  | No       | Optional grouping label, at most 256 characters.                                                                                       |
+| `description`     | string  | No       | Pipeline description, at most 1,024 characters.                                                                                        |
+| `executionConfig` | object  | No       | Execution binding. Omitted, it defaults to a `Lambda` binding with no target. See [Execution configuration](#execution-configuration). |
+| `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration).                                             |
+| `enabled`         | boolean | No       | Whether the pipeline is enabled (default `true`).                                                                                      |
 
 ### Request body example
 
@@ -266,12 +275,15 @@ Returns the created pipeline, in the same shape as [Get a pipeline](#get-a-pipel
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `400`  | Validation error      |
-| `403`  | Not authorized        |
-| `404`  | Database not found    |
-| `500`  | Internal server error |
+| Status | Description                                                                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a body `databaseId` that does not match the path, a pipeline ID already in use, or a disabled `DeadlineCloud` execution type |
+| `403`  | Not authorized                                                                                                                                 |
+| `500`  | Internal server error                                                                                                                          |
+
+:::note[A pipeline is created without reading the database record]
+Create writes the pipeline row under the `databaseId` in the path without looking that database up, so a mistyped identifier returns `200` and a pipeline nobody finds in a database listing. Confirm the database exists with [Get a database](databases.md#get-a-database) before creating a pipeline under it.
+:::
 
 ---
 
@@ -292,17 +304,24 @@ PUT /database/{databaseId}/pipelines/{pipelineId}
 
 ### Request body
 
-| Field             | Type    | Required | Description                                                                                |
-| ----------------- | ------- | -------- | ------------------------------------------------------------------------------------------ |
-| `pipelineName`    | string  | No       | Human-readable pipeline name.                                                              |
-| `category`        | string  | No       | Grouping label.                                                                            |
-| `description`     | string  | No       | Pipeline description.                                                                      |
-| `executionConfig` | object  | No       | Execution binding. See [Execution configuration](#execution-configuration).                |
-| `systemConfig`    | object  | No       | Input handling and templating defaults. See [System configuration](#system-configuration). |
-| `enabled`         | boolean | No       | Whether the pipeline is enabled.                                                           |
+At least one field must be supplied.
+
+| Field             | Type    | Required | Description                                                                                                                       |
+| ----------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pipelineName`    | string  | No       | Human-readable pipeline name, at most 256 characters.                                                                             |
+| `category`        | string  | No       | Grouping label, at most 256 characters.                                                                                           |
+| `description`     | string  | No       | Pipeline description, at most 1,024 characters.                                                                                   |
+| `executionConfig` | object  | No       | Execution binding, replaced wholesale. See [Execution configuration](#execution-configuration).                                   |
+| `systemConfig`    | object  | No       | Input handling and templating defaults, replaced wholesale. See [System configuration](#system-configuration).                    |
+| `enabled`         | boolean | No       | Whether the pipeline is enabled.                                                                                                  |
+| `archived`        | boolean | No       | The soft-delete flag. Send `false` to restore a pipeline archived by [Delete a pipeline](#delete-a-pipeline); `true` archives it. |
 
 :::tip[Enable or disable a pipeline]
 Set `enabled` to `true` or `false` to enable or disable a pipeline without changing any other field.
+:::
+
+:::tip[Restore an archived pipeline]
+`PUT` with `\{"archived": false\}` returns an archived pipeline to the active listings under its original identifier, together with every workflow reference and execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the pipeline.
 :::
 
 ### Request body example
@@ -314,18 +333,26 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 }
 ```
 
+:::warning[`executionConfig` and `systemConfig` replace the stored block]
+Both are stored whole. A request that supplies either one persists exactly the keys it sends, and any key it omits is gone rather than retained — send the complete block, not the subset being changed. `executionConfig.lambda.resourceId` is the one exception: when a `Lambda` binding names no function, the update keeps the function the pipeline already runs, so a partial execution-config edit does not repoint a deployed state machine at an empty target.
+:::
+
+:::note[Changing the execution binding needs each referencing workflow re-saved]
+A pipeline's execution target and its callback and timeout values are compiled into the AWS Step Functions definition of every workflow that references it when that workflow is saved. Changing `executionConfig` returns a warning naming those workflows: their deployed state machines keep invoking the previous target until each workflow is saved again.
+:::
+
 ### Response
 
 Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipeline), plus an optional `warnings` array. See [Trigger consistency warnings](#trigger-consistency-warnings).
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `400`  | Validation error      |
-| `403`  | Not authorized        |
-| `404`  | Pipeline not found    |
-| `500`  | Internal server error |
+| Status | Description                                                                       |
+| ------ | --------------------------------------------------------------------------------- |
+| `400`  | Validation error, no field supplied, or a disabled `DeadlineCloud` execution type |
+| `403`  | Not authorized                                                                    |
+| `404`  | Pipeline not found                                                                |
+| `500`  | Internal server error                                                             |
 
 ### Trigger consistency warnings
 
@@ -348,7 +375,7 @@ Creating or updating a pipeline succeeds (`200`) even when it is inconsistent wi
 
 ## Delete a pipeline
 
-Archives a pipeline. The delete is a soft-delete that sets the pipeline's `archived` flag to `true`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied.
+Archives a pipeline. The delete is a soft-delete that sets the pipeline's `archived` flag to `true` and its `enabled` flag to `false`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied. The archive is reversible — see [Update a pipeline](#update-a-pipeline) for the restore.
 
 ```
 DELETE /database/{databaseId}/pipelines/{pipelineId}
@@ -381,7 +408,9 @@ DELETE /database/{databaseId}/pipelines/{pipelineId}
 
 ## Templates
 
-Templates are reusable configuration bodies attached to a pipeline. A template holds a `configBody` (the template text, which may contain `{{tagName}}` placeholders) and an optional `webFormJson` (opaque web form markup used to render an input form). Clients always send `configBody` and `webFormJson` inline; VAMS transparently offloads large bodies to Amazon S3 and rehydrates them on read.
+Templates are reusable configuration bodies attached to a pipeline. A template holds a `configBody` (the template text, which may contain `{{tagName}}` placeholders) and an optional `webFormJson` (opaque web form markup used to render an input form). Clients always send `configBody` and `webFormJson` inline; VAMS stores them on the template record while their combined size stays at or below 320 KB and offloads them to Amazon S3 beyond that. [Get a template](#get-a-template) rehydrates an offloaded body, so the storage choice is transparent there; the [List templates](#list-templates) view returns an offloaded body as an empty string rather than reading each row's object.
+
+The combined `configBody` and `webFormJson` may be at most 5 MB. A larger body is rejected with `400` on create and update.
 
 ### List templates
 
@@ -398,21 +427,46 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates
 | `databaseId` | string | Yes      | Database identifier |
 | `pipelineId` | string | Yes      | Pipeline identifier |
 
+#### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                |
+| --------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------ |
+| `pageSize`      | number | No       | `10`    | Templates per page. Clamped to a maximum of 10; a larger request is served a 10-row page.  |
+| `maxItems`      | number | No       | `10`    | Accepted as a synonym for `pageSize`, under the same maximum. `pageSize` takes precedence. |
+| `startingToken` | string | No       | --      | Continuation token from a previous response's `NextToken`.                                 |
+| `NextToken`     | string | No       | --      | Accepted as a synonym for `startingToken`.                                                 |
+
+`NextToken` is `null` once the walk is complete. Page until it is `null` rather than until a page looks short: a page filled to the requested size returns a token even when nothing follows it, so the last page of a pipeline holding an exact multiple of the page size is an empty one. A token that cannot be decoded returns `400` rather than serving the first page again.
+
+The page size is capped because each row carries its inline `configBody`, which can reach the 320 KB inline threshold, so a wider page would breach the AWS Lambda synchronous-response limit.
+
 #### Response
+
+Each item is a full template record. A body VAMS offloaded to Amazon S3 comes back as an empty `configBody` and `webFormJson` here; [Get a template](#get-a-template) rehydrates it. `tagSchema` is `null` in this view — read a template individually for its tag definitions.
 
 ```json
 {
     "message": {
         "Items": [
             {
+                "pipelineDatabaseId": "my-database",
+                "pipelineId": "my-conversion-pipeline",
                 "templateId": "high-quality",
                 "templateName": "High quality",
+                "description": "High-fidelity conversion preset",
                 "configFormat": "json",
+                "configBody": "{\"quality\": \"{{quality}}\", \"draco\": true}",
+                "webFormJson": "",
                 "allowCustomEdit": false,
-                "isDefault": false,
                 "inputInstructions": "Choose the conversion quality preset.",
+                "overrides": {},
+                "isDefault": false,
+                "tagSchema": null,
                 "dateCreated": "2026-03-15T10:30:00Z",
-                "dateModified": "2026-03-15T10:30:00Z"
+                "dateModified": "2026-03-15T10:30:00Z",
+                "createdBy": "user@example.com",
+                "modifiedBy": "user@example.com",
+                "schemaVersion": 1
             }
         ],
         "NextToken": null
@@ -422,11 +476,12 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates
 
 #### Error responses
 
-| Status | Description                    |
-| ------ | ------------------------------ |
-| `403`  | Not authorized                 |
-| `404`  | Database or pipeline not found |
-| `500`  | Internal server error          |
+| Status | Description                                           |
+| ------ | ----------------------------------------------------- |
+| `400`  | Invalid path parameters or an invalid `startingToken` |
+| `403`  | Not authorized                                        |
+| `404`  | Pipeline not found                                    |
+| `500`  | Internal server error                                 |
 
 ### Create a template
 
@@ -447,17 +502,19 @@ POST /database/{databaseId}/pipelines/{pipelineId}/templates
 
 | Field               | Type    | Required | Description                                                                                                                                                                                                                                             |
 | ------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `templateId`        | string  | No       | Template identifier (GUID). Generated when omitted.                                                                                                                                                                                                     |
-| `templateName`      | string  | Yes      | Human-readable template name.                                                                                                                                                                                                                           |
-| `description`       | string  | No       | Template description.                                                                                                                                                                                                                                   |
+| `templateId`        | string  | No       | Template identifier, at most 64 characters. A GUID is generated when omitted.                                                                                                                                                                           |
+| `templateName`      | string  | Yes      | Human-readable template name, at most 256 characters.                                                                                                                                                                                                   |
+| `description`       | string  | No       | Template description, at most 1,024 characters.                                                                                                                                                                                                         |
 | `configFormat`      | string  | No       | Format of `configBody`: `json` (default), `yaml`, `openjd`, `xml`, or `raw`.                                                                                                                                                                            |
 | `configBody`        | string  | No       | The template text. May contain `{{tagName}}` placeholders resolved from tags at execution time. When `configFormat` is `json`, it must be valid JSON around those placeholders (validated at save — see [System template tags](#system-template-tags)). |
 | `webFormJson`       | string  | No       | Serialized web-form definition used to render the template's input form. When present, must be valid JSON (validated at save).                                                                                                                          |
 | `allowCustomEdit`   | boolean | No       | Whether the template config may be edited inline at execution time.                                                                                                                                                                                     |
 | `isDefault`         | boolean | No       | Marks this template as the pipeline's default. At most one template per pipeline is the default; setting it clears the flag on any other template. See [Default template](#default-template).                                                           |
-| `inputInstructions` | string  | No       | Guidance shown to the user when supplying template inputs.                                                                                                                                                                                              |
+| `inputInstructions` | string  | No       | Guidance shown to the user when supplying template inputs, at most 4,096 characters.                                                                                                                                                                    |
 | `overrides`         | object  | No       | Per-template overrides of the pipeline's `systemConfig`. See [Template overrides](#template-overrides).                                                                                                                                                 |
 | `tagSchema`         | array   | No       | Tag field definitions for the template. See [Tag schema fields](#tag-schema-fields).                                                                                                                                                                    |
+
+A `templateId` already in use on this pipeline is rejected with `400` rather than replacing the template — use [Update a template](#update-a-template) instead.
 
 #### Request body example
 
@@ -484,7 +541,11 @@ POST /database/{databaseId}/pipelines/{pipelineId}/templates
 
 #### Response
 
-Returns the created template with `configBody` and `webFormJson` inline.
+Returns the created template with `configBody` and `webFormJson` inline, in the same shape as [Get a template](#get-a-template).
+
+:::note[A bad tag definition returns `tagSchemaErrors`]
+When an entry in the supplied `tagSchema` fails validation, the response is `400` with a `tagSchemaErrors` array under `message` — one entry per offending definition — and no template is written. See [Set a template's tag schema](#set-a-templates-tag-schema) for the body shape.
+:::
 
 :::note[Templates used as a trigger default must be headless-runnable]
 When a template is referenced by a workflow trigger as a default (see [Set a trigger](workflows.md#set-a-trigger)) and its tag schema has a required tag with no default value, the save is rejected with `400` and a `triggerTemplateErrors` list under `message`. A trigger fires headless executions, which cannot supply template tags interactively, so each required tag on a trigger-default template needs a default value or must be optional. A template not referenced by any trigger is unaffected — a missing required tag is instead caught at run time for an interactive execution.
@@ -503,12 +564,12 @@ When a template is referenced by a workflow trigger as a default (see [Set a tri
 
 #### Error responses
 
-| Status | Description                                                                                                                 |
-| ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, or the template is a trigger default with a required tag with no default value (`triggerTemplateErrors`). |
-| `403`  | Not authorized                                                                                                              |
-| `404`  | Database or pipeline not found                                                                                              |
-| `500`  | Internal server error                                                                                                       |
+| Status | Description                                                                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), or a trigger default with a required tag with no default value (`triggerTemplateErrors`) |
+| `403`  | Not authorized                                                                                                                                                                          |
+| `404`  | Pipeline not found                                                                                                                                                                      |
+| `500`  | Internal server error                                                                                                                                                                   |
 
 #### Template overrides
 
@@ -624,8 +685,11 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
         "description": "High-fidelity conversion preset",
         "configFormat": "json",
         "configBody": "{\"quality\": \"{{quality}}\", \"draco\": true}",
+        "webFormJson": "",
         "allowCustomEdit": false,
         "inputInstructions": "Choose the conversion quality preset.",
+        "overrides": {},
+        "isDefault": false,
         "tagSchema": [
             {
                 "tagKey": "quality",
@@ -633,20 +697,26 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
                 "required": true,
                 "default": "high",
                 "label": "Quality",
+                "description": "Conversion quality preset",
                 "enumValues": ["low", "medium", "high"]
             }
-        ]
+        ],
+        "dateCreated": "2026-03-15T10:30:00Z",
+        "dateModified": "2026-03-15T10:30:00Z",
+        "createdBy": "user@example.com",
+        "modifiedBy": "user@example.com",
+        "schemaVersion": 1
     }
 }
 ```
 
 #### Error responses
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `403`  | Not authorized                            |
-| `404`  | Database, pipeline, or template not found |
-| `500`  | Internal server error                     |
+| Status | Description                    |
+| ------ | ------------------------------ |
+| `403`  | Not authorized                 |
+| `404`  | Pipeline or template not found |
+| `500`  | Internal server error          |
 
 ### Update a template
 
@@ -666,24 +736,32 @@ PUT /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
 
 #### Request body
 
-Any subset of `templateName`, `description`, `configFormat`, `configBody`, `webFormJson`, `allowCustomEdit`, `isDefault`, `inputInstructions`, `overrides`, and `tagSchema` (see [Create a template](#create-a-template)).
+Any subset of `templateName`, `description`, `configFormat`, `configBody`, `webFormJson`, `allowCustomEdit`, `isDefault`, `inputInstructions`, `overrides`, and `tagSchema` (see [Create a template](#create-a-template)). At least one field must be supplied.
+
+A supplied `overrides` or `tagSchema` **replaces** the stored one rather than merging into it, so send the complete set. Send `tagSchema` as an empty array to remove a template's tags.
 
 #### Response
 
-Returns the updated template with `configBody` and `webFormJson` inline.
+Returns the updated template with `configBody` and `webFormJson` inline, in the same shape as [Get a template](#get-a-template).
 
 :::note[Templates used as a trigger default must be headless-runnable]
 As with [Create a template](#create-a-template), when the template is referenced by a workflow trigger as a default and its tag schema has a required tag with no default value, the update is rejected with `400` and a `triggerTemplateErrors` list under `message`. Give each such tag a default value or make it optional.
 :::
 
+:::note[A tag's type is validated against the stored body]
+A tag schema and a configuration body are one contract: a tag's declared type determines whether its placeholder renders into a valid document. `\{"steps": \{\{PARAM\}\}\}` is valid JSON when `PARAM` is an integer and invalid when it is a string, because the substituted value lands in an unquoted position.
+
+Supplying `tagSchema` therefore re-checks the schema against the body currently stored, even when the request changes no body of its own, and a retype that would invalidate it is rejected with `400`. [Set a template's tag schema](#set-a-templates-tag-schema) applies the same check, so both routes reach the same verdict for the same change. Send the new `configBody` alongside `tagSchema` when a retype requires the body to change with it.
+:::
+
 #### Error responses
 
-| Status | Description                                                                                                                 |
-| ------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, or the template is a trigger default with a required tag with no default value (`triggerTemplateErrors`). |
-| `403`  | Not authorized                                                                                                              |
-| `404`  | Database, pipeline, or template not found                                                                                   |
-| `500`  | Internal server error                                                                                                       |
+| Status | Description                                                                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a body over the 5 MB combined cap, a bad tag definition (`tagSchemaErrors`), or a trigger default with a required tag with no default value (`triggerTemplateErrors`) |
+| `403`  | Not authorized                                                                                                                                                                          |
+| `404`  | Pipeline or template not found                                                                                                                                                          |
+| `500`  | Internal server error                                                                                                                                                                   |
 
 ### Delete a template
 
@@ -713,11 +791,11 @@ DELETE /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}
 
 #### Error responses
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `403`  | Not authorized                            |
-| `404`  | Database, pipeline, or template not found |
-| `500`  | Internal server error                     |
+| Status | Description                    |
+| ------ | ------------------------------ |
+| `403`  | Not authorized                 |
+| `404`  | Pipeline or template not found |
+| `500`  | Internal server error          |
 
 ### Get a template's tag schema
 
@@ -737,13 +815,15 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSche
 
 #### Response
 
+The response identifies the schema by the template that owns it. `tagSchemaId`, `dateCreated`, and `dateModified` are present in the shape but always empty — a tag schema is addressed through its template, so it carries no identifier or timestamps of its own. Read `dateModified` on [Get a template](#get-a-template) for when the template and its schema were last saved.
+
 ```json
 {
     "message": {
         "pipelineDatabaseId": "my-database",
         "pipelineId": "my-conversion-pipeline",
         "templateId": "high-quality",
-        "tagSchemaId": "a1b2c3d4",
+        "tagSchemaId": "",
         "fields": [
             {
                 "tagKey": "quality",
@@ -751,22 +831,25 @@ GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSche
                 "required": true,
                 "default": "high",
                 "label": "Quality",
+                "description": "Conversion quality preset",
                 "enumValues": ["low", "medium", "high"]
             }
         ],
-        "dateCreated": "2026-03-15T10:30:00Z",
-        "dateModified": "2026-03-15T10:30:00Z"
+        "dateCreated": "",
+        "dateModified": ""
     }
 }
 ```
 
+A template with no tag schema returns an empty `fields` array rather than a `404`.
+
 #### Error responses
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `403`  | Not authorized                            |
-| `404`  | Database, pipeline, or template not found |
-| `500`  | Internal server error                     |
+| Status | Description                    |
+| ------ | ------------------------------ |
+| `403`  | Not authorized                 |
+| `404`  | Pipeline or template not found |
+| `500`  | Internal server error          |
 
 ### Set a template's tag schema
 
@@ -786,13 +869,18 @@ PUT /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}/tagSche
 
 #### Request body
 
-| Field    | Type  | Required | Description                                                         |
-| -------- | ----- | -------- | ------------------------------------------------------------------- |
-| `fields` | array | Yes      | Tag field definitions. See [Tag schema fields](#tag-schema-fields). |
+| Field    | Type  | Required | Description                                                                      |
+| -------- | ----- | -------- | -------------------------------------------------------------------------------- |
+| `fields` | array | Yes      | Tag field definitions, at most 250. See [Tag schema fields](#tag-schema-fields). |
 
 :::warning[Reserved tag keys]
 Reserved system tag keys (the built-in template tags, such as `executionId` and `workflowId`) and any key using the `metadata_` prefix are rejected.
 :::
+
+This route applies the same cross-checks the template `PUT` applies, because the schema and the stored `configBody` are one contract:
+
+-   **The stored body is re-validated against the new schema.** A tag's declared type decides where its `{{tagKey}}` placeholder may sit in a `json` body, so a type change that leaves the body rendering invalid JSON is rejected with `tagSchemaErrors` rather than stored. A body in a non-`json` format, or one referencing no tags, is not affected.
+-   **Trigger defaults must stay headless-runnable.** When the template is named as a default by a workflow trigger and the new schema gives a required tag no default value, the request is rejected with `400` and a `triggerTemplateErrors` list under `message`.
 
 #### Request body example
 
@@ -814,16 +902,28 @@ Reserved system tag keys (the built-in template tags, such as `executionId` and 
 
 #### Response
 
-Returns the stored tag schema wrapped in `message`, alongside `pipelineDatabaseId`, `pipelineId`, `templateId`, `tagSchemaId`, and the create/modify timestamps — the same shape as [Get a template's tag schema](#get-a-templates-tag-schema).
+Returns the stored tag schema wrapped in `message`, in the same shape as [Get a template's tag schema](#get-a-templates-tag-schema) — including the empty `tagSchemaId` and timestamps.
+
+A tag definition that fails validation returns `400` with a `tagSchemaErrors` array under `message`, one entry per offending definition:
+
+```json
+{
+    "message": {
+        "tagSchemaErrors": [
+            "tag 'executionId': tagKey collides with a reserved system tag name or the reserved 'metadata_' prefix; choose a different key"
+        ]
+    }
+}
+```
 
 #### Error responses
 
-| Status | Description                                                        |
-| ------ | ------------------------------------------------------------------ |
-| `400`  | Validation error, reserved tag key, or reserved `metadata_` prefix |
-| `403`  | Not authorized                                                     |
-| `404`  | Database, pipeline, or template not found                          |
-| `500`  | Internal server error                                              |
+| Status | Description                                                                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error, reserved tag key, reserved `metadata_` prefix, or a body the new schema invalidates (`tagSchemaErrors`); or a trigger default left with a required tag with no default value (`triggerTemplateErrors`) |
+| `403`  | Not authorized                                                                                                                                                                                                           |
+| `404`  | Pipeline or template not found                                                                                                                                                                                           |
+| `500`  | Internal server error                                                                                                                                                                                                    |
 
 ### Tag schema fields
 
@@ -871,6 +971,23 @@ The `executionConfig` object binds a pipeline to the resource that runs it. The 
 | `eventBridge`          | object | `{ "busArn": "<bus ARN>", "source": "<source>", "detailType": "<detail-type>" }` for the `EventBridge` type.                                                         |
 | `deadlineCloud`        | object | Target settings for the `DeadlineCloud` type.                                                                                                                        |
 
+Those eight are the only keys `executionConfig` accepts. Any other top-level key is rejected with `400`, so a misspelled setting is reported rather than stored and never read. The whole block may be at most **327,680 bytes** (320 KB) serialized — an allowance sized for a `DeadlineCloud` block carrying an OpenJD job template, which is itself capped at 262,144 characters (256 KB).
+
+Each execution type requires its own target. `sqs.queueUrl`, and both `deadlineCloud.farmId` and `deadlineCloud.queueId`, are mandatory for their type; `eventBridge.busArn` is optional and resolves to the account's default event bus when absent.
+
+### The Lambda target on create and update
+
+`executionConfig.lambda.resourceId` is the function the pipeline's AWS Step Functions task invokes. It accepts either an AWS Lambda function ARN or a bare function name; anything else is rejected with `400`. An **absent** value is resolved rather than stored empty, and how depends on the operation:
+
+| Operation | `lambda.resourceId` absent                                                                                                                          |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create    | VAMS provisions a new function seeded from the sample pipeline package and stores its name.                                                         |
+| Update    | The function the pipeline already runs is kept, so a partial execution-config edit does not repoint its deployed state machines at an empty target. |
+
+An update that switches a pipeline **into** the `Lambda` type has no stored function to keep, so it provisions one the same way a create does. Either way the row is never saved with an empty invoke target: a deployment that cannot auto-create a function answers `400` with a message asking for an existing function in `executionConfig.lambda.resourceId`, and no pipeline is written.
+
+Because `executionConfig` is replaced wholesale, `lambda.resourceId` is the only value carried over from the stored block. Every other setting an update omits — `waitForCallback`, the timeouts, the other execution-type blocks — is dropped.
+
 ## System configuration
 
 The `systemConfig` object describes how a pipeline consumes input and whether it uses templates.
@@ -884,6 +1001,10 @@ The `systemConfig` object describes how a pipeline consumes input and whether it
 | `allowCustomTemplateOverride` | boolean | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `auxPreviewPipelineSuffix`    | string  | Suffix used to associate an auxiliary preview pipeline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `inputFileFilters`            | object  | `allow` and `exclude` arrays. Each entry matches by extension (`*.glb`, with `.glb` also accepted as shorthand), exact path, file name, or wildcard (`*.previewFile.*`, `/models/*`). Matching is case-insensitive. A non-empty `allow` restricts inputs to matching files; `exclude` removes matches and takes precedence. An omitted, empty, or match-everything `allow` list accepts any file and defers the decision to the workflow/template chain; a match-everything `exclude` (`*`, `**`, `*.*`, `/*`, `/**`) is rejected on save because it would exclude everything. |
+
+A pipeline's `systemConfig` accepts those seven keys plus the four a workflow uses — `concurrencyRestriction`, `outputTarget`, `allowWorkflowTriggerChaining`, and `defaultOutputFileBaseExecutionPathExtension` (see [System configuration](workflows.md#system-configuration) in the Workflows API). The two records share one key set, so a block is validated the same way whichever it is sent to; a pipeline reads only the seven above. Any other top-level key is rejected with `400` — the block is stored whole and every reader resolves a named key, so an unrecognized one would be stored, returned, and never acted on.
+
+The whole block may be at most **65,536 bytes** (64 KB) serialized. That is roughly a hundred times the largest block a built-in pipeline ships, and it bounds the filter lists as a group: `inputFileFilters.allow` and `.exclude` each hold at most 250 patterns of at most 512 characters, and the byte ceiling admits the full pattern count at any realistic pattern length. `auxPreviewPipelineSuffix` is at most 256 characters.
 
 ### Metadata inputs
 
@@ -920,11 +1041,11 @@ VAMS pipelines support several execution types, each suited for different integr
 
 ### Lambda
 
-The default execution type. VAMS invokes an AWS Lambda function synchronously as a Step Functions task.
+The default execution type. VAMS invokes an AWS Lambda function as an AWS Step Functions task.
 
 -   If you provide `executionConfig.lambda.resourceId`, VAMS uses your existing Lambda function.
--   If you omit `executionConfig.lambda.resourceId`, VAMS auto-creates a sample Lambda function with a unique name.
--   Deleting a pipeline is a soft-archive; any auto-created Lambda function is left in place.
+-   If you omit `executionConfig.lambda.resourceId`, VAMS auto-creates a sample Lambda function with a unique name. See [The Lambda target on create and update](#the-lambda-target-on-create-and-update) for how an omitted value resolves on each operation.
+-   Deleting a pipeline is a soft-archive; any auto-created Lambda function is left in place, and restoring the pipeline reuses it rather than provisioning a second one.
 
 ### SQS
 

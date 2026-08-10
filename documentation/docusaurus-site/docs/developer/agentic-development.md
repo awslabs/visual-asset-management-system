@@ -112,23 +112,31 @@ The steering document specifies that Synonyms must be used in headers, labels, d
 
 ### Example 3: Required Security Calls for Lambda Builders
 
-The CDK workflow documents mandate that every Lambda builder function includes four security-related calls. Omitting any of these calls results in deployment failures (CDK Nag violations) or security gaps.
+The CDK workflow documents mandate that every Lambda builder function includes five security-related calls, followed by the domain-specific resource grants. Omitting any of these calls results in deployment failures (CDK Nag violations) or security gaps.
 
 ```typescript
-// Every Lambda builder must include these four calls:
+// Every Lambda builder must include these five calls, in order:
 
-// 1. KMS key permissions for encryption/decryption
+// 1. AWS KMS key permissions for encryption/decryption
 kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
-// 2. Global environment variables and permissions
+// 2. Authorization table read grants + Amazon CloudWatch audit log group write grants
+setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+
+// 3. VAMS_RESOURCE_PARAM_PREFIX environment variable + AWS Systems Manager Parameter Store grant
 globalLambdaEnvironmentsAndPermissions(fun, config);
 
-// 3. CDK Nag suppression for S3 grant-based permissions
+// 4. Per-Lambda CDK Nag suppressions (IAM4/IAM5, wildcard AWS KMS)
+suppressCdkNagLambda(fun);
+
+// 5. CDK Nag suppression for grant-based permissions (only when using grantRead/grantReadWrite)
 suppressCdkNagErrorsByGrantReadWrite(scope);
 
-// 4. Domain-specific DynamoDB table grants
+// Plus the domain-specific Amazon DynamoDB table grants the handler needs
 storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
 ```
+
+`setupSecurityAndLoggingEnvironmentAndPermissions()` carries the two-tier authorization and audit-logging grants: read access to the constraints, user-roles, and roles tables that `CasbinEnforcer` reads, and `logs:CreateLogStream` and `logs:PutLogEvents` on the nine VAMS audit log groups. A builder that omits it synthesizes and deploys cleanly, then returns 403 on every request and writes no audit events.
 
 These patterns are documented with complete code templates in both `CDK_DEVELOPMENT_WORKFLOW.md` and `BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`, ensuring that AI agents produce compliant Lambda builders on the first attempt.
 

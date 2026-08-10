@@ -4,7 +4,7 @@
  */
 
 import { Workflow, Pipeline } from "../types";
-import { metadataEnabled } from "../wizard/resolveRestrictions";
+import { metadataEnabled, isOpenAllowList } from "../wizard/resolveRestrictions";
 
 export interface ValidationResult {
     errors: string[];
@@ -72,14 +72,65 @@ export function allPipelineRefsSelected(refs?: { pipelineId?: string }[]): boole
 }
 
 /**
+ * The key a reference resolves through — the same `databaseId:pipelineId` composite the backend keys
+ * a workflow's per-step params, resolved configs and filtered inputs by (pipeline_composite_key in
+ * common/workflows/executionRecords.py).
+ */
+export function pipelineRefKey(ref: { pipelineId?: string; pipelineDatabaseId?: string }): string {
+    return ref.pipelineDatabaseId
+        ? `${ref.pipelineDatabaseId}:${ref.pipelineId}`
+        : ref.pipelineId || "";
+}
+
+/** The scope selections a workflow can grant and a pipeline can decline. */
+const SCOPE_SELECTIONS = [
+    { key: "wholeAssetAllowed", label: "selecting a whole asset" },
+    { key: "folderAllowed", label: "selecting a folder" },
+] as const;
+
+/**
+ * One assetScope selection flag. `wholeAsset` is the shorthand the vamsSchema registration bundles
+ * emit for `wholeAssetAllowed`; an explicit canonical key wins, exactly as normalize_asset_scope in
+ * common/workflows/executionValidation.py resolves the pair. `undefined` means the scope declares
+ * nothing about the selection, which is neither a grant nor a refusal.
+ */
+function scopeGrant(
+    scope: Record<string, boolean> | undefined,
+    key: (typeof SCOPE_SELECTIONS)[number]["key"]
+): boolean | undefined {
+    if (!scope) return undefined;
+    if (key === "wholeAssetAllowed") {
+        if (scope.wholeAssetAllowed !== undefined) return !!scope.wholeAssetAllowed;
+        if (scope.wholeAsset !== undefined) return !!scope.wholeAsset;
+        return undefined;
+    }
+    return scope.folderAllowed === undefined ? undefined : !!scope.folderAllowed;
+}
+
+/** Whether a step takes input files at all — mirrors the backend's `_arity` default of 'one'. */
+function consumesInputFiles(pipeline: Pipeline): boolean {
+    return (pipeline.systemConfig?.inputFileArity || "one") !== "none";
+}
+
+export interface ValidateWorkflowOptions {
+    /**
+     * False while the pipeline list is still loading. `pipelinesById` is then incomplete, so a
+     * reference that is merely not fetched yet must not be reported as unresolvable.
+     */
+    pipelinesLoaded?: boolean;
+}
+
+/**
  * Validates a workflow before save, checking for structural errors and configuration warnings.
  */
 export function validateWorkflow(
     // Accepts an in-progress create body too (workflowId may be null/absent before save); the
     // validation rules never read the workflow id.
     wf: Omit<Workflow, "workflowId"> & { workflowId?: string | null },
-    pipelinesById: Record<string, Pipeline>
+    pipelinesById: Record<string, Pipeline>,
+    options: ValidateWorkflowOptions = {}
 ): ValidationResult {
+    const pipelinesLoaded = options.pipelinesLoaded !== false;
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -114,6 +165,11 @@ export function validateWorkflow(
 
     // Per-reference rules, then archived/disabled pipelines and arity mismatches
     if (wf.specifiedPipelines) {
+        // First position each job name and each pipeline reference was seen at, so a repeat can name
+        // the card it collides with rather than just reporting that a collision exists.
+        const jobNameFirstSeen = new Map<string, number>();
+        const refFirstSeen = new Map<string, number>();
+
         wf.specifiedPipelines.forEach((ref, i) => {
             const position = i + 1;
 
@@ -129,13 +185,52 @@ export function validateWorkflow(
                 );
             }
 
-            const compositeKey = ref.pipelineDatabaseId
-                ? `${ref.pipelineDatabaseId}:${ref.pipelineId}`
-                : ref.pipelineId;
+            // ERROR: two steps sharing a job name collapse into ONE state machine state and one of
+            // the pipelines never runs — create_state_machine keys its states by name, so the second
+            // overwrites the first. Compared case-insensitively because the name is also an S3 path
+            // segment, where two casings of one name are two folders that read as the same step.
+            if (ref.jobName) {
+                const nameKey = ref.jobName.toLowerCase();
+                const seenAt = jobNameFirstSeen.get(nameKey);
+                if (seenAt === undefined) {
+                    jobNameFirstSeen.set(nameKey, position);
+                } else {
+                    errors.push(
+                        `Pipeline #${position} job name '${ref.jobName}' is already used by pipeline ` +
+                            `#${seenAt}; each step needs its own job name because it names the step ` +
+                            `in the state machine and its output folder`
+                    );
+                }
+            }
+
+            const compositeKey = pipelineRefKey(ref);
+
+            // ERROR: the same pipeline listed twice. The backend keys per-step execute params,
+            // resolved configs and filtered inputs by this composite, so the later step overwrites
+            // the earlier one and only one of them runs.
+            if (ref.pipelineId) {
+                const seenAt = refFirstSeen.get(compositeKey);
+                if (seenAt === undefined) {
+                    refFirstSeen.set(compositeKey, position);
+                } else {
+                    errors.push(
+                        `Pipeline #${position} ('${ref.pipelineId}') is already used by pipeline ` +
+                            `#${seenAt}; a workflow may reference each pipeline only once`
+                    );
+                }
+            }
 
             const pipeline = pipelinesById[compositeKey];
             if (!pipeline) {
-                // No warning if pipeline not found in map
+                // ERROR: a reference that resolves to nothing. The card renders as an empty picker
+                // and the backend rejects the save with a message that names no position, so the
+                // author is told which one here.
+                if (ref.pipelineId && pipelinesLoaded) {
+                    errors.push(
+                        `Pipeline #${position} references '${compositeKey}', which is not an ` +
+                            `available pipeline; it may have been deleted or is not accessible to you`
+                    );
+                }
                 return;
             }
 
@@ -187,6 +282,25 @@ export function validateWorkflow(
                 }
             });
 
+            // An asset-selection the workflow grants but this step refuses. Every level must accept
+            // the selection (the run is submitted once and each step is checked against it), so the
+            // option never appears in the execute wizard and the workflow setting does nothing. Only
+            // a file-consuming step counts: an arity-'none' step receives no input files, so the
+            // backend never applies its scope to the selection.
+            if (consumesInputFiles(pipeline)) {
+                SCOPE_SELECTIONS.forEach(({ key, label }) => {
+                    if (
+                        scopeGrant(wf.systemConfig?.assetScope, key) === true &&
+                        scopeGrant(pipeline.systemConfig?.assetScope, key) === false
+                    ) {
+                        warnings.push(
+                            `The workflow allows ${label} but pipeline '${ref.pipelineId}' does ` +
+                                `not, so the option will not be offered at execution time`
+                        );
+                    }
+                });
+            }
+
             // Two independent ways the workflow's filters can starve this pipeline of its input.
             const workflowAllow = wf.systemConfig?.inputFileFilters?.allow || [];
             const pipelineAllow = pipeline.systemConfig?.inputFileFilters?.allow || [];
@@ -221,6 +335,43 @@ export function validateWorkflow(
                         `${suppressed.length === 1 ? "that" : "those"}, ${detail}`
                 );
             }
+        });
+
+        // Step-vs-step allow lists. Every check above is workflow-vs-one-pipeline, but a run is
+        // submitted ONCE and _evaluate applies EVERY step's filters to that same selection — a step's
+        // filters are never applied to the previous step's output. So two steps whose allow lists
+        // share no admissible file can only both be satisfied by a selection that carries a file for
+        // each, which a single-file workflow cannot express. Only file-consuming steps with a
+        // restrictive allow list participate: an open list admits anything, and an arity-'none' step
+        // is handed an empty input list before its filters are reached.
+        const restrictiveSteps = wf.specifiedPipelines
+            .map((ref) => ({ ref, pipeline: pipelinesById[pipelineRefKey(ref)] }))
+            .filter(
+                ({ pipeline }) =>
+                    !!pipeline &&
+                    consumesInputFiles(pipeline) &&
+                    !isOpenAllowList(pipeline.systemConfig?.inputFileFilters?.allow)
+            );
+
+        const workflowArity = wf.systemConfig?.inputFileArity ?? "one";
+        restrictiveSteps.forEach((left, i) => {
+            const leftAllow = left.pipeline.systemConfig?.inputFileFilters?.allow || [];
+            restrictiveSteps.slice(i + 1).forEach((right) => {
+                const rightAllow = right.pipeline.systemConfig?.inputFileFilters?.allow || [];
+                if (leftAllow.some((a) => rightAllow.some((b) => patternsMayOverlap(a, b)))) return;
+                const pair =
+                    `Pipelines '${left.ref.pipelineId}' (${leftAllow.join(", ")}) and ` +
+                    `'${right.ref.pipelineId}' (${rightAllow.join(
+                        ", "
+                    )}) accept no input file in ` +
+                    `common, and every step's filters are applied to the same selection`;
+                warnings.push(
+                    workflowArity === "multi"
+                        ? `${pair}; a run must therefore select a file for each of them`
+                        : `${pair}; no single-file selection can satisfy both, so every execution ` +
+                              `will fail at launch`
+                );
+            });
         });
     }
 

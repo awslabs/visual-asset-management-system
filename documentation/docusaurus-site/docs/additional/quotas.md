@@ -42,7 +42,7 @@ All VAMS Lambda functions share the same configuration:
 | ------------------------ | ------------------------- | ------------ | ----------------------------------------------------- |
 | Credential/token timeout | 3,600 seconds (1 hour)    | Yes          | `app.authProvider.useCognito.credTokenTimeoutSeconds` |
 | Presigned URL timeout    | 86,400 seconds (24 hours) | Yes          | `app.authProvider.presignedUrlTimeoutSeconds`         |
-| Upload initializations   | 10 per user per minute    | No           | Hardcoded rate limit                                  |
+| Upload initializations   | 20 per user per minute    | No           | Hardcoded rate limit                                  |
 
 ---
 
@@ -52,12 +52,12 @@ All VAMS Lambda functions share the same configuration:
 
 All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which automatically scales to handle workload demands.
 
-| Parameter                   | Value                           |
-| --------------------------- | ------------------------------- |
-| Billing mode                | On-demand (PAY_PER_REQUEST)     |
-| Maximum item size           | 400 KB (DynamoDB service limit) |
-| Metadata records per entity | 500                             |
-| Table count                 | 25+ tables                      |
+| Parameter                   | Value                                     |
+| --------------------------- | ----------------------------------------- |
+| Billing mode                | On-demand (PAY_PER_REQUEST)               |
+| Maximum item size           | 400 KB (DynamoDB service limit)           |
+| Metadata records per entity | 500                                       |
+| Table count                 | 46 tables (plus 5 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -71,6 +71,7 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 | Multipart upload threshold | 5 GB (parts required above this size)           |
 | Maximum parts per upload   | 10,000 (Amazon S3 service limit)                |
 | Part size range            | 5 MB to 5 GB                                    |
+| VAMS upload part size      | 150 MB                                          |
 | Bucket encryption          | AWS KMS (when CMK enabled) or Amazon S3-managed |
 
 ### Amazon OpenSearch
@@ -91,11 +92,18 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 
 ### General Pipeline Limits
 
-| Parameter                                | Value                                  |
-| ---------------------------------------- | -------------------------------------- |
-| AWS Step Functions state transitions     | Based on workflow complexity           |
-| Pipeline execution types                 | Lambda, Amazon SQS, Amazon EventBridge |
-| Concurrent workflow executions per asset | Multiple (with different input files)  |
+| Parameter                                | Value                                                          |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| AWS Step Functions state transitions     | Based on workflow complexity                                   |
+| Pipeline execution types                 | AWS Lambda, Amazon SQS, Amazon EventBridge, AWS Deadline Cloud |
+| Pipeline steps per workflow              | 100                                                            |
+| Concurrent workflow executions per asset | Multiple (with different input files)                          |
+
+:::note
+The AWS Deadline Cloud execution type is available when the deployment sets
+`app.pipelines.deadlineCloudExecutionTypeEnabled`, and only in the commercial AWS partition. See
+[Building custom pipelines](../pipelines/custom-pipelines.md#aws-deadline-cloud).
+:::
 
 ### Pipeline-Specific Limits
 
@@ -129,11 +137,22 @@ so an authoring mistake is reported immediately rather than surfacing at run tim
 | Auxiliary preview suffix length        | 256 characters                   |
 | AWS Deadline Cloud job template length | 256 KB                           |
 | Pipeline task timeout                  | 604,800 seconds (7 days)         |
+| `systemConfig` serialized size         | 64 KB                            |
+| `executionConfig` serialized size      | 320 KB                           |
+| `configBody` + `webFormJson` combined  | 5 MB                             |
 
 :::note
-A template's `configBody` has no character limit of its own. A body too large to store inline is
-offloaded to Amazon S3 automatically and the record keeps a pointer to it, so template size is bounded
-by the absolute storage cap rather than by a request-validation rule.
+A template's `configBody` has no length limit of its own — it is bounded together with its
+`webFormJson` by the combined 5 MB ceiling in the table above. A combined body over 320 KB is
+offloaded to Amazon S3 automatically and the record keeps a pointer to it, so a large body is stored
+without a client ever addressing Amazon S3 directly.
+:::
+
+:::info
+The two configuration blocks are bounded by their serialized size so an oversized request is rejected
+with a `400` at validation time rather than failing when the record is written. `executionConfig` has
+the larger allowance because an AWS Deadline Cloud block carries a job template up to its own 256 KB
+limit, alongside the settings for the other execution types.
 :::
 
 ### Workflow Execution Limits
@@ -154,6 +173,7 @@ matters when reading a result:
 | Template tag values per pipeline             | 250                            | Rejected               |
 | Template tag key length                      | 128 characters                 | Rejected               |
 | Template tag value length                    | 65,536 characters (serialized) | Rejected               |
+| Template tag values combined per pipeline    | 128 KB (serialized)            | Rejected               |
 | `customTemplateOverride` length per pipeline | 5 MB                           | Rejected               |
 | Output base-path extension length            | 1,024 characters               | Rejected               |
 | Metadata entries captured per entity         | 1,000                          | Truncated and reported |
@@ -186,14 +206,21 @@ data limits — the full data remains stored and reachable.
 | Parameter                                      | Value             | Exceeding it                                      |
 | ---------------------------------------------- | ----------------- | ------------------------------------------------- |
 | Rows read per detail collection                | 2,000             | Truncated, flagged                                |
-| Input rows returned per detail collection      | 1,000             | Truncated, flagged                                |
+| Rows returned per detail collection            | 1,000             | Truncated, flagged                                |
+| Rows returned in the output-files collection   | 2,000             | Truncated, flagged                                |
 | Bytes returned per detail collection           | 4 MB              | Truncated, flagged                                |
 | Total detail response size                     | 5 MB              | Truncated, flagged                                |
 | Metadata bytes guaranteed in a detail response | 256 KB minimum    | Reserved so a file-heavy run still shows metadata |
-| Metadata rows per detail-metadata page         | 500 (default 100) | Rejected above the maximum                        |
-| Executions per global list page                | 100               | Rejected above the maximum                        |
+| Metadata rows per detail-metadata page         | 500 (default 100) | Clamped to the maximum; page with `NextToken`     |
+| Executions per global list page                | 100               | Clamped to the maximum; page with `NextToken`     |
 | Free-form text bytes per execution record      | 380 KB            | Truncated, flagged                                |
 | Log text bytes per execution record            | 390 KB            | Truncated                                         |
+
+:::note
+A page-size cap bounds the size of one response rather than the amount of data a caller may read, so a
+`pageSize` above the maximum is answered with a page at the maximum and its `NextToken` instead of a
+`400`. Continue the walk with the returned token to read the remainder.
+:::
 
 :::note
 A truncated detail collection is named in the response's `truncatedCollections` array, and a truncated
@@ -256,7 +283,7 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 | ---------------------------------------------------- | -------------------------- |
 | VPC endpoints per configuration                      | 1-11 per Availability Zone |
 | Availability Zones required (ALB)                    | 2 minimum                  |
-| Availability Zones required (OpenSearch Provisioned) | 3 minimum                  |
+| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)         |
 | Availability Zones required (Lambda in VPC)          | 1 minimum                  |
 
 For detailed cost implications of VPC endpoint configurations, see the [cost estimates](../overview/costs.md).

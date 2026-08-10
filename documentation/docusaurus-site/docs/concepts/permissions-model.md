@@ -232,43 +232,48 @@ For the complete list of templates, JSON format details, and instructions on app
 
 The following web routes can be checked via the `web` object type with the `route__path` field. Requests for these routes are made through the `POST /auth/routes` API. These control front-end navigation visibility only and do not impact API data access.
 
-| Route Path                                        | Page                                  |
-| ------------------------------------------------- | ------------------------------------- |
-| `*`                                               | Default landing page (always allowed) |
-| `/`                                               | Default landing page (always allowed) |
-| `/assetIngestion`                                 | Asset ingestion                       |
-| `/assets`                                         | Assets listing                        |
-| `/assets/:assetId`                                | Asset detail                          |
-| `/auth/api-keys`                                  | API key management                    |
-| `/auth/cognitousers`                              | Amazon Cognito user management        |
-| `/auth/constraints`                               | Constraint management                 |
-| `/auth/roles`                                     | Role management                       |
-| `/auth/subscriptions`                             | Subscription management               |
-| `/auth/tags`                                      | Tag management                        |
-| `/auth/userroles`                                 | User-role assignment                  |
-| `/databases`                                      | Database listing                      |
-| `/databases/:databaseId/assets`                   | Database assets listing               |
-| `/databases/:databaseId/assets/:assetId`          | Asset detail (database-scoped)        |
-| `/databases/:databaseId/assets/:assetId/download` | Asset download                        |
-| `/databases/:databaseId/assets/:assetId/file`     | File viewer                           |
-| `/databases/:databaseId/assets/:assetId/file/*`   | File viewer (nested path)             |
-| `/databases/:databaseId/assets/:assetId/uploads`  | Modify asset uploads                  |
-| `/databases/:databaseId/pipelines`                | Database pipelines                    |
-| `/databases/:databaseId/workflows`                | Database workflows                    |
-| `/databases/:databaseId/workflows/:workflowId`    | Workflow detail                       |
-| `/databases/:databaseId/workflows/create`         | Create workflow                       |
-| `/executions`                                     | Executions listing                    |
-| `/executions/:executionId`                        | Execution detail                      |
-| `/metadataschema`                                 | Metadata schema listing               |
-| `/metadataschema/:databaseId`                     | Database metadata schemas             |
-| `/pipelines`                                      | Pipeline listing                      |
-| `/pipelines/:pipelineName`                        | Pipeline detail                       |
-| `/search`                                         | Search page                           |
-| `/search/:databaseId/assets`                      | Database-scoped search                |
-| `/upload`                                         | Upload page                           |
-| `/upload/:databaseId`                             | Database-scoped upload                |
-| `/workflows`                                      | Workflow listing                      |
-| `/workflows/create`                               | Create workflow                       |
+| Route Path                                                           | Page                                  |
+| -------------------------------------------------------------------- | ------------------------------------- |
+| `*`                                                                  | Default landing page (always allowed) |
+| `/`                                                                  | Default landing page (always allowed) |
+| `/assetIngestion`                                                    | Asset ingestion                       |
+| `/assets`                                                            | Assets listing                        |
+| `/assets/:assetId`                                                   | Asset detail                          |
+| `/auth/api-keys`                                                     | API key management                    |
+| `/auth/cognitousers`                                                 | Amazon Cognito user management        |
+| `/auth/constraints`                                                  | Constraint management                 |
+| `/auth/roles`                                                        | Role management                       |
+| `/auth/subscriptions`                                                | Subscription management               |
+| `/auth/tags`                                                         | Tag management                        |
+| `/auth/userroles`                                                    | User-role assignment                  |
+| `/databases`                                                         | Database listing                      |
+| `/databases/:databaseId/assets`                                      | Database assets listing               |
+| `/databases/:databaseId/assets/:assetId`                             | Asset detail (database-scoped)        |
+| `/databases/:databaseId/assets/:assetId/download`                    | Asset download                        |
+| `/databases/:databaseId/assets/:assetId/file`                        | File viewer                           |
+| `/databases/:databaseId/assets/:assetId/file/*`                      | File viewer (nested path)             |
+| `/databases/:databaseId/assets/:assetId/uploads`                     | Modify asset uploads                  |
+| `/databases/:databaseId/pipelines`                                   | Database pipelines                    |
+| `/databases/:databaseId/pipelines/:pipelineId`                       | Pipeline detail                       |
+| `/databases/:databaseId/pipelines/:pipelineId/templates`             | Pipeline templates listing            |
+| `/databases/:databaseId/pipelines/:pipelineId/templates/:templateId` | Template detail                       |
+| `/databases/:databaseId/pipelines/:pipelineId/templates/create`      | Create pipeline template              |
+| `/databases/:databaseId/pipelines/create`                            | Create pipeline                       |
+| `/databases/:databaseId/workflows`                                   | Database workflows                    |
+| `/databases/:databaseId/workflows/:workflowId`                       | Workflow detail                       |
+| `/databases/:databaseId/workflows/:workflowId/triggers`              | Workflow triggers                     |
+| `/databases/:databaseId/workflows/create`                            | Create workflow                       |
+| `/executions`                                                        | Executions listing                    |
+| `/executions/:executionId`                                           | Execution detail                      |
+| `/metadataschema`                                                    | Metadata schema listing               |
+| `/metadataschema/:databaseId`                                        | Database metadata schemas             |
+| `/pipelines`                                                         | Pipeline listing                      |
+| `/search`                                                            | Search page                           |
+| `/search/:databaseId/assets`                                         | Database-scoped search                |
+| `/upload`                                                            | Upload page                           |
+| `/upload/:databaseId`                                                | Database-scoped upload                |
+| `/workflows`                                                         | Workflow listing                      |
+| `/workflows/create`                                                  | Create workflow                       |
 
 ## API route reference
 
@@ -379,11 +384,11 @@ Routes marked "No auth checks" bypass Tier 1 and Tier 2 authorization. Routes ma
 
 | Route                                                                                                                 | Methods                | Tier 2 Object Type              | Tier 2 Fields                                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/pipelines`                                                                                                          | GET, PUT               | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
+| `/pipelines`                                                                                                          | GET                    | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
 | `/database/\{databaseId\}/pipelines`                                                                                  | GET, POST              | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
 | `/database/\{databaseId\}/pipelines/\{pipelineId\}`                                                                   | GET, PUT, DELETE       | `pipeline`                      | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name`                                                                                                                                                                                                                       |
 | `/database/\{databaseId\}/pipelines/\{pipelineId\}/templates` and `.../templates/\{templateId\}` (incl. `/tagSchema`) | GET, POST, PUT, DELETE | `pipeline`                      | Enforced against the **owning pipeline** (templates + tag schemas have no separate object type).                                                                                                                                                                                              |
-| `/workflows`                                                                                                          | GET, PUT               | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
+| `/workflows`                                                                                                          | GET                    | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
 | `/database/\{databaseId\}/workflows`                                                                                  | GET, POST              | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
 | `/database/\{databaseId\}/workflows/\{workflowId\}`                                                                   | GET, PUT, DELETE       | `workflow`                      | `databaseId`, `workflowId`, `category`, `name`                                                                                                                                                                                                                                                |
 | `/database/\{databaseId\}/workflows/\{workflowId\}/triggers` and `.../triggers/\{triggerType\}`                       | GET, PUT, DELETE       | `workflow`                      | Enforced against the **owning workflow**.                                                                                                                                                                                                                                                     |

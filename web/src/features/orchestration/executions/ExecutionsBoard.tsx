@@ -32,6 +32,10 @@ interface ExecutionsBoardProps {
     scope: ExecutionScope;
 }
 
+// Lower bound for a custom range whose "from" side is left empty, meaning "everything up to the
+// chosen end date".
+const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
+
 const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const toast = useToast();
     const navigate = useNavigate();
@@ -86,7 +90,13 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             f.workflowId = assetWorkflowFilter.slice(separator + 1);
         }
         if (dateWindow === "custom") {
-            if (startDateFilter) f.filterStartDate = `${startDateFilter}T00:00:00Z`;
+            // The lower bound is always sent. The server applies its own 90-day floor when none
+            // arrives, so an end-only range ("everything before X") would otherwise come back
+            // silently clipped to the last 90 days — and inverted against an older end date, which
+            // the key-range BETWEEN rejects.
+            f.filterStartDate = startDateFilter
+                ? `${startDateFilter}T00:00:00Z`
+                : OPEN_ENDED_RANGE_START;
             if (endDateFilter) f.filterEndDate = `${endDateFilter}T23:59:59Z`;
         } else if (dateWindow !== "90") {
             // 120 / 180 day presets: N days before now (the 90-day default needs no override).
@@ -181,11 +191,33 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     } = useExecutions(scope, filters, {});
     const { abortExecution, rerunExecution, permanentDeleteExecution } = useExecutionActions();
     const { can } = useAllowedRoutes();
+    // `can` is a fresh closure on each render, and it feeds the column definitions. Reading it
+    // through a ref keeps the definitions stable across a poll, which is what keeps an open row
+    // action menu from being unmounted mid-click.
+    const canRef = React.useRef(can);
+    canRef.current = can;
+    const canStable = React.useCallback(
+        (method: string, pathTemplate: string) => canRef.current(method, pathTemplate),
+        []
+    );
 
     const executions = React.useMemo(
         () => data?.pages?.flatMap((page: any) => page.Items) ?? [],
         [data]
     );
+
+    // Page-level notices from the list endpoint. A page that hit the per-page asset-resolution bound
+    // withholds rows it could not evaluate and says so here; without it a short page is
+    // indistinguishable from a window in which almost nothing ran.
+    const listWarnings = React.useMemo(() => {
+        const seen: string[] = [];
+        (data?.pages || []).forEach((page: any) => {
+            (Array.isArray(page?.warnings) ? page.warnings : []).forEach((w: string) => {
+                if (w && !seen.includes(w)) seen.push(w);
+            });
+        });
+        return seen;
+    }, [data]);
 
     // Fold whatever workflows the loaded rows reveal into the accumulated option set (asset tab
     // only). Rows carry ids, so the label comes from the workflow list when it is available and falls
@@ -279,37 +311,47 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         }
     };
 
-    const handleRerun = async (executionId: string, groupId?: string) => {
-        setActionError(null);
-        try {
-            const result: any = await rerunExecution.mutateAsync({
-                executionId,
-                executionGroupId: groupId,
-            });
-            // The re-run response passes the execute handler's body through, so it carries the NEW
-            // execution's id and any non-fatal warnings. Naming the new id matters because the row the
-            // user acted on is the OLD execution — without it there is no way to tell which run to
-            // watch. Warnings are surfaced rather than dropped: a run that launched with caveats
-            // (skipped inputs, say) is not the same as a clean one.
-            const newId: string | undefined = result?.executionId || result?.workflowExecutionId;
-            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
-            const parts = [
-                newId ? `New execution ${newId}.` : "A new execution was launched.",
-                groupId ? "Re-ran every execution in the group." : "",
-                warnings.length ? `Warnings: ${warnings.join("; ")}` : "",
-            ].filter(Boolean);
-            if (warnings.length) {
-                // Not a plain success: it started, but with something the operator should read.
-                toast.warning("Re-run started with warnings", { description: parts.join(" ") });
-            } else {
-                toast.success("Re-run started", { description: parts.join(" ") });
+    const handleRerun = React.useCallback(
+        async (executionId: string, groupId?: string) => {
+            setActionError(null);
+            try {
+                const result: any = await rerunExecution.mutateAsync({
+                    executionId,
+                    executionGroupId: groupId,
+                });
+                // The re-run response passes the execute handler's body through, so it carries the NEW
+                // execution's id and any non-fatal warnings. Naming the new id matters because the row
+                // the user acted on is the OLD execution — without it there is no way to tell which run
+                // to watch. Warnings are surfaced rather than dropped: a run that launched with caveats
+                // (skipped inputs, say) is not the same as a clean one.
+                const newId: string | undefined =
+                    result?.executionId || result?.workflowExecutionId;
+                const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+                const parts = [
+                    newId ? `New execution ${newId}.` : "A new execution was launched.",
+                    // One row, one re-run: the group id is carried onto the new execution as a label
+                    // so it files alongside its siblings, and says nothing about them being replayed.
+                    groupId
+                        ? `Filed under group ${groupId}; the other executions in that group were not re-run.`
+                        : "",
+                    warnings.length ? `Warnings: ${warnings.join("; ")}` : "",
+                ].filter(Boolean);
+                if (warnings.length) {
+                    // Not a plain success: it started, but with something the operator should read.
+                    toast.warning("Re-run started with warnings", { description: parts.join(" ") });
+                } else {
+                    toast.success("Re-run started", { description: parts.join(" ") });
+                }
+            } catch (err) {
+                const message = toastErrorMessage(err, "Failed to rerun execution");
+                setActionError(message);
+                toast.error("Re-run failed", { description: message });
             }
-        } catch (err) {
-            const message = toastErrorMessage(err, "Failed to rerun execution");
-            setActionError(message);
-            toast.error("Re-run failed", { description: message });
-        }
-    };
+        },
+        // The mutation object is a new reference on every render while mutateAsync is stable, so the
+        // dependency is the function rather than its wrapper.
+        [rerunExecution.mutateAsync, toast]
+    );
 
     const handlePermanentDelete = async (executionId: string) => {
         setActionError(null);
@@ -465,7 +507,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <div onClick={(e) => e.stopPropagation()}>
                         <ExecutionRowActions
                             execution={row.original}
-                            can={can}
+                            can={canStable}
                             onView={() => setQuickViewExecutionId(row.original.workflowExecutionId)}
                             onAbort={() => {
                                 setActionError(null);
@@ -510,7 +552,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             },
         ],
         [
-            can,
+            canStable,
             navigate,
             handleRerun,
             setQuickViewExecutionId,
@@ -708,6 +750,19 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     className="p-3 rounded bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400"
                 >
                     {actionError}
+                </div>
+            )}
+
+            {/* Notices from the list response itself, above the rows they qualify — the count on
+                screen is not the whole answer when one of these is present. */}
+            {listWarnings.length > 0 && (
+                <div
+                    role="status"
+                    className="p-3 rounded bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300"
+                >
+                    {listWarnings.map((warning) => (
+                        <div key={warning}>{warning}</div>
+                    ))}
                 </div>
             )}
 

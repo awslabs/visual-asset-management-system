@@ -86,4 +86,91 @@ test.describe("Pipelines page", () => {
             timeout: 20_000,
         });
     });
+
+    test("Edit on a stored pipeline opens a populated form whose save is reachable", async ({
+        page,
+    }) => {
+        const id = await firstCardId(page);
+        test.skip(!id, "No pipelines in this environment");
+        const items = await openCardMenu(page, id!);
+        const edit = items.filter({ hasText: "Edit" });
+        // A DeadlineCloud pipeline in a deployment with that feature off is read-only and offers no
+        // Edit action, so there is nothing to assert about the form here.
+        if ((await edit.count()) === 0) {
+            await page.keyboard.press("Escape");
+            test.skip(true, "The first pipeline offers no Edit action in this deployment");
+        }
+        await edit.first().click();
+
+        await expect(page.getByRole("heading", { name: "Edit Pipeline", level: 1 })).toBeVisible({
+            timeout: 30_000,
+        });
+        // A pipeline stored by any writer — API, CLI, CDK registration, or a migration — must be
+        // editable. Every stored record carries all four execution-type sub-blocks with the unused
+        // ones empty, so a form that validated those blocked the save with nothing on screen.
+        await expect(page.locator("#pipelineId")).toHaveValue(/.+/, { timeout: 30_000 });
+        await expect(page.locator("#pipelineName")).not.toHaveValue("");
+
+        // The save must actually leave the browser. The request is intercepted and aborted, so this
+        // proves the form issues it without changing the pipeline (core specs mutate nothing).
+        let updateAttempted = false;
+        await page.route(/\/pipelines\//, async (route) => {
+            if (route.request().method() === "PUT") {
+                updateAttempted = true;
+                await route.abort();
+                return;
+            }
+            await route.continue();
+        });
+
+        // Walk the wizard with its own Next button; Save exists only on the last step. Locating a
+        // step by name would match the global navigation instead of the stepper. Bounded rather than
+        // "while visible" so a Next that stops advancing fails on the Update assertion below with a
+        // readable message instead of looping.
+        const next = page.getByRole("button", { name: "Next" });
+        for (let step = 0; step < 5; step++) {
+            if (!(await next.isVisible().catch(() => false))) break;
+            await next.click();
+        }
+        const update = page.getByRole("button", { name: /^Update$/ });
+        await expect(update).toBeEnabled();
+        await update.click();
+        await expect.poll(() => updateAttempted, { timeout: 20_000 }).toBe(true);
+    });
+
+    test("a pipeline that fails to load shows an error, not a blank Edit form", async ({
+        page,
+    }) => {
+        const id = await firstCardId(page);
+        test.skip(!id, "No pipelines in this environment");
+
+        // Fails the single-pipeline read only: the list route ends at "/pipelines" with no id
+        // segment, and the templates route continues past the id, so neither matches.
+        await page.route(/\/pipelines\/[^/?]+(\?|$)/, async (route) => {
+            if (route.request().method() === "GET") {
+                await route.fulfill({
+                    status: 500,
+                    contentType: "application/json",
+                    body: JSON.stringify({ message: "Internal Server Error" }),
+                });
+                return;
+            }
+            await route.continue();
+        });
+
+        const items = await openCardMenu(page, id!);
+        const edit = items.filter({ hasText: "Edit" });
+        if ((await edit.count()) === 0) {
+            await page.keyboard.press("Escape");
+            test.skip(true, "The first pipeline offers no Edit action in this deployment");
+        }
+        await edit.first().click();
+
+        // An unreadable pipeline must say so. A form titled "Edit Pipeline" seeded with create
+        // defaults reads as a pipeline whose configuration was wiped, and saving it would PUT to a
+        // path with an empty id.
+        await expect(page.getByText(/pipeline not found/i)).toBeVisible({ timeout: 30_000 });
+        await expect(page.locator("#pipelineName")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: /^Update$/ })).toHaveCount(0);
+    });
 });

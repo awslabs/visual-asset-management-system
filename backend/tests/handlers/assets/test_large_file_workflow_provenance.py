@@ -91,13 +91,13 @@ class TestExternalLargeFileQueueing:
         """A >1GB workflow output carries its workflow provenance into the SQS message."""
         size = uploadFile.LARGE_FILE_THRESHOLD_BYTES + 1
         file_info, response = _queue_external_upload(
-            _external_request(workflowId="wf-1", workflowExecutionId="exec-1", changeUserId="SYSTEM_USER"),
+            _external_request(workflowId="wf-1", workflowExecutionId="b9a3aba3c092475f978ad39e5d5a2657", changeUserId="SYSTEM_USER"),
             size,
         )
 
         assert file_info, "large external file was not queued for asynchronous processing"
         assert file_info["workflowId"] == "wf-1"
-        assert file_info["workflowExecutionId"] == "exec-1"
+        assert file_info["workflowExecutionId"] == "b9a3aba3c092475f978ad39e5d5a2657"
         assert file_info["changeUserId"] == "SYSTEM_USER"
         assert response.largeFileAsynchronousHandling is True
 

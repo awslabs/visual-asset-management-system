@@ -67,6 +67,15 @@ const OUTPUT_PATH_PREFIX_HELP = (
     </span>
 );
 
+/**
+ * How many input rows still load their version history up front.
+ *
+ * Each row's list is a separate request, and a selection made in the file manager can carry hundreds
+ * of files into this step. Up to this many rows the requests are cheap and the lists are ready before
+ * anyone opens one; beyond it each row waits until its own selector is reached.
+ */
+const EAGER_VERSION_ROW_LIMIT = 5;
+
 const WizardInputStage: React.FC<WizardInputStageProps> = ({
     workflow,
     databaseId,
@@ -88,8 +97,6 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
 }) => {
     const inputFileArity = workflow.systemConfig?.inputFileArity || "one";
     const allowOutputOverride = workflow.systemConfig?.outputTarget?.allowOverride || false;
-    // Passed to every file picker so a file the workflow would reject is never offered.
-    const workflowFileFilters = workflow.systemConfig?.inputFileFilters;
 
     // Databases for the input/output selectors. On a database-scoped launch the database is fixed;
     // on the global page the user picks from the databases they can see.
@@ -170,6 +177,22 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
     // for a reason the picker already knew. An omitted scope key is not a grant (matching the backend's
     // _scope_errors), so a workflow that says nothing offers neither.
     const allowWholeAsset = restrictions.wholeAssetAllowed;
+    // A folder input is gated the same way, and the backend accepts a trailing-slash key wherever the
+    // resolved scope grants it.
+    const allowFolder = restrictions.folderAllowed;
+    // The filters the file pickers offer against are the RESOLVED ones — the workflow's, its
+    // pipelines' and the chosen templates'. Filtering on the workflow's alone offered files the chain
+    // rejects, which the validation panel then contradicted the picker about.
+    const fileFilters = React.useMemo(
+        () => ({ allow: restrictions.allow, exclude: restrictions.exclude }),
+        [restrictions.allow, restrictions.exclude]
+    );
+    // The seeded database for a new row. GLOBAL is the shared pipeline/workflow catalog rather than an
+    // asset database, so it is not a value the row's Database picker can show or an asset endpoint can
+    // take: an empty value renders as the picker's blank prompt and keeps the Asset picker disabled
+    // until a real database is chosen.
+    const seedDatabaseId = isAllDatabases(databaseId) ? "" : databaseId;
+    const deferRowVersions = (inputFiles || []).length > EAGER_VERSION_ROW_LIMIT;
 
     // Metadata-source pickers, offered only for a run with no input files: with input files the
     // sources are the files' own assets and databases, so there is nothing to name.
@@ -223,7 +246,7 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
         onInputFilesChange([
             ...inputFiles,
             {
-                databaseId: presetAsset?.databaseId || databaseId,
+                databaseId: presetAsset?.databaseId || seedDatabaseId,
                 assetId: presetAsset?.assetId || "",
                 relativeFileKey: allowWholeAsset ? "/" : "",
             },
@@ -384,10 +407,11 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                         <InputFileSelector
                             databaseOptions={databaseOptions}
                             allowWholeAsset={allowWholeAsset}
-                            inputFileFilters={workflowFileFilters}
+                            allowFolder={allowFolder}
+                            inputFileFilters={fileFilters}
                             value={
                                 inputFiles[0] || {
-                                    databaseId: presetAsset?.databaseId || databaseId,
+                                    databaseId: presetAsset?.databaseId || seedDatabaseId,
                                     assetId: presetAsset?.assetId || "",
                                     relativeFileKey: allowWholeAsset ? "/" : "",
                                 }
@@ -420,7 +444,9 @@ const WizardInputStage: React.FC<WizardInputStageProps> = ({
                             <InputFileSelector
                                 databaseOptions={databaseOptions}
                                 allowWholeAsset={allowWholeAsset}
-                                inputFileFilters={workflowFileFilters}
+                                allowFolder={allowFolder}
+                                inputFileFilters={fileFilters}
+                                deferVersions={deferRowVersions}
                                 value={file}
                                 onChange={(updated) => {
                                     const next = [...inputFiles];

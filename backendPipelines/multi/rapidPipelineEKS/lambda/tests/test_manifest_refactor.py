@@ -356,6 +356,71 @@ class TestVamsExecute:
         # No task token -> validation fails (the EKS validator reports the missing token as a 400).
         assert resp["statusCode"] == 400
 
+    def test_pre_invoke_failure_fails_the_task_token(self):
+        # A multi-file manifest is rejected before the pipeline starts; the workflow task waits on
+        # the callback token, so the rejection must be reported rather than only returned.
+        mod = self._load()
+        manifest = self._manifest()
+        manifest["inputFiles"].append(
+            {"bucket": "abkt", "key": "xidM/second.glb", "assetId": "xidM", "databaseId": "dbM"})
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
+        invoke = MagicMock(return_value={"StatusCode": 200, "Payload": MagicMock(read=lambda: b"")})
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn), \
+                patch.object(mod.lambda_client, "invoke", invoke):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, _ctx())
+        assert resp["statusCode"] == 500
+        invoke.assert_not_called()
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_validation_rejection_fails_the_task_token(self):
+        # The EKS validator returns a 400 early-return; a 400 that leaves the callback pending
+        # strands the workflow task for its full taskTimeout, so it reports the token too.
+        mod = self._load()
+        s3 = MagicMock()
+        s3.get_object.side_effect = Exception("no manifest")
+        body = self._body()
+        body.pop("inputManifestS3Location")
+        body.pop("outputS3AssetFilesPath")  # required parameter -> validation failure
+        sfn = MagicMock()
+        invoke = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn), \
+                patch.object(mod.lambda_client, "invoke", invoke):
+            resp = mod.lambda_handler({"body": json.dumps(body)}, _ctx())
+        assert resp["statusCode"] == 400
+        invoke.assert_not_called()
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_pipeline_invoke_failure_fails_the_task_token(self):
+        mod = self._load()
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(self._manifest()).encode("utf-8"))}
+        invoke = MagicMock(side_effect=Exception("open pipeline unavailable"))
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn), \
+                patch.object(mod.lambda_client, "invoke", invoke), patch.object(mod.time, "sleep", MagicMock()):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, _ctx())
+        assert resp["statusCode"] == 500
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_no_task_token_skips_the_callback(self):
+        # A direct invoke carries no token: the error response is still returned, without a callback.
+        mod = self._load()
+        s3 = MagicMock()
+        s3.get_object.side_effect = Exception("no manifest")
+        body = self._body()
+        body.pop("inputManifestS3Location")
+        body.pop("TaskToken")
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(body)}, _ctx())
+        assert resp["statusCode"] == 400
+        sfn.send_task_failure.assert_not_called()
+
 
 # ============================ openPipeline: threading + registration ============================
 

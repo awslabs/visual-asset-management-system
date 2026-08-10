@@ -4218,21 +4218,45 @@ paths:
                                         not contain '..' or backslashes.
                                 pipelineExecutionParameters:
                                     type: object
-                                    description: "Per-pipeline execution parameters, keyed by pipelineId."
+                                    description: >
+                                        Per-pipeline execution parameters, keyed by pipelineId. At most 100
+                                        entries, matching the workflow's own cap on specifiedPipelines. Each key
+                                        must be a valid pipeline identifier and each value an object.
                                     additionalProperties:
                                         type: object
                                         properties:
                                             templateId:
                                                 type: string
+                                                description: "Template the pipeline's configuration is resolved from. Must be a valid template identifier."
                                             templateTags:
                                                 type: array
+                                                maxItems: 250
+                                                description: >
+                                                    Caller-supplied tag values for the chosen template (at most 250).
+                                                    Each entry is a key/value pair; the key is at most 128
+                                                    characters and the value at most 65,536 characters serialized.
                                                 items:
                                                     type: object
+                                                    properties:
+                                                        key:
+                                                            type: string
+                                                            minLength: 1
+                                                            maxLength: 128
+                                                        value:
+                                                            description: "A string, number, boolean, or string list, per the tag's declared type."
+                                                    required:
+                                                        - key
                                             customTemplateOverride:
                                                 type: string
+                                                maxLength: 5242880
+                                                description: >
+                                                    Configuration body used in place of a stored template, up to
+                                                    5,242,880 characters (5 MB) — the same absolute cap a stored
+                                                    template body is held to.
                                 executionGroupId:
                                     type: string
-                                    description: "Optional group id for bulk grouping / abort-by-group."
+                                    maxLength: 64
+                                    description: "Optional group id for bulk grouping / abort-by-group. Must be a valid identifier: it becomes a query key on the executions list and the abort-by-group route."
                                 triggerType:
                                     type: string
                                     enum: [manual, fileUpload]
@@ -4240,17 +4264,45 @@ paths:
             responses:
                 "200":
                     description: Workflow execution started.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
                     description: >
                         Validation, template-resolution, or cross-entity validation error, including
                         metadataSourceAssets spanning more assets than the workflow's assetScope span
-                        keys allow.
+                        keys allow, a workflow that is archived or disabled, a conflicting execution
+                        already running under the workflow's concurrencyRestriction, and a recorded
+                        set of inputs too large to store (fewer or shorter template tag values and
+                        metadata-source entities). A template-resolution failure returns
+                        a message object carrying templateResolutionErrors, and a cross-entity failure
+                        one carrying executionValidationErrors — so the 400 body's message is an object
+                        holding a list of strings rather than a string on those two paths.
+
+
+                        A request throttled by Amazon DynamoDB or AWS Step Functions, and one that
+                        reaches the account's Step Functions execution limit, is also answered here
+                        with the status code the AWS service reported and a message naming the
+                        condition; both are retryable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Not authorized (API, the workflow, a referenced pipeline, an input-file asset, a metadata-source asset, a named metadata-source database, or the output asset).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: >
+                        The workflow, an input-file asset, a metadata-source asset, or the output asset
+                        does not exist, or one or more selected input files do not exist in their
+                        asset's bucket.
                     content:
                         application/json:
                             schema:
@@ -4277,12 +4329,47 @@ paths:
     /database/{databaseId}/assets/{assetId}/workflows/executions:
         get:
             summary: "List all workflow executions for an asset."
-            description: "Lists the executions associated with an asset — the union of runs that read it and runs that wrote to it. Lists recent executions by default (started within the last 90 days); filterStartDate queries an explicit lower bound. Supports optional equality filters (workflowId, workflowDatabaseId, status, triggerType, groupId), each AND-ed and matched per field, and NextToken pagination. The applied window is echoed back as filterStartDate."
+            description: >-
+                Lists the executions associated with an asset — the union of runs that read it and runs
+                that wrote to it. Lists recent executions by default (started within the last 90 days);
+                filterStartDate queries an explicit lower bound. Supports optional equality filters
+                (workflowId, workflowDatabaseId, status, triggerType, groupId), each AND-ed and matched
+                per field, and NextToken pagination. The applied window is echoed back as
+                filterStartDate.
+
+
+                One request collects at most the 200 most recent executions of the asset, across both
+                directions, and each is then checked against the caller's access; the response carries
+                a NextToken when older executions remain, so page until the token is absent.
             responses:
                 "200":
                     description: OK.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/executionListRow"
+                                            filterStartDate:
+                                                type: string
+                                                description: "The lower bound that was applied, so the response is self-describing."
+                                            NextToken:
+                                                type: string
+                                                nullable: true
                 "400":
-                    description: A filter or pagination parameter is invalid.
+                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, or a startingToken that cannot be decoded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, or GET on the asset).
                     content:
                         application/json:
                             schema:
@@ -4300,9 +4387,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
+              - name: startingToken
+                in: query
+                description: "NextToken from a previous page. A token that cannot be decoded is rejected with 400 rather than restarting at the first page."
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -4351,9 +4442,49 @@ paths:
     /database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}:
         get:
             summary: "List executions for a specific workflow on an asset."
+            description: >-
+                The workflow-scoped form of the asset execution list: identical behavior, with the
+                workflow named in the path instead of as a query filter. A workflow ID is unique only
+                within its database, so pair it with the workflowDatabaseId query parameter to name a
+                single workflow.
+
+
+                One request collects at most the 200 most recent executions of the asset, across both
+                directions, and each is then checked against the caller's access; the response carries
+                a NextToken when older executions remain, so page until the token is absent.
             responses:
                 "200":
                     description: OK.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/executionListRow"
+                                            filterStartDate:
+                                                type: string
+                                                description: "The lower bound that was applied, so the response is self-describing."
+                                            NextToken:
+                                                type: string
+                                                nullable: true
+                "400":
+                    description: A filter or pagination parameter is invalid — a filterStartDate outside the accepted UTC form, a workflowId or workflowDatabaseId outside the ID pattern, or a startingToken that cannot be decoded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, or GET on the asset).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Asset not found.
                     content:
@@ -4367,9 +4498,25 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
+              - name: startingToken
+                in: query
+                description: "NextToken from a previous page. A token that cannot be decoded is rejected with 400 rather than restarting at the first page."
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+              - in: query
+                name: filterStartDate
+                required: false
+                description: "UTC lower bound on execution start date, of the form YYYY-MM-DDTHH:MM:SSZ; only executions started on or after this date are listed. Fractional seconds and a +00:00 offset are accepted and normalized. Any other form is rejected with 400. Defaults to 90 days ago."
+                schema:
+                    type: string
+              - in: query
+                name: workflowDatabaseId
+                required: false
+                description: "Database of the workflow named in the path. Accepts GLOBAL for the shared workflow catalog."
+                schema:
+                    type: string
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -6151,6 +6298,21 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /database/{databaseId}/pipelines/{pipelineId}/templates:
         get:
             summary: "List a pipeline's templates."
+            description: >-
+                Returns one page of the pipeline's templates. Each item is the full template record,
+                not a summary.
+
+
+                A configBody or webFormJson that VAMS offloaded to Amazon S3 is returned EMPTY in
+                this view: the list does not rehydrate bodies from Amazon S3, so a large template
+                reads as if its body were blank. Read such a template through
+                GET /database/{databaseId}/pipelines/{pipelineId}/templates/{templateId}, which
+                returns both bodies inline. The item's tagSchema is likewise absent here and is
+                returned by the single-template GET.
+
+
+                A page carries at most 10 templates. When more remain, the response carries a
+                NextToken; send it back as startingToken to read the next page.
             responses:
                 "200":
                     description: OK
@@ -6165,10 +6327,16 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                             Items:
                                                 type: array
                                                 items:
-                                                    $ref: "#/components/schemas/pipelineTemplateDescriptor"
+                                                    $ref: "#/components/schemas/pipelineTemplateListItem"
                                             NextToken:
                                                 type: string
                                                 nullable: true
+                "400":
+                    description: Invalid parameters, or a startingToken that cannot be decoded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
                     content:
@@ -6188,9 +6356,31 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
+              - name: pageSize
+                in: query
+                description: "Number of templates returned in one page. A value above the maximum is served at the maximum, and an unparseable value falls back to the default."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 10
+                    default: 10
+              - name: maxItems
+                in: query
+                description: "Alias of pageSize for this route; pageSize takes precedence when both are sent."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 10
+                    default: 10
+              - name: startingToken
+                in: query
+                description: "NextToken from a previous page. A token that cannot be decoded is rejected with 400."
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
               - name: databaseId
                 in: path
                 description: Database ID.
@@ -7468,9 +7658,38 @@ Several triggers of one type are supported: address each with its own key ('<typ
             summary: "List workflow executions across all assets (global)."
             description: "Asset-less, permission-filtered list of executions. An execution is visible when the caller has GET on its workflow and GET on EVERY asset the run read (each input file's asset plus each asset named as a metadata source), or on the asset it wrote to for a run with no inputs; a permanently deleted asset defers to GET on the database it lived in. Lists recent executions by default (started within the last 90 days); filterStartDate/filterEndDate query an explicit range. Supports optional filters (workflowId, workflowDatabaseId, status, triggerType, groupId, triggeredByUserId) and NextToken pagination. The applied window is echoed back as filterStartDate (and filterEndDate when supplied). Each row also reports the run's output target (outputLocationType, outputAssetId, outputDatabaseId); these are empty for a results-only execution that writes no files."
             parameters:
-              - $ref: '#/components/parameters/maxItemsParam'
-              - $ref: '#/components/parameters/pageSizeParam'
-              - $ref: '#/components/parameters/startingTokenParam'
+              - name: pageSize
+                in: query
+                description: "Rows read per page. A value above the maximum is served at the maximum, and an unparseable or non-positive value falls back to the default. The page is read before the per-execution visibility check, so a page may return fewer rows than pageSize while still carrying a NextToken; page until the token is absent."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 50
+              - name: maxItems
+                in: query
+                description: "Alias of pageSize for this route; pageSize takes precedence when both are sent."
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 50
+              - name: startingToken
+                in: query
+                description: "NextToken from a previous page. A token that cannot be decoded is rejected with 400 rather than restarting at the first page."
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+              - name: NextToken
+                in: query
+                description: "Alias of startingToken, so a response's NextToken can be sent back under the name it was returned as. startingToken takes precedence when both are sent."
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
               - in: query
                 name: filterStartDate
                 required: false
@@ -7516,6 +7735,33 @@ Several triggers of one type are supported: address each with its own key ('<typ
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: object
+                                        properties:
+                                            Items:
+                                                type: array
+                                                items:
+                                                    $ref: "#/components/schemas/executionListRow"
+                                            filterStartDate:
+                                                type: string
+                                                description: "The lower bound that was applied, so the response is self-describing."
+                                            filterEndDate:
+                                                type: string
+                                                description: "The upper bound that was applied, present only when one was supplied."
+                                            NextToken:
+                                                type: string
+                                                nullable: true
+                "400":
+                    description: A filter or pagination parameter is invalid — a filterStartDate or filterEndDate outside the accepted UTC form, or a startingToken that cannot be decoded.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized.
                     content:
@@ -7537,17 +7783,23 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 name: executionId
                 required: true
                 schema:
-                    type: string
+                    $ref: '#/components/schemas/execution_id_regex'
                 description: Identifier of the execution to abort.
               - in: query
                 name: groupId
                 required: false
                 schema:
                     type: string
-                description: When set, abort all active executions in this group instead of the single execution.
+                description: When set, abort all active executions in this group instead of the single execution. The executionId path segment is still required by the route but takes no part in a group abort.
             responses:
                 "200":
-                    description: OK
+                    description: >
+                        OK. A single abort carries a warnings array only when a registered sub-process
+                        could not be stopped; the sub-process is then left running and the warning names
+                        it. A group abort carries the group id and a per-member result for every member
+                        the caller is authorized on, skippedInaccessibleCount when members were withheld
+                        for access, and moreRemaining when active members remain beyond the request's
+                        cap of 200 — re-invoke to continue.
                 "400":
                     description: Invalid or missing executionId.
                     content:
@@ -7561,7 +7813,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Execution not found.
+                    description: Execution not found, or — for a group abort — no executions exist in the group.
                     content:
                         application/json:
                             schema:
@@ -7575,13 +7827,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and the input collections (inputFiles, inputMetadata, inputDatabaseMetadata) are then trimmed to at most 1000 returned rows. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results' -- and is empty when the view is complete; there is no continuation token, so a named collection's remaining rows are not retrievable through this route. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. Internal details (ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results' -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
                 required: true
                 schema:
-                    type: string
+                    $ref: '#/components/schemas/execution_id_regex'
                 description: Identifier of the execution.
             responses:
                 "200":
@@ -7610,6 +7862,129 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/details/metadata:
+        get:
+            summary: "Read one of an execution's metadata collections a page at a time."
+            description: >-
+                Returns one page of ONE of the execution's metadata collections, with a continuation
+                token, so a collection the details view reported truncated can be walked in full.
+                Rows carry the same scrubbed shape the details view returns, plus the pipelineId of
+                the step that read (or wrote) the entity, so a client renders a page with the columns
+                it already has.
+
+
+                Three collections are addressable, matching the details view's three metadata
+                sections: 'input' is inputMetadata (the asset and file metadata each step read),
+                'inputDatabase' is inputDatabaseMetadata (each metadata-source database's own
+                metadata), and 'output' is outputs.metadata. The details view's file collections
+                (inputFiles, outputs.files) and outputs.results have no paged equivalent, which is why
+                the details view serves them ahead of the metadata collections when its own byte
+                budget cannot hold everything.
+
+
+                Every metadata collection is keyed per pipeline execution, so the walk visits the
+                execution's steps in a stable order and the token names a position within it - which
+                step to continue in, and where inside that step. A token is only valid alongside the
+                pipelineId filter it was issued with, and a token whose step order has changed
+                underneath it is rejected with 400 rather than resumed in the wrong step. Nothing is
+                dropped by a page bound: a page ends at the first row it could not carry and the token
+                resumes there. NextToken is absent on the last page, so its presence is what tells a
+                client there is more.
+
+
+                A page carries at most 500 rows and at most 4,194,304 bytes (4 MB) of rows, whichever
+                comes first; pageSize above the maximum is served at the maximum rather than rejected.
+                'input' and 'inputDatabase' are the two scope halves of one stored collection, so a
+                request for one reads past the other's rows; a single request scans at most 20,000
+                rows and then ends the page with a token at the last row scanned.
+
+
+                Authorization is the same rule the details view enforces, evaluated for GET: GET on
+                the execution's workflow, GET on every input-file asset tied to the execution, GET on
+                every asset named as a metadata source, and GET on every database in
+                metadataSourceDatabases. Exactly the callers who can open the details view can page
+                its metadata.
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    $ref: '#/components/schemas/execution_id_regex'
+                description: Identifier of the execution.
+              - in: query
+                name: collection
+                required: false
+                schema:
+                    type: string
+                    enum: [input, inputDatabase, output]
+                    default: input
+                description: "Which metadata collection to page. Omitted or empty reads 'input'; any other value is rejected with 400."
+              - in: query
+                name: pageSize
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 500
+                    default: 100
+                description: "Rows requested per page. A value above the maximum is served at the maximum; a value below 1 is rejected with 400."
+              - in: query
+                name: startingToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Continuation token from a previous page's NextToken. A token that cannot be used against this execution is rejected with 400 rather than restarting at the first page."
+              - in: query
+                name: NextToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Alias of startingToken, so a response's NextToken can be sent back under the name it was returned as. startingToken takes precedence when both are sent."
+              - in: query
+                name: pipelineId
+                required: false
+                schema:
+                    type: string
+                    pattern: ^[-_a-zA-Z0-9]{3,63}$
+                description: "Narrow the page to the rows of the steps running this pipeline. A value outside the identifier pattern is rejected with 400 rather than returning an empty page. A token issued with this filter is only valid alongside the same filter."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executionDetailMetadataPage'
+                "400":
+                    description: Invalid or missing executionId, an unknown collection, an invalid pipelineId or pageSize, or a continuation token that cannot be used.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, one of the input-file assets, a metadata-source asset, or a captured database).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
@@ -7619,7 +7994,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 name: executionId
                 required: true
                 schema:
-                    type: string
+                    $ref: '#/components/schemas/execution_id_regex'
                 description: Identifier of the execution.
               - in: query
                 name: mode
@@ -7646,20 +8021,21 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 required: false
                 schema:
                     type: integer
-                description: "(full mode) Start of the time range, epoch milliseconds."
+                description: "(full mode) Start of the time range, epoch milliseconds. A non-numeric value is rejected with 400."
               - in: query
                 name: endTime
                 required: false
                 schema:
                     type: integer
-                description: "(full mode) End of the time range, epoch milliseconds."
+                description: "(full mode) End of the time range, epoch milliseconds. A non-numeric value is rejected with 400."
               - in: query
                 name: limit
                 required: false
                 schema:
                     type: integer
+                    maximum: 1000
                     default: 100
-                description: "(full mode) Maximum number of events to return."
+                description: "(full mode) Maximum number of events to return. A value above the maximum is served at the maximum; a non-numeric value is rejected with 400."
               - in: query
                 name: nextToken
                 required: false
@@ -7670,7 +8046,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 "200":
                     description: OK
                 "400":
-                    description: Invalid or missing executionId, or invalid mode.
+                    description: Invalid or missing executionId, an invalid mode, or a non-numeric limit, startTime, or endTime.
                     content:
                         application/json:
                             schema:
@@ -7696,13 +8072,25 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/rerun:
         post:
             summary: "Re-run an execution."
-            description: "Reconstructs the execute request from the stored execution records and launches a new execution (new executionId). The caller must be able to view the original execution; the re-launch re-validates the caller's permissions against every referenced asset/workflow/pipeline. Optionally reuses or supplies an executionGroupId."
+            description: >-
+                Reconstructs the execute request from the stored execution records and launches a new
+                execution (new executionId). The caller must be able to view the original execution and
+                must also hold API access to the execute route of the original's workflow, since a
+                re-run launches a run; the re-launch then re-validates the caller's permissions against
+                every referenced asset, workflow, and pipeline. Optionally reuses or supplies an
+                executionGroupId.
+
+
+                The re-launch runs the same request the original did, so every rejection the execute
+                route can raise reaches the caller here with the execute route's own status code and
+                message — including an input file that no longer exists, a workflow since archived or
+                disabled, and a template whose tags no longer resolve.
             parameters:
               - in: path
                 name: executionId
                 required: true
                 schema:
-                    type: string
+                    $ref: '#/components/schemas/execution_id_regex'
                 description: Identifier of the execution to re-run.
             requestBody:
                 required: false
@@ -7713,18 +8101,26 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             properties:
                                 executionGroupId:
                                     type: string
-                                    description: "Optional group id for the new execution."
+                                    maxLength: 64
+                                    description: "Optional group id for the new execution. Must be a valid identifier. Omit it to launch the re-run outside any group; send the original's group id to keep the two together."
             responses:
                 "200":
                     description: New execution started.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
-                    description: Invalid request or the reconstructed execution failed validation.
+                    description: An invalid executionGroupId or request body, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Not authorized (API on this route or on the workflow's execute route, or the caller cannot view the original execution).
                     content:
                         application/json:
                             schema:
@@ -7744,13 +8140,22 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/permanent:
         delete:
             summary: "Permanently delete an execution's records (admin)."
-            description: "Removes only the DynamoDB rows across all execution sub-tables; does not touch the Step Functions execution history. Guarded: the execution must not be in progress (abort it first). Requires confirmDelete=true in the body. Admin-only (granted only to admin permission templates)."
+            description: >-
+                Removes only the Amazon DynamoDB rows across all execution sub-tables — the main row,
+                the workflow inputs and configuration, and, per pipeline step, its record plus every
+                input, output, log, and configuration sub-row. The AWS Step Functions execution history
+                and any files the run wrote are left untouched. Guarded: the execution must not be in
+                progress (abort it first), and a non-terminal row is confirmed against Step Functions
+                before the delete proceeds. Requires confirmDelete=true in the body. Admin-only
+                (granted only to admin permission templates), and additionally requires GET on the
+                execution's workflow and POST on every asset the run read, the same rule an abort
+                enforces.
             parameters:
               - in: path
                 name: executionId
                 required: true
                 schema:
-                    type: string
+                    $ref: '#/components/schemas/execution_id_regex'
                 description: Identifier of the execution to permanently delete.
             requestBody:
                 required: true
@@ -7761,20 +8166,20 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             properties:
                                 confirmDelete:
                                     type: boolean
-                                    description: "Must be true to permanently delete the execution records."
+                                    description: "Must be true to permanently delete the execution records. Omitting it or sending false is rejected with 400."
                             required:
                                 - confirmDelete
             responses:
                 "200":
                     description: Execution records permanently deleted.
                 "400":
-                    description: Missing confirmDelete, or the execution is in progress.
+                    description: Invalid or missing executionId, invalid JSON, a missing or false confirmDelete, or an execution still in progress.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Not authorized (API, the execution's workflow, or one of the assets the run read).
                     content:
                         application/json:
                             schema:
@@ -8973,6 +9378,123 @@ components:
                         - triggerTemplateErrors
             required:
                 - message
+        executeWorkflowResponse:
+            type: object
+            description: "Result of a successful execute: the new execution and any non-fatal observations the launch recorded."
+            properties:
+                executionId:
+                    type: string
+                    description: "Identifier of the launched execution. Use it on the details, logs, abort, re-run, and paged-metadata routes."
+                executionGroupId:
+                    type: string
+                    nullable: true
+                    description: "The group the execution was launched into, when one was supplied."
+                warnings:
+                    type: array
+                    nullable: true
+                    description: >
+                        Non-fatal observations, absent when there are none: a pipeline declaring a
+                        metadata type the run named no source for, an entity bounded by the per-entity
+                        metadata limits, an entity emptied by the total per-execution metadata bound, a
+                        metadata-source database whose metadata could not be read, and a
+                        metadataSourceDatabaseId the run did not use because it also supplied input
+                        files.
+                    items:
+                        type: string
+            required:
+                - executionId
+        executionListRow:
+            type: object
+            description: "One execution as returned by the global executions list. Internal fields (state machine ARNs, temporary S3 locations) are omitted."
+            properties:
+                workflowExecutionId:
+                    type: string
+                workflowId:
+                    type: string
+                workflowDatabaseId:
+                    type: string
+                executionStatus:
+                    type: string
+                executionStartDate:
+                    type: string
+                executionStopDate:
+                    type: string
+                    description: "Empty while the execution is still running."
+                triggerType:
+                    type: string
+                triggeredByUserId:
+                    type: string
+                executionGroupId:
+                    type: string
+                outputLocationType:
+                    type: string
+                    description: "'asset' for a run that wrote files to an asset, 'none' for a results-only run. Empty for a run with no configuration row."
+                outputAssetId:
+                    type: string
+                    description: "Empty for a results-only execution that writes no files."
+                outputDatabaseId:
+                    type: string
+                    description: "Empty for a results-only execution that writes no files."
+        executionDetailMetadataRow:
+            type: object
+            description: >-
+                One metadata row of an execution, in the same scrubbed shape the details view returns.
+                An input row ('input' / 'inputDatabase') carries the entity ids, the scope, and the
+                metadata and attributes maps; an output row ('output') carries the target path and the
+                key/value it wrote. Every row carries the pipelineId of the step it belongs to.
+            properties:
+                pipelineId:
+                    type: string
+                    description: "Pipeline whose step read or wrote this row."
+                databaseId:
+                    type: string
+                    description: "(input rows) Database of the entity the metadata describes."
+                assetId:
+                    type: string
+                    description: "(input rows) Asset of the entity the metadata describes. Empty on a database-scope row."
+                filePath:
+                    type: string
+                    description: "(input rows) Asset-relative path of the file the metadata describes; '/' for an asset's or a database's own metadata."
+                scope:
+                    type: string
+                    enum: [asset, database]
+                    description: "(input rows) What the metadata describes: an asset or one of its files, or a metadata-source database's own metadata."
+                metadata:
+                    type: object
+                    additionalProperties: true
+                    description: "(input rows) The entity's captured metadata. Empty when the step's metadataInputs excluded it."
+                attributes:
+                    type: object
+                    additionalProperties: true
+                    description: "(input rows) That file's captured attributes, reported apart from metadata because metadataInputs grants fileMetadata and fileAttributes independently. Always empty on an asset- or database-scope row."
+                targetFilePath:
+                    type: string
+                    description: "(output rows) Asset-relative path of the file the metadata was written to."
+                metadataKey:
+                    type: string
+                    description: "(output rows) Metadata key written."
+                metadataValue:
+                    type: string
+                    description: "(output rows) Metadata value written."
+        executionDetailMetadataPage:
+            type: object
+            description: "One page of one of an execution's metadata collections."
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/executionDetailMetadataRow"
+                collection:
+                    type: string
+                    enum: [input, inputDatabase, output]
+                    description: "The collection this page was read from, echoed back so a client rendering several collections can attribute the page."
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Continuation token for the next page. Absent on the last page, so its presence is what tells a client there is more."
+            required:
+                - Items
+                - collection
         eventName:
             $ref: "#/components/schemas/object_name_pattern_regex"
         filename_pattern:
@@ -8984,6 +9506,15 @@ components:
         id_regex:
             type: string
             pattern: ^[a-z]([-_a-z0-9]){3,63}$
+        execution_id_regex:
+            type: string
+            description: >
+                A workflow-execution, pipeline-execution, or execution-group identifier. Two shapes are
+                accepted: the undashed 32-character lowercase hex id VAMS generates, and the dashed
+                8-4-4-4-12 UUID AWS Step Functions assigns as an execution name when one is started
+                without an explicit name. The dashed form is case-insensitive; the undashed form is
+                lowercase-only, because it is compared as an exact Amazon DynamoDB key.
+            pattern: ^(?:[0-9a-f]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$
         asset_id_regex:
             type: string
             pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
@@ -9265,7 +9796,19 @@ components:
         # Pipeline execution and system configuration
         pipelineExecutionConfig:
             type: object
-            description: "Execution binding for a pipeline. The nested block matching executionType supplies the target resource."
+            description: >-
+                Execution binding for a pipeline. The nested block matching executionType supplies the
+                target resource.
+
+
+                The block is stored whole and is bounded at 327,680 bytes (320 KB) serialized. The
+                allowance is generous because a DeadlineCloud block carries an inline OpenJD job
+                template of up to 262,144 characters (256 KB); every other execution type uses a small
+                fraction of it. A larger block is rejected with 400 rather than written.
+
+
+                Only the keys below are accepted. An unrecognized key is rejected with 400, so a
+                misspelled setting surfaces at authoring time instead of being stored and never read.
             properties:
                 executionType:
                     type: string
@@ -9294,21 +9837,38 @@ components:
                     properties:
                         resourceId:
                             type: string
-                            description: "Lambda function name or ARN."
+                            description: >-
+                                Lambda function name or ARN, and the invoke target baked into every
+                                state machine that runs this pipeline.
+
+
+                                On create, omitting it asks VAMS to provision a function for the
+                                pipeline, seeded from the sample pipeline package; the created
+                                function's name is returned in the response. A deployment that cannot
+                                auto-create one rejects the request with 400, so a pipeline is never
+                                stored pointing at an empty target. Naming an existing function skips
+                                provisioning.
+
+
+                                On update, omitting it keeps the function the pipeline already runs, so
+                                a partial executionConfig edit does not drop the invoke target the
+                                deployed state machines were built against. A pipeline switched to the
+                                Lambda type from another type has no function to keep, so one is
+                                provisioned under the same rules as create.
                 sqs:
                     type: object
                     description: "Target for SQS execution type."
                     properties:
                         queueUrl:
                             type: string
-                            description: "Amazon SQS queue URL."
+                            description: "Amazon SQS queue URL. Required for this execution type — an absent value would emit a state machine with an empty target, so it is rejected with 400 at save."
                 eventBridge:
                     type: object
                     description: "Target for EventBridge execution type."
                     properties:
                         busArn:
                             type: string
-                            description: "Amazon EventBridge bus ARN."
+                            description: "Amazon EventBridge bus ARN. Omit it to publish to the account's default event bus."
                         source:
                             type: string
                             description: "Event source string."
@@ -9317,7 +9877,7 @@ components:
                             description: "Event detail-type string."
                 deadlineCloud:
                     type: object
-                    description: "Target for DeadlineCloud execution type."
+                    description: "Target for DeadlineCloud execution type. farmId and queueId are required, waitForCallback must be 'Enabled', and the inline job template is limited to 262,144 characters (256 KB)."
             required:
                 - executionType
         pipelineAssetScope:
@@ -9433,7 +9993,21 @@ components:
                         or leave it empty to exclude nothing.
         pipelineSystemConfig:
             type: object
-            description: "Input handling and templating defaults for a pipeline."
+            description: >-
+                Input handling and templating defaults for a pipeline.
+
+
+                The block is stored whole and is snapshotted again per pipeline step on each
+                execution's config record, so it is bounded at 65,536 bytes (64 KB) serialized —
+                roughly a hundred times the largest block the built-in pipelines declare. A larger
+                block is rejected with 400 at parse time rather than written.
+
+
+                A key outside the systemConfig vocabulary is rejected with 400. The vocabulary is one
+                set shared with workflowSystemConfig, so the keys below are the ones a pipeline reads
+                and the workflow-only keys are tolerated on a pipeline without effect. The block is
+                stored wholesale and every reader resolves a named key, so rejecting an unknown key is
+                what turns a misspelled setting into an error instead of a setting that does nothing.
             properties:
                 inputFileArity:
                     type: string
@@ -9681,8 +10255,10 @@ components:
             type: object
             description: "A pipeline template. configBody and webFormJson are returned inline; large bodies are transparently offloaded to Amazon S3 and rehydrated on read."
             properties:
-                databaseId:
-                    $ref: "#/components/schemas/id_regex"
+                pipelineDatabaseId:
+                    allOf:
+                        - $ref: "#/components/schemas/id_regex"
+                    description: "Database that owns the pipeline this template belongs to."
                 pipelineId:
                     $ref: "#/components/schemas/id_regex"
                 templateId:
@@ -9712,11 +10288,39 @@ components:
                     $ref: "#/components/schemas/pipelineTemplateOverrides"
                 tagSchema:
                     type: array
-                    description: "The template's tag schema fields."
+                    nullable: true
+                    description: "The template's tag schema fields. Null when the template has no tag schema, and null in the templates list view, which does not read the schema."
                     items:
                         $ref: "#/components/schemas/pipelineTemplateTagField"
+                dateCreated:
+                    type: string
+                    description: "ISO-8601 creation timestamp."
+                dateModified:
+                    type: string
+                    description: "ISO-8601 last-modified timestamp."
+                createdBy:
+                    type: string
+                    description: "User that created the template."
+                modifiedBy:
+                    type: string
+                    description: "User that last modified the template."
+                schemaVersion:
+                    type: integer
+                    description: "Storage schema version of the template record."
+                    default: 1
             required:
+                - pipelineDatabaseId
+                - pipelineId
+                - templateId
                 - templateName
+        pipelineTemplateListItem:
+            allOf:
+                - $ref: "#/components/schemas/pipelineTemplate"
+            description: >-
+                One template as returned by the templates list. Carries every field of a template,
+                with two values the list view does not read: configBody and webFormJson are empty
+                strings for a template whose bodies VAMS offloaded to Amazon S3, and tagSchema is
+                null. Fetch the template by id to obtain the bodies and the tag schema.
         createPipelineTemplateRequest:
             type: object
             description: "Request body for creating a pipeline template. Send configBody/webFormJson inline; the service offloads large bodies to Amazon S3. The template is scoped to the databaseId and pipelineId path parameters."
@@ -9824,7 +10428,15 @@ components:
                         regardless of this flag.
         workflowSystemConfig:
             type: object
-            description: "Input handling, asset-scope gating, and output defaults for a workflow."
+            description: >-
+                Input handling, asset-scope gating, and output defaults for a workflow.
+
+
+                The block is bounded at 65,536 bytes (64 KB) serialized, and a key outside the
+                systemConfig vocabulary is rejected with 400. A workflow and a pipeline systemConfig
+                are validated against the same key set and the same bound: the keys below are the ones
+                a workflow reads, and the pipeline-only keys are tolerated on a workflow without
+                effect.
             properties:
                 inputFileArity:
                     type: string
@@ -11560,10 +12172,15 @@ components:
                 baseAssetsPrefix:
                     type: string
                     description: "Base prefix path within the bucket for assets"
+                isDefault:
+                    type: boolean
+                    description: "Whether this is the VAMS default asset bucket, which houses pipeline template data and execution-time run I/O under the pipelines/ prefix. Exactly one bucket in a deployment is the default."
+                    default: false
             required:
                 - bucketId
                 - bucketName
                 - baseAssetsPrefix
+                - isDefault
         getBucketsResponse:
             type: object
             properties:

@@ -172,6 +172,21 @@ export function computeRefetchInterval(rows: any[]): number | false {
     return hasNonTerminal ? 5000 : false;
 }
 
+/**
+ * Poll cadence for a PAGED execution list: the row-driven cadence, spaced by the number of loaded
+ * pages.
+ *
+ * One poll of an infinite query re-reads every page loaded so far in a single pass, and each list
+ * request resolves its rows' assets and evaluates them against the caller's constraints. Spacing the
+ * ticks by the page count holds the request rate at one page per cadence however deep the reader has
+ * paged, so watching a run in progress costs the same whether the board shows 50 rows or 500.
+ */
+export function computeListRefetchInterval(rows: any[], pageCount: number): number | false {
+    const base = computeRefetchInterval(rows);
+    if (base === false) return false;
+    return base * Math.max(1, pageCount);
+}
+
 // Helper to throw on service [false, msg] tuple for query error state
 async function callService<T>(serviceFn: () => Promise<[boolean, T | string]>): Promise<T> {
     const [ok, data] = await serviceFn();
@@ -625,11 +640,15 @@ export function useExecutions(scope: ExecutionScope, filters?: Record<string, st
         },
         getNextPageParam: (lastPage: ExecutionListResponse) => lastPage.NextToken,
         initialPageParam: undefined as string | undefined,
+        // A tick re-reads every loaded page in one pass, so the cadence is spaced by the page count to
+        // keep the request rate at one page per cadence however far the reader has paged. Loaded pages
+        // are kept: bounding the fetch to the first page instead would discard the rest on every tick.
+        // A hidden tab skips the tick entirely (refetchIntervalInBackground defaults off), so a board
+        // left open in a background tab issues nothing until it is looked at again.
         refetchInterval: (query: any) => {
-            // Compute refetch interval from all pages
-            const allRows =
-                query.state.data?.pages.flatMap((p: ExecutionListResponse) => p.Items) ?? [];
-            return computeRefetchInterval(allRows);
+            const pages: ExecutionListResponse[] = query.state.data?.pages ?? [];
+            const allRows = pages.flatMap((p: ExecutionListResponse) => p.Items);
+            return computeListRefetchInterval(allRows, pages.length);
         },
         ...opts,
     });

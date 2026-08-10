@@ -78,6 +78,8 @@ def _validate_output_target(system_config):
     if not system_config:
         return
     output_target = system_config.get("outputTarget") or {}
+    if not isinstance(output_target, dict):
+        raise ValueError("systemConfig.outputTarget must be an object")
     # The boolean gates are checked whether or not a locationType is declared: allowOverride is read
     # at execute time regardless (the default locationType is 'asset').
     for key in _OUTPUT_TARGET_BOOLEAN_KEYS:
@@ -109,10 +111,12 @@ def _validate_input_file_arity(system_config):
 
 def _validate_system_config_shapes(system_config):
     """Validate the assetScope / metadataInputs / inputFileFilters value shapes shared with the
-    pipeline systemConfig (boolean maps with known keys, string-list filters). Reuses the pipeline
-    model's shared validator so workflow and pipeline systemConfig are validated identically."""
-    from models.pipelines import _validate_system_config_shape
+    pipeline systemConfig (boolean maps with known keys, string-list filters), plus the top-level key
+    set and serialized size bound. Reuses the pipeline model's shared validators so workflow and
+    pipeline systemConfig are validated identically."""
+    from models.pipelines import _validate_system_config_shape, validate_system_config_keys
     _validate_system_config_shape(system_config, "systemConfig")
+    validate_system_config_keys(system_config)
     _validate_allow_workflow_trigger_chaining(system_config)
     _validate_default_output_path_extension(system_config)
 

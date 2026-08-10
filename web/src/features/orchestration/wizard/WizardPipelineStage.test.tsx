@@ -4,10 +4,11 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import WizardPipelineStage from "./WizardPipelineStage";
 import type { Workflow, Pipeline, SpecifiedPipelineRef } from "../types";
+import type { PipelineStageData } from "./ExecuteWizard";
 
 jest.mock("../api/queries", () => ({
     useTemplates: jest.fn(),
@@ -85,6 +86,160 @@ describe("WizardPipelineStage", () => {
         const reported = onChange.mock.calls[onChange.mock.calls.length - 1][0];
         expect(reported.errors).toEqual([]);
         expect(reported.mode).toBe(4);
+    });
+});
+
+/**
+ * Tag values belong to the template they were entered against.
+ *
+ * The form is seeded per template, so switching the picker must re-seed from the NEW template's own
+ * tagSchema — carrying the previous template's values over submits free text as another template's
+ * enum value, and keys the new schema may not declare at all.
+ */
+describe("WizardPipelineStage tag seeding across template changes", () => {
+    const TPL_A = {
+        templateId: "tplA",
+        templateName: "Template A",
+        configFormat: "json",
+        configBody: '{"p":"{{prompt}}"}',
+        isDefault: true,
+        tagSchema: [{ tagKey: "prompt", type: "string" }],
+    };
+    const TPL_B = {
+        templateId: "tplB",
+        templateName: "Template B",
+        configFormat: "json",
+        configBody: '{"p":"{{prompt}}"}',
+        tagSchema: [
+            {
+                tagKey: "prompt",
+                type: "enum",
+                required: true,
+                default: "fast",
+                enumValues: ["fast", "slow"],
+            },
+        ],
+    };
+
+    /**
+     * ExecuteWizard stores every reported PipelineStageData and feeds it back as `data`, so the stage
+     * always sees its own last report on re-render. The harness reproduces that round trip — without
+     * it the stale-value path this describes is unreachable.
+     */
+    const renderWith = (list: any[], initial?: PipelineStageData) => {
+        const { useTemplates, useTemplate } = require("../api/queries");
+        useTemplates.mockReturnValue({ data: list, isLoading: false, isSuccess: true });
+        useTemplate.mockImplementation((_db: string, _pipe: string, templateId: string) => {
+            const tpl = list.find((t) => t.templateId === templateId);
+            return { data: tpl, isLoading: false, isSuccess: !!tpl };
+        });
+        const onChange = jest.fn();
+        // The pipeline object is created once: the stage's validation memo keys off identity, so a new
+        // object per render would re-report on every parent update.
+        const pipeline = makePipeline({ requireTemplate: false });
+        const Harness: React.FC = () => {
+            const [data, setData] = React.useState<PipelineStageData | undefined>(initial);
+            return (
+                <WizardPipelineStage
+                    workflow={workflow}
+                    pipeline={pipeline}
+                    pipelineRef={pipelineRef}
+                    data={data}
+                    onChange={(d) => {
+                        onChange(d);
+                        setData(d);
+                    }}
+                />
+            );
+        };
+        render(<Harness />);
+        return onChange;
+    };
+
+    const lastTags = (onChange: jest.Mock) =>
+        onChange.mock.calls[onChange.mock.calls.length - 1][0].tags;
+    const lastReport = (onChange: jest.Mock) =>
+        onChange.mock.calls[onChange.mock.calls.length - 1][0];
+
+    /** The template picker is the first select on the step; the tag form's own controls follow it. */
+    const selectTemplate = async (templateName: string) =>
+        userEvent.selectOptions(screen.getAllByRole("combobox")[0], templateName);
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("replaces the previous template's tag values with the new template's defaults", async () => {
+        const onChange = renderWith([TPL_A, TPL_B]);
+        await userEvent.type(await screen.findByLabelText("prompt"), "free-text-from-A");
+        await waitFor(() =>
+            expect(lastTags(onChange)).toEqual([{ key: "prompt", value: "free-text-from-A" }])
+        );
+
+        await selectTemplate("Template B");
+
+        await waitFor(() => expect(lastReport(onChange).templateId).toBe("tplB"));
+        expect(lastTags(onChange)).toEqual([{ key: "prompt", value: "fast" }]);
+    });
+
+    it("drops a value whose key the new template does not declare", async () => {
+        const tplC = { ...TPL_B, templateId: "tplC", templateName: "Template C", tagSchema: [] };
+        const onChange = renderWith([TPL_A, tplC]);
+        await userEvent.type(await screen.findByLabelText("prompt"), "x");
+        await waitFor(() => expect(lastTags(onChange)).toEqual([{ key: "prompt", value: "x" }]));
+
+        await selectTemplate("Template C");
+
+        await waitFor(() => expect(lastReport(onChange).templateId).toBe("tplC"));
+        expect(lastTags(onChange)).toEqual([]);
+    });
+
+    it("does not flag a blank optional tag as an error after re-seeding", async () => {
+        // An optional string/enum/string-list tag left blank is valid: the backend materializes an
+        // empty value for it, which is what the metadata fallback relies on.
+        const optional = {
+            ...TPL_B,
+            templateId: "tplOpt",
+            templateName: "Template Optional",
+            tagSchema: [{ tagKey: "prompt", type: "enum", enumValues: ["fast", "slow"] }],
+        };
+        const onChange = renderWith([TPL_A, optional]);
+        await selectTemplate("Template Optional");
+
+        await waitFor(() => expect(lastReport(onChange).templateId).toBe("tplOpt"));
+        expect(lastTags(onChange)).toEqual([]);
+        expect(lastReport(onChange).errors).toEqual([]);
+    });
+
+    it("restores the run's own tags when the step is revisited on the same template", async () => {
+        const onChange = renderWith([TPL_A, TPL_B], {
+            pipelineId: "pipe1",
+            templateId: "tplA",
+            tags: [{ key: "prompt", value: "entered-earlier" }],
+            errors: [],
+            params: {},
+        });
+
+        await waitFor(() =>
+            expect(lastTags(onChange)).toEqual([{ key: "prompt", value: "entered-earlier" }])
+        );
+        expect(await screen.findByLabelText("prompt")).toHaveValue("entered-earlier");
+    });
+
+    it("does not restore the run's tags onto a different template", async () => {
+        const onChange = renderWith([TPL_A, TPL_B], {
+            pipelineId: "pipe1",
+            templateId: "tplA",
+            tags: [{ key: "prompt", value: "entered-earlier" }],
+            errors: [],
+            params: {},
+        });
+        await waitFor(() =>
+            expect(lastTags(onChange)).toEqual([{ key: "prompt", value: "entered-earlier" }])
+        );
+
+        await selectTemplate("Template B");
+
+        await waitFor(() => expect(lastReport(onChange).templateId).toBe("tplB"));
+        expect(lastTags(onChange)).toEqual([{ key: "prompt", value: "fast" }]);
     });
 });
 

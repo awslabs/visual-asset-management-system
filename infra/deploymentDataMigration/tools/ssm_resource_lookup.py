@@ -99,6 +99,17 @@ class ResourceParamKeys:
     ASSET_AUXILIARY_BUCKET = "s3Buckets/assetAuxiliary"
     ARTEFACTS_BUCKET = "s3Buckets/artefacts"
 
+    # Audit CloudWatch log groups
+    AUDIT_LOG_AUTHENTICATION = "cloudwatchLogGroups/auditAuthentication"
+    AUDIT_LOG_AUTHORIZATION = "cloudwatchLogGroups/auditAuthorization"
+    AUDIT_LOG_FILEUPLOAD = "cloudwatchLogGroups/auditFileUpload"
+    AUDIT_LOG_FILEDOWNLOAD = "cloudwatchLogGroups/auditFileDownload"
+    AUDIT_LOG_FILEDOWNLOAD_STREAMED = "cloudwatchLogGroups/auditFileDownloadStreamed"
+    AUDIT_LOG_AUTHOTHER = "cloudwatchLogGroups/auditAuthOther"
+    AUDIT_LOG_AUTHCHANGES = "cloudwatchLogGroups/auditAuthChanges"
+    AUDIT_LOG_ACTIONS = "cloudwatchLogGroups/auditActions"
+    AUDIT_LOG_ERRORS = "cloudwatchLogGroups/auditErrors"
+
     # Lambda function names consumed by migration tooling
     CR_OS_REINDEXER_FUNCTION = "lambdaFunctions/crOsReindexer"
 

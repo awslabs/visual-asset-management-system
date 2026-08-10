@@ -821,3 +821,63 @@ class TestTemplateMethodNotAllowed:
         resp = lambda_handler(_event("DELETE", path, params), MagicMock())
         assert resp["statusCode"] == 400
         assert json.loads(resp["body"])["message"] == "Method not allowed"
+
+
+@pytest.mark.unit
+class TestTagSchemaRetypeParityAcrossBothRoutes:
+    """Two routes change a template's tag schema; both must apply the same body cross-check.
+
+    The schema and the stored configBody are one contract: a tag's declared type decides whether its
+    placeholder renders into valid JSON. `{"steps": {{PARAM}}}` is valid with an integer-typed PARAM
+    and invalid with a string-typed one, because the substituted value lands in an unquoted slot.
+
+    The tag-schema PUT validated this (`_set_tag_schema_on_template`), but the template PUT gated its
+    check on `configBody is not None or format_changed` — so a tagSchema-ONLY update skipped it and
+    accepted a change the other route rejected. Live, the template PUT returned 0 while the
+    tag-schema PUT returned 1 for the identical payload.
+    """
+
+    UNQUOTED_BODY = '{"steps": {{PARAM}}}'
+    SCHEMA_STRING = [{"tagKey": "PARAM", "type": "string", "required": False, "default": "abc"}]
+    SCHEMA_INTEGER = [{"tagKey": "PARAM", "type": "integer", "required": False, "default": 10}]
+
+    def _stored_row(self):
+        return {
+            "pipelineDatabaseId": "db1", "pipelineId": "pipe1", "templateId": "tmpl-1",
+            "templateName": "T", "configFormat": "json", "configBody": self.UNQUOTED_BODY,
+        }
+
+    def _run(self, path, method, body, mocks):
+        mock_enforcer, mock_claims, mock_parent, mock_get_row, mock_rehydrate = mocks
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        mock_parent.return_value = (True, PIPELINE_ITEM)
+        mock_get_row.return_value = self._stored_row()
+        mock_rehydrate.return_value = {"configBody": self.UNQUOTED_BODY}
+        params = {**BASE_PARAMS, "templateId": "tmpl-1"}
+        return lambda_handler(_event(method, path, params, body), MagicMock())
+
+    @patch(f"{MOD}._rehydrate_template")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_the_template_put_rejects_a_retype_that_breaks_the_stored_body(
+            self, mock_enforcer, mock_claims, mock_parent, mock_get_row, mock_rehydrate):
+        resp = self._run(f"{BASE_PATH}/tmpl-1", "PUT", {"tagSchema": self.SCHEMA_STRING},
+                         (mock_enforcer, mock_claims, mock_parent, mock_get_row, mock_rehydrate))
+        assert resp["statusCode"] == 400, (
+            f"a tagSchema-only retype that invalidates the stored body must be refused: {resp}")
+
+    @patch(f"{MOD}._rehydrate_template")
+    @patch(f"{MOD}._get_template_row")
+    @patch(f"{MOD}._enforce_parent_pipeline")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_a_retype_that_keeps_the_body_valid_is_still_accepted(
+            self, mock_enforcer, mock_claims, mock_parent, mock_get_row, mock_rehydrate):
+        # The positive control: the check above must not be rejecting every tagSchema-only update.
+        resp = self._run(f"{BASE_PATH}/tmpl-1", "PUT", {"tagSchema": self.SCHEMA_INTEGER},
+                         (mock_enforcer, mock_claims, mock_parent, mock_get_row, mock_rehydrate))
+        assert resp["statusCode"] != 400, (
+            f"an integer-typed PARAM keeps '{self.UNQUOTED_BODY}' valid, so it must be allowed: {resp}")

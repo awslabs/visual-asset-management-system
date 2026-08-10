@@ -1,5 +1,6 @@
 """Main CLI entry point for VamsCLI."""
 
+import json
 import sys
 from typing import Optional
 
@@ -183,8 +184,38 @@ def version():
 
 @handle_global_exceptions()
 def main():
-    """Main entry point for the CLI."""
-    cli()
+    """Main entry point for the CLI.
+
+    Click reports a bad or missing option by printing usage text and exiting, which happens before any
+    command body runs — so `--json-output` would otherwise be answered with plain text and break a
+    caller that parses stdout. Catching UsageError here keeps the contract total: every invocation
+    carrying the flag emits JSON and nothing else, whatever the failure.
+    """
+    try:
+        cli(standalone_mode=False)
+    except click.UsageError as e:
+        if '--json-output' in sys.argv:
+            payload = {
+                'error': e.format_message(),
+                'error_type': 'UsageError',
+            }
+            # The command path helps a caller tell which subcommand rejected the arguments.
+            if e.ctx is not None:
+                payload['command'] = e.ctx.command_path
+            click.echo(json.dumps(payload, indent=2))
+            sys.exit(e.exit_code)
+        e.show()
+        sys.exit(e.exit_code)
+    except click.ClickException as e:
+        if '--json-output' in sys.argv:
+            click.echo(json.dumps({'error': e.format_message(),
+                                   'error_type': type(e).__name__}, indent=2))
+            sys.exit(e.exit_code)
+        e.show()
+        sys.exit(e.exit_code)
+    except click.exceptions.Abort:
+        # Ctrl-C / an aborted prompt: Click's own handler prints "Aborted!" to stderr.
+        sys.exit(1)
 
 
 if __name__ == '__main__':

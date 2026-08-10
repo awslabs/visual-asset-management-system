@@ -27,6 +27,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from customLogging.logger import safeLogger
+from common.resourceNames import ResourceKeys, get_bucket_name
 from common.workflows import vamsSchemaImport as vsi
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -42,7 +43,7 @@ try:
     trigger_service_function = os.environ["WORKFLOW_TRIGGER_SERVICE_FUNCTION_NAME"]
     # Artefacts/deployment bucket the vamsSchema files are uploaded to (optional: inline bundles
     # don't need it).
-    schema_bucket = os.environ.get("VAMS_SCHEMA_BUCKET", "")
+    schema_bucket = get_bucket_name(ResourceKeys.ARTEFACTS_BUCKET)
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -167,7 +168,8 @@ def _apply_request(request):
 
 def _read_s3_json(key):
     if not schema_bucket:
-        raise ImportError_("VAMS_SCHEMA_BUCKET not configured but an S3 schema key was supplied")
+        raise ImportError_(
+            "The artefacts bucket name could not be resolved but an S3 schema key was supplied")
     try:
         obj = s3_client.get_object(Bucket=schema_bucket, Key=key)
         return json.loads(obj["Body"].read().decode("utf-8"))

@@ -655,7 +655,7 @@ class TestExecutionConfigChangeWarning:
         }}
         mock_table.return_value = table
         wf_table = MagicMock()
-        wf_table.scan.return_value = {"Items": [{
+        wf_table.query.return_value = {"Items": [{
             "databaseId": "db1", "workflowId": "wf1",
             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}],
         }]}
@@ -668,6 +668,9 @@ class TestExecutionConfigChangeWarning:
         assert resp["statusCode"] == 200
         warnings = json.loads(resp["body"])["warnings"]
         assert any("db1:wf1" in w for w in warnings)
+        # The referencing-workflow lookup queries the by-date GSI; it never scans the table.
+        wf_table.scan.assert_not_called()
+        assert wf_table.query.call_args.kwargs["IndexName"] == "WorkflowsByDateGSI"
 
     @patch(f"{MOD}._workflow_table")
     @patch(f"{MOD}._pipeline_table")
@@ -684,7 +687,7 @@ class TestExecutionConfigChangeWarning:
         }}
         mock_table.return_value = table
         wf_table = MagicMock()
-        wf_table.scan.return_value = {"Items": [{
+        wf_table.query.return_value = {"Items": [{
             "databaseId": "db1", "workflowId": "wf1",
             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}],
         }]}

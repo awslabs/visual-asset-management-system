@@ -17,8 +17,9 @@ Matching rules (per trigger row's triggerConfig):
     only for uploads in its own database (mirrors the workflow execute database-scope rule).
   - Disabled trigger rows (enabled=false) never fire.
 The built execute body carries pipelineExecutionParameters from the trigger's defaultTemplateIds map
-(keyed "pipelineDatabaseId:pipelineId" -> templateId), triggerType="fileUpload", and the single
-uploaded input file.
+(keyed "pipelineDatabaseId:pipelineId" -> templateId), triggerType="fileUpload", and the uploaded
+input file — except for an arity-"none" workflow, which takes no input files and uses the uploaded
+file's asset only as the output target.
 """
 
 from customLogging.logger import safeLogger
@@ -29,6 +30,10 @@ logger = safeLogger(service_name="TriggerMatching")
 
 GLOBAL_DATABASE = "GLOBAL"
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
+
+# A workflow declaring this arity accepts no input files, so its trigger fires with an empty
+# inputFiles list; the uploaded file's asset is still what the run writes back to.
+ARITY_NONE = "none"
 
 
 def chaining_allows_trigger(candidate_workflow_id, change_source, change_workflow_id,
@@ -95,12 +100,18 @@ def _default_template_params(trigger_row):
     return params
 
 
-def build_trigger_execute_body(trigger_row, database_id, asset_id, relative_file_key, version_id=""):
+def build_trigger_execute_body(trigger_row, database_id, asset_id, relative_file_key, version_id="",
+                               input_file_arity=""):
     """Build the asset-less execute request body for a fired fileUpload trigger. The uploaded file is
     the single input; output target defaults to the input asset (the handler locks it when the
-    workflow does not allow override); per-pipeline template params come from defaultTemplateIds."""
-    return {
-        "inputFiles": [{
+    workflow does not allow override); per-pipeline template params come from defaultTemplateIds.
+
+    `input_file_arity` is the target workflow's declared arity. An arity-"none" workflow accepts no
+    input files, so the body carries none — the uploaded file selected the trigger and named the asset
+    the run writes back to, which is the explicit output pair executeWorkflow's zero-input branch
+    requires. Any other arity takes the uploaded file as its single input."""
+    body = {
+        "inputFiles": [] if input_file_arity == ARITY_NONE else [{
             "databaseId": database_id,
             "assetId": asset_id,
             "relativeFileKey": relative_file_key,
@@ -111,11 +122,12 @@ def build_trigger_execute_body(trigger_row, database_id, asset_id, relative_file
         "pipelineExecutionParameters": _default_template_params(trigger_row),
         "triggerType": "fileUpload",
     }
+    return body
 
 
 def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file_key, version_id="",
                               change_source="", change_workflow_id="",
-                              chaining_allowed_for=None):
+                              chaining_allowed_for=None, input_file_arity_for=None):
     """Return the list of (workflowDatabaseId, workflowId, executeBody) for every fileUpload trigger
     that fires for an uploaded file. Non-firing triggers (disabled, wrong database, filtered out) are
     omitted. The dispatcher launches one execution per returned entry.
@@ -125,7 +137,12 @@ def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file
     ``(workflowDatabaseId, workflowId) -> bool`` returning that workflow's
     `allowWorkflowTriggerChaining`; it is only consulted for a workflow-written file, so an ordinary
     user upload costs no extra lookups. Omitting it means "no workflow opts in", which reproduces the
-    pre-chaining behavior of never re-firing on workflow output."""
+    pre-chaining behavior of never re-firing on workflow output.
+
+    `input_file_arity_for` is an optional callable ``(workflowDatabaseId, workflowId) -> str``
+    returning that workflow's `inputFileArity`, so an arity-"none" workflow's trigger fires with no
+    input files instead of one its own validation rejects. Omitting it treats every workflow as taking
+    the uploaded file."""
     matches = []
     for trigger_row in trigger_rows or []:
         # The row's `triggerType` is its SORT KEY, which is the bare type for a workflow's first trigger
@@ -152,7 +169,10 @@ def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file
                     f"was written by workflow execution of '{change_workflow_id or 'unknown'}' and "
                     "chaining is not permitted for this workflow")
                 continue
+        arity = (input_file_arity_for(workflow_database_id, workflow_id)
+                 if input_file_arity_for else "")
         body = build_trigger_execute_body(
-            trigger_row, database_id, asset_id, relative_file_key, version_id)
+            trigger_row, database_id, asset_id, relative_file_key, version_id,
+            input_file_arity=arity)
         matches.append((workflow_database_id, workflow_id, body))
     return matches

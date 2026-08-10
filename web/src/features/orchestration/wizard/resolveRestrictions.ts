@@ -44,6 +44,11 @@ export function resolveEffectivePipelineConfig(
  * nothing at all (no assetScope block) is treated as declaring nothing to widen, so it neither grants
  * nor blocks; the workflow gate is what must grant it.
  *
+ * A step whose arity is 'none' is skipped: it receives no input files whatever the run selected, so
+ * the backend never applies its scope to the selection (`_evaluate` in executionValidation.py assigns
+ * it an empty input list and continues before `_scope_errors`). Judging the selection against it would
+ * withhold an option the backend accepts.
+ *
  * `wholeAsset` is the shorthand the vamsSchema bundles emit for `wholeAssetAllowed`; both spellings are
  * accepted here exactly as the backend accepts them.
  */
@@ -64,8 +69,15 @@ function scopeKeyAllowedEverywhere(
 
     // The workflow must grant it: an absent or silent workflow scope is not a grant.
     if (read(workflowSystemConfig.assetScope) !== true) return false;
-    // Any step that explicitly declines it removes the option.
-    return !effectiveStepConfigs.some((cfg) => read(cfg?.assetScope) === false);
+    // Any file-consuming step that explicitly declines it removes the option.
+    return !effectiveStepConfigs.some(
+        (cfg) => consumesInputFiles(cfg) && read(cfg?.assetScope) === false
+    );
+}
+
+/** Whether a step takes input files at all — mirrors the backend's `_arity` default of 'one'. */
+function consumesInputFiles(stepConfig?: Record<string, any>): boolean {
+    return ((stepConfig || {}).inputFileArity || "one") !== "none";
 }
 
 /**

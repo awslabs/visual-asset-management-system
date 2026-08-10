@@ -31,11 +31,11 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 web/
   package.json              # npm, React 18, Vite scripts
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
+  e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
     routes.tsx              # Centralized route table, React.lazy, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
-    config.json             # Build-time config
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
     reportWebVitals.ts      # Web vitals reporting
@@ -43,10 +43,25 @@ web/
 
     features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
+                            #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
+                            #   client.ts queries.ts
       permissions/          # useAllowedRoutes.ts (Tier-1 gating)
-      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu, ...)
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
-      pipelines/ workflows/ executions/ wizard/
+      pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
+                            #   live under executionConfig.sqs / executionConfig.eventBridge),
+                            #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
+                            #   TemplateOverridesEditor.tsx pipelineValidation.ts
+      workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
+                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   WorkflowValidationPanel.tsx workflowValidation.ts
+      executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
+                            #   ExecutionQuickView.tsx ExecutionRowActions.tsx
+                            #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
+      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
+                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
       types.ts reservedTagKeys.ts
 
     FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
@@ -61,40 +76,42 @@ web/
       MetadataSchemaService.ts
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
-      WorkflowContext.ts     # NOTE: typo is intentional, do NOT rename
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
         versions/             # Asset version management (list, comparison, edit/archive modals)
-      common/ containers/ createupdate/ form/
+      common/ createupdate/ form/
       filemanager/            # Asset file manager (Cloudscape)
         components/             #   FileDetailsPanel toolbar: Export | Automation | operations.
                                 #   AutomationActions.tsx lazy-loads the orchestration execute modal,
                                 #   so this Cloudscape tree never bundles that module.
         utils/                  #   automationSelection.ts — maps a selection (whole asset / folder /
                                 #   one file / many) to workflow input files
-      interactive/            # Map/geospatial components
       list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
       search/                 # ModernSearchContainer.tsx - main search UI
       searchSmall/ selectors/
-      single/                 # Single-entity views (ViewPipeline, ViewFile, AssetIngestion)
+      single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
 
     pages/                  # Thin page wrappers composing components
-      AssetDownload.tsx AssetUpload/ Assets.tsx
+      AssetDownload.tsx AssetUpload/
       auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
-      CommentListPage.tsx Databases.tsx Executions.tsx
-      LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      Pipelines.tsx           # Pipeline list; create/edit forms show conditional fields for
-                              # SQS (sqsQueueUrl) and EventBridge (busArn, source, detailType)
-                              # based on pipelineExecutionType. Non-callback SQS/EventBridge
-                              # pipelines display a fire-and-forget alert.
+      Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
-      Subscription/ Tag/ Workflows.tsx
+      Subscription/ Tag/
+
+      # Orchestration route shells — each reads route params and renders the matching
+      # features/orchestration component; keep the page logic in the feature module.
+      PipelinesPage2.tsx PipelineBuilderPage.tsx
+      TemplateListPage.tsx TemplateBuilderPage.tsx
+      WorkflowsPage2.tsx WorkflowBuilderPage.tsx WorkflowTriggersPage.tsx
+      ExecutionsPage.tsx ExecutionDetail.tsx
 
     visualizerPlugin/       # 3D/media viewer plugin system — see CLAUDE.md there
       index.ts README.md
@@ -102,30 +119,34 @@ web/
       core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
       components/               # Shared viewer UI components
       viewers/                  # Individual viewer plugins + manifest.ts
-      test/
 
     common/                 # Shared utilities and helpers
-      apply-mode.ts clipboard.ts columnDefinitionsHelper.ts common-components.tsx
-      constants/ createPropertyStorage.ts External.tsx GlobalHeader.tsx helpers/
-      i18nStrings.ts localStorage.ts property-filter/ typeUtils.ts utils/
+      GlobalHeader.tsx common-components.tsx
+      constants/              # apiKeys.ts authRoutes.ts featuresEnabled.ts fileFormats.ts
+      helpers/                # labels.ts tableCounterStrings.ts
+      utils/                  # utils.ts fileSize.ts
 
     constants/uploadLimits.ts
-    external/               # External library integrations
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts
     layout/Navigation.tsx   # Left sidebar navigation
 
     utils/
+      apiEndpoint.ts        # Resolves the API base URL
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
 
-    styles/                 # Global styles (7-1 SCSS architecture)
+    styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
+      tailwind.css          # Tailwind entry (scoped content glob; preflight disabled — see Rule 2)
       index.scss base.scss dashboard.scss form.scss header.scss landing-page.scss
-      onboarding.scss wizard.scss
-      abstracts/ base/ components/ layout/ pages/ utilities/
+      onboarding.scss wizard.scss table-date-filter.scss table-select.scss
+      components/
 
     resources/              # Static assets (images, logos)
     @types/                 # Custom TypeScript declarations
+    __mocks__/              # Jest module mocks (the only .js files in src/)
 ```
 
 ---
@@ -446,7 +467,8 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 | -------------------- | ------------------------------- | -------------------------------- |
 | `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
 | `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
-| `WorkflowContext`    | `context/WorkflowContext.ts`    | Workflow state                   |
+
+The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
 
 ### 6.4 Permission Graying (Orchestration Module)
 
@@ -521,8 +543,10 @@ rather than throwing.
 
 -   **Pages** (`src/pages/`) — thin wrappers composing components, lazy-loaded in routes
 -   **Components** (`src/components/`) — organized by domain/feature
+-   **Features** (`src/features/orchestration/`) — the pipelines/workflows/executions module, which
+    owns its own pages, components, and API layer; its `src/pages/` entries are route shells only
 -   **Layout** (`src/layout/`) — Navigation shell components
--   **Common** (`src/common/`) — shared utilities, helpers, column definitions
+-   **Common** (`src/common/`) — shared utilities, helpers, labels, and feature-switch constants
 
 ### 7.2 Component Template (New Feature Component)
 

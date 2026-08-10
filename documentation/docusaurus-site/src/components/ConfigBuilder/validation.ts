@@ -38,10 +38,56 @@ function g(cfg: ConfigShape, path: string): any {
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
 const IPV4_PATTERN =
     /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-// Partition-aware: commercial/GovCloud serve amazonaws.com, China amazonaws.com.cn, and EU Sovereign
-// Cloud amazonaws.eu. A .com-only pattern flags a valid queue URL in the other partitions as invalid.
-const SQS_URL_PATTERN =
-    /^https:\/\/sqs\.[a-z0-9-]+\.(?:amazonaws\.com(?:\.cn)?|amazonaws\.eu)\/\d+\/[a-zA-Z0-9_-]+$/;
+/**
+ * Region-name prefix to partition DNS suffix, matching what `region_info.RegionInfo.get(region)`
+ * resolves at synth time (config.ts:1822 builds the SQS pattern from that suffix). A region with no
+ * listed prefix is commercial. Verified against every Region aws-cdk-lib knows.
+ */
+const PARTITION_DNS_SUFFIXES: { prefix: string; suffix: string }[] = [
+    { prefix: "us-gov-", suffix: "amazonaws.com" },
+    { prefix: "cn-", suffix: "amazonaws.com.cn" },
+    { prefix: "eusc-", suffix: "amazonaws.eu" },
+    { prefix: "us-isob-", suffix: "sc2s.sgov.gov" },
+    { prefix: "us-isof-", suffix: "csp.hci.ic.gov" },
+    { prefix: "us-iso-", suffix: "c2s.ic.gov" },
+    { prefix: "eu-isoe-", suffix: "cloud.adc-e.uk" },
+];
+const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
+
+/**
+ * The partition DNS suffix implied by `env.region`, or undefined when the region is unset — the
+ * deploy-time region can still come from CDK context or the environment, which the browser cannot
+ * read, so the partition is unknowable and suffix-specific rules stay silent.
+ */
+function partitionDnsSuffix(cfg: ConfigShape): string | undefined {
+    const region = g(cfg, "env.region");
+    if (isUnset(region) || typeof region !== "string") return undefined;
+    const match = PARTITION_DNS_SUFFIXES.find((entry) => region.startsWith(entry.prefix));
+    return match ? match.suffix : COMMERCIAL_DNS_SUFFIX;
+}
+
+/**
+ * SQS queue URL pattern: https://sqs.<region>.<dnsSuffix>/<account>/<queue>. The suffix is pinned to
+ * the configured region's partition. When the region is unset any known partition suffix is accepted,
+ * so a blank region reports only a genuinely malformed URL.
+ */
+function sqsUrlPattern(cfg: ConfigShape): RegExp {
+    const suffix = partitionDnsSuffix(cfg);
+    const suffixes = suffix
+        ? [suffix]
+        : [COMMERCIAL_DNS_SUFFIX, ...PARTITION_DNS_SUFFIXES.map((entry) => entry.suffix)];
+    const alternation = [...new Set(suffixes)]
+        .map((entry) => entry.replace(/\./g, "\\."))
+        .join("|");
+    return new RegExp(`^https://sqs\\.[a-z0-9-]+\\.(?:${alternation})/\\d+/[a-zA-Z0-9_-]+$`);
+}
+
+/** True when the region resolves to the commercial partition (config.ts:1591, :1602). */
+function isCommercialPartition(cfg: ConfigShape): boolean {
+    const region = g(cfg, "env.region");
+    if (isUnset(region) || typeof region !== "string") return true;
+    return !PARTITION_DNS_SUFFIXES.some((entry) => region.startsWith(entry.prefix));
+}
 
 /** The four OpenSearch Serverless OCU fields config.ts bounds together (config.ts:1397-1450). */
 const OCU_FIELD_PATHS = [
@@ -646,6 +692,39 @@ export const RULES: Rule[] = [
             "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
     },
 
+    // ----- Cognito SAML federation (config.ts:1584-1596) -----
+    {
+        id: "saml-requires-cognito",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useCognito.useSaml", "app.authProvider.useCognito.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.useSaml") &&
+            !g(c, "app.authProvider.useCognito.enabled"),
+        message: "useCognito.useSaml requires useCognito.enabled to be true.",
+    },
+    {
+        id: "saml-commercial-partition-only",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useCognito.useSaml", "env.region"],
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.useSaml") && !isCommercialPartition(c),
+        message:
+            "useCognito.useSaml is supported only in the commercial partition. The Amazon Cognito hosted UI " +
+            "used for SAML federation is unavailable in GovCloud, the EU Sovereign Cloud, and the ISO partitions.",
+    },
+
+    // ----- AWS Deadline Cloud partition availability (config.ts:1602-1607) -----
+    {
+        id: "deadline-cloud-commercial-partition-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.deadlineCloudExecutionTypeEnabled", "env.region"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.deadlineCloudExecutionTypeEnabled") && !isCommercialPartition(c),
+        message:
+            "AWS Deadline Cloud is offered only in the commercial partition. Set " +
+            "app.pipelines.deadlineCloudExecutionTypeEnabled to false for this deployment Region.",
+    },
+
     // ----- API throttling (config.ts:884-901) -----
     {
         id: "api-rate-positive",
@@ -772,15 +851,17 @@ export const RULES: Rule[] = [
     {
         id: "garnet-sqs-format",
         severity: "error",
-        fieldPaths: ["app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl"],
+        fieldPaths: ["app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl", "env.region"],
         appliesWhen: (c) => {
             if (!g(c, "app.addons.useGarnetFramework.enabled")) return false;
             const url = g(c, "app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl");
             if (isUnset(url)) return false; // covered by garnet-sqs
-            return !SQS_URL_PATTERN.test(url);
+            return !sqsUrlPattern(c).test(url);
         },
         message:
-            "Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL (https://sqs.<region>.amazonaws.com/<account>/<queue>).",
+            "Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL for the deployment " +
+            "partition (https://sqs.<region>.<dnsSuffix>/<account>/<queue>, e.g. amazonaws.com in the " +
+            "commercial and GovCloud partitions, amazonaws.com.cn in China, amazonaws.eu in the EU Sovereign Cloud).",
     },
 
     // ----- Physna Sync (config.ts:1560-1653) -----

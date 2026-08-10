@@ -36,12 +36,18 @@ const renderEditor = (triggers: WorkflowTrigger[], isLoading = false) => {
     const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    return render(
+    const invalidateQueries = jest.spyOn(queryClient, "invalidateQueries");
+    const rendered = render(
         <QueryClientProvider client={queryClient}>
             <TriggersEditor databaseId="db1" workflowId="wf-1" pipelineRefs={pipelineRefs} />
         </QueryClientProvider>
     );
+    return { ...rendered, invalidateQueries };
 };
+
+/** The query keys a mutation invalidated, as arrays. */
+const invalidatedKeys = (spy: jest.SpyInstance) =>
+    spy.mock.calls.map((call) => (call[0] as any)?.queryKey);
 
 const trigger = (over: Partial<WorkflowTrigger> = {}): WorkflowTrigger =>
     ({
@@ -201,5 +207,61 @@ describe("TriggersEditor", () => {
         renderEditor([]);
         expect(screen.getByText(/no triggers configured/i)).toBeInTheDocument();
         expect(screen.getByText(/started explicitly/i)).toBeInTheDocument();
+    });
+});
+
+describe("TriggersEditor cache invalidation", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { setTrigger, deleteTrigger } = require("../api/workflows");
+        setTrigger.mockResolvedValue([true, {}]);
+        deleteTrigger.mockResolvedValue([true, {}]);
+    });
+
+    // triggerCount/triggersEnabledCount are computed server-side per LIST row and drive the workflow
+    // cards and the trigger facet, so a trigger write that invalidates only this list leaves the
+    // workflows page contradicting the trigger just saved for as long as its data stays fresh.
+    it("invalidates the workflow queries when a trigger is saved", async () => {
+        const { setTrigger } = require("../api/workflows");
+        const { invalidateQueries } = renderEditor([]);
+
+        await userEvent.click(screen.getByRole("button", { name: /add file upload trigger/i }));
+        await userEvent.click(await screen.findByRole("button", { name: /^save$/i }));
+
+        await waitFor(() => expect(setTrigger).toHaveBeenCalled());
+        await waitFor(() =>
+            expect(invalidatedKeys(invalidateQueries)).toEqual(
+                expect.arrayContaining([["workflows"]])
+            )
+        );
+        expect(invalidatedKeys(invalidateQueries)).toEqual(
+            expect.arrayContaining([
+                ["triggers", "db1", "wf-1"],
+                ["workflow", "db1", "wf-1"],
+            ])
+        );
+    });
+
+    it("invalidates the workflow queries when a trigger is deleted", async () => {
+        const { deleteTrigger } = require("../api/workflows");
+        const { invalidateQueries } = renderEditor([trigger()]);
+
+        await userEvent.click(
+            await screen.findByRole("button", { name: /delete trigger fileUpload/i })
+        );
+        await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+        await waitFor(() => expect(deleteTrigger).toHaveBeenCalled());
+        await waitFor(() =>
+            expect(invalidatedKeys(invalidateQueries)).toEqual(
+                expect.arrayContaining([["workflows"]])
+            )
+        );
+        expect(invalidatedKeys(invalidateQueries)).toEqual(
+            expect.arrayContaining([
+                ["triggers", "db1", "wf-1"],
+                ["workflow", "db1", "wf-1"],
+            ])
+        );
     });
 });

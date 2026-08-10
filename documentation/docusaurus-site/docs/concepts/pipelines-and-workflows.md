@@ -37,18 +37,18 @@ When `waitForCallback` is `Enabled`, AWS Step Functions sends a task token along
 
 A pipeline's `systemConfig` governs how the pipeline consumes input and whether it uses templates.
 
-| Field                         | Description                                                                                                                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `inputFileArity`              | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                  |
-| `assetScope`                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted selections.                                                           |
-| `metadataInputs`              | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipeline. See [Metadata inputs](#metadata-inputs). |
-| `inputFileFilters`            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard (`*.previewFile.*`). See [Input-file filters](#input-file-filters).                            |
-| `requireTemplate`             | When `true`, every execution of this pipeline must select one of its configuration templates.                                                                                        |
-| `allowCustomTemplateOverride` | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                                                    |
+| Field                         | Description                                                                                                                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `inputFileArity`              | Number of input files the pipeline consumes: `none` (no input file), `one` (exactly one), or `multi` (one or more).                                                                        |
+| `assetScope`                  | Booleans `crossAssetAllowed`, `singleAssetOnly`, `wholeAssetAllowed`, and `folderAllowed` controlling accepted selections. The shorthand `wholeAsset` is accepted for `wholeAssetAllowed`. |
+| `metadataInputs`              | Booleans `assetMetadata`, `fileMetadata`, `fileAttributes`, and `databaseMetadata` — which metadata is gathered and passed to the pipeline. See [Metadata inputs](#metadata-inputs).       |
+| `inputFileFilters`            | `allow` and `exclude` lists matching by extension, exact path, file name, or wildcard (`*.previewFile.*`). See [Input-file filters](#input-file-filters).                                  |
+| `requireTemplate`             | When `true`, every execution of this pipeline must select one of its configuration templates.                                                                                              |
+| `allowCustomTemplateOverride` | When `true`, an execution may supply its own raw configuration body in place of a saved template.                                                                                          |
 
 ### Templates and tag schemas
 
-A pipeline can carry one or more **templates** -- reusable configuration bodies (JSON, YAML, OpenJD, XML, or raw text) that supply the parameters an execution passes to the pipeline. A template body may contain `{{tagName}}` placeholders. These are either the template's own schema tags (filled in at execution time) or **system tags** that the engine resolves automatically per pipeline task — execution identity, input files, output/auxiliary locations, and resolved metadata. See [System template tags](../api/pipelines.md#system-template-tags) for the full catalog.
+A pipeline can carry one or more **templates** -- reusable configuration bodies (JSON, YAML, OpenJD, XML, or raw text) that supply the parameters an execution passes to the pipeline. A template body may contain `\{\{tagName\}\}` placeholders. These are either the template's own schema tags (filled in at execution time) or **system tags** that the engine resolves automatically per pipeline task — execution and pipeline-task identity, timestamps, the input files, the output and auxiliary locations, the resolved metadata, and the Deadline Cloud farm values. See [System template tags](../api/pipelines.md#system-template-tags) for the full catalog. A system tag name is reserved: a template's own tag key may not reuse one, nor begin with the reserved `metadata_` prefix, and such a key is rejected when the tag schema is saved.
 
 Each template can define a **tag schema** describing the typed tags (`string`, `integer`, `number`, `boolean`, `string-list`, or `enum`) that fill those placeholders, including labels, defaults, and whether each is required. In a `json` config body the declared type also fixes where the placeholder sits: a tag that renders a JSON number, boolean, or array is the whole value and takes no quotes (`"steps": \{\{STEPS\}\}`), while a `string` or `enum` tag goes inside the string it fills (`"prompt": "\{\{PROMPT\}\}"`). The body is checked against its own tag schema when it is saved, so a placeholder in the wrong position is reported then rather than delivering the wrong type to the pipeline at run time. A pipeline may designate one template as its **default** (`isDefault`); the default is pre-selected on the execute form and is used automatically when a pipeline that requires a template is run without one specified.
 
@@ -79,11 +79,12 @@ For the full workflow, trigger, and execution API, see the [Workflows API](../ap
 
 `specifiedPipelines` is an ordered, non-empty array of pipeline references. Each entry names one pipeline:
 
-| Field                | Description                                                                      |
-| -------------------- | -------------------------------------------------------------------------------- |
-| `pipelineId`         | Identifier of the referenced pipeline.                                           |
-| `pipelineDatabaseId` | Database that owns the referenced pipeline. Defaults to the workflow's database. |
-| `jobName`            | Label for this pipeline step within the workflow. Optional.                      |
+| Field                | Description                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `pipelineId`         | Identifier of the referenced pipeline.                                                                  |
+| `pipelineDatabaseId` | Database that owns the referenced pipeline. Defaults to the workflow's database.                        |
+| `jobName`            | Label for this pipeline step within the workflow. Optional.                                             |
+| `defaultTemplateId`  | Template this step resolves against when the execute request supplies no `templateId` for it. Optional. |
 
 A `GLOBAL` workflow may reference only `GLOBAL` pipelines; a database workflow may reference `GLOBAL` pipelines or pipelines from its own database. The pipelines execute in the order they are listed.
 
@@ -95,32 +96,34 @@ When one model or container needs to run twice in a workflow with different sett
 
 #### Job names
 
-A step's `jobName` names the step in the workflow's state machine and becomes a segment of every output path that step writes:
+A step's `jobName` labels the step within the workflow. It does two things: it names the step in the workflow's state machine, and — for the workflow's **first** step — it names the folder that holds the whole execution's output.
+
+An execution writes to one shared set of output prefixes, derived from the first step:
 
 ```
-pipelines/{pipelineName}/{jobName}/output/{executionId}/files/
+pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
 ```
 
-When `jobName` is empty or omitted, the pipeline's own id is used in its place, so each step's outputs already land in a folder distinct from every other step's. Leaving it blank is the normal choice.
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name with a short generated prefix, assigned when the workflow's state machine is built. Every step of the run writes beneath these prefixes; the steps do not each get a folder of their own.
 
-The value is 3–63 characters of letters, numbers, hyphens, and underscores. It is a fixed label rather than a template: `{{tag}}` placeholders are **not** substituted in a `jobName` and are rejected on save, because the name is written into the state machine once when the workflow is deployed, not per execution. To vary the output path per run, use the workflow's `defaultOutputFileBaseExecutionPathExtension` (or an execution's own output path prefix), both of which resolve tags at launch.
+The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow is expected to carry its own: a job name repeated across two steps names both of them identically in the state machine and in the run's logs, leaving no way to tell the two apart. The web workflow editor refuses a repeat, comparing case-insensitively.
+
+It is a fixed label rather than a template: `{{tag}}` placeholders are **not** substituted in a `jobName` and are rejected on save, because the name is written into the state machine once when the workflow is deployed, not per execution.
 
 ##### When to set a job name
 
-Because the pipeline id is already used as the folder name, a `jobName` is worth setting only when that id does not describe the step's role clearly enough:
+Leaving `jobName` blank is the normal choice — the pipeline id already labels the step. Setting one is worth it when that id does not describe the step's role clearly enough:
 
--   **A step's role in this workflow is narrower than its pipeline's name suggests.** A general-purpose conversion pipeline used specifically to produce a web preview writes to a folder named after the pipeline; naming the step `convert-for-web` records what the step is for, so its output is identifiable without opening the execution.
--   **The pipeline id is opaque.** A generated or abbreviated id (for example `pl-7f3a91`) produces an output folder nobody can interpret later. A job name gives the folder a meaning that survives in the S3 layout.
--   **Downstream tooling reads the output paths.** Anything that locates output by S3 prefix — a sync job, a report, an external consumer — is easier to write against a stable, intentional folder name than against a pipeline id that may be renamed.
+-   **The first step's role is narrower than its pipeline's name suggests.** A general-purpose conversion pipeline used here specifically to produce a web preview gives the execution a folder named after the pipeline; naming the step `convert-for-web` records what the run was for.
+-   **The first step's pipeline id is opaque.** A generated or abbreviated id (for example `pl-7f3a91`) produces an output folder nobody can interpret later.
+-   **The step is one of several in a busy workflow** and the state machine is easier to follow with each step named for what it does.
 
-Leave it blank otherwise. Setting it to a value that merely restates the pipeline id adds a name to maintain without changing behavior.
-
-:::warning[A job name is part of the output path, not a display label]
-Changing a `jobName` on an existing workflow changes where its subsequent output is written. Output already written stays at its original path, so the workflow's history ends up split across the old and new folders, and anything that reads output by prefix has to account for both. Treat a change to this value as a storage-layout change rather than a rename.
+:::warning[Separate a run's output with the output path prefix, not the job name]
+Only the first step's name reaches the output path, and the generated portion of the folder name is reassigned whenever the workflow's pipeline list changes — so an S3 prefix built from a job name is neither per-step nor stable across edits. To give runs their own predictable folders, set the workflow's `defaultOutputFileBaseExecutionPathExtension` (or an execution's own output path prefix), which resolve `{{tag}}` placeholders at launch: `/\{\{executionId\}\}/` gives every run its own folder, `/\{\{jobStartDate\}\}/` a folder per day.
 :::
 
-:::note[`jobName` the field versus `{{jobName}}` the tag]
-These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `{{jobName}}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves at launch to the workflow's generated job name for the run. Writing `{{jobName}}` into the `jobName` field is rejected.
+:::note[`jobName` the field versus `\{\{jobName\}\}` the tag]
+These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `\{\{jobName\}\}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves to the generated job name of the step it renders for. Writing `\{\{jobName\}\}` into the `jobName` field is rejected.
 :::
 
 ### System configuration
@@ -136,7 +139,7 @@ A workflow's `systemConfig` governs how the workflow consumes input, which asset
 | `concurrencyRestriction`                      | How concurrent executions are limited: `none`, `perAsset`, or `perInputFile`.                                                                                                                                                                           |
 | `outputTarget`                                | Where the workflow writes its output: `locationType` (`asset` or `none`) and `allowOverride`.                                                                                                                                                           |
 | `allowWorkflowTriggerChaining`                | Whether another workflow's output may fire this workflow's triggers. Self-output never re-triggers, whatever this is set to. Defaults to `false`.                                                                                                       |
-| `defaultOutputFileBaseExecutionPathExtension` | Output path prefix used when an execution names none, stored unresolved so `{{tag}}` placeholders resolve per run (e.g. `/{{jobName}}/`). Empty means outputs land at the asset root.                                                                   |
+| `defaultOutputFileBaseExecutionPathExtension` | Output path prefix used when an execution names none, stored unresolved so `\{\{tag\}\}` placeholders resolve per run (e.g. `/\{\{executionId\}\}/`). Empty means outputs land at the asset root.                                                       |
 
 The `outputTarget.locationType` is `asset` to write output files and metadata to a VAMS asset, or `none` for a results-only workflow that records only results text and logs and writes no asset output. A results-only workflow may still take input files -- for example, reading files to emit a metadata report. When `locationType` is `asset`, `allowOverride` gates whether an execution may redirect output to a chosen asset.
 
@@ -210,11 +213,15 @@ POST /workflows/{workflowDatabaseId}/{workflowId}/execute
 
 The request carries an `inputFiles` array, where each entry has a `databaseId`, `assetId`, and `relativeFileKey` (asset-relative, beginning with `/`; `/` selects the whole asset and `/folder/` a folder). When the workflow's `outputTarget` allows override, the request may set `outputAssetId` and `outputDatabaseId` to redirect the output. Per-pipeline parameters (`templateId`, template tag values, or a custom template override) are supplied in `pipelineExecutionParameters`, keyed by pipeline.
 
+`metadataSourceDatabaseId` and `metadataSourceAssets` name entities whose stored metadata the run reads. They are not input files: they carry no file key, are exempt from the arity and filter checks, and do not resolve an output target. Both are optional at every arity, and they are how an `inputFileArity: none` workflow — one whose pipelines generate rather than transform — is still given asset and database metadata to work from. `metadataSourceDatabaseId` names one concrete database (`GLOBAL` is rejected); `metadataSourceAssets` is a list of `{databaseId, assetId}` bounded by the workflow's asset span.
+
 ### Metadata inputs
 
 Alongside its input files, an execution gathers the stored metadata its pipelines declared through `metadataInputs` and writes it into a metadata file each pipeline step reads. Four kinds of metadata are gathered independently: each involved asset's own metadata (`assetMetadata`), each input file's metadata (`fileMetadata`) and attributes (`fileAttributes`), and each involved database's own metadata (`databaseMetadata`). The workflow's booleans are the outer gate and each pipeline's own decide what that step receives, so a type reaches a pipeline only when both have it on.
 
-Which entities a run gathers from follows from its selection: every asset an input file belongs to, every asset the request named purely as a metadata source, and every distinct database of those assets. A run with no input files has nothing to derive from, so it gathers the single database the request named.
+Which entities a run gathers from follows from its selection: every asset an input file belongs to, every asset the request named purely as a metadata source, and every distinct database of those assets. A run with no input files has nothing to derive from, so it gathers the assets and the single database the request named as sources.
+
+A named source database the caller cannot read fails the launch, since the caller asked for metadata they may not have. A database merely _derived_ from an input or source asset is skipped instead, because an asset `GET` does not imply a database `GET` — the run then captures no metadata for it, and the launch reports that in its warnings.
 
 Database metadata is read-only. It is supplied to a pipeline as input, and a pipeline never writes metadata back to a database — metadata write-back targets assets and files.
 
@@ -266,14 +273,14 @@ Log data is redacted before it is stored or returned: credential-bearing values 
 
 During an execution, each pipeline writes to a set of Amazon S3 output locations that VAMS provisions and passes to the step. Outputs are categorized so the end-state step can route them correctly:
 
-| Category     | Purpose                                                                         |
-| ------------ | ------------------------------------------------------------------------------- |
-| **Files**    | File-level outputs: new asset files and file previews (`.previewFile.*`).       |
-| **Previews** | Asset-level preview images that represent the asset as a whole.                 |
-| **Metadata** | Metadata files produced by the pipeline.                                        |
-| **Results**  | Structured result files recorded against the execution (for results-only runs). |
+| Category     | Purpose                                                                                                                                             |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Files**    | File-level outputs: new asset files and file previews (`.previewFile.*`).                                                                           |
+| **Previews** | Asset-level preview images that represent the asset as a whole.                                                                                     |
+| **Metadata** | Metadata files produced by the pipeline.                                                                                                            |
+| **Results**  | Structured result files recorded against the execution. Collected for every run, whatever the output target — not only for a results-only workflow. |
 
-A separate auxiliary location holds temporary working files and special non-versioned viewer data (such as Potree octree files). For output-path conventions and the `assetId` threading pattern that pipeline authors follow, see the pipeline development guide.
+A separate auxiliary location holds temporary working files and special non-versioned viewer data (such as Potree octree files). For output-path conventions and the `assetId` threading pattern that pipeline authors follow, see [Amazon S3 output path conventions](../pipelines/custom-pipelines.md#amazon-s3-output-path-conventions) and [Threading assetId through the pipeline](../pipelines/custom-pipelines.md#threading-assetid-through-the-pipeline).
 
 :::note[What an execution's output listing covers]
 An execution records the files, metadata, and results it wrote to its output **asset**, each with the

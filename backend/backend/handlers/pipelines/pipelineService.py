@@ -52,6 +52,7 @@ from models.pipelines import (
     GetPipelinesResponseModel,
 )
 from common.workflows import pipelineRecords as pr
+from common.workflows import workflowRecords as wr
 from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
 from common.workflows.executionValidation import arity_none_metadata_warnings
 
@@ -112,6 +113,14 @@ MAX_LIST_PAGE_ITEMS = 500
 # details response so one heavily templated pipeline cannot breach the 6MB Lambda limit.
 MAX_DETAIL_TEMPLATES = 10
 
+# Bounds on the referencing-workflow lookup behind the save-path advisory warnings. The lookup pages
+# the constant-partition by-date GSI with only the reference fields projected; the page cap keeps one
+# save from paging an arbitrarily large workflow table, and the label cap bounds the warning string.
+# Both produce a non-blocking advisory, so stopping early degrades the hint rather than the save.
+REFERENCING_WORKFLOW_PAGE_SIZE = 200
+MAX_REFERENCING_WORKFLOW_PAGES = 20
+MAX_REFERENCING_WORKFLOWS = 25
+
 
 #######################
 # Utilities
@@ -157,25 +166,37 @@ def _pipeline_save_warnings(item):
 
 def _referencing_workflow_labels(database_id, pipeline_id):
     """`databaseId:workflowId` labels of the workflows whose specifiedPipelines snapshot lists this
-    pipeline. Bounded save-path scan of the low-cardinality workflow table; best-effort — returns []
-    on any read error."""
+    pipeline. Queries the constant-partition by-date GSI rather than scanning the table, projecting
+    only the three attributes the match needs, and stops at MAX_REFERENCING_WORKFLOWS labels or
+    MAX_REFERENCING_WORKFLOW_PAGES pages. Best-effort — returns [] on any read error."""
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
     labels = []
     try:
         table = _workflow_table()
-        kwargs = {}
-        while True:
-            resp = table.scan(**kwargs)
+        kwargs = {
+            "IndexName": "WorkflowsByDateGSI",
+            "KeyConditionExpression": Key("allListPartition").eq(wr.ALL_WORKFLOWS_LIST_PARTITION),
+            "ProjectionExpression": "databaseId, workflowId, specifiedPipelines",
+            "Limit": REFERENCING_WORKFLOW_PAGE_SIZE,
+        }
+        for _ in range(MAX_REFERENCING_WORKFLOW_PAGES):
+            resp = table.query(**kwargs) or {}
             for workflow in resp.get("Items", []):
                 for ref in workflow.get("specifiedPipelines", []) or []:
                     if (ref or {}).get("pipelineDatabaseId:pipelineId") == composite:
                         labels.append(
                             f"{workflow.get('databaseId', '')}:{workflow.get('workflowId', '')}")
                         break
+                if len(labels) >= MAX_REFERENCING_WORKFLOWS:
+                    return labels
             lek = resp.get("LastEvaluatedKey")
-            if not lek:
-                break
+            if not isinstance(lek, dict) or not lek:
+                return labels
             kwargs["ExclusiveStartKey"] = lek
+        logger.warning(
+            f"Referencing-workflow lookup for {composite} stopped after "
+            f"{MAX_REFERENCING_WORKFLOW_PAGES} pages; the save warning may name fewer workflows "
+            "than reference this pipeline.")
     except Exception as e:
         logger.warning(f"Referencing-workflow lookup failed for {composite}: {e}")
         return []
@@ -609,8 +630,7 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
         return validation_error(body={
             "message": "The DeadlineCloud execution type is not enabled for this deployment."})
 
-    execution_config_changed = (request.executionConfig is not None
-                                and request.executionConfig != item.get("executionConfig"))
+    stored_execution_config = item.get("executionConfig")
 
     if request.pipelineName is not None:
         item["pipelineName"] = request.pipelineName
@@ -620,7 +640,11 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
     if request.description is not None:
         item["description"] = request.description
     if request.executionConfig is not None:
-        item["executionConfig"] = request.executionConfig
+        # A Lambda-type config that names no function keeps the function the pipeline already runs,
+        # so a partial executionConfig edit does not drop the invoke target the deployed state
+        # machines were built against.
+        item["executionConfig"] = _carry_over_provisioned_lambda(
+            request.executionConfig, stored_execution_config)
     if request.systemConfig is not None:
         item["systemConfig"] = request.systemConfig
     if request.enabled is not None:
@@ -629,6 +653,24 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
         item["archived"] = request.archived
     item["dateModified"] = pr.iso_now()
     item["modifiedBy"] = username
+
+    # Tier-2 again, on the MUTATED object: category and pipelineName are ABAC constraint fields, so
+    # the pre-mutation check authorizes only the scope the pipeline is leaving. Without this a role
+    # scoped to one category could move a pipeline into a category its own policy forbids.
+    if not _enforce(claims_and_roles, item, "PUT"):
+        logger.info(f"Update of pipeline {database_id}:{pipeline_id} denied: the requested changes "
+                    "move it outside the caller's permitted scope")
+        return authorization_error()
+
+    # Provision a Lambda when the pipeline still references none (a type switch INTO Lambda), after
+    # authorization so a rejected request never creates a function. Raises when the deployment cannot
+    # auto-create one, so the row is never saved pointing at an empty invoke target.
+    if request.executionConfig is not None:
+        item["executionConfig"] = _provision_lambda_for_pipeline(
+            item.get("executionConfig"), pipeline_id)
+
+    execution_config_changed = (request.executionConfig is not None
+                                and item.get("executionConfig") != stored_execution_config)
 
     _pipeline_table().put_item(Item=item)
     # AUDIT LOG: pipeline updated. executionConfigChanged is worth auditing on its own — it repoints

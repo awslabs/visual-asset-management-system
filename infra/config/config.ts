@@ -1816,11 +1816,17 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        // Validate SQS URL format (basic validation)
-        const sqsUrlPattern = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+        // Validate SQS URL format against the deployment partition's DNS suffix (amazonaws.com in
+        // the commercial and GovCloud partitions, amazonaws.com.cn in China, amazonaws.eu in the
+        // EU Sovereign Cloud, and the ISO suffixes). A queue lives in the deployment partition.
+        const sqsDnsSuffix =
+            region_info.RegionInfo.get(config.env.region).domainSuffix || "amazonaws.com";
+        const sqsUrlPattern = new RegExp(
+            `^https://sqs\\.[a-z0-9-]+\\.${sqsDnsSuffix.replace(/\./g, "\\.")}/\\d+/[a-zA-Z0-9_-]+$`
+        );
         if (!sqsUrlPattern.test(config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl)) {
             throw new Error(
-                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.amazonaws.com/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
+                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.${sqsDnsSuffix}/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
             );
         }
 

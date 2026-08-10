@@ -140,6 +140,75 @@ class TestVamsExecute:
             resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
         assert resp["statusCode"] == 500
 
+    def test_no_task_token_skips_the_callback(self):
+        # A direct invoke carries no token; the callback must be skipped rather than crash.
+        mod = self._load()
+        s3 = self._s3_for(self._manifest(), {})
+        body = self._body()
+        del body["TaskToken"]
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
+        assert resp["statusCode"] == 500
+        sfn.send_task_failure.assert_not_called()
+
+    def test_missing_body_skips_the_callback(self):
+        # The 400 early return happens before the body is parsed, so no token is known yet.
+        mod = self._load()
+        sfn = MagicMock()
+        with patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({}, MagicMock())
+        assert resp["statusCode"] == 400
+        sfn.send_task_failure.assert_not_called()
+
+    def test_multi_file_manifest_fails_the_task_token(self):
+        # enforce_single_input_file rejects the run before the internal SFN starts; the workflow
+        # task waits on the callback token, so the rejection must be reported, not only returned.
+        mod = self._load()
+        manifest = self._manifest()
+        manifest["inputFiles"].append(
+            {"bucket": "abkt", "key": "xidM/second.usd", "assetId": "xidM", "databaseId": "dbM"})
+        s3 = self._s3_for(manifest, {})
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        sfn.start_execution.assert_not_called()
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_bad_input_configuration_fails_the_task_token(self):
+        # fetch_input_configuration raises InputConfigurationError for a malformed config body.
+        mod = self._load()
+        s3 = MagicMock()
+
+        def _get_object(Bucket, Key, **kw):
+            if Key.endswith("manifest.json"):
+                return {"Body": MagicMock(read=lambda: json.dumps(self._manifest()).encode("utf-8"))}
+            return {"Body": MagicMock(read=lambda: b"not json at all")}
+
+        s3.get_object.side_effect = _get_object
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        sfn.start_execution.assert_not_called()
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_start_execution_failure_fails_the_task_token(self):
+        mod = self._load()
+        s3 = self._s3_for(self._manifest(), {"trainingConfig": {}})
+        sfn = MagicMock()
+        sfn.start_execution.side_effect = Exception("state machine unavailable")
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(self._body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+        assert sfn.send_task_failure.call_args.kwargs["error"] == "IsaacLabPipelineError"
+        assert len(sfn.send_task_failure.call_args.kwargs["cause"]) <= 256
+
 
 @pytest.mark.unit
 class TestOpenPipeline:

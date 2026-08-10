@@ -71,11 +71,11 @@ def test_external_complete_model_accepts_workflow_fields():
         uploadType="assetFile",
         files=[{"relativeKey": "/a.glb", "tempKey": "temp/upload123/a.glb"}],
         workflowId="wf-abc123",
-        workflowExecutionId="exec-xyz789",
+        workflowExecutionId="b9a3aba3c092475f978ad39e5d5a2657",
         changeUserId="SYSTEM_USER",
     )
     assert m.workflowId == "wf-abc123"
-    assert m.workflowExecutionId == "exec-xyz789"
+    assert m.workflowExecutionId == "b9a3aba3c092475f978ad39e5d5a2657"
     assert m.changeUserId == "SYSTEM_USER"
 
 
@@ -144,3 +144,44 @@ def test_external_complete_model_rejects_invalid_change_user_id():
     except ValidationError as e:
         error_str = str(e).lower()
         assert "changeuserid" in error_str  # Field name in error message
+
+
+@pytest.mark.unit
+class TestWorkflowExecutionIdProvenanceIsGuidValidated:
+    """The provenance field records WHICH execution produced a file, so it takes an execution id.
+
+    Every writer supplies one from `executionRecords.new_guid()` (32 hex) or the dashed uuid Step
+    Functions assigns as an execution name. Validating it as STRING_256 accepted arbitrary text into a
+    field read back as provenance, so it now uses the same GUID validator the execution routes apply.
+    """
+
+    def _model(self, execution_id):
+        from backend.backend.models.assetsV3 import CompleteExternalUploadRequestModel
+        return CompleteExternalUploadRequestModel(
+            assetId="test-asset",
+            databaseId="db-123",
+            uploadType="assetFile",
+            files=[{"relativeKey": "/a.glb", "tempKey": "temp/upload123/a.glb"}],
+            workflowId="wf-abc123",
+            workflowExecutionId=execution_id,
+            changeUserId="SYSTEM_USER",
+        )
+
+    @pytest.mark.parametrize("execution_id", [
+        "b9a3aba3c092475f978ad39e5d5a2657",       # new_guid(): 32 lowercase hex
+        "b9a3aba3-c092-475f-978a-d39e5d5a2657",   # the dashed uuid Step Functions assigns
+        "B9A3ABA3-C092-475F-978A-D39E5D5A2657",   # the dashed form is case-insensitive
+    ])
+    def test_a_real_execution_id_is_accepted(self, execution_id):
+        assert self._model(execution_id).workflowExecutionId == execution_id
+
+    @pytest.mark.parametrize("bad", [
+        "exec-xyz789",                             # the placeholder shape this once allowed
+        "not-an-execution-id",
+        "B9A3ABA3C092475F978AD39E5D5A2657",        # undashed stays lowercase-only (exact DDB key)
+        "b9a3aba3c092475f978ad39e5d5a26",          # too short
+        "'; DROP TABLE assets; --",
+    ])
+    def test_a_value_that_is_not_an_execution_id_is_rejected(self, bad):
+        with pytest.raises(Exception):
+            self._model(bad)

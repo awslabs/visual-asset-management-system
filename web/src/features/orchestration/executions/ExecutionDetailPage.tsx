@@ -330,6 +330,152 @@ const PipelineProgress: React.FC<{ pipelines: any[] }> = ({ pipelines }) => {
     );
 };
 
+const TABS: { key: TabKey; label: string; hidden?: boolean }[] = [
+    { key: "inputs", label: "Inputs" },
+    { key: "pipelines", label: "Pipelines" },
+    { key: "outputs", label: "Outputs" },
+    { key: "settings", label: "Settings" },
+    { key: "logs", label: "Logs" },
+];
+
+/**
+ * Column sets for the (potentially long) input/output file and metadata tables.
+ *
+ * Module constants rather than render-body arrays: `DataTable` passes `columns` straight into
+ * `useReactTable`, which rebuilds its column model whenever the array identity changes. The page polls
+ * every few seconds while a run is in flight, so a fresh array per render would make every poll
+ * re-render every visible cell of three tables.
+ */
+const inputFileColumns: ColumnDef<any, any>[] = [
+    { accessorKey: "databaseId", header: "Database" },
+    { accessorKey: "assetId", header: "Asset" },
+    {
+        accessorKey: "inputAssetFileKey",
+        header: "File",
+        // The stored key is asset-root-relative and begins with the assetId segment
+        // ("/{assetId}/folder/file.laz"). The row already names the asset in its own column, so
+        // show only the path within the asset.
+        cell: (c) => {
+            const f = c.row.original as any;
+            const key: string = c.getValue() || "";
+            const prefix = `/${f.assetId}`;
+            const shown = f.assetId && key.startsWith(prefix) ? key.slice(prefix.length) : key;
+            return <span className="font-mono text-sm">{shown || "/"}</span>;
+        },
+    },
+    // The concrete S3 version the run read (resolved at launch). Blank for folder/whole-asset
+    // selections, which have no single version.
+    { accessorKey: "versionId", header: "S3 version", cell: (c) => c.getValue() || "—" },
+    {
+        id: "open",
+        header: "",
+        cell: (c) => {
+            const f = c.row.original;
+            if (!f.assetId || !f.databaseId) return null;
+            // Whole-asset/folder selections have no single file to deep-link to → open the asset.
+            const key = f.inputAssetFileKey;
+            const isFile = key && key !== "/" && !key.endsWith("/");
+            return (
+                <a
+                    href={buildFileManagerLink(f.databaseId, f.assetId, isFile ? key : "")}
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                >
+                    {isFile ? "Open in file manager" : "Open asset"}
+                </a>
+            );
+        },
+    },
+];
+
+// Metadata rows are recorded per pipeline, each pipeline's rows describing the entities IT reads, so
+// the same entity legitimately appears once per pipeline and the Pipeline column is what tells those
+// rows apart.
+const metadataColumns: ColumnDef<any, any>[] = [
+    { accessorKey: "assetId", header: "Asset" },
+    { accessorKey: "filePath", header: "File" },
+    { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+    // Metadata and file attributes are separate metadataInputs a pipeline can be granted
+    // independently, so a row says which of the two it came from.
+    {
+        accessorKey: "source",
+        header: "Source",
+        cell: (c) => (c.getValue() === "attributes" ? "Attribute" : "Metadata"),
+    },
+    { accessorKey: "key", header: "Key" },
+    {
+        accessorKey: "value",
+        header: "Value",
+        cell: (c) => <MetadataValueCell value={c.getValue()} />,
+    },
+];
+
+// Database metadata belongs to a source database, not an asset, so the asset/file columns above
+// have nothing to show for it. It belongs to every pipeline of the run — database metadata is
+// envelope-global — so a multi-step run repeats each row once per pipeline.
+const databaseMetadataColumns: ColumnDef<any, any>[] = [
+    { accessorKey: "databaseId", header: "Database" },
+    { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+    { accessorKey: "key", header: "Key" },
+    {
+        accessorKey: "value",
+        header: "Value",
+        cell: (c) => <MetadataValueCell value={c.getValue()} />,
+    },
+];
+
+const outputFileColumns: ColumnDef<any, any>[] = [
+    { accessorKey: "relativeFilePath", header: "Path" },
+    { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+    // No Asset/Database column: every output row shares the execution's single output target,
+    // which the header states once. The row identifies the FILE (path + version).
+    {
+        accessorKey: "assetFileVersionId",
+        header: "Version",
+        cell: (c) => c.getValue() || "—",
+    },
+    {
+        accessorKey: "fileSize",
+        header: "Size",
+        cell: (c) =>
+            c.getValue() !== undefined && c.getValue() !== null ? formatBytes(c.getValue()) : "—",
+    },
+    {
+        id: "open",
+        header: "",
+        cell: (c) => {
+            const f = c.row.original;
+            if (!f.assetId || !f.databaseId) return null;
+            // Preview files ({baseFile}.previewFile.{ext}) are viewed via their base file, so
+            // link to the base path rather than the preview file itself.
+            return (
+                <a
+                    href={buildFileManagerLink(
+                        f.databaseId,
+                        f.assetId,
+                        baseFilePathForPreview(f.relativeFilePath)
+                    )}
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                >
+                    Open in file manager
+                </a>
+            );
+        },
+    },
+];
+
+const outputMetadataColumns: ColumnDef<any, any>[] = [
+    { accessorKey: "targetFilePath", header: "File" },
+    // Output metadata is recorded per pipeline execution, so two steps writing the same key onto the
+    // same file are two rows identical but for the producing pipeline.
+    { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
+    { accessorKey: "metadataKey", header: "Key" },
+    {
+        accessorKey: "metadataValue",
+        header: "Value",
+        cell: (c) => <MetadataValueCell value={c.getValue()} />,
+    },
+];
+
 /** Label/value pair used inside the detail cards. */
 const Field: React.FC<{ label: string; children: React.ReactNode; mono?: boolean }> = ({
     label,
@@ -366,6 +512,40 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
     // Per-pipeline Monaco editor state: { [pipelineIdx]: true if editor is visible }
     const [expandedEditors, setExpandedEditors] = useState<Record<number, boolean>>({});
 
+    // The metadata collections flatten to one row per key, so a real asset's records expand into tens of
+    // thousands of row objects. Memoized on the response, which the poll replaces only when the payload
+    // actually changed (TanStack's structural sharing keeps the identity otherwise), so a tick against an
+    // unchanged run re-flattens nothing.
+    const inputMetadataRows = React.useMemo(
+        () => flattenInputMetadata(execution?.inputMetadata || []),
+        [execution?.inputMetadata]
+    );
+    const databaseMetadataRows = React.useMemo(
+        () => flattenInputMetadata(execution?.inputDatabaseMetadata || []),
+        [execution?.inputDatabaseMetadata]
+    );
+    // Collections the server reports as partial. Looked up per section so each one is marked on its own
+    // evidence — the two metadata collections share one read server-side, so both can be named at once.
+    const truncatedSet = React.useMemo(
+        () => new Set(execution?.truncatedCollections || []),
+        [execution?.truncatedCollections]
+    );
+    const isTruncated = React.useCallback(
+        (collection: string) => truncatedSet.has(collection),
+        [truncatedSet]
+    );
+    // A truncated metadata collection is re-read through the paged route, so the banner must not call it
+    // a subset — the sections that stay a subset are the ones with no paged counterpart (the file and
+    // results collections), plus any metadata collection this caller cannot page.
+    const { escalatedCollections, cappedInline } = React.useMemo(() => {
+        const all = execution?.truncatedCollections || [];
+        const escalated = all.filter((c) => !!PAGED_METADATA_COLLECTION[c] && canPageMetadata);
+        return {
+            escalatedCollections: escalated,
+            cappedInline: all.filter((c) => !escalated.includes(c)),
+        };
+    }, [execution?.truncatedCollections, canPageMetadata]);
+
     if (isLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
@@ -394,155 +574,6 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         execution.executionStartDate && execution.executionStopDate
             ? calculateDuration(execution.executionStartDate, execution.executionStopDate)
             : null;
-
-    const tabs: { key: TabKey; label: string; hidden?: boolean }[] = [
-        { key: "inputs", label: "Inputs" },
-        { key: "pipelines", label: "Pipelines" },
-        { key: "outputs", label: "Outputs" },
-        { key: "settings", label: "Settings" },
-        { key: "logs", label: "Logs" },
-    ];
-
-    // Table column definitions for the (potentially long) input/output files + metadata lists.
-    const inputFileColumns: ColumnDef<any, any>[] = [
-        { accessorKey: "databaseId", header: "Database" },
-        { accessorKey: "assetId", header: "Asset" },
-        {
-            accessorKey: "inputAssetFileKey",
-            header: "File",
-            // The stored key is asset-root-relative and begins with the assetId segment
-            // ("/{assetId}/folder/file.laz"). The row already names the asset in its own column, so
-            // show only the path within the asset.
-            cell: (c) => {
-                const f = c.row.original as any;
-                const key: string = c.getValue() || "";
-                const prefix = `/${f.assetId}`;
-                const shown = f.assetId && key.startsWith(prefix) ? key.slice(prefix.length) : key;
-                return <span className="font-mono text-sm">{shown || "/"}</span>;
-            },
-        },
-        // The concrete S3 version the run read (resolved at launch). Blank for folder/whole-asset
-        // selections, which have no single version.
-        { accessorKey: "versionId", header: "S3 version", cell: (c) => c.getValue() || "—" },
-        {
-            id: "open",
-            header: "",
-            cell: (c) => {
-                const f = c.row.original;
-                if (!f.assetId || !f.databaseId) return null;
-                // Whole-asset/folder selections have no single file to deep-link to → open the asset.
-                const key = f.inputAssetFileKey;
-                const isFile = key && key !== "/" && !key.endsWith("/");
-                return (
-                    <a
-                        href={buildFileManagerLink(f.databaseId, f.assetId, isFile ? key : "")}
-                        className="text-sm text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
-                    >
-                        {isFile ? "Open in file manager" : "Open asset"}
-                    </a>
-                );
-            },
-        },
-    ];
-    const inputMetadataRows = flattenInputMetadata(execution.inputMetadata || []);
-    // Collections the server reports as partial. Looked up per section so each one is marked on its own
-    // evidence — the two metadata collections share one read server-side, so both can be named at once.
-    const truncatedSet = new Set(execution.truncatedCollections || []);
-    const isTruncated = (collection: string) => truncatedSet.has(collection);
-    // A truncated metadata collection is re-read through the paged route, so the banner must not call it
-    // a subset — the sections that stay a subset are the ones with no paged counterpart (the file and
-    // results collections), plus any metadata collection this caller cannot page.
-    const escalatedCollections = (execution.truncatedCollections || []).filter(
-        (c) => !!PAGED_METADATA_COLLECTION[c] && canPageMetadata
-    );
-    const cappedInline = (execution.truncatedCollections || []).filter(
-        (c) => !escalatedCollections.includes(c)
-    );
-    // Metadata rows are recorded per pipeline, each pipeline's rows describing the entities IT reads, so
-    // the same entity legitimately appears once per pipeline and the Pipeline column is what tells those
-    // rows apart.
-    const metadataColumns: ColumnDef<any, any>[] = [
-        { accessorKey: "assetId", header: "Asset" },
-        { accessorKey: "filePath", header: "File" },
-        { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
-        // Metadata and file attributes are separate metadataInputs a pipeline can be granted
-        // independently, so a row says which of the two it came from.
-        {
-            accessorKey: "source",
-            header: "Source",
-            cell: (c) => (c.getValue() === "attributes" ? "Attribute" : "Metadata"),
-        },
-        { accessorKey: "key", header: "Key" },
-        {
-            accessorKey: "value",
-            header: "Value",
-            cell: (c) => <MetadataValueCell value={c.getValue()} />,
-        },
-    ];
-    const databaseMetadataRows = flattenInputMetadata(execution.inputDatabaseMetadata || []);
-    // Database metadata belongs to a source database, not an asset, so the asset/file columns above
-    // have nothing to show for it. It belongs to every pipeline of the run — database metadata is
-    // envelope-global — so a multi-step run repeats each row once per pipeline.
-    const databaseMetadataColumns: ColumnDef<any, any>[] = [
-        { accessorKey: "databaseId", header: "Database" },
-        { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
-        { accessorKey: "key", header: "Key" },
-        {
-            accessorKey: "value",
-            header: "Value",
-            cell: (c) => <MetadataValueCell value={c.getValue()} />,
-        },
-    ];
-    const outputFileColumns: ColumnDef<any, any>[] = [
-        { accessorKey: "relativeFilePath", header: "Path" },
-        { accessorKey: "pipelineId", header: "Pipeline", cell: (c) => c.getValue() || "—" },
-        // No Asset/Database column: every output row shares the execution's single output target,
-        // which the header states once. The row identifies the FILE (path + version).
-        {
-            accessorKey: "assetFileVersionId",
-            header: "Version",
-            cell: (c) => c.getValue() || "—",
-        },
-        {
-            accessorKey: "fileSize",
-            header: "Size",
-            cell: (c) =>
-                c.getValue() !== undefined && c.getValue() !== null
-                    ? formatBytes(c.getValue())
-                    : "—",
-        },
-        {
-            id: "open",
-            header: "",
-            cell: (c) => {
-                const f = c.row.original;
-                if (!f.assetId || !f.databaseId) return null;
-                // Preview files ({baseFile}.previewFile.{ext}) are viewed via their base file, so
-                // link to the base path rather than the preview file itself.
-                return (
-                    <a
-                        href={buildFileManagerLink(
-                            f.databaseId,
-                            f.assetId,
-                            baseFilePathForPreview(f.relativeFilePath)
-                        )}
-                        className="text-sm text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
-                    >
-                        Open in file manager
-                    </a>
-                );
-            },
-        },
-    ];
-    const outputMetadataColumns: ColumnDef<any, any>[] = [
-        { accessorKey: "targetFilePath", header: "File" },
-        { accessorKey: "metadataKey", header: "Key" },
-        {
-            accessorKey: "metadataValue",
-            header: "Value",
-            cell: (c) => <MetadataValueCell value={c.getValue()} />,
-        },
-    ];
 
     // Breadcrumb trail: Executions › {workflow's executions} › this execution. The middle crumb
     // deep-links to the executions list pre-filtered to this execution's workflow.
@@ -685,23 +716,21 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                 and unselected tabs shade on hover — otherwise the buttons read as floating text. */}
             <div className="orch-outline border-b border-border-default">
                 <nav className="flex gap-1" role="tablist">
-                    {tabs
-                        .filter((t) => !t.hidden)
-                        .map((t) => (
-                            <button
-                                key={t.key}
-                                role="tab"
-                                aria-selected={activeTab === t.key}
-                                onClick={() => setActiveTab(t.key)}
-                                className={`orch-outline px-3 py-2 -mb-px border-b-2 font-bold text-sm rounded-t transition-colors ${
-                                    activeTab === t.key
-                                        ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
-                                        : "border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-hover"
-                                }`}
-                            >
-                                {t.label}
-                            </button>
-                        ))}
+                    {TABS.filter((t) => !t.hidden).map((t) => (
+                        <button
+                            key={t.key}
+                            role="tab"
+                            aria-selected={activeTab === t.key}
+                            onClick={() => setActiveTab(t.key)}
+                            className={`orch-outline px-3 py-2 -mb-px border-b-2 font-bold text-sm rounded-t transition-colors ${
+                                activeTab === t.key
+                                    ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
+                                    : "border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-hover"
+                            }`}
+                        >
+                            {t.label}
+                        </button>
+                    ))}
                 </nav>
             </div>
 

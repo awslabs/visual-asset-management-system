@@ -5,6 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 Test APIClient URL composition for stage-inclusive and fronted base URLs.
 """
 
+import json
+
 import pytest
 import requests
 from unittest.mock import MagicMock, patch
@@ -292,6 +294,137 @@ class TestGetExecutionDetailsMetadata:
 
             with pytest.raises(InvalidExecutionDataError):
                 client.get_execution_details_metadata("e1", params={"startingToken": "stale"})
+
+
+class TestPweDomainErrorMappingIsReachable:
+    """The pipeline/workflow/execution methods map a non-2xx themselves, so their mapping has to
+    survive the transport layer.
+
+    `_make_request` converts an HTTPError to a generic `APIError` for every other method. These
+    methods opt out (`raise_http_errors=True`) so the original error reaches their own arm — which is
+    what lets a structured backend body reach the user and what makes the command layer's
+    `except PipelineNotFoundError` / `except WorkflowAlreadyRunningError` blocks run. The tests below
+    drive the real `session.request` boundary rather than patching `client.get`, because patching the
+    verb wrapper skips the very conversion that has to be avoided.
+    """
+
+    def _client(self):
+        mock_profile_manager = MagicMock()
+        mock_profile_manager.is_override_token.return_value = False
+        mock_profile_manager.is_token_expired.return_value = False
+        mock_profile_manager.load_auth_profile.return_value = {}
+        return APIClient("https://x.execute-api.us-east-1.amazonaws.com/api",
+                         profile_manager=mock_profile_manager)
+
+    @staticmethod
+    def _response(status_code, body):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.content = json.dumps(body).encode()
+        resp.headers = {}
+        resp.json.return_value = body
+        resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
+        return resp
+
+    def test_structured_trigger_error_reaches_the_user_as_readable_lines(self):
+        """The finding's scenario: a trigger-set 400 whose message is a dict of error lists."""
+        from vamscli.utils.exceptions import InvalidWorkflowTriggerDataError
+
+        client = self._client()
+        body = {"message": {"triggerTemplateErrors": [
+            "template 'X' (pipeline 'Y') is chosen as a trigger default but has required tag(s) "
+            "with no default value: q."]}}
+        with patch.object(client.session, "request", return_value=self._response(400, body)):
+            with pytest.raises(InvalidWorkflowTriggerDataError) as excinfo:
+                client.set_workflow_trigger("db1", "wf1", "allFileTypes",
+                                            {"defaultTemplateIds": {"global:conv": "t1"}})
+
+        message = str(excinfo.value)
+        assert "required tag(s) with no default value: q." in message
+        # Neither the raw dict repr nor the generic wrapper the shared conversion produces.
+        assert "triggerTemplateErrors" not in message
+        assert "Invalid request (400)" not in message
+
+    def test_missing_pipeline_raises_the_domain_not_found_error(self):
+        from vamscli.utils.exceptions import PipelineNotFoundError
+
+        client = self._client()
+        with patch.object(client.session, "request",
+                          return_value=self._response(404, {"message": "Pipeline not found"})):
+            with pytest.raises(PipelineNotFoundError):
+                client.get_pipeline("db1", "p1")
+
+    def test_conflicting_execution_raises_already_running(self):
+        from vamscli.utils.exceptions import WorkflowAlreadyRunningError
+
+        client = self._client()
+        body = {"message": "A conflicting execution is already running for this asset."}
+        with patch.object(client.session, "request", return_value=self._response(400, body)):
+            with pytest.raises(WorkflowAlreadyRunningError):
+                client.execute_workflow("global", "wf1", {"inputFiles": []})
+
+    def test_in_progress_permanent_delete_raises_execution_in_progress(self):
+        from vamscli.utils.exceptions import ExecutionInProgressError
+
+        client = self._client()
+        body = {"message": "Execution is in progress and cannot be deleted."}
+        with patch.object(client.session, "request", return_value=self._response(400, body)):
+            with pytest.raises(ExecutionInProgressError):
+                client.permanent_delete_execution("e1")
+
+    def test_asset_and_database_methods_keep_the_shared_conversion(self):
+        """The opt-out is per call: everything else still gets the generic APIError wrapper."""
+        from vamscli.utils.exceptions import APIError
+
+        client = self._client()
+        with patch.object(client.session, "request",
+                          return_value=self._response(400, {"message": "bad asset data"})):
+            with pytest.raises(APIError) as excinfo:
+                # create_asset maps 400 itself, but only ever sees the converted error, so the
+                # generic wrapper is what surfaces.
+                client.create_asset({"databaseId": "db1"})
+
+        assert "Invalid request (400): bad asset data" in str(excinfo.value)
+
+
+class TestPweEnvelopeAsymmetry:
+    """Pipeline/workflow/execution methods return the raw {'message': ...} envelope; asset and
+    database methods return the payload directly. The MCP server unwraps the former, so
+    normalizing either side would silently change the shape its tools hand agents."""
+
+    def _client(self):
+        mock_profile_manager = MagicMock()
+        mock_profile_manager.is_override_token.return_value = False
+        mock_profile_manager.load_auth_profile.return_value = {}
+        return APIClient("https://x.execute-api.us-east-1.amazonaws.com/api",
+                         profile_manager=mock_profile_manager)
+
+    @staticmethod
+    def _response(body):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.content = json.dumps(body).encode()
+        resp.headers = {}
+        resp.json.return_value = body
+        return resp
+
+    def test_pipeline_read_keeps_the_envelope(self):
+        client = self._client()
+        body = {"message": {"pipelineId": "p1", "pipelineName": "Convert"}}
+        with patch.object(client.session, "request", return_value=self._response(body)):
+            assert client.get_pipeline("db1", "p1") == body
+
+    def test_execution_list_keeps_the_envelope(self):
+        client = self._client()
+        body = {"message": {"Items": [{"workflowExecutionId": "e1"}], "NextToken": "tok"}}
+        with patch.object(client.session, "request", return_value=self._response(body)):
+            assert client.list_executions() == body
+
+    def test_database_read_has_no_envelope(self):
+        client = self._client()
+        body = {"databaseId": "db1", "description": "d"}
+        with patch.object(client.session, "request", return_value=self._response(body)):
+            assert client.get_database("db1") == body
 
 
 class TestPweErrorMessageFlattening:

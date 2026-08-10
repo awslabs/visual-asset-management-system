@@ -61,8 +61,7 @@ def validate_trigger_default_templates(default_template_ids, load_tag_schema_fie
     return errors
 
 
-def triggers_referencing_template(triggers_table, workflows_table, pipeline_database_id,
-                                  pipeline_id, template_id):
+def triggers_referencing_template(triggers_table, pipeline_database_id, pipeline_id, template_id):
     """Return the list of (workflowDatabaseId, workflowId, triggerType) tuples whose trigger picks
     this template as a default for this pipeline. Queries TriggersByBaseTypeGSI once per trigger type
     (paginated to exhaustion) rather than scanning the table. Best-effort: returns [] on a read
@@ -103,8 +102,8 @@ def triggers_referencing_template(triggers_table, workflows_table, pipeline_data
     return hits
 
 
-def validate_template_not_breaking_triggers(triggers_table, workflows_table, pipeline_database_id,
-                                            pipeline_id, template_id, tag_schema_fields):
+def validate_template_not_breaking_triggers(triggers_table, pipeline_database_id, pipeline_id,
+                                            template_id, tag_schema_fields):
     """For a template being saved, return errors when the template is referenced by any trigger as a
     default AND the new tag schema has a required tag with no default (which would break those
     headless triggers). Returns [] when the template has no such tag or is not trigger-referenced."""
@@ -112,7 +111,7 @@ def validate_template_not_breaking_triggers(triggers_table, workflows_table, pip
     if not missing:
         return []
     refs = triggers_referencing_template(
-        triggers_table, workflows_table, pipeline_database_id, pipeline_id, template_id)
+        triggers_table, pipeline_database_id, pipeline_id, template_id)
     if not refs:
         return []
     logger.info(

@@ -128,9 +128,39 @@ class Workflow:
     workflow_arn: str = ""
     enabled: bool = True
     archived: bool = False
+    # The workflow's stored systemConfig, which carries the input gates (inputFileArity, assetScope)
+    # the service validates an execute request against.
+    system_config: Dict[str, Any] = field(default_factory=dict)
     specified_pipelines: List[Dict[str, Any]] = field(default_factory=list)
     trigger_count: int = 0
     triggers_enabled_count: int = 0
+
+    @property
+    def is_runnable(self) -> bool:
+        """A disabled or archived workflow is rejected at execute time."""
+        return self.enabled and not self.archived
+
+    @property
+    def input_file_arity(self) -> str:
+        """The declared inputFileArity — 'none', 'one' or 'multi'; 'one' when absent."""
+        return self.system_config.get("inputFileArity") or "one"
+
+    @property
+    def allows_whole_asset(self) -> bool:
+        """Whether a whole-asset ('/') selection passes this workflow's assetScope gate.
+
+        The gate is only enforced on a scope that declares the key, and the pipeline registration
+        schemas spell it ``wholeAsset`` while the canonical record vocabulary uses
+        ``wholeAssetAllowed``; both are accepted and evaluate identically. An arity of 'none' takes
+        no input file at all, so no selection is offered for it.
+        """
+        if self.input_file_arity == "none":
+            return False
+        scope = self.system_config.get("assetScope") or {}
+        for key in ("wholeAssetAllowed", "wholeAsset"):
+            if key in scope:
+                return bool(scope[key])
+        return True
 
 
 @dataclass
@@ -790,13 +820,18 @@ class VamsCliService:
     # Workflow Operations
     # -------------------------------------------------------------------------
 
-    def list_workflows(self, database_id: Optional[str] = None) -> List[Workflow]:
+    def list_workflows(self, database_id: Optional[str] = None,
+                       include_unrunnable: bool = False) -> List[Workflow]:
         """
         List available workflows, optionally filtered by database.
 
         Args:
             database_id: Optional database ID to filter workflows.
                          If None, lists all workflows across all databases.
+            include_unrunnable: Keep disabled workflows in the result. The listing already omits
+                                archived workflows unless ``--include-archived`` is passed, which
+                                this wrapper never does; a disabled workflow is still returned by
+                                the API and is dropped here because executing one is rejected.
 
         Returns:
             List of Workflow objects.
@@ -811,7 +846,7 @@ class VamsCliService:
         data = self._parse_json(output)
 
         items = data.get("Items", [])
-        return [
+        workflows = [
             Workflow(
                 workflow_id=item.get("workflowId", ""),
                 workflow_name=item.get("workflowName", ""),
@@ -821,12 +856,16 @@ class VamsCliService:
                 workflow_arn=item.get("workflow_arn", ""),
                 enabled=item.get("enabled", True),
                 archived=item.get("archived", False),
+                system_config=item.get("systemConfig") or {},
                 specified_pipelines=item.get("specifiedPipelines", []) or [],
                 trigger_count=item.get("triggerCount") or 0,
                 triggers_enabled_count=item.get("triggersEnabledCount") or 0,
             )
             for item in items
         ]
+        if include_unrunnable:
+            return workflows
+        return [wf for wf in workflows if wf.is_runnable]
 
     def list_workflow_executions(
         self,

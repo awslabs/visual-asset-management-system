@@ -149,6 +149,16 @@ export class IsaacLabTrainingFunctions extends Construct {
             record.bucket.grantRead(this.vamsExecuteFunction);
         });
 
+        // The workflow task waits on a callback token, so a failure in this lambda must be reported
+        // back to Step Functions instead of leaving the task pending until its timeout.
+        this.vamsExecuteFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
+            })
+        );
+
         // Apply standard per-Lambda CDK Nag suppressions (IAM4 execution roles, KMS wildcard)
         suppressCdkNagLambda(this.openPipelineFunction);
         suppressCdkNagLambda(this.executeBatchJobFunction);

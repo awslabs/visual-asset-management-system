@@ -204,7 +204,7 @@ os.environ.setdefault("PIPELINE_SERVICE_V2_FUNCTION_NAME", "t-pipe-v2")
 os.environ.setdefault("PIPELINE_TEMPLATE_SERVICE_FUNCTION_NAME", "t-tpl")
 os.environ.setdefault("WORKFLOW_SERVICE_V2_FUNCTION_NAME", "t-wf-v2")
 os.environ.setdefault("WORKFLOW_TRIGGER_SERVICE_FUNCTION_NAME", "t-trig")
-os.environ.setdefault("VAMS_SCHEMA_BUCKET", "t-artefacts")
+os.environ.setdefault("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET", "t-artefacts")
 
 # handlers.workflows __init__ imports get_task_builder at import; stub it.
 if "common.workflows.stepfunctions_builder" not in sys.modules:

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /*
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -12,7 +11,6 @@ import { NestedStack } from "aws-cdk-lib";
 import { ConversionMeshCadMetadataExtractionConstruct } from "./constructs/conversionMeshCadMetadataExtraction-construct";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../../../config/config";
-import * as kms from "aws-cdk-lib/aws-kms";
 
 export interface ConversionMeshCadMetadataExtractionNestedStackProps extends cdk.StackProps {
     config: Config.Config;

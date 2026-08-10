@@ -21,7 +21,11 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    generateUniqueNameHash,
+    grantExternalAssetBucketKmsKeys,
+    kmsKeyPolicyStatementGenerator,
+} from "../../../../../helper/security";
 import {
     buildConstructPipelineFunction,
     buildExecuteBatchJobFunction,
@@ -97,6 +101,13 @@ export class CoordinateTransformConstruct extends Construct {
             ],
         });
 
+        //Add KMS key use if provided
+        if (props.kmsKey) {
+            inputBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
+
+            outputBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(props.kmsKey));
+        }
+
         const stateTaskPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
@@ -141,6 +152,11 @@ export class CoordinateTransformConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         // CodeBuild-based container build (when useCodeBuild is true)
         let codeBuildConstruct: CoordinateTransformCodeBuildConstruct | undefined;
@@ -300,7 +316,10 @@ export class CoordinateTransformConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "CoordTransformProcessing-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            timeout: cdk.Duration.hours(4),
+            // Envelopes the 4-hour batch-job taskTimeout so an overrunning transform hits that
+            // task's own timeout and reaches pipelineEnd — which releases the external task
+            // token — rather than being cut short by an execution-level States.Timeout.
+            timeout: cdk.Duration.hours(5),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,
@@ -435,21 +454,6 @@ export class CoordinateTransformConstruct extends Construct {
                         { regex: "/^Resource::<.*Function.*.Arn>:.*$/g" },
                         { regex: "/^Action::s3:.*$/g" },
                     ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            stateMachine,
-            [
-                {
-                    id: "AwsSolutions-SF1",
-                    reason: "CloudWatch logging for Step Functions state machine will be added in future iteration. Pipeline errors are captured via pipelineEnd Lambda.",
-                },
-                {
-                    id: "AwsSolutions-SF2",
-                    reason: "X-Ray tracing for Step Functions state machine will be added in future iteration.",
                 },
             ],
             true

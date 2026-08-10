@@ -11,6 +11,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as efs from "aws-cdk-lib/aws-efs";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as cr from "aws-cdk-lib/custom-resources";
@@ -20,7 +21,10 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import { IsaacLabTrainingFunctions } from "../lambdaBuilder/isaacLabTrainingFunctions";
 import * as Config from "../../../../../../config/config";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
-import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
+import {
+    generateUniqueNameHash,
+    grantExternalAssetBucketKmsKeys,
+} from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import { NagSuppressions } from "cdk-nag";
@@ -397,9 +401,28 @@ export class IsaacLabTrainingConstruct extends Construct {
             .next(executeBatchJobState)
             .next(closePipelineState);
 
+        const stateMachineLogGroup = new logs.LogGroup(this, "IsaacLab-StateMachineLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSstateMachine-IsaacLabTrainingPipeline" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "IsaacLab-StateMachineLogGroup",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         const stateMachine = new sfn.StateMachine(this, "IsaacLabStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
             timeout: cdk.Duration.hours(8),
+            logs: {
+                destination: stateMachineLogGroup,
+                includeExecutionData: true,
+                level: sfn.LogLevel.ALL,
+            },
+            tracingEnabled: true,
         });
 
         // Grant vamsExecuteFunction permission to start the SFN
@@ -417,6 +440,17 @@ export class IsaacLabTrainingConstruct extends Construct {
         );
         props.storageResources.eventBridge.orchestrationBus.grantPutEventsTo(
             lambdaFunctions.vamsExecuteFunction
+        );
+
+        // Registered with the sub-execution so the execution log viewer can read this state
+        // machine's logs
+        lambdaFunctions.vamsExecuteFunction.addEnvironment(
+            "STATE_MACHINE_LOG_GROUP_NAME",
+            stateMachineLogGroup.logGroupName
+        );
+        lambdaFunctions.vamsExecuteFunction.addEnvironment(
+            "STATE_MACHINE_LOG_GROUP_ARN",
+            stateMachineLogGroup.logGroupArn
         );
 
         // Set output
@@ -474,7 +508,7 @@ export class IsaacLabTrainingConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Wildcard permissions required: batch:DescribeComputeEnvironments does not support resource-level permissions, S3 bucket access needs object-level wildcards, and Batch job operations require dynamic resource access",
+                    reason: "Wildcard permissions required: batch:DescribeComputeEnvironments does not support resource-level permissions, S3 bucket access needs object-level wildcards, Batch job operations require dynamic resource access, and the state machine's CloudWatch Logs delivery + X-Ray trace actions are not resource-scopable",
                 },
                 {
                     id: "AwsSolutions-IAM4",
@@ -482,14 +516,6 @@ export class IsaacLabTrainingConstruct extends Construct {
                     appliesTo: [
                         "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
                     ],
-                },
-                {
-                    id: "AwsSolutions-SF1",
-                    reason: "CloudWatch logging will be added in future iteration",
-                },
-                {
-                    id: "AwsSolutions-SF2",
-                    reason: "X-Ray tracing will be added in future iteration",
                 },
             ],
             true

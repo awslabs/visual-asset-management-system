@@ -661,6 +661,52 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getAllByText("—")).toHaveLength(2);
     });
 
+    it("attributes each output metadata row to the pipeline that wrote it", async () => {
+        // Output metadata is recorded per pipeline execution, so a two-step workflow writing the same
+        // key onto the same file produces two rows identical but for the producing pipeline. Without a
+        // Pipeline column an operator diagnosing a wrong value sees a duplicated row and cannot say
+        // which step wrote it, even though the response carries the answer.
+        renderDetail({
+            outputs: {
+                metadata: [
+                    {
+                        targetFilePath: "/out.glb",
+                        metadataKey: "previewGenerated",
+                        metadataValue: "true",
+                        pipelineId: "p1",
+                    },
+                    {
+                        targetFilePath: "/out.glb",
+                        metadataKey: "previewGenerated",
+                        metadataValue: "true",
+                        pipelineId: "p2",
+                    },
+                ],
+            } as any,
+        });
+
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(screen.getByText(/Output Metadata \(2\)/)).toBeInTheDocument();
+        // The Pipeline column exists and tells the two otherwise identical rows apart.
+        expect(screen.getByRole("columnheader", { name: /Pipeline/i })).toBeInTheDocument();
+        expect(screen.getByText("p1")).toBeInTheDocument();
+        expect(screen.getByText("p2")).toBeInTheDocument();
+    });
+
+    it("renders an output metadata row carrying no pipelineId as a dash", async () => {
+        // A run recorded before per-pipeline attribution has no pipelineId; the cell falls back to the
+        // same dash the sibling output-files table uses rather than rendering blank.
+        renderDetail({
+            outputs: {
+                metadata: [{ targetFilePath: "/out.glb", metadataKey: "k", metadataValue: "v" }],
+            } as any,
+        });
+
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(screen.getByText(/Output Metadata \(1\)/)).toBeInTheDocument();
+        expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    });
+
     it("offers the config body's S3 location when the inline copy is truncated", async () => {
         renderDetail({
             pipelines: [

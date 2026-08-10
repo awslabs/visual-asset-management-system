@@ -17,7 +17,7 @@ const PipelineBuilderPage: React.FC = () => {
     const navigate = useNavigate();
     const isEdit = !!pipelineId;
 
-    const { data: pipeline, isLoading } = usePipeline(databaseId || "", pipelineId || "");
+    const { data: pipeline, isLoading, isError } = usePipeline(databaseId || "", pipelineId || "");
 
     if (!databaseId) {
         return (
@@ -36,6 +36,14 @@ const PipelineBuilderPage: React.FC = () => {
                     <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400 mb-3" />
                     <p className="text-text-secondary">Loading pipeline…</p>
                 </div>
+            </div>
+        );
+    }
+
+    if (isEdit && (isError || !pipeline)) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
+                <p className="text-vams-error text-xl">Pipeline not found</p>
             </div>
         );
     }

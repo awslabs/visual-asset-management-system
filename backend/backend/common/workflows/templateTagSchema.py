@@ -17,7 +17,8 @@ reuse of validate_metadata_value_common.
 
 Two entry points:
   - validate_tag_schema(fields): structural validation of a DECLARED schema (keys unique, types
-    known, no reserved-key collisions, enum has values). Used at template create/update + CDK ingest.
+    known, no reserved-key collisions, enum has values, a type with no blank form is required or
+    carries a default). Used at template create/update + CDK ingest.
   - validate_tags(tag_schema, provided_tags): validate CALLER-supplied values against a schema —
     required present, types coerce, reserved keys rejected, defaults filled. Returns
     (errors, filled_tags) where filled_tags is the {key: value} map the renderer consumes.
@@ -52,8 +53,23 @@ TAG_TYPES = frozenset(
     }
 )
 
+# The empty value each type materializes to for a blank OPTIONAL tag with no declared default, so a
+# {{tag}} referencing it renders empty rather than failing resolution as unmatched. integer, number
+# and boolean have no representable empty value and are therefore absent from this map.
+_TYPE_EMPTY_VALUES = {
+    TAG_TYPE_STRING: "",
+    TAG_TYPE_ENUM: "",
+    TAG_TYPE_STRING_LIST: [],
+}
 
-def _normalize_type(raw) -> str:
+# The complement of _TYPE_EMPTY_VALUES: the types a blank tag cannot materialize as. Such a tag is
+# supplyable only by a value — the caller's or a declared default — so a schema declaring one
+# optional-and-defaultless is rejected at declaration (validate_tag_schema) rather than rendering an
+# unmatched {{tag}} on every execution, which is a failure with no name attached to it.
+TYPES_WITHOUT_EMPTY_VALUE = frozenset(TAG_TYPES - set(_TYPE_EMPTY_VALUES))
+
+
+def normalize_tag_type(raw) -> str:
     """Lower-case a declared type (accepts a plain string or an Enum whose value is the type)."""
     if raw is None:
         return TAG_TYPE_STRING
@@ -104,7 +120,7 @@ def validate_tag_schema(fields):
                 "'metadata_' prefix; choose a different key"
             )
 
-        tag_type = _normalize_type(field.get("type"))
+        tag_type = normalize_tag_type(field.get("type"))
         if tag_type not in TAG_TYPES:
             errors.append(
                 f"{where}: unknown type '{tag_type}' (allowed: {', '.join(sorted(TAG_TYPES))})"
@@ -115,6 +131,13 @@ def validate_tag_schema(fields):
             enum_values = field.get("enumValues")
             if not enum_values or not isinstance(enum_values, list):
                 errors.append(f"{where}: enum type requires a non-empty enumValues list")
+
+        if tag_type in TYPES_WITHOUT_EMPTY_VALUE and not bool(field.get("required")) \
+                and field.get("default") is None:
+            errors.append(
+                f"{where}: type '{tag_type}' has no blank form, so the tag must either be required "
+                "or declare a default value"
+            )
 
         # A declared default must itself be valid for the type.
         if field.get("default") is not None:
@@ -207,16 +230,6 @@ def _is_absent(value):
     return value is None or value == "" or value == []
 
 
-# The empty value each type materializes to for a blank OPTIONAL tag with no declared default, so a
-# {{tag}} referencing it renders empty rather than failing resolution as unmatched. integer, number
-# and boolean have no representable empty value and are therefore absent from this map.
-_TYPE_EMPTY_VALUES = {
-    TAG_TYPE_STRING: "",
-    TAG_TYPE_ENUM: "",
-    TAG_TYPE_STRING_LIST: [],
-}
-
-
 def _provided_map(provided_tags):
     """Accept provided tags as either a {key: value} dict or a [{key, value}] list; return a dict."""
     if provided_tags is None:
@@ -246,7 +259,8 @@ def validate_tags(tag_schema, provided_tags):
       - An OPTIONAL tag left blank (absent or empty) with no declared default still materializes as
         its type's empty value — "" for string/enum, [] for string-list — so a {{tag}} referencing it
         renders empty instead of failing resolution as an unmatched tag. integer / number / boolean
-        have no representable empty value and stay absent.
+        have no representable empty value and stay absent; validate_tag_schema is what keeps such a
+        tag from being declared optional-and-defaultless, so a body may always reference one.
       - EXTRA provided tags (no matching schema entry) are IGNORED, not an error. The only
         render-time tag error is an unmatched {{tag}} in the body, enforced by the renderer.
     """
@@ -270,7 +284,7 @@ def validate_tags(tag_schema, provided_tags):
         if not key:
             continue
         schema_keys.add(key)
-        tag_type = _normalize_type(field.get("type"))
+        tag_type = normalize_tag_type(field.get("type"))
         enum_values = field.get("enumValues")
         required = bool(field.get("required"))
 
@@ -297,13 +311,18 @@ def validate_tags(tag_schema, provided_tags):
 
 
 def required_tags_without_default(tag_schema):
-    """Return the tagKeys in a schema that are required=True AND have no usable default value.
+    """Return the tagKeys in a schema that no headless run could supply a value for.
 
     A headless run (an auto-triggered workflow) has no person to supply tag values, so a template
-    with such a tag can never render for a trigger — every triggered execution would fail at
-    validate_tags with 'tag X is required'. Callers use this to reject saving a trigger (or a
-    trigger-referenced template) that would be dead-on-arrival. A default of None (or an absent
-    default) counts as 'no default'; any other value (including False/0/"") is a usable default."""
+    with such a tag can never render for a trigger — every triggered execution would fail, at
+    validate_tags for a required tag and at the renderer's unmatched-tag check for a tag with no
+    blank form. Callers use this to reject saving a trigger (or a trigger-referenced template) that
+    would be dead-on-arrival. A default of None (or an absent default) counts as 'no default'; any
+    other value (including False/0/"") is a usable default.
+
+    Two shapes qualify: a required tag with no default, and a tag of a type with no blank form
+    (TYPES_WITHOUT_EMPTY_VALUE) with no default, which is equally unsupplyable whether or not it is
+    marked required."""
     missing = []
     for field in tag_schema or []:
         if not isinstance(field, dict):
@@ -311,6 +330,9 @@ def required_tags_without_default(tag_schema):
         key = field.get("tagKey")
         if not key:
             continue
-        if bool(field.get("required")) and field.get("default") is None:
+        if field.get("default") is not None:
+            continue
+        if bool(field.get("required")) \
+                or normalize_tag_type(field.get("type")) in TYPES_WITHOUT_EMPTY_VALUE:
             missing.append(key)
     return missing

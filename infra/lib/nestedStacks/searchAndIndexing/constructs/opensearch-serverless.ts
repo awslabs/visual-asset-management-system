@@ -246,7 +246,7 @@ export class OpensearchServerlessConstruct extends Construct {
             collectionGroupName: collectionGroupName,
         });
 
-        collection.addDependency(collectionGroup);
+        collection.addResourceDependency(collectionGroup);
 
         this.collectionArn = collection.attrArn;
 
@@ -313,8 +313,8 @@ export class OpensearchServerlessConstruct extends Construct {
                 networkPolicyCfn.node.addDependency(this.vpcEndpointAOSSDependable);
         }
 
-        collection.addDependency(encryptionPolicyCfn);
-        if (networkPolicyCfn) collection.addDependency(networkPolicyCfn);
+        collection.addResourceDependency(encryptionPolicyCfn);
+        if (networkPolicyCfn) collection.addResourceDependency(networkPolicyCfn);
 
         schemaDeploy.addToRolePolicy(
             new cdk.aws_iam.PolicyStatement({

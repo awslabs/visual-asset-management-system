@@ -34,11 +34,16 @@ const MetadataSourceSelector: React.FC<MetadataSourceSelectorProps> = ({
     const assetId = value.assetId || "";
 
     const [assetQuery, setAssetQuery] = React.useState("");
-    const { data: assetPage, isFetching: assetsLoading } = useAssetSearch(
-        assetQuery,
-        databaseId,
-        !!databaseId
-    );
+    const assetSearch = useAssetSearch(assetQuery, databaseId, !!databaseId);
+    // The picker holds the previous page on screen while the next one loads, so the list does not flash
+    // empty on every keystroke. That hold also spans a DATABASE change, where the held page lists
+    // assets of another database entirely and a pick from it emits a pair that does not exist. A page
+    // is offered only once the database it was fetched for is the one selected.
+    const settledDatabaseId = React.useRef(databaseId);
+    if (!assetSearch.isPlaceholderData) settledDatabaseId.current = databaseId;
+    const assetsAreCurrent = settledDatabaseId.current === databaseId;
+    const assetPage = assetsAreCurrent ? assetSearch.data : undefined;
+    const assetsLoading = assetSearch.isFetching || !assetsAreCurrent;
     const assets = assetPage?.items || [];
     const assetTotal = assetPage?.total ?? 0;
     // Says so when the list is a capped page of a larger result set, so a missing asset reads as

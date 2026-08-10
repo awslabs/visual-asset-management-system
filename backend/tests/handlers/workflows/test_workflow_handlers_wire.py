@@ -247,11 +247,14 @@ class TestAbortExecutionHandler:
         stopped_arns = {c.kwargs.get("executionArn") for c in mock_stop.call_args_list}
         assert "arn:ex:inner1" in stopped_arns
         assert "arn:ex:main" in stopped_arns
-        # The running pipeline row was written back ABORTED; the SUCCEEDED row was not.
-        written = [c.kwargs["Item"] for c in pexec_table.put_item.call_args_list]
-        assert any(i["pipelineExecutionId"] == "P1" and i["executionStatus"] == "ABORTED"
-                   for i in written)
-        assert all(i["pipelineExecutionId"] != "P2" for i in written)
+        # The running pipeline row was marked ABORTED via a targeted update (not a whole-item put,
+        # which would drop what the still-running pipeline registered); the SUCCEEDED row was not.
+        pexec_table.put_item.assert_not_called()
+        pipe_updates = [c.kwargs for c in pexec_table.update_item.call_args_list]
+        assert any(u["Key"]["pipelineExecutionId"] == "P1"
+                   and u["ExpressionAttributeValues"][":st"] == "ABORTED"
+                   for u in pipe_updates)
+        assert all(u["Key"]["pipelineExecutionId"] != "P2" for u in pipe_updates)
         # Main row written ABORTED with a stop date, via a targeted update so a concurrent
         # end-state write is not replaced by this read's pre-abort snapshot.
         main_table.put_item.assert_not_called()

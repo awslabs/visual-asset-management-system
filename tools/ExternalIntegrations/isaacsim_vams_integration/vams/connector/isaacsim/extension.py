@@ -635,14 +635,23 @@ class VamsConnectorExtension(omni.ext.IExt):
         with self._wf_stack:
             ui.Label(f"  Execute: {desc}", height=20, style={"font_size": 13})
             ui.Label(f"  Asset: {asset_name}", height=18, style={"font_size": 11, "color": 0xFF999999})
-            ui.Button("  Run on Entire Asset", height=26,
-                      clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
+
+            takes_input_files = wf.input_file_arity != "none"
+            if not takes_input_files:
+                ui.Label("  This workflow takes no input files and is run from the VAMS web UI.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
+            elif wf.allows_whole_asset:
+                ui.Button("  Run on Entire Asset", height=26,
+                          clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
+            else:
+                ui.Label("  This workflow runs on a single file, not a whole asset.",
+                         height=20, style={"font_size": 11, "color": 0xFF888888})
 
             non_folders = [f for f in self._files
                            if not f.is_folder and (f.relative_path or f.file_name).strip("/")]
-            if non_folders:
-                ui.Label("  Or run on a file:", height=18,
-                         style={"font_size": 11, "color": 0xFF888888})
+            if takes_input_files and non_folders:
+                ui.Label("  Or run on a file:" if wf.allows_whole_asset else "  Run on a file:",
+                         height=18, style={"font_size": 11, "color": 0xFF888888})
                 for f in non_folders:
                     fkey = (f.relative_path or f.file_name).strip("/")
                     with ui.HStack(height=22, spacing=HORIZONTAL_SPACING):

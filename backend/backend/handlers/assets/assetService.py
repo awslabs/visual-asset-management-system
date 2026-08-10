@@ -1791,13 +1791,8 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
-                # # Fall back to default pagination with validation
-                # validate_pagination_info(query_parameters)
-                # query_params = query_parameters
-                # show_archived = query_parameters.get('showArchived', '').lower() == 'true'
-            
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
 
@@ -1865,13 +1860,8 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                error_msg = str(v)
-                return validation_error(body={'message': f"Invalid parameter: {error_msg}"}, event=event)
-                # # Fall back to default pagination with validation
-                # validate_pagination_info(query_parameters)
-                # query_params = query_parameters
-                # show_archived = query_parameters.get('showArchived', '').lower() == 'true'
-            
+                return validation_error(body={'message': validation_error_message(v)}, event=event)
+
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
 

@@ -10,13 +10,16 @@ from common.s3PathPatterns import PIPELINES_PREFIX, PIPELINE_OUTPUT_PREFIX
 #Define patterns as global constants
 id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
 uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
-# System-generated execution identifiers: the undashed 32-hex form produced by
-# common.workflows.executionRecords.new_guid() (uuid.uuid4().hex) — workflow-execution,
-# pipeline-execution, and execution-group ids. Distinct from uuid_pattern, which is the DASHED
-# form used by externally-issued ids such as an API key id; a .hex value has no dashes and so does
-# not match it. Lowercase only, because .hex emits lowercase and these values are compared as exact
-# DynamoDB key values, where an uppercase variant would simply match nothing.
-guid_pattern = r'^[0-9a-f]{32}$'
+# Execution identifiers, in either shape a stored execution id can carry: the undashed 32-hex form
+# produced by common.workflows.executionRecords.new_guid() (uuid.uuid4().hex), and the dashed
+# 8-4-4-4-12 uuid Step Functions generates as the execution name when StartExecution is called
+# without one, which is the id an execution row keeps for its whole life. Covers
+# workflow-execution, pipeline-execution, and execution-group ids. The undashed alternative is
+# lowercase only, because .hex emits lowercase and these values are compared as exact DynamoDB key
+# values, where an uppercase variant would simply match nothing.
+execution_id_pattern = (
+    r'^(?:[0-9a-f]{32}'
+    r'|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$')
 
 sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
@@ -55,7 +58,8 @@ aws_partition_group = r'aws(?:-us-gov|-cn|-eusc|-iso(?:-[a-z])?)?'
 # The DNS suffixes those partitions serve regional endpoints from, for URL-shaped values. Partitions
 # do not share one suffix: commercial/GovCloud use amazonaws.com, China amazonaws.com.cn, EU Sovereign
 # amazonaws.eu, and the ISO partitions use their own non-amazonaws domains.
-aws_dns_suffix_group = r'(?:amazonaws\.com(?:\.cn)?|amazonaws\.eu|c2s\.ic\.gov|sc2s\.sgov\.gov|cloud\.adc-e\.uk)'
+aws_dns_suffix_group = (r'(?:amazonaws\.com(?:\.cn)?|amazonaws\.eu|c2s\.ic\.gov|sc2s\.sgov\.gov'
+                        r'|cloud\.adc-e\.uk|csp\.hci\.ic\.gov)')
 # SQS Queue URL: https://sqs[-fips].{region}.{dns-suffix}/{account}/{queue-name}
 # Also supports VPC endpoint URLs: https://vpce-xxx.sqs.{region}.vpce.{dns-suffix}/{account}/{queue-name}
 sqs_queue_url_pattern = (r'^https://(vpce-[a-z0-9\-]+\.)?sqs[\-a-z]*\.[a-z0-9\-]+\.(vpce\.)?'
@@ -84,7 +88,7 @@ log_stream_name_pattern = r'^[^:*]{1,512}$'
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
 uuid_regex = re.compile(uuid_pattern)
-guid_regex = re.compile(guid_pattern)
+execution_id_regex = re.compile(execution_id_pattern)
 
 
 sagemaker_notebook_name_regex = re.compile(sagemaker_notebook_name_pattern)
@@ -131,8 +135,8 @@ def validate_uuid(name, value):
     return (True, '')
 
 def validate_guid(name, value):
-    if not guid_regex.fullmatch(value):
-        return (False, name + " is invalid. Must follow the regexp "+guid_pattern)
+    if not execution_id_regex.fullmatch(value):
+        return (False, name + " is invalid. Must follow the regexp "+execution_id_pattern)
     return (True, '')
 
 def validate_relative_file_path(name, value):
@@ -474,12 +478,14 @@ def validate(values):
             else:
                 return (False, k + " is a required field.")
             
-        #Check and allow for global keyword (initially case insensitive)
+        #Check and allow for global keyword (initially case insensitive). Accepting the keyword
+        #skips THIS field's type check only (`continue`, not `return` — a `return` here would
+        #report the whole request valid and silently skip every field ordered after it).
         if isinstance(v['value'], str):
             if allowGlobalKeyword and v['value'].lower().strip() == 'global':
                 #additional check to make sure final value is capitalized or not
                 if v['value'] == 'GLOBAL':
-                    return (True, "")
+                    continue
                 else:
                     return (False, k + " is invalid. GLOBAL must be capitalized for this field is used.")
             elif not allowGlobalKeyword and v['value'].lower().strip()  == 'global':

@@ -62,8 +62,9 @@ def _filled_from_raw_tags(provided_tags):
 
 
 def _value_text(value):
-    """A tag value as the text that would be substituted, for scanning purposes."""
-    return value if isinstance(value, str) else json.dumps(value)
+    """A tag value as the text that would be substituted, for scanning purposes. `default=str` covers a
+    stored DynamoDB numeric reaching this path alongside a request-supplied float."""
+    return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
 def _json_override_errors(body, config_format, tag_schema_fields):

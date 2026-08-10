@@ -22,6 +22,7 @@ from unittest import mock
 os.environ.setdefault("AWS_REGION", "us-east-1")
 
 from backend.backend.common.workflows import workflowAslBuilder as _asl
+from backend.backend.common.workflows import stepfunctions_builder as sfb
 
 
 class _Cw:
@@ -346,8 +347,11 @@ class TestCallbackTaskRetryPolicy:
         state = _pipeline_states(definition["States"])[0]
         assert state["Retry"][0]["ErrorEquals"] == ["States.Timeout", "States.HeartbeatTimeout"]
         assert state["Retry"][0]["MaxAttempts"] == 0
-        # Invocation failures still retry, via the trailing catch-all retrier.
-        assert state["Retry"][-1]["ErrorEquals"] == ["States.ALL"]
+        # Transient delivery faults still retry. An application failure the pipeline reported through
+        # SendTaskFailure does not, so a failed run is not re-invoked while its outputs may be draining.
+        assert state["Retry"][-1]["ErrorEquals"] == list(
+            sfb.CALLBACK_TRANSIENT_RETRYABLE_ERRORS)
+        assert "States.ALL" not in state["Retry"][-1]["ErrorEquals"]
         assert state["Retry"][-1]["MaxAttempts"] > 0
 
     def test_fire_and_forget_states_keep_the_single_catch_all_retrier(self):

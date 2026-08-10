@@ -1486,9 +1486,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 # Mark invalid files as failed
                 for file_detail in successful_files[:]:
                     if file_detail['relativeKey'] in invalid_files:
-                        # Delete the uploaded file
-                        delete_s3_object(bucket_name, file_detail['temp_s3_key'])
-                        
+                        # Delete the staged temporary file (it lives in the source bucket)
+                        delete_s3_object(source_bucket, file_detail['temp_s3_key'])
+
                         # Update file result
                         for result in file_results:
                             if result.relativeKey == file_detail['relativeKey'] and result.success:

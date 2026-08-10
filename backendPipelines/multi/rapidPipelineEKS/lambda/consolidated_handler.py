@@ -443,9 +443,11 @@ def handle_construct_pipeline(event):
 
         # outputType is a VAMS-reserved key in the input configuration: it selects the output file
         # extension and is removed before the remainder is written as the rpdx rp_config.json. Fall
-        # back to the legacy threaded outputFileType for executions whose ASL predates this change.
+        # back to the threaded outputFileType, then to the input file's own extension so the written
+        # object always carries one — rpdx then optimizes the model without changing its format.
         output_s3_asset_extension = input_configuration.pop('outputType', None) \
-            or event.get('outputFileType', input_s3_asset_extension)
+            or event.get('outputFileType', '') \
+            or input_s3_asset_extension
 
         # Handle .all format to generate all supported output formats
         is_all_formats = (output_s3_asset_extension == '.all')

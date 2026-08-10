@@ -547,7 +547,8 @@ def get_buckets(event, query_params, claims_and_roles=None):
             bucket_model = BucketModel(
                 bucketId=deserialized_document.get('bucketId'),
                 bucketName=deserialized_document.get('bucketName', ''),
-                baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', '')
+                baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', ''),
+                isDefault=bool(deserialized_document.get('isDefault', False))
             )
             items.append(bucket_model)
 

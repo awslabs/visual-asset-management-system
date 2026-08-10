@@ -1411,13 +1411,17 @@ def publish_to_orchestration_bus(successful_records):
             "ASSET_BUCKET_NAME": asset_bucket_name,
             "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
         }
-        events_client.put_events(Entries=[{
-            "EventBusName": orchestration_bus_name,
-            "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
-            "DetailType": "asset.file.uploaded",
-            "Detail": json.dumps(detail, default=str),
-        }])
-        logger.info(f"Published asset.file.uploaded event ({len(user_records)} record(s)) to the orchestration bus")
+        try:
+            events_client.put_events(Entries=[{
+                "EventBusName": orchestration_bus_name,
+                "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
+                "DetailType": "asset.file.uploaded",
+                "Detail": json.dumps(detail, default=str),
+            }])
+        except Exception as e:
+            logger.exception(f"EventBridge put_events failed for asset.file.uploaded on bus {orchestration_bus_name}: {e}")
+            return
+        logger.info(f"Published asset.file.uploaded event ({len(publishable_records)} record(s)) to the orchestration bus")
     except Exception as e:
         logger.exception(f"Error publishing to orchestration bus: {e}")
 

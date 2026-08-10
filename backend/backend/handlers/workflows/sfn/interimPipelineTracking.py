@@ -26,16 +26,28 @@ import os
 import json
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
+from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
+from models.common import VAMSGeneralErrorResponse
 
 logger = safeLogger(service="InterimPipelineTracking")
 
-s3c = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+s3c = boto3.client('s3', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+
+# The declared arity of a step that consumes no input files (models/pipelines.py inputFileArity).
+ARITY_NONE = "none"
+
+# S3 error codes that mean the object genuinely is not there. Any other failure on an S3 read is a
+# fault, not an absent file, and must surface rather than degrade the step's inputs.
+_ABSENT_OBJECT_ERROR_CODES = ("NoSuchKey", "NoSuchBucket", "404")
 
 try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
@@ -101,7 +113,9 @@ def _get_original_input_entries(workflow_execution_id):
                 "auxPreviewPrefix": er.aux_preview_file_prefix(database_id, file_key.lstrip('/')),
                 "bucket": file_bucket,
                 "key": file_key.lstrip('/'),
-                "versionId": "",
+                # The concrete version the run resolved at launch, so a later step reads the same
+                # object bytes step 1 read rather than whatever is latest now.
+                "versionId": row.get('versionId', '') or "",
             })
         if 'LastEvaluatedKey' not in resp:
             break
@@ -142,17 +156,94 @@ def record_previous_pipeline_outputs(body):
     if to_pipeline_execution_id:
         eo.set_pipeline_status_running(
             dynamodb, pipeline_executions_table, to_pipeline_execution_id, workflow_execution_id)
+        _stamp_pipeline_start_date(to_pipeline_execution_id, workflow_execution_id, er.iso_now())
 
     return current_files
 
 
-def prepare_next_pipeline(body):
+def _stamp_pipeline_start_date(pipeline_execution_id, workflow_execution_id, start_date):
+    """Record when a pipeline step began, alongside its NEW -> RUNNING flip, so the execution
+    details can report a per-step duration.
+
+    Written only with a real value: executionStartDate is a GSI sort key on the execution tables and
+    DynamoDB rejects an empty string for an indexed key attribute. Conditioned on the row not
+    already carrying one so a re-invoked interim step keeps the first start. Best-effort — a failed
+    timing stamp must not fail the step transition."""
+    if not start_date or not pipeline_execution_id:
+        return
+    table = dynamodb.Table(pipeline_executions_table)
+    try:
+        table.update_item(
+            Key={"pipelineExecutionId": pipeline_execution_id,
+                 "workflowExecutionId": workflow_execution_id},
+            UpdateExpression="SET executionStartDate = :sd",
+            ConditionExpression=(
+                "attribute_not_exists(executionStartDate) OR executionStartDate = :empty"),
+            ExpressionAttributeValues={":sd": start_date, ":empty": ""},
+        )
+    except Exception as e:
+        if _error_code(e) != "ConditionalCheckFailedException":
+            logger.warning(
+                f"Could not stamp the start date on pipeline execution {pipeline_execution_id}: {e}")
+
+
+def _error_code(error):
+    """The AWS error code on a boto3 exception, or '' when it carries none."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        return (response.get("Error") or {}).get("Code", "") or ""
+    return ""
+
+
+def narrow_next_pipeline_inputs(body, input_files):
+    """The next step's own share of the resolved input files: the entries passing its effective
+    inputFileFilters, gated by its declared inputFileArity.
+
+    Per-step INTAKE, the counterpart to the metadata narrowing in resolve_next_metadata_location.
+    Step 1's manifest is narrowed at launch, where the effective config resolves; steps 2+ have their
+    manifests assembled here, so the step's filters and arity travel in the interim payload
+    (nextPipelineInputFileFilters / nextPipelineInputFileArity) the same way its metadata key does.
+    Without them the manifest carries the run's entire selection plus every file a prior step
+    produced, so a step receives files it never declared it could read.
+
+    An absent or empty filter map narrows nothing, so an execution launched without the keys keeps
+    the full selection. An arity the narrowed set cannot satisfy raises: the interim state's Catch
+    reconciles the run as FAILED with the reason on the record, rather than handing the pipeline a
+    selection it rejects opaquely (or waits out its callback timeout on)."""
+    arity = (body or {}).get('nextPipelineInputFileArity', '') or ""
+    if arity == ARITY_NONE:
+        return []
+
+    filters = (body or {}).get('nextPipelineInputFileFilters') or {}
+    narrowed = input_files
+    if isinstance(filters, dict) and (filters.get("allow") or filters.get("exclude")):
+        # The filter helper reads each entry's 'relativeFileKey'; manifest entries carry the same
+        # asset-relative path as 'relativePath'.
+        candidates = [{"relativeFileKey": f.get("relativePath", ""), "manifestEntry": f}
+                      for f in input_files]
+        narrowed = [c["manifestEntry"]
+                    for c in ev.apply_input_file_filters(candidates, filters)]
+
+    if arity:
+        violation = ev._arity_violation(arity, len(narrowed))
+        if violation:
+            next_pipeline_id = (body or {}).get('nextPipelineId', '')
+            raise VAMSGeneralErrorResponse(
+                f"Pipeline '{next_pipeline_id}' {violation} after its input filters were applied to "
+                f"the previous pipeline's outputs.")
+    return narrowed
+
+
+def prepare_next_pipeline(body, current_output_files=None):
     """Write pipeline N+1's resolved input manifest envelope to the asset bucket and return the
     N+1 config + manifest S3 locations for the SFN result.
 
     The envelope context (output/aux locations, metadata location, system config) is threaded
     from the ASL into the interim payload; the input FILES are resolved here (shadowing) from
-    the execution's original inputs overlaid by the shared output FILES folder."""
+    the execution's original inputs overlaid by the shared output FILES folder.
+
+    current_output_files: the output-files listing the attribution step already took in this
+    invocation, so the shared output folder is listed once per step transition rather than twice."""
     # The workflow-execution I/O bucket holds the shared pipeline output folder + the per-pipeline
     # manifest/config files (NOT the input asset files, whose own buckets come from the input rows).
     wf_exec_bucket = body.get('workflowExecutionS3InputOutputBucket', '')
@@ -201,7 +292,9 @@ def prepare_next_pipeline(body):
     original_inputs = _get_original_input_entries(workflow_execution_id)
     # Output files are listed/shadowed from the workflow-exec I/O bucket (the shared output folder).
     manifest = eo.build_resolved_manifest(
-        s3c, original_inputs, wf_exec_bucket, output_files_prefix, envelope_context=envelope_context)
+        s3c, original_inputs, wf_exec_bucket, output_files_prefix,
+        envelope_context=envelope_context, current_output_files=current_output_files)
+    manifest["inputFiles"] = narrow_next_pipeline_inputs(body, manifest.get("inputFiles") or [])
 
     if next_manifest_key:
         s3c.put_object(Bucket=wf_exec_bucket, Key=next_manifest_key,
@@ -255,8 +348,10 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
     try:
         resp = s3c.get_object(Bucket=wf_exec_bucket, Key=next_config_key)
         raw_cfg = resp["Body"].read().decode("utf-8")
-    except Exception as e:  # nosec B110 - a missing/empty config file is valid; nothing to render
-        logger.info(f"No input configuration to render for next pipeline (non-critical): {e}")
+    except ClientError as e:
+        if _error_code(e) not in _ABSENT_OBJECT_ERROR_CODES:
+            raise
+        logger.info(f"No input configuration to render for next pipeline: {e}")
         return
     if not tr.uses_template_tags(raw_cfg):
         return
@@ -290,7 +385,10 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
         try:
             resp = s3c.get_object(Bucket=bkt, Key=key)
             payload = json.loads(resp["Body"].read().decode("utf-8"))
-        except Exception:  # nosec B110 - best-effort; an unreadable metadata file yields {}
+        except ClientError as e:
+            if _error_code(e) not in _ABSENT_OBJECT_ERROR_CODES:
+                raise
+            logger.info(f"No metadata envelope to render for next pipeline: {e}")
             return {}
         if not isinstance(payload, dict):
             return {}
@@ -323,10 +421,11 @@ def lambda_handler(event, context):
             raise
 
     # 1) Record the just-finished pipeline N's outputs + completion.
-    record_previous_pipeline_outputs(body)
+    current_files = record_previous_pipeline_outputs(body)
 
-    # 2) Prepare pipeline N+1's resolved input manifest + return its input locations.
-    next_locations = prepare_next_pipeline(body)
+    # 2) Prepare pipeline N+1's resolved input manifest + return its input locations. The output
+    #    folder listing from step 1 is reused: the shadowing pass needs the identical set.
+    next_locations = prepare_next_pipeline(body, current_output_files=current_files)
 
     logger.info(f"Interim tracking complete; next pipeline locations: {next_locations}")
     return next_locations

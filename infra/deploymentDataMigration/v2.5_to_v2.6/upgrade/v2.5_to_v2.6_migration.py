@@ -81,6 +81,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import sys
 import time
 import uuid
@@ -90,9 +91,22 @@ from typing import Dict, Iterator, List, Optional, Tuple
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 # Shared migration tooling (infra/deploymentDataMigration/tools)
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "tools"))
 from ssm_resource_lookup import ResourceParamKeys, SsmResourceLookup  # noqa: E402
+
+# The backend's hybrid inline/S3 template body storage, so migrated template rows carry the same
+# threshold, key layout and content hashes the pipeline template service writes.
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "..", "..", "backend", "backend"))
+try:
+    from common.workflows import templateBodyStorage as tbs  # noqa: E402
+except ImportError as _tbs_error:  # pragma: no cover - a broken checkout, not a runtime path
+    raise ImportError(
+        "Could not import backend/backend/common/workflows/templateBodyStorage.py. Run this script "
+        "from its location inside the VAMS repository so the backend package is importable."
+    ) from _tbs_error
 
 # Configure logging
 logging.basicConfig(
@@ -462,6 +476,13 @@ _GUID_NAMESPACE = uuid.UUID("00000000-0000-0000-0000-00000000a6d6")
 # DynamoDB BatchWriteItem accepts at most 25 items per request.
 _BATCH_WRITE_MAX = 25
 
+# UnprocessedItems retry budget. DynamoDB returns rows unprocessed when the table or one of its GSIs
+# throttles -- the constant-partition by-date GSIs concentrate the bulk write on one partition -- so the
+# retries back off instead of re-issuing into the same exhausted write bucket.
+_BATCH_WRITE_MAX_RETRIES = 8
+_BATCH_WRITE_BACKOFF_BASE_SECONDS = 0.05
+_BATCH_WRITE_BACKOFF_MAX_SECONDS = 5.0
+
 
 def derive_guid(*parts) -> str:
     """Deterministic 32-hex GUID from the given parts (idempotent)."""
@@ -561,6 +582,47 @@ def build_workflow_pipeline_cache(dynamodb_client, workflow_table_name: str) -> 
     return cache
 
 
+def build_asset_bucket_name_index(dynamodb_client, buckets_table_name: str) -> Dict[str, str]:
+    """Map bucketId -> bucketName from the S3 asset buckets table. A bucket registered under several
+    prefixes has one row per prefix sharing a bucketId, so the name is the same whichever row wins."""
+    logger.info(f"Building bucketId -> bucketName index from {buckets_table_name}...")
+    index: Dict[str, str] = {}
+    for item in iter_all_items(dynamodb_client, buckets_table_name,
+                               projection='bucketId,bucketName'):
+        bucket_id = item.get('bucketId', {}).get('S', '')
+        bucket_name = item.get('bucketName', {}).get('S', '')
+        if bucket_id and bucket_name:
+            index[bucket_id] = bucket_name
+    logger.info(f"Indexed {len(index)} asset buckets")
+    return index
+
+
+def build_asset_location_lookup(
+    dynamodb_client, asset_table_name: str, bucket_name_index: Dict[str, str]
+) -> Dict[Tuple[str, str], Dict[str, str]]:
+    """Map (databaseId, assetId) -> {'bucket': bucketName, 'root': assetLocation.Key}.
+
+    The V2 workflow-input record stores each input file's own asset root (bucket name + bucket-relative
+    asset-root prefix) so a re-run can turn the stored FULL key back into an asset-relative one; a row
+    without them re-reads a whole-asset selection as a folder selection."""
+    logger.info(f"Building asset location lookup from {asset_table_name}...")
+    lookup: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for item in iter_all_items(dynamodb_client, asset_table_name,
+                               projection='databaseId,assetId,bucketId,assetLocation'):
+        database_id = item.get('databaseId', {}).get('S', '')
+        asset_id = item.get('assetId', {}).get('S', '')
+        if not database_id or not asset_id:
+            continue
+        # An archived asset lives under a 'databaseId#deleted' partition; its executions were recorded
+        # against the live databaseId, so the lookup is keyed on that.
+        database_id = database_id[:-len('#deleted')] if database_id.endswith('#deleted') else database_id
+        location_key = item.get('assetLocation', {}).get('M', {}).get('Key', {}).get('S', '') or ''
+        bucket_name = bucket_name_index.get(item.get('bucketId', {}).get('S', ''), '')
+        lookup.setdefault((database_id, asset_id), {'bucket': bucket_name, 'root': location_key})
+    logger.info(f"Indexed {len(lookup)} asset locations")
+    return lookup
+
+
 def _item_identity(item: Dict) -> str:
     """A human-readable identity for a wire-format row, for per-item error logging. Reports the
     first recognized identifying attributes so a failed write names the record to re-migrate."""
@@ -587,6 +649,13 @@ def _write_chunk_item_by_item(dynamodb_client, table_name: str, chunk: List[Dict
     return written, errors
 
 
+def _batch_write_backoff_seconds(attempt: int) -> float:
+    """Exponential backoff with jitter for an UnprocessedItems retry (1-based attempt)."""
+    delay = min(_BATCH_WRITE_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)),
+                _BATCH_WRITE_BACKOFF_MAX_SECONDS)
+    return delay * (1 + random.random())
+
+
 def flush_batch_write(dynamodb_client, table_name: str, batch: List[Dict], dry_run: bool = False) -> Tuple[int, int]:
     if not batch:
         return 0, 0
@@ -603,16 +672,25 @@ def flush_batch_write(dynamodb_client, table_name: str, batch: List[Dict], dry_r
             written += len(write_requests)
             unprocessed = response.get('UnprocessedItems', {}).get(table_name, [])
             retry_count = 0
-            while unprocessed and retry_count < 3:
+            while unprocessed and retry_count < _BATCH_WRITE_MAX_RETRIES:
                 retry_count += 1
+                # Sleep before re-issuing: retries fired back to back hit the same exhausted write
+                # bucket, so the rows come back unprocessed and are dropped rather than written.
+                time.sleep(_batch_write_backoff_seconds(retry_count))
                 response = dynamodb_client.batch_write_item(RequestItems={table_name: unprocessed})
                 unprocessed = response.get('UnprocessedItems', {}).get(table_name, [])
             if unprocessed:
-                errors += len(unprocessed)
+                # A lingering throttle degrades to slow single writes rather than lost rows: each
+                # remaining row is written on its own, and only a row that still fails is an error.
+                logger.warning(f"{len(unprocessed)} row(s) still unprocessed in {table_name} after "
+                               f"{_BATCH_WRITE_MAX_RETRIES} retries. Writing them one row at a time.")
                 written -= len(unprocessed)
-                for request in unprocessed:
-                    logger.error(f"Unprocessed row after retries in {table_name} "
-                                 f"({_item_identity(request.get('PutRequest', {}).get('Item', {}))})")
+                remaining = [request.get('PutRequest', {}).get('Item', {})
+                             for request in unprocessed]
+                row_written, row_errors = _write_chunk_item_by_item(
+                    dynamodb_client, table_name, remaining)
+                written += row_written
+                errors += row_errors
         except ClientError as e:
             # A validation failure on one row fails the whole request, so retry the chunk one row
             # at a time to keep the valid rows and identify the offending ones.
@@ -645,8 +723,21 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
     # output target, and re-run reads the per-pipeline rows for template parameters.
     wf_config = cfg.get('workflow_execution_configuration_storage_table_name')
     pexec_config = cfg.get('pipeline_execution_input_configuration_storage_table_name')
+    # Asset location source for each input row's own asset root. Optional: without both names the rows
+    # write with an empty bucket + root, which is what makes a whole-asset re-run read as a folder.
+    asset_table = cfg.get('asset_storage_table_name')
+    buckets_table = cfg.get('s3_asset_buckets_storage_table_name')
 
     pipeline_cache = build_workflow_pipeline_cache(dynamodb_client, workflow_table)
+    asset_locations: Dict[Tuple[str, str], Dict[str, str]] = {}
+    if asset_table and buckets_table:
+        asset_locations = build_asset_location_lookup(
+            dynamodb_client, asset_table, build_asset_bucket_name_index(dynamodb_client, buckets_table))
+    else:
+        logger.warning(
+            "The asset storage / S3 asset buckets table names are unset, so migrated workflow-input "
+            "rows carry no s3Bucket or assetRootS3Key: re-running a whole-asset execution reads as a "
+            "folder selection.")
     # Streamed rather than materialized: a deployment can hold hundreds of thousands of legacy
     # executions, and rows are written in batches as they are read.
     legacy_rows = iter_all_items(dynamodb_client, legacy_table, limit)
@@ -728,7 +819,10 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             main_row['executionStartDate'] = s(start_date)
         main_batch.append(main_row)
 
-        # 2) WorkflowExecutionInputs row
+        # 2) WorkflowExecutionInputs row. s3Bucket + assetRootS3Key locate the input file's own asset
+        # root; a re-run strips the root to recover the asset-relative key, and without it a
+        # whole-asset input ('{root}/') is re-read as a folder selection.
+        asset_location = asset_locations.get((database_id, asset_id)) or {}
         inputs_row = {
             'workflowExecutionId': s(execution_id),
             'databaseId:assetId:inputAssetFileKey': s(f"{database_id}:{asset_id}:{input_file_key}"),
@@ -736,6 +830,11 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             'assetId': s(asset_id),
             'databaseId': s(database_id),
             'inputAssetFileKey': s(input_file_key),
+            's3Bucket': s(asset_location.get('bucket', '')),
+            'assetRootS3Key': s(asset_location.get('root', '')),
+            # V1 recorded no S3 VersionId for an execution's inputs, so the run's exact version is
+            # unknown rather than "latest".
+            'versionId': s(''),
             'workflowId': s(workflow_id),
             'workflowDatabaseId': s(workflow_database_id),
         }
@@ -757,7 +856,9 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             pexec_id = derive_guid(execution_id, p_idx)
             is_end = (p_idx == len(pipelines) - 1)
             pipeline_name = pipeline.get('name') or 'DELETED'
-            pipeline_db = pipeline.get('databaseId', workflow_database_id)
+            # A v2.4.x workflow entry carried no databaseId, so the cached value is present but empty;
+            # an empty pipelineDatabaseId resolves no pipeline definition and indexes under ':id'.
+            pipeline_db = pipeline.get('databaseId') or workflow_database_id
             # A built-in whose id was consolidated in v2.6 no longer exists under its V1 id, so the
             # execution row records the effective V2 id — the same rewrite the definitions step
             # applies to a workflow's pipeline references, keeping the two records consistent.
@@ -951,6 +1052,18 @@ def run_workflow_executions_step(config: dict, args) -> int:
                 f"'{cfg_key}' is unset and could not be resolved from SSM; migrated executions will "
                 "have no configuration snapshot (empty output target in the detail view, and re-run "
                 "unavailable for pipelines that require a template).")
+
+    # The asset + bucket tables supply each input row's own asset root (s3Bucket + assetRootS3Key).
+    # Also optional: a missing name leaves those two fields empty, which the migration step warns about.
+    for cfg_key, param_key in (
+        ('asset_storage_table_name', ResourceParamKeys.ASSET_STORAGE_TABLE),
+        ('s3_asset_buckets_storage_table_name', ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE),
+    ):
+        step_cfg[cfg_key] = None
+        try:
+            step_cfg[cfg_key] = resolve(cfg_key, param_key)
+        except Exception as e:
+            logger.warning(f"Could not resolve '{cfg_key}': {e}")
 
     logger.info("=" * 80)
     logger.info("VAMS v2.5 -> v2.6 WORKFLOW EXECUTIONS STORAGE OVERHAUL (V1 -> V2)")
@@ -1335,6 +1448,9 @@ _WORKFLOW_SCHEMA_VERSION = 1
 # templateId of the single template carrying a migrated pipeline's V1 inputParameters.
 _MIGRATED_TEMPLATE_ID = 'migrated-default'
 
+# The only V2 trigger type, and the equivalent of V1's autoTriggerOnFileExtensionsUpload.
+_TRIGGER_TYPE_FILE_UPLOAD = 'fileUpload'
+
 
 def n(val) -> Dict:
     """DynamoDB wire-format Number attribute from an int/str."""
@@ -1383,22 +1499,31 @@ def _v1_execution_config(row: Dict) -> Dict:
     wait_for_callback = row.get('waitForCallback', {}).get('S', 'Disabled') or 'Disabled'
     task_timeout = row.get('taskTimeout', {}).get('S', '') or ''
 
-    # userProvidedResource is a JSON string {isProvided, resourceId}; the resourceId is the Lambda
-    # function name for a Lambda pipeline. SQS/EventBridge resources are user-configured at run time.
-    resource_id = ''
+    # userProvidedResource is a JSON string {isProvided, resourceId, eventSource, eventDetailType};
+    # the resourceId is the Lambda function name for a Lambda pipeline, the queue url for SQS, and the
+    # event-bus arn for EventBridge.
+    upr = {}
     try:
-        upr = json.loads(row.get('userProvidedResource', {}).get('S', '') or '{}')
-        resource_id = upr.get('resourceId', '') or ''
+        upr = json.loads(row.get('userProvidedResource', {}).get('S', '') or '{}') or {}
     except (ValueError, TypeError):
-        resource_id = ''
+        upr = {}
+    resource_id = upr.get('resourceId', '') or ''
 
     lambda_block, sqs_block, eb_block = {}, {}, {}
     if exec_type == 'Lambda' and resource_id:
         lambda_block = {'resourceId': s(resource_id)}
     elif exec_type == 'SQS' and resource_id:
         sqs_block = {'queueUrl': s(resource_id)}
-    elif exec_type == 'EventBridge' and resource_id:
-        eb_block = {'busArn': s(resource_id)}
+    elif exec_type == 'EventBridge':
+        # source and detailType identify the event a customer's EventBridge rule matches on, so they
+        # are carried alongside the bus. V1 stored the literal 'default' for the account default bus,
+        # which is not a bus ARN; an empty busArn is what the task builder resolves to 'default'.
+        bus_arn = '' if resource_id == 'default' else resource_id
+        eb_block = {
+            'busArn': s(bus_arn),
+            'source': s(upr.get('eventSource', '') or ''),
+            'detailType': s(upr.get('eventDetailType', '') or ''),
+        }
 
     return m({
         'executionType': s(exec_type),
@@ -1422,7 +1547,9 @@ def _v1_system_config(row: Dict) -> Dict:
         'assetScope': m({
             'crossAssetAllowed': bool_(False),
             'singleAssetOnly': bool_(True),
-            'wholeAssetAllowed': bool_(False),
+            # A V1 execute request that omitted fileKey ran against the whole asset, so whole-asset
+            # runs stay permitted; the remaining scopes had no V1 equivalent.
+            'wholeAssetAllowed': bool_(True),
             'folderAllowed': bool_(False),
         }),
         'metadataInputs': m({
@@ -1489,17 +1616,45 @@ def _v2_pipeline_item(row: Dict, now: str) -> Dict:
     }
 
 
-def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
+def _migrated_template_body_storage(database_id: str, pipeline_id: str, config_body: str) -> Dict:
+    """Inline-vs-S3 storage fields for a migrated template body, mirroring what the pipeline template
+    service writes. A V1 inputParameters JSON had no length cap, so a body over the inline threshold
+    is offloaded to the default asset bucket rather than written onto the row, where it would exceed
+    DynamoDB's 400 KB item limit and lose the template. `pendingBody` is the body to upload, empty
+    when the body stays inline."""
+    plan = tbs.plan_body_storage(config_body, '')
+    if not plan['offload']:
+        return {
+            'bodyStorage': tbs.BODY_STORAGE_INLINE,
+            'configBody': config_body,
+            'configBodyS3Key': '',
+            'configBodyHash': plan['configBodyHash'],
+            'webFormHash': plan['webFormHash'],
+            'pendingBody': '',
+        }
+    return {
+        'bodyStorage': tbs.BODY_STORAGE_S3,
+        'configBody': '',
+        'configBodyS3Key': tbs.config_body_s3_key(database_id, pipeline_id, _MIGRATED_TEMPLATE_ID),
+        'configBodyHash': plan['configBodyHash'],
+        'webFormHash': plan['webFormHash'],
+        'pendingBody': config_body,
+    }
+
+
+def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Tuple[Dict, str]]:
     """Build a single migrated PipelineTemplatesStorageTable row carrying the V1 pipeline's
     inputParameters as the template configBody, so the migrated pipeline keeps its default config as a
-    selectable template. Returns None when the V1 pipeline had no inputParameters."""
+    selectable template. Returns (item, bodyToUploadToS3) — the second element is empty when the body
+    stays inline — or None when the V1 pipeline had no inputParameters."""
     database_id = row.get('databaseId', {}).get('S', '')
     pipeline_id = row.get('pipelineId', {}).get('S', '')
     input_parameters = row.get('inputParameters', {}).get('S', '') or ''
     if not input_parameters.strip():
         return None
     date_created = _v1_date_created(row, now)
-    return {
+    storage = _migrated_template_body_storage(database_id, pipeline_id, input_parameters)
+    item = {
         'pipelineDatabaseId:pipelineId': s(f"{database_id}:{pipeline_id}"),
         'templateId': s(_MIGRATED_TEMPLATE_ID),
         'pipelineDatabaseId': s(database_id),
@@ -1509,13 +1664,14 @@ def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
         'configFormat': s('json'),
         'allowCustomEdit': bool_(True),
         'inputInstructions': s(''),
-        'bodyStorage': s('inline'),
-        'configBody': s(input_parameters),
+        'bodyStorage': s(storage['bodyStorage']),
+        'configBody': s(storage['configBody']),
         'webFormJson': s(''),
-        'configBodyS3Key': s(''),
-        'configBodyHash': s(''),
+        'configBodyS3Key': s(storage['configBodyS3Key']),
+        # The hashes back unchanged-body detection on a later template update.
+        'configBodyHash': s(storage['configBodyHash']),
         'webFormS3Key': s(''),
-        'webFormHash': s(''),
+        'webFormHash': s(storage['webFormHash']),
         'overrides': m({}),
         # The pipeline's only template, so it is its default: the UI pre-selects it and a
         # require-template run falls back to it.
@@ -1527,6 +1683,7 @@ def _v2_migrated_template_item(row: Dict, now: str) -> Optional[Dict]:
         'schemaVersion': n(_TEMPLATE_SCHEMA_VERSION),
         'migratedRecord': bool_(True),
     }
+    return item, storage['pendingBody']
 
 
 def _existing_v2_deployment(dynamodb_client, table_name: str, database_id: str,
@@ -1603,7 +1760,9 @@ def _v2_workflow_item(row: Dict, now: str, migrated_template_pipelines=None,
             'assetScope': m({
                 'crossAssetAllowed': bool_(False),
                 'singleAssetOnly': bool_(True),
-                'wholeAssetAllowed': bool_(False),
+                # A V1 execute request that omitted fileKey ran against the whole asset, so
+                # whole-asset runs stay permitted; the remaining scopes had no V1 equivalent.
+                'wholeAssetAllowed': bool_(True),
                 'folderAllowed': bool_(False),
             }),
             'metadataInputs': m({
@@ -1633,7 +1792,107 @@ def _v2_workflow_item(row: Dict, now: str, migrated_template_pipelines=None,
     }
 
 
-def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, limit: int) -> Tuple[Dict, Dict]:
+def _v1_auto_trigger_allow_patterns(raw: str) -> List[str]:
+    """The inputFileFilters.allow patterns for a V1 autoTriggerOnFileExtensionsUpload value.
+
+    V1 accepted a comma-delimited extension list ('jpg,.png') or the allow-all keyword ('all'/'.all').
+    Each extension becomes the canonical '*.ext' pattern the V2 filter matcher reads; allow-all yields
+    an empty list, which is how the matcher spells "no restriction"."""
+    text = (raw or '').strip()
+    if not text or text.lower() in ('all', '.all'):
+        return []
+    patterns = []
+    for extension in text.split(','):
+        body = extension.strip().lstrip('.').lower()
+        if body and body not in patterns:
+            patterns.append(body)
+    return [f"*.{body}" for body in patterns]
+
+
+def _v2_trigger_item(row: Dict, now: str) -> Optional[Dict]:
+    """Build a WorkflowTriggersStorageTable fileUpload row from a V1 workflow's
+    autoTriggerOnFileExtensionsUpload, so a workflow that auto-ran on upload keeps doing so. Returns
+    None when the V1 workflow configured no auto-trigger."""
+    raw = row.get('autoTriggerOnFileExtensionsUpload', {}).get('S', '') or ''
+    if not raw.strip():
+        return None
+    database_id = row.get('databaseId', {}).get('S', '')
+    workflow_id = row.get('workflowId', {}).get('S', '')
+    date_created = _v1_date_created(row, now)
+    return {
+        'workflowDatabaseId:workflowId': s(f"{database_id}:{workflow_id}"),
+        # Sort key. A V1 workflow had exactly one auto-trigger, so it is the workflow's first trigger
+        # of the type and keeps the bare type as its key (no '#triggerId' suffix).
+        'triggerType': s(_TRIGGER_TYPE_FILE_UPLOAD),
+        # Partition key of TriggersByBaseTypeGSI, which the upload dispatcher queries by exact type.
+        'triggerBaseType': s(_TRIGGER_TYPE_FILE_UPLOAD),
+        'triggerId': s(''),
+        'workflowDatabaseId': s(database_id),
+        'workflowId': s(workflow_id),
+        'triggerConfig': m({
+            'inputFileFilters': m({
+                'allow': string_list(_v1_auto_trigger_allow_patterns(raw)),
+                'exclude': string_list([]),
+            }),
+            # A V1 auto-trigger named no per-pipeline template; a fired run resolves each pipeline's
+            # own default, which for a migrated pipeline is its 'migrated-default' template.
+            'defaultTemplateIds': m({}),
+        }),
+        'enabled': bool_(row.get('enabled', {}).get('BOOL', True)),
+        'dateCreated': s(date_created),
+        'dateModified': s(date_created),
+        'migratedRecord': bool_(True),
+    }
+
+
+def _offload_template_body(s3_client, bucket: str, key: str, body: str,
+                           database_id: str, pipeline_id: str, dry_run: bool) -> bool:
+    """Write an over-threshold migrated template body to the default asset bucket. False when it could
+    not be stored, so the caller drops the template row rather than writing one whose configBody
+    neither lives inline nor resolves in S3."""
+    if not bucket or s3_client is None:
+        logger.error(
+            f"Pipeline '{database_id}:{pipeline_id}' has inputParameters larger than the "
+            f"{tbs.INLINE_THRESHOLD_BYTES}-byte inline limit, but the default asset bucket could not "
+            "be resolved, so its migrated template is skipped. Re-run the step with the bucket "
+            "resolvable to migrate the template.")
+        return False
+    if dry_run:
+        logger.info(f"  [DRY RUN] Would offload the '{database_id}:{pipeline_id}' template body to "
+                    f"s3://{bucket}/{key}")
+        return True
+    try:
+        tbs.write_body_to_s3(s3_client, bucket, key, body)
+        return True
+    except (ClientError, BotoCoreError) as e:
+        logger.error(f"Failed offloading the '{database_id}:{pipeline_id}' template body to "
+                     f"s3://{bucket}/{key}: {e}. Its migrated template is skipped.")
+        return False
+
+
+def resolve_default_bucket_name(dynamodb_client, buckets_table_name: str) -> str:
+    """The bucket name of the VAMS default asset bucket (the row flagged isDefault), or '' when none
+    is flagged. Mirrors common.workflows.defaultBucket: a bucket registered under several prefixes has
+    a row per prefix, and the bucket-root row is preferred so the canonical base wins."""
+    rows = []
+    for item in iter_all_items(dynamodb_client, buckets_table_name,
+                               projection='bucketName,baseAssetsPrefix,isDefault'):
+        if item.get('isDefault', {}).get('BOOL') is not True:
+            continue
+        rows.append((item.get('baseAssetsPrefix', {}).get('S', '') or '',
+                     item.get('bucketName', {}).get('S', '') or ''))
+    if not rows:
+        return ''
+    rows.sort(key=lambda entry: (0 if entry[0].strip('/') == '' else 1, entry[0], entry[1]))
+    distinct = {name for _prefix, name in rows}
+    if len(distinct) > 1:
+        logger.error(f"More than one bucket is flagged as the VAMS default ({sorted(distinct)}); using "
+                     f"{rows[0][1]}. Clear the stale isDefault row(s) in the S3 asset buckets table.")
+    return rows[0][1]
+
+
+def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, limit: int,
+                                          s3_client=None) -> Tuple[Dict, Dict]:
     """Migrate user-database pipeline + workflow DEFINITIONS from V1 tables to V2 tables. GLOBAL
     built-ins are skipped (re-created by the CDK importer). Returns (counts, totals)."""
     v1_pipeline_table = cfg['pipeline_storage_table_name_v1']
@@ -1641,9 +1900,13 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
     v2_template_table = cfg['pipeline_templates_storage_table_name']
     v1_workflow_table = cfg['workflow_storage_table_name']
     v2_workflow_table = cfg['workflow_storage_table_name_v2']
+    triggers_table = cfg.get('workflow_triggers_storage_table_name')
+    # Default asset bucket for an offloaded template body. Optional: a body over the inline threshold
+    # is skipped rather than written onto the row, where it would exceed the 400 KB item limit.
+    template_body_bucket = cfg.get('pipeline_template_body_bucket_name')
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    counts = {'pipelines': 0, 'templates': 0, 'workflows': 0, 'skipped_global': 0,
+    counts = {'pipelines': 0, 'templates': 0, 'workflows': 0, 'triggers': 0, 'skipped_global': 0,
               'skipped_deleted': 0, 'errors': 0,
               'duplicate_pipeline_ids': 0, 'duplicate_workflow_ids': 0}
 
@@ -1685,7 +1948,13 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
         counts['pipelines'] += 1
         tpl = _v2_migrated_template_item(row, now)
         if tpl:
-            template_batch.append(tpl)
+            item, pending_body = tpl
+            if pending_body and not _offload_template_body(
+                    s3_client, template_body_bucket,
+                    item['configBodyS3Key']['S'], pending_body, database_id, pipeline_id, dry_run):
+                counts['errors'] += 1
+                continue
+            template_batch.append(item)
             migrated_template_pipelines.add((database_id, pipeline_id))
             counts['templates'] += 1
 
@@ -1696,7 +1965,7 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
         counts['errors'] += te
 
     # --- Workflows ---
-    workflow_batch = []
+    workflow_batch, trigger_batch = [], []
     v1_workflows = scan_all_items(dynamodb_client, v1_workflow_table, limit)
     for row in v1_workflows:
         database_id = row.get('databaseId', {}).get('S', '')
@@ -1724,9 +1993,25 @@ def migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run: bool, l
         workflow_batch.append(_v2_workflow_item(
             row, now, migrated_template_pipelines, existing_arn, existing_job_names))
         counts['workflows'] += 1
+        # V1's autoTriggerOnFileExtensionsUpload is a fileUpload trigger row in V2; without one the
+        # workflow stops firing on upload.
+        trigger = _v2_trigger_item(row, now)
+        if trigger:
+            if triggers_table:
+                trigger_batch.append(trigger)
+                counts['triggers'] += 1
+            else:
+                logger.warning(
+                    f"  Workflow '{database_id}:{workflow_id}' auto-runs on file upload, but the "
+                    "workflow triggers table name is unset, so its trigger is not migrated and the "
+                    "workflow will not fire on upload.")
 
     _, we = flush_batch_write(dynamodb_client, v2_workflow_table, workflow_batch, dry_run)
     counts['errors'] += we
+
+    if trigger_batch:
+        _, tre = flush_batch_write(dynamodb_client, triggers_table, trigger_batch, dry_run)
+        counts['errors'] += tre
 
     return counts, {'v1_pipelines': len(v1_pipelines), 'v1_workflows': len(v1_workflows)}
 
@@ -1861,7 +2146,9 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
         session_kwargs['profile_name'] = profile
     if region:
         session_kwargs['region_name'] = region
-    dynamodb_client = boto3.Session(**session_kwargs).client('dynamodb')
+    session = boto3.Session(**session_kwargs)
+    dynamodb_client = session.client('dynamodb')
+    s3_client = session.client('s3')
 
     # Resolve the five table names: explicit config overrides win, else resolve from the SSM prefix.
     try:
@@ -1888,10 +2175,23 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
                 'workflow_storage_table_name', ResourceParamKeys.WORKFLOW_STORAGE_TABLE),
             'workflow_storage_table_name_v2': resolve(
                 'workflow_storage_table_name_v2', ResourceParamKeys.WORKFLOW_STORAGE_TABLE_V2),
+            'workflow_triggers_storage_table_name': resolve(
+                'workflow_triggers_storage_table_name', ResourceParamKeys.WORKFLOW_TRIGGERS_STORAGE_TABLE),
         }
     except Exception as e:
         logger.error(f"Failed resolving table names for the pipelineWorkflowDefinitions step: {e}")
         return 1
+
+    # The default asset bucket houses an offloaded template body. Optional: only a pipeline whose V1
+    # inputParameters exceed the inline threshold needs it, and that case reports itself.
+    cfg['pipeline_template_body_bucket_name'] = None
+    try:
+        buckets_table = resolve('s3_asset_buckets_storage_table_name',
+                                ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+        cfg['pipeline_template_body_bucket_name'] = resolve_default_bucket_name(
+            dynamodb_client, buckets_table)
+    except Exception as e:
+        logger.warning(f"Could not resolve the VAMS default asset bucket: {e}")
 
     limit = args.limit if args.limit is not None else config.get('limit')
 
@@ -1902,7 +2202,8 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
 
     start = datetime.now(timezone.utc)
     try:
-        counts, totals = migrate_pipeline_workflow_definitions(dynamodb_client, cfg, dry_run, limit)
+        counts, totals = migrate_pipeline_workflow_definitions(
+            dynamodb_client, cfg, dry_run, limit, s3_client=s3_client)
     except Exception as e:
         logger.error(f"pipelineWorkflowDefinitions step failed: {e}")
         return 1
@@ -1916,6 +2217,7 @@ def run_pipeline_workflow_definitions_step(config: dict, args, base_param_prefix
     logger.info(f"  V2 pipeline rows written: {counts['pipelines']}")
     logger.info(f"  V2 template rows written: {counts['templates']}")
     logger.info(f"  V2 workflow rows written: {counts['workflows']}")
+    logger.info(f"  fileUpload trigger rows:  {counts['triggers']}")
     logger.info(f"  Skipped (GLOBAL built-in): {counts['skipped_global']}")
     logger.info(f"  Skipped (soft-deleted):    {counts['skipped_deleted']}")
     logger.info(f"  Errors:                    {counts['errors']}")

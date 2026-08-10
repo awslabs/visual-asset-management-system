@@ -63,10 +63,14 @@ interface WorkflowFormState {
     backendWarnings: string[];
     saving: boolean;
     saveError: string | null;
+    /** Set by any action that changes an authored value, so Cancel can confirm before discarding. */
+    dirty: boolean;
 }
 
 type WorkflowFormAction =
-    | { type: "SET_FIELD"; field: keyof WorkflowFormState; value: any }
+    // `authored` false for a value the form derives itself rather than one the user entered, so it
+    // does not count toward dirtiness.
+    | { type: "SET_FIELD"; field: keyof WorkflowFormState; value: any; authored?: boolean }
     | { type: "LOAD_WORKFLOW"; workflow: Workflow }
     | { type: "SET_TEMPLATES"; key: string; templates: Template[] }
     | { type: "SET_VALIDATION"; errors: string[]; warnings: string[] }
@@ -99,6 +103,7 @@ const initialState: WorkflowFormState = {
     backendWarnings: [],
     saving: false,
     saveError: null,
+    dirty: false,
 };
 
 function workflowFormReducer(
@@ -107,7 +112,11 @@ function workflowFormReducer(
 ): WorkflowFormState {
     switch (action.type) {
         case "SET_FIELD":
-            return { ...state, [action.field]: action.value };
+            return {
+                ...state,
+                [action.field]: action.value,
+                dirty: state.dirty || action.authored !== false,
+            };
         case "LOAD_WORKFLOW": {
             const workflow = action.workflow;
             const sc = workflow.systemConfig || {};
@@ -130,6 +139,7 @@ function workflowFormReducer(
                 allowOverride: sc.outputTarget?.allowOverride ?? false,
                 allowWorkflowTriggerChaining: sc.allowWorkflowTriggerChaining ?? false,
                 defaultOutputPathPrefix: sc.defaultOutputFileBaseExecutionPathExtension || "",
+                dirty: false,
             };
         }
         case "SET_TEMPLATES":
@@ -186,8 +196,18 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     // Archived pipelines are included so an existing workflow's reference to one still resolves: the
     // card shows which pipeline it is (tagged and non-selectable) and validation reports the block.
     const isGlobalWorkflow = databaseId === "GLOBAL";
-    const { data: dbPipelines = [] } = useAllPipelines(databaseId, true);
-    const { data: globalPipelines = [] } = useAllPipelines("GLOBAL", true, !isGlobalWorkflow);
+    const { data: dbPipelines = [], isSuccess: dbPipelinesLoaded } = useAllPipelines(
+        databaseId,
+        true
+    );
+    const { data: globalPipelines = [], isSuccess: globalPipelinesLoaded } = useAllPipelines(
+        "GLOBAL",
+        true,
+        !isGlobalWorkflow
+    );
+    // Only once BOTH lists have arrived is a reference that resolves to nothing genuinely missing
+    // rather than not fetched yet.
+    const pipelinesLoaded = !!dbPipelinesLoaded && (isGlobalWorkflow || !!globalPipelinesLoaded);
     const pipelines = React.useMemo(() => {
         if (isGlobalWorkflow) return dbPipelines;
         const seen = new Set<string>();
@@ -251,7 +271,12 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             state.inputFileArity === "none" &&
             !state.allowOverride
         ) {
-            dispatch({ type: "SET_FIELD", field: "allowOverride", value: true });
+            dispatch({
+                type: "SET_FIELD",
+                field: "allowOverride",
+                value: true,
+                authored: false,
+            });
         }
     }, [state.locationType, state.inputFileArity, state.allowOverride]);
 
@@ -314,9 +339,9 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             return acc;
         }, {});
 
-        const result = validateWorkflow(assembled, pipelinesById);
+        const result = validateWorkflow(assembled, pipelinesById, { pipelinesLoaded });
         dispatch({ type: "SET_VALIDATION", errors: result.errors, warnings: result.warnings });
-    }, [assembleWorkflow, pipelines]);
+    }, [assembleWorkflow, pipelines, pipelinesLoaded]);
 
     const handleSave = async () => {
         if (state.validationErrors.length > 0) return;
@@ -391,6 +416,20 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const goNext = () =>
         setWizardStep(WIZARD_STEPS[Math.min(stepIndex + 1, WIZARD_STEPS.length - 1)].id);
     const goBack = () => setWizardStep(WIZARD_STEPS[Math.max(stepIndex - 1, 0)].id);
+
+    // Cancel leaves the wizard, discarding everything entered across its steps. A completed
+    // four-step definition is a lot to lose to one mis-click next to Back, so confirm while there is
+    // anything to lose. After a warned save the entered values are already persisted.
+    const handleCancel = () => {
+        if (
+            state.dirty &&
+            !savedWithWarnings &&
+            !confirm("Discard this workflow and leave without saving?")
+        ) {
+            return;
+        }
+        navigate(-1);
+    };
 
     return (
         <div className="orchestration-root orchestration-page space-y-6 bg-surface min-h-full">
@@ -684,7 +723,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
             {/* Wizard navigation. Save is only on the final (Review) step. */}
             <div className="flex justify-between gap-2">
-                <button onClick={() => navigate(-1)} className={btnSecondary}>
+                <button onClick={handleCancel} className={btnSecondary}>
                     Cancel
                 </button>
                 <div className="flex gap-2">

@@ -82,7 +82,13 @@
             "name": "{{ROLE_NAME}}-api-routes-execution-logs-deny",
             "description": "Withhold the admin-only detailed execution logs route from {{ROLE_NAME}}. A deny overrides the broad /workflows GET allow above.",
             "objectType": "api",
-            "criteriaAnd": [],
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/workflows/executions/"
+                }
+            ],
             "criteriaOr": [{ "field": "route__path", "operator": "ends_with", "value": "/logs" }],
             "groupPermissions": [{ "action": "GET", "type": "deny" }]
         },

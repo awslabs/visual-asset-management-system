@@ -6,13 +6,21 @@
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import type { Pipeline, PipelineCreateRequest, ExecutionType } from "../types";
-import { validatePipeline } from "./pipelineValidation";
+import {
+    DEADLINE_TEMPLATE_TYPES,
+    pruneExecutionConfig,
+    validatePipeline,
+} from "./pipelineValidation";
 import { useCreatePipeline, useUpdatePipeline } from "../api/queries";
 import Dialog from "../components/Dialog";
 import InfoTooltip from "../components/InfoTooltip";
 import StringListInput from "../components/StringListInput";
 import CollapsibleSection from "../components/CollapsibleSection";
-import AssetSpanControl from "../components/AssetSpanControl";
+import AssetSpanControl, {
+    assetSpanFromScope,
+    normalizeAssetScope,
+} from "../components/AssetSpanControl";
+import type { AssetScope } from "../components/AssetSpanControl";
 import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
@@ -60,17 +68,53 @@ const MAPPED_ERROR_KEYS = new Set([
     "category",
     "description",
     "executionConfig.executionType",
-    "executionConfig.lambda.resourceId",
-    "executionConfig.sqs.queueUrl",
-    "executionConfig.eventBridge.busArn",
-    "executionConfig.eventBridge.source",
-    "executionConfig.eventBridge.detailType",
-    "executionConfig.deadlineCloud.farmId",
-    "executionConfig.deadlineCloud.queueId",
     "executionConfig.waitForCallback",
     "executionConfig.taskTimeout",
     "executionConfig.taskHeartbeatTimeout",
 ]);
+
+// Per-type inline message elements, keyed by the execution type that renders them. A message is only
+// reachable while its own type is selected, so an error on any other type's field has to fall through
+// to the form-level summary rather than being silently suppressed by MAPPED_ERROR_KEYS.
+const EXECUTION_TYPE_ERROR_KEYS: Record<ExecutionType, string[]> = {
+    Lambda: ["executionConfig.lambda.resourceId"],
+    SQS: ["executionConfig.sqs.queueUrl"],
+    EventBridge: [
+        "executionConfig.eventBridge.busArn",
+        "executionConfig.eventBridge.source",
+        "executionConfig.eventBridge.detailType",
+    ],
+    DeadlineCloud: [
+        "executionConfig.deadlineCloud.farmId",
+        "executionConfig.deadlineCloud.queueId",
+        "executionConfig.deadlineCloud.priority",
+        "executionConfig.deadlineCloud.maxRetriesPerTask",
+        "executionConfig.deadlineCloud.maxFailedTasksCount",
+        "executionConfig.deadlineCloud.templateType",
+        "executionConfig.deadlineCloud.template",
+    ],
+};
+
+// Deadline Cloud job-template dialects, with a blank entry for the createJob task's own default so a
+// stored pipeline that never set one is not displayed as having chosen the first option.
+const DEADLINE_TEMPLATE_TYPE_OPTIONS: { value: string; label: string }[] = [
+    { value: "", label: "Default (YAML)" },
+    ...DEADLINE_TEMPLATE_TYPES.map((type) => ({ value: type, label: type })),
+];
+
+// The four canonical asset-scope booleans. The backend's pipeline-level check only evaluates the keys
+// a scope DECLARES (executionValidation._scope_errors with declared_only), so an omitted key defers to
+// the workflow gate rather than denying — a partial map is a narrower rule than the control displays.
+// Resolving all four from the control's own reader keeps what is stored identical to what is shown.
+const completeAssetScope = (scope: AssetScope | undefined): Record<string, boolean> => {
+    const normalized = normalizeAssetScope(scope);
+    return {
+        crossAssetAllowed: assetSpanFromScope(normalized) === "multiple",
+        singleAssetOnly: assetSpanFromScope(normalized) === "single",
+        wholeAssetAllowed: !!normalized.wholeAssetAllowed,
+        folderAllowed: !!normalized.folderAllowed,
+    };
+};
 
 // Page-wizard steps, in order. Module scope so onSubmit can gate on the final step.
 const PIPELINE_STEPS = [
@@ -152,7 +196,9 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             },
             systemConfig: {
                 inputFileArity: "one",
-                assetScope: {},
+                // Seeded with all four keys so the create default is the same explicit declaration a
+                // save persists, rather than an empty map the backend reads as declaring nothing.
+                assetScope: completeAssetScope(undefined),
                 metadataInputs: {},
                 requireTemplate: false,
                 allowCustomTemplateOverride: false,
@@ -212,7 +258,13 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             return;
         }
 
-        const validation = validatePipeline(data);
+        // Fields keep their values when unmounted (react-hook-form's shouldUnregister defaults to
+        // false), so a form session that visited another execution type still carries that type's
+        // sub-block. Pruning to the selected type is what the backend reads anyway, and it keeps a
+        // value from an abandoned type out of both the validation and the request body.
+        const executionConfig = pruneExecutionConfig(data.executionConfig);
+
+        const validation = validatePipeline({ ...data, executionConfig });
         if (!validation.ok) {
             const errors = (validation.errors as Record<string, string>) || {};
             setValidationErrors(errors);
@@ -238,9 +290,10 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             category: data.category,
             description: data.description,
             enabled: data.enabled,
-            executionConfig: data.executionConfig!,
+            executionConfig: executionConfig as PipelineCreateRequest["executionConfig"],
             systemConfig: {
                 ...data.systemConfig,
+                assetScope: completeAssetScope(data.systemConfig?.assetScope),
                 inputFileFilters: { allow, exclude },
             },
         };
@@ -290,9 +343,18 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
 
     const isPage = variant === "page";
 
-    // Errors on paths without their own inline message element, shown as a form-level summary.
+    // Errors whose inline message element is not currently on screen, shown as a form-level summary.
+    // A per-type field's message renders only under its own execution type, so an error carried by
+    // another type would otherwise refuse the save with nothing displayed anywhere.
+    const visibleErrorKeys = React.useMemo(() => {
+        const keys = new Set(MAPPED_ERROR_KEYS);
+        (EXECUTION_TYPE_ERROR_KEYS[executionType as ExecutionType] || []).forEach((key) =>
+            keys.add(key)
+        );
+        return keys;
+    }, [executionType]);
     const unmappedErrors = Object.entries(validationErrors).filter(
-        ([key]) => !MAPPED_ERROR_KEYS.has(key)
+        ([key]) => !visibleErrorKeys.has(key)
     );
 
     // Page variant is a stepper wizard (mirrors the workflow builder). Dialog variant shows every
@@ -318,7 +380,8 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
             if (executionType === "DeadlineCloud")
                 return !!(
                     watch("executionConfig.deadlineCloud.farmId") &&
-                    watch("executionConfig.deadlineCloud.queueId")
+                    watch("executionConfig.deadlineCloud.queueId") &&
+                    watch("executionConfig.deadlineCloud.template")
                 );
             return true;
         }
@@ -690,64 +753,153 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                                 )}
                             </div>
                             <div>
-                                <label className="block text-sm font-medium mb-1">
+                                <label
+                                    htmlFor="dcStorageProfileId"
+                                    className="block text-sm font-medium mb-1"
+                                >
                                     Storage Profile ID
                                 </label>
                                 <input
+                                    id="dcStorageProfileId"
                                     {...register("executionConfig.deadlineCloud.storageProfileId")}
                                     disabled={isDeadlineCloudDisabled}
                                     className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium mb-1">Priority</label>
+                                <label
+                                    htmlFor="dcPriority"
+                                    className="block text-sm font-medium mb-1"
+                                >
+                                    Priority
+                                </label>
                                 <input
+                                    id="dcPriority"
                                     {...register(
                                         "executionConfig.deadlineCloud.priority",
                                         optionalNumberField
                                     )}
                                     type="number"
+                                    min={0}
                                     disabled={isDeadlineCloudDisabled}
                                     className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
+                                {validationErrors["executionConfig.deadlineCloud.priority"] && (
+                                    <p className="text-vams-error text-sm mt-1">
+                                        {validationErrors["executionConfig.deadlineCloud.priority"]}
+                                    </p>
+                                )}
                             </div>
                             <div>
-                                <label className="block text-sm font-medium mb-1">
+                                <label
+                                    htmlFor="dcMaxRetries"
+                                    className="block text-sm font-medium mb-1"
+                                >
                                     Max Retries Per Task
                                 </label>
                                 <input
+                                    id="dcMaxRetries"
                                     {...register(
                                         "executionConfig.deadlineCloud.maxRetriesPerTask",
                                         optionalNumberField
                                     )}
                                     type="number"
+                                    min={0}
                                     disabled={isDeadlineCloudDisabled}
                                     className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
+                                {validationErrors[
+                                    "executionConfig.deadlineCloud.maxRetriesPerTask"
+                                ] && (
+                                    <p className="text-vams-error text-sm mt-1">
+                                        {
+                                            validationErrors[
+                                                "executionConfig.deadlineCloud.maxRetriesPerTask"
+                                            ]
+                                        }
+                                    </p>
+                                )}
                             </div>
                             <div>
-                                <label className="block text-sm font-medium mb-1">
+                                <label
+                                    htmlFor="dcMaxFailed"
+                                    className="block text-sm font-medium mb-1"
+                                >
                                     Max Failed Tasks Count
                                 </label>
                                 <input
+                                    id="dcMaxFailed"
                                     {...register(
                                         "executionConfig.deadlineCloud.maxFailedTasksCount",
                                         optionalNumberField
                                     )}
                                     type="number"
+                                    min={0}
                                     disabled={isDeadlineCloudDisabled}
                                     className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                                 />
+                                {validationErrors[
+                                    "executionConfig.deadlineCloud.maxFailedTasksCount"
+                                ] && (
+                                    <p className="text-vams-error text-sm mt-1">
+                                        {
+                                            validationErrors[
+                                                "executionConfig.deadlineCloud.maxFailedTasksCount"
+                                            ]
+                                        }
+                                    </p>
+                                )}
                             </div>
                             <div>
-                                <label className="block text-sm font-medium mb-1">
+                                <label
+                                    htmlFor="dcTemplateType"
+                                    className="block text-sm font-medium mb-1"
+                                >
                                     Template Type
                                 </label>
-                                <input
+                                <select
+                                    id="dcTemplateType"
                                     {...register("executionConfig.deadlineCloud.templateType")}
                                     disabled={isDeadlineCloudDisabled}
                                     className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                                >
+                                    {DEADLINE_TEMPLATE_TYPE_OPTIONS.map(({ value, label }) => (
+                                        <option key={value} value={value}>
+                                            {label}
+                                        </option>
+                                    ))}
+                                </select>
+                                {validationErrors["executionConfig.deadlineCloud.templateType"] && (
+                                    <p className="text-vams-error text-sm mt-1">
+                                        {
+                                            validationErrors[
+                                                "executionConfig.deadlineCloud.templateType"
+                                            ]
+                                        }
+                                    </p>
+                                )}
+                            </div>
+                            <div>
+                                <div className="flex items-center gap-1.5 text-sm font-medium mb-1">
+                                    <label htmlFor="dcTemplate">Job Template *</label>
+                                    <InfoTooltip text="The Open Job Description job template submitted to Deadline Cloud. It must declare a string parameter for every Vams-prefixed value the workflow passes (VamsInputManifestS3Location and the rest of the shared envelope)." />
+                                </div>
+                                <textarea
+                                    id="dcTemplate"
+                                    {...register("executionConfig.deadlineCloud.template")}
+                                    disabled={isDeadlineCloudDisabled}
+                                    rows={10}
+                                    spellCheck={false}
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary font-mono text-xs disabled:opacity-50"
+                                    placeholder={
+                                        "specificationVersion: jobtemplate-2023-09\nname: my-job\nparameterDefinitions:\n  - name: VamsInputManifestS3Location\n    type: STRING\nsteps: []"
+                                    }
                                 />
+                                {validationErrors["executionConfig.deadlineCloud.template"] && (
+                                    <p className="text-vams-error text-sm mt-1">
+                                        {validationErrors["executionConfig.deadlineCloud.template"]}
+                                    </p>
+                                )}
                             </div>
                         </>
                     )}

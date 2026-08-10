@@ -201,6 +201,14 @@ def _clean_validation_message(v):
     return str(v)
 
 
+def _is_item_size_rejection(err):
+    """True when a DynamoDB ValidationException is the 400 KB item-size limit rather than one of the
+    many other conditions that share the code (a malformed key, an empty attribute name, a bad update
+    expression). Only the message distinguishes them."""
+    message = (err.response.get("Error", {}) or {}).get("Message", "") or ""
+    return "item size" in message.lower()
+
+
 #######################
 # Table accessors
 #######################
@@ -402,59 +410,16 @@ def _metadata_service_lambda(payload):
         Payload=json.dumps(payload).encode("utf-8"))
 
 
-def _fetch_metadata(database_id, asset_id, query_params, event):
-    """Invoke the metadata service GET endpoint; return the parsed 'metadata' list (best-effort)."""
-    try:
-        l_payload = {
-            "requestContext": {
-                "http": {"path": f"/database/{database_id}/assets/{asset_id}/metadata", "method": "GET"},
-                "authorizer": event["requestContext"].get("authorizer"),
-            },
-            "pathParameters": {"databaseId": database_id, "assetId": asset_id},
-            "queryStringParameters": query_params or {},
-        }
-        response = _metadata_service_lambda(l_payload)
-        stream = response.get("Payload", "")
-        if not stream:
-            return []
-        json_response = json.loads(stream.read().decode("utf-8"))
-        if json_response.get("statusCode") == 200 and "body" in json_response:
-            return json.loads(json_response["body"]).get("metadata", [])
-    except Exception as e:
-        logger.exception(f"Failed fetching metadata for {database_id}:{asset_id}: {e}")
-    return []
-
-
-def _fetch_file_metadata(database_id, asset_id, file_path, meta_type, event):
-    """Invoke the metadata-service file endpoint (type 'metadata' or 'attribute')."""
-    try:
-        l_payload = {
-            "requestContext": {
-                "http": {"path": f"/database/{database_id}/assets/{asset_id}/metadata/file", "method": "GET"},
-                "authorizer": event["requestContext"].get("authorizer"),
-            },
-            "pathParameters": {"databaseId": database_id, "assetId": asset_id},
-            "queryStringParameters": {"filePath": file_path, "type": meta_type},
-        }
-        response = _metadata_service_lambda(l_payload)
-        stream = response.get("Payload", "")
-        if not stream:
-            return []
-        json_response = json.loads(stream.read().decode("utf-8"))
-        if json_response.get("statusCode") == 200 and "body" in json_response:
-            return json.loads(json_response["body"]).get("metadata", [])
-    except Exception as e:
-        logger.exception(f"Failed fetching file metadata for {database_id}:{asset_id}{file_path}: {e}")
-    return []
-
-
 def _metadata_service_payload(path, path_parameters, event):
     """A metadata-service GET invoke payload carrying the identity THIS execute request arrived with.
 
     An API request forwards its authorizer context. A lambda cross-call (trigger dispatch, re-run)
     has no authorizer at all, so its `lambdaCrossCall` identity is forwarded instead — forwarding an
     absent authorizer as `authorizer: None` makes the metadata service's claims extraction fail and
-    answer no metadata for a run that is otherwise fully authorized."""
+    answer no metadata for a run that is otherwise fully authorized.
+
+    Every metadata read of the envelope goes through here, so the identity a run reads with is decided
+    in one place rather than per endpoint."""
     payload = {
         "requestContext": {"http": {"path": path, "method": "GET"}},
         "pathParameters": path_parameters or {},
@@ -466,6 +431,61 @@ def _metadata_service_payload(path, path_parameters, event):
         payload["requestContext"]["authorizer"] = (
             event.get("requestContext") or {}).get("authorizer")
     return payload
+
+
+def _fetch_metadata(database_id, asset_id, query_params, event):
+    """Invoke the metadata service GET endpoint; return the parsed 'metadata' list (best-effort).
+
+    An answer that is neither a 200-with-body nor a payload at all is reported: the metadata service
+    answers a failure with an error payload carrying no statusCode, which is otherwise indistinguishable
+    from an asset that genuinely carries no metadata."""
+    try:
+        payload = _metadata_service_payload(
+            f"/database/{database_id}/assets/{asset_id}/metadata",
+            {"databaseId": database_id, "assetId": asset_id}, event)
+        payload["queryStringParameters"] = query_params or {}
+        response = _metadata_service_lambda(payload)
+        stream = response.get("Payload", "")
+        if not stream:
+            logger.warning(
+                f"Metadata service returned no payload for asset {database_id}:{asset_id}; the "
+                f"execution captures no metadata for it.")
+            return []
+        json_response = json.loads(stream.read().decode("utf-8"))
+        if json_response.get("statusCode") == 200 and "body" in json_response:
+            return json.loads(json_response["body"]).get("metadata", [])
+        logger.warning(
+            f"Metadata service answered status {json_response.get('statusCode')} for asset "
+            f"{database_id}:{asset_id}; the execution captures no metadata for it.")
+    except Exception as e:
+        logger.exception(f"Failed fetching metadata for {database_id}:{asset_id}: {e}")
+    return []
+
+
+def _fetch_file_metadata(database_id, asset_id, file_path, meta_type, event):
+    """Invoke the metadata-service file endpoint (type 'metadata' or 'attribute'). A failed read is
+    reported for the same reason _fetch_metadata reports one."""
+    try:
+        payload = _metadata_service_payload(
+            f"/database/{database_id}/assets/{asset_id}/metadata/file",
+            {"databaseId": database_id, "assetId": asset_id}, event)
+        payload["queryStringParameters"] = {"filePath": file_path, "type": meta_type}
+        response = _metadata_service_lambda(payload)
+        stream = response.get("Payload", "")
+        if not stream:
+            logger.warning(
+                f"Metadata service returned no payload for file {database_id}:{asset_id}{file_path} "
+                f"({meta_type}); the execution captures none of it.")
+            return []
+        json_response = json.loads(stream.read().decode("utf-8"))
+        if json_response.get("statusCode") == 200 and "body" in json_response:
+            return json.loads(json_response["body"]).get("metadata", [])
+        logger.warning(
+            f"Metadata service answered status {json_response.get('statusCode')} for file "
+            f"{database_id}:{asset_id}{file_path} ({meta_type}); the execution captures none of it.")
+    except Exception as e:
+        logger.exception(f"Failed fetching file metadata for {database_id}:{asset_id}{file_path}: {e}")
+    return []
 
 
 def _fetch_database_metadata(database_id, event):
@@ -850,10 +870,11 @@ def _apply_total_metadata_budget(asset_groups, database_groups):
 
 
 def _metadata_capture_warnings(truncated_entities, unread_databases, dropped_entities=None,
-                               ignored_source_databases=None):
+                               ignored_source_databases=None, suppressed_source_databases=None):
     """Non-blocking warnings describing an incomplete metadata capture: entity rows bounded by the
     per-entity caps, rows dropped by the total cap, source databases whose metadata could not be read,
-    and a named source database the run derived its databases past.
+    a named source database the run derived its databases past, and one the workflow's own
+    databaseMetadata gate turns off entirely.
 
     Each is one message naming up to MAX_METADATA_NOTICE_ENTITIES_LISTED entities with a count of the
     rest, so a run over hundreds of entities returns a bounded response rather than one warning each."""
@@ -878,6 +899,11 @@ def _metadata_capture_warnings(truncated_entities, unread_databases, dropped_ent
          "derives its metadata-source databases from those files' assets instead",
          "did not use the {count} metadata-source databases ({names}) it was given: an execution with "
          "input files derives its metadata-source databases from those files' assets instead"),
+        (suppressed_source_databases or [],
+         "did not use the metadata-source database {names} it was given: this workflow's "
+         "databaseMetadata input is turned off, so no database metadata is captured",
+         "did not use the {count} metadata-source databases ({names}) it was given: this workflow's "
+         "databaseMetadata input is turned off, so no database metadata is captured"),
     ):
         if not entities:
             continue
@@ -1657,7 +1683,12 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # applied, keyed 1-based to match the pipeline input folders. A step whose gate narrows the shared
     # envelope reads its own metadata file instead (see _write_execution_input_files); the gates for
     # steps 2+ also travel in the ASL so the interim lambda can point their manifests at theirs.
+    # The same effective config supplies each step's input filters and arity, one entry per pipeline in
+    # workflow order: steps 2+ have their manifests assembled by the interim lambda, which narrows the
+    # run's selection to the step's own share the way step 1's manifest is narrowed here.
     step_metadata_gates = {}
+    step_input_filters = []
+    step_input_arity = []
     for idx, record in enumerate(pipeline_records):
         composite = er.pipeline_composite_key(
             record.get("databaseId", ""), record.get("pipelineId", ""))
@@ -1665,6 +1696,8 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         effective = ev.resolve_effective_pipeline_config(
             record.get("systemConfig", {}) or {}, overrides)
         step_metadata_gates[idx + 1] = effective.get("metadataInputs") or {}
+        step_input_filters.append(effective.get("inputFileFilters") or {})
+        step_input_arity.append(ev._arity(effective))
 
     # Pipeline 1's delivery: its own narrowed metadata file when its gate subtracts anything, else the
     # shared envelope. The manifest is what the pipeline honors (manifestHelper.resolve_inputs takes
@@ -1775,6 +1808,12 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                 input_locations["narrowedMetadataKeys"].get(i + 1, "")
                 for i in range(len(pipeline_records))
             ],
+            # Per-step input narrowing, threaded for the same reason and in the same order: a step's
+            # filters and arity come from its effective config (template overrides applied), so they
+            # are known only per execution. The interim lambda applies them before writing the next
+            # step's manifest, which otherwise carries the run's entire selection.
+            "stepInputFilters": step_input_filters,
+            "stepInputArity": step_input_arity,
         }))
     logger.info(f"Started workflow execution {execution_id}")
 
@@ -2182,6 +2221,16 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     #     plus the caller's single named database on the arity-'none' path. Only the named one is passed
     #     as named: it fails the launch when denied, while a derived one is skipped.
     metadata_inputs = (workflow.get("systemConfig", {}) or {}).get("metadataInputs", {})
+    # A workflow whose databaseMetadata gate is off captures no database metadata at all, so a named
+    # source database takes no part in the run: it is dropped here, before it can be derived,
+    # authorized or recorded. Recording it anyway is what the read paths gate on
+    # (inputMetadataDatabaseId), so a database the launch never made an authorization decision about
+    # would become the gate on the launcher's own execution.
+    suppressed_source_database = ""
+    if (metadata_source_database_id
+            and not er.metadata_input_enabled(metadata_inputs, "databaseMetadata")):
+        suppressed_source_database = metadata_source_database_id
+        metadata_source_database_id = ""
     candidate_source_databases = _derive_metadata_source_databases(
         selected_inputs, metadata_source_assets, metadata_source_database_id, metadata_inputs)
     named_source_databases = ([metadata_source_database_id]
@@ -2251,10 +2300,12 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
 
     # 11) Grouped input metadata (honoring the workflow's metadataInputs gate) from the selected inputs
     #     plus the resolved metadata sources. capture_notices collects what the capture could not take
-    #     whole — truncated entity rows, rows past the total bound, unreadable source databases, and a
-    #     named source database the run derived past — for the response warnings.
+    #     whole — truncated entity rows, rows past the total bound, unreadable source databases, a named
+    #     source database the run derived past, and one the workflow's gate turns off — for the response
+    #     warnings.
     capture_notices = _metadata_capture_warnings(
-        [], [], ignored_source_databases=[discarded_source_database] if discarded_source_database else [])
+        [], [], ignored_source_databases=[discarded_source_database] if discarded_source_database else [],
+        suppressed_source_databases=[suppressed_source_database] if suppressed_source_database else [])
     metadata_envelope = _build_grouped_metadata(
         selected_inputs, asset_records, metadata_inputs, event,
         metadata_source_assets=metadata_source_assets,
@@ -2389,6 +2440,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 status_code=err.response["ResponseMetadata"]["HTTPStatusCode"],
                 body={"message": "ExecutionLimitExceeded: Reached the maximum state machine execution limit."},
                 event=event)
+        # A record the request made too large for one DynamoDB item is the caller's to shrink (fewer
+        # or shorter template tag values, fewer metadata-source entities), so it answers with what to
+        # change rather than an internal error. The started execution has already been stopped by the
+        # record-write path that re-raised, so nothing keeps running.
+        if code == "ValidationException" and _is_item_size_rejection(err):
+            logger.exception("Execution record exceeded the DynamoDB item size limit")
+            return general_error(body={"message":
+                "This execution's recorded inputs are too large to store. Reduce the number or size of "
+                "the template tag values, metadata-source assets, and metadata-source databases, then "
+                "run it again."}, event=event)
         logger.exception(err)
         return internal_error(event=event)
     except Exception as e:

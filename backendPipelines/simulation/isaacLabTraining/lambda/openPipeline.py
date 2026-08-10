@@ -4,7 +4,8 @@
 """
 ConstructPipeline Lambda
 Builds the Batch job definition for IsaacLab training or evaluation.
-Downloads and parses config file from S3 if provided.
+The run configuration comes from the manifest-delivered input configuration; a JSON input file may
+supply standing defaults for the fields it leaves blank.
 """
 
 import json
@@ -30,19 +31,18 @@ DEFAULT_NUM_EPISODES = 50
 def lambda_handler(event, context):
     logger.info(f"Event: {event}")
 
-    # Load config from S3 file if provided
+    # Standing defaults a JSON input file may carry; the manifest configuration outranks them.
     file_config = load_config_from_s3(event.get("inputS3AssetFilePath"))
-    
-    # Merge configs: inputParameters (defaults) < file_config (user's specific config takes priority)
+
     training_config = merge_configs(
-        event.get("trainingConfig", {}),
-        file_config.get("trainingConfig", {})
+        file_config.get("trainingConfig", {}),
+        event.get("trainingConfig", {})
     )
     compute_config = merge_configs(
-        event.get("computeConfig", {}),
-        file_config.get("computeConfig", {})
+        file_config.get("computeConfig", {}),
+        event.get("computeConfig", {})
     )
-    
+
     mode = training_config.get("mode", "train")
     task = training_config.get("task", DEFAULT_TASK)
     rl_library = training_config.get("rlLibrary", "rsl_rl")
@@ -70,24 +70,31 @@ def lambda_handler(event, context):
 
 
 def load_config_from_s3(s3_uri: str) -> dict:
-    """Download and parse JSON config file from S3."""
+    """Standing defaults from a JSON input file, or {} when the file carries none.
+
+    An input file is an ASSET file the operator selected, not the run's configuration, so anything
+    it holds is a fallback only. A file that is not JSON, is not a JSON object, or does not parse
+    yields no defaults rather than an error.
+    """
     if not s3_uri:
         return {}
-    
+
     try:
         parsed = urlparse(s3_uri)
         bucket = parsed.netloc
         key = parsed.path.lstrip("/")
-        
-        # Only parse JSON files
+
         if not key.endswith(".json"):
             logger.info(f"Input file is not JSON, skipping config parsing: {key}")
             return {}
-        
+
         response = s3_client.get_object(Bucket=bucket, Key=key)
         content = response["Body"].read().decode("utf-8")
         config = json.loads(content)
-        logger.info(f"Loaded config from S3: {config}")
+        if not isinstance(config, dict):
+            logger.info(f"Input JSON file is not a config object, skipping: {key}")
+            return {}
+        logger.info(f"Loaded config defaults from S3: {config}")
         return config
     except Exception as e:
         logger.warning(f"Failed to load config from S3: {e}")
@@ -172,10 +179,16 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
 
 
 def merge_configs(base: dict, override: dict) -> dict:
-    """Merge two config dicts, with override taking priority."""
-    result = base.copy()
+    """Merge two config sections, with override taking priority per key.
+
+    A key the override leaves absent, null, or blank falls through to the base, which is what lets an
+    input file hold a standing default for a field the run's configuration does not set.
+    """
+    result = base.copy() if isinstance(base, dict) else {}
+    if not isinstance(override, dict):
+        return result
     for key, value in override.items():
-        if value is not None:
+        if value is not None and str(value).strip() != "":
             result[key] = value
     return result
 

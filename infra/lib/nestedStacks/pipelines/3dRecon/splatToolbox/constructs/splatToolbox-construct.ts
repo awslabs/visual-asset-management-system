@@ -346,7 +346,10 @@ export class SplatToolboxConstruct extends Construct {
             "SplatToolboxProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: Duration.hours(5),
+                // Envelopes the Batch attempt (timeoutSeconds 259200) so a long-running job reaches
+                // its own failure path — and the container's task-token callback — rather than being
+                // cut short by the state machine.
+                timeout: Duration.hours(73),
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,
@@ -354,6 +357,18 @@ export class SplatToolboxConstruct extends Construct {
                 },
                 tracingEnabled: true,
             }
+        );
+
+        // Stopping the state machine cancels the .sync Batch task, which requires terminating the
+        // running job; the BatchSubmitJob task grants only batch:SubmitJob. Batch job ids are
+        // generated at submit time and carry no deployment-specific prefix to scope on, so the
+        // resource is a wildcard.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs", "batch:TerminateJob"],
+                resources: ["*"],
+            })
         );
 
         /**

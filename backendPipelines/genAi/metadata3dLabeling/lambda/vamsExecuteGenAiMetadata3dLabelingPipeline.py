@@ -16,6 +16,7 @@ OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 logger = safeLogger(service="VamsExecuteGenAiMetadata3dLabelingPipeline")
 lambda_client = boto3.client('lambda')
 s3_client = boto3.client('s3')
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
@@ -50,8 +51,26 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         raise Exception("Invoke Open Pipeline Lambda Failed. " + message)
 
 
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so the pipeline task does not wait
+    for the full taskTimeout when this lambda cannot start the pipeline."""
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="GenAiMetadata3dLabelingPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
+
 def lambda_handler(event, context):
     logger.info(event)
+
+    external_task_token = None
 
     try:
         response = {
@@ -120,6 +139,7 @@ def lambda_handler(event, context):
         }
     except Exception as e:
         logger.exception(e)
+        abort_external_workflow(e, external_task_token)
         return {
             'statusCode': 500,
             'body': json.dumps({"message": "Internal Server Error"})

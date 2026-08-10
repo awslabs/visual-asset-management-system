@@ -12,13 +12,26 @@ unit-tested in isolation. It centralizes:
   - text parsing/truncation for results/logs within DynamoDB item limits
 """
 
+import json
+import math
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
-# Byte budget shared by the free-form text fields of one DynamoDB item (keeps each
-# item comfortably under the 400 KB DynamoDB item limit).
-MAX_TEXT_FIELD_BYTES = 380 * 1024
+# DynamoDB rejects an item over 400 KB, so every variable-size field of one item — free-form text
+# bodies, tag lists, config snapshots, entity lists — shares ONE byte budget, with a reserve left
+# for the item's keys and fixed-size attributes.
+MAX_ITEM_BYTES = 400 * 1024
+ITEM_FIXED_FIELD_RESERVE_BYTES = 20 * 1024
+MAX_TEXT_FIELD_BYTES = MAX_ITEM_BYTES - ITEM_FIXED_FIELD_RESERVE_BYTES
 MAX_LOG_FIELD_BYTES = 390 * 1024
+# Ceiling on the variable-size COLLECTIONS of one item (tag lists, source-entity lists, step
+# snapshots), taken before the text bodies so a large collection shortens the bodies — which carry a
+# truncation flag and a full copy in S3 — instead of overflowing the item. Sized to the sum of the
+# request-side caps that feed the largest such group, one pipeline's tag list plus its two config
+# blocks (models.executions.MAX_TEMPLATE_TAGS_TOTAL_LENGTH + 2 x
+# models.pipelines.MAX_CONFIG_BLOCK_BYTES), so a request those models accepted is stored whole.
+MAX_ITEM_COLLECTION_BYTES = 256 * 1024
 
 # Schema versions stamped on the VAMS-authored manifest and metadata files.
 MANIFEST_SCHEMA_VERSION = 1
@@ -478,6 +491,53 @@ def to_legacy_vams_view(metadata_body, database_id="", asset_id="", file_key="")
     return body
 
 
+def to_dynamodb_numerics(value):
+    """A copy of value with every float replaced by an equivalent Decimal, at any nesting depth.
+
+    DynamoDB has no float type: boto3 raises TypeError on one, so a single fractional value anywhere
+    inside a caller-supplied structure fails the whole put_item. A non-finite float and any type
+    outside the JSON set fall back to their string form, which DynamoDB can store."""
+    if isinstance(value, bool) or value is None or isinstance(value, (str, int, Decimal)):
+        return value
+    if isinstance(value, float):
+        return Decimal(str(value)) if math.isfinite(value) else str(value)
+    if isinstance(value, dict):
+        return {k: to_dynamodb_numerics(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [to_dynamodb_numerics(v) for v in value]
+    return str(value)
+
+
+def serialized_bytes(value) -> int:
+    """Serialized UTF-8 size of a structured value, for item-size accounting."""
+    return len(json.dumps(value, default=str).encode("utf-8"))
+
+
+def _budget_shares(sizes, total_limit):
+    """Per-field byte limits for fields sharing one item budget: a field smaller than its equal share
+    of the budget keeps its whole size and donates the remainder to the oversized ones. Returns None
+    when the fields already fit."""
+    if sum(sizes) <= total_limit:
+        return None
+    limits = [0] * len(sizes)
+    remaining = total_limit
+    pending = list(range(len(sizes)))
+    while pending:
+        share = remaining // len(pending)
+        under = [i for i in pending if sizes[i] <= share]
+        if not under:
+            for i in pending:
+                limits[i] = share
+            # Integer-division leftover goes to the first oversized field.
+            limits[pending[0]] += remaining - share * len(pending)
+            break
+        for i in under:
+            limits[i] = sizes[i]
+            remaining -= sizes[i]
+            pending.remove(i)
+    return limits
+
+
 def truncate_text(text: str, limit: int = MAX_TEXT_FIELD_BYTES):
     """Trim text to <= limit bytes (UTF-8). Returns (text, was_truncated)."""
     if text is None:
@@ -495,26 +555,63 @@ def truncate_text_budget(texts, total_limit: int = MAX_TEXT_FIELD_BYTES):
     (text, was_truncated) in input order."""
     values = [t or "" for t in texts]
     sizes = [len(v.encode("utf-8")) for v in values]
-    if sum(sizes) <= total_limit:
+    limits = _budget_shares(sizes, total_limit)
+    if limits is None:
         return [(v, False) for v in values]
-
-    limits = [0] * len(values)
-    remaining = total_limit
-    pending = list(range(len(values)))
-    while pending:
-        share = remaining // len(pending)
-        under = [i for i in pending if sizes[i] <= share]
-        if not under:
-            for i in pending:
-                limits[i] = share
-            # Integer-division leftover goes to the first oversized field.
-            limits[pending[0]] += remaining - share * len(pending)
-            break
-        for i in under:
-            limits[i] = sizes[i]
-            remaining -= sizes[i]
-            pending.remove(i)
     return [truncate_text(values[i], limit=limits[i]) for i in range(len(values))]
+
+
+def truncate_map(mapping, limit: int):
+    """Trim a map to <= limit serialized bytes, dropping entries in sorted-key order so the kept set
+    is the same for the same input. Returns (map, was_truncated)."""
+    body = mapping or {}
+    if serialized_bytes(body) <= limit:
+        return body, False
+    kept = {}
+    used = 2  # the enclosing braces
+    for key in sorted(body):
+        entry = serialized_bytes(key) + 2 + serialized_bytes(body[key]) + (2 if kept else 0)
+        if used + entry > limit:
+            break
+        kept[key] = body[key]
+        used += entry
+    return kept, True
+
+
+def truncate_list(items, limit: int):
+    """Trim a list to <= limit serialized bytes, keeping a leading run so entries whose order carries
+    meaning (selection order, step order) stay contiguous. Returns (list, was_truncated)."""
+    values = list(items or [])
+    if serialized_bytes(values) <= limit:
+        return values, False
+    kept = []
+    used = 2  # the enclosing brackets
+    for item in values:
+        entry = serialized_bytes(item) + (2 if kept else 0)
+        if used + entry > limit:
+            break
+        kept.append(item)
+        used += entry
+    return kept, True
+
+
+def truncate_collection_budget(collections, total_limit: int = MAX_ITEM_COLLECTION_BYTES):
+    """Trim a group of maps/lists that share ONE DynamoDB item so their combined serialized size
+    stays within total_limit, on the same donate-the-remainder shares truncate_text_budget uses.
+    Returns a list of (collection, was_truncated) in input order."""
+    values = [[] if c is None else c for c in collections]
+    limits = _budget_shares([serialized_bytes(v) for v in values], total_limit)
+    if limits is None:
+        return [(v, False) for v in values]
+    return [truncate_map(v, limits[i]) if isinstance(v, dict) else truncate_list(v, limits[i])
+            for i, v in enumerate(values)]
+
+
+def remaining_budget(claimed, total_limit: int = MAX_TEXT_FIELD_BYTES) -> int:
+    """The share of an item's budget left once the already-sized fields in `claimed` are counted, so a
+    large collection shortens the fields taken after it rather than pushing the item past the DynamoDB
+    limit."""
+    return max(total_limit - sum(serialized_bytes(c) for c in claimed), 0)
 
 
 def build_workflow_execution_record(
@@ -810,8 +907,17 @@ def build_input_metadata_record(
     'attributes' holds that file's ATTRIBUTES, kept in their own key rather than merged into
     'metadata': the two are distinct entities in the four-key metadataInputs model (fileMetadata and
     fileAttributes are separately gated), so merging them would make the delivered set unattributable
-    to the gate that allowed it. A row for an asset-level or database scope carries an empty map."""
+    to the gate that allowed it. A row for an asset-level or database scope carries an empty map.
+
+    Both maps land on the same item, and the metadata service bounds each entity's set on its own, so
+    they share ONE byte budget here: whichever is oversized drops entries in sorted-key order and
+    carries its own truncation flag. Truncating is the alternative to failing put_item after the state
+    machine has already started, which loses the whole run and reports nothing about the cause."""
     fp = normalize_file_key(file_path)
+    ((metadata_body, metadata_truncated),
+     (attributes_body, attributes_truncated)) = truncate_collection_budget(
+        [to_dynamodb_numerics(metadata or {}), to_dynamodb_numerics(attributes or {})],
+        total_limit=MAX_TEXT_FIELD_BYTES)
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "databaseId:assetId:filePath": f"{database_id}:{asset_id}:{fp}",  # SK
@@ -819,8 +925,10 @@ def build_input_metadata_record(
         "databaseId": database_id,
         "filePath": fp,
         "scope": scope or "asset",
-        "metadata": metadata or {},
-        "attributes": attributes or {},
+        "metadata": metadata_body,
+        "metadataTruncated": metadata_truncated,
+        "attributes": attributes_body,
+        "attributesTruncated": attributes_truncated,
         "sourceInputMetadataFileS3Key": source_input_metadata_file_s3_key or "",
     }
 
@@ -851,11 +959,24 @@ def build_input_configuration_record(
         inputFileArity / assetScope / metadataInputs / inputFileFilters were in force.
       - templateOverrides: just the keys the template overrode, so a reader can see WHY the effective
         config differs from the pipeline's own (e.g. a template raising inputFileArity from 'none').
+
+    Every variable-size field lands on the same item, so all of them are accounted against the one
+    400 KB limit: the tag list and the two config maps take a bounded share first (each flagged when
+    trimmed), and the text bodies then share whatever is left. Tag values are caller-supplied, so they
+    are also normalized to DynamoDB numerics — a fractional value anywhere inside them would otherwise
+    fail put_item after the state machine has started.
     """
-    # Both text fields land in the same item and share one byte budget.
+    ((tags, tags_truncated),
+     (effective_config, effective_config_truncated),
+     (overrides, overrides_truncated)) = truncate_collection_budget([
+         to_dynamodb_numerics(template_tags or []),
+         to_dynamodb_numerics(effective_system_config or {}),
+         to_dynamodb_numerics(template_overrides or {}),
+     ])
     ((content, truncated),
      (override_content, override_truncated)) = truncate_text_budget(
-        [input_configuration or "", custom_template_override or ""])
+        [input_configuration or "", custom_template_override or ""],
+        total_limit=remaining_budget([tags, effective_config, overrides]))
     return {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "recordType": "configuration",  # SK
@@ -867,15 +988,18 @@ def build_input_configuration_record(
         "templateId": template_id or "",
         "templateSchemaVersion": template_schema_version or "",
         "tagSchemaVersion": tag_schema_version or "",
-        "templateTags": template_tags or [],
+        "templateTags": tags,
+        "templateTagsTruncated": tags_truncated,
         "customTemplateOverrideUsed": bool(custom_template_override_used),
         "customTemplateOverride": override_content,
         "customTemplateOverrideTruncated": override_truncated,
         # Format of the rendered config body, so the detail view highlights it correctly.
         "configFormat": config_format or "",
         # The settings this step ran under, and the template overrides that shaped them.
-        "effectiveSystemConfig": effective_system_config or {},
-        "templateOverrides": template_overrides or {},
+        "effectiveSystemConfig": effective_config,
+        "effectiveSystemConfigTruncated": effective_config_truncated,
+        "templateOverrides": overrides,
+        "templateOverridesTruncated": overrides_truncated,
     }
 
 
@@ -971,10 +1095,30 @@ def build_workflow_configuration_record(
     has none), so the read paths authorize and report the set that is really in the envelope rather than
     re-deriving it. These are recorded here (and nowhere else) because they are not input FILES:
     re-emitting them as inputFiles on a re-run would violate an arity-'none' workflow's own
-    no-input-files rule."""
+    no-input-files rule.
+
+    The step snapshot and the two source lists are variable-size fields on the same item as the two
+    text bodies, so they take a bounded share of the one 400 KB budget first (each flagged when
+    trimmed) and the bodies share what is left — the inputMetadata body is also written to S3 in full,
+    while overflowing the item would lose the whole run after the state machine has started.
+
+    The source lists have first claim on that share, and the step snapshot only what they leave: the
+    read paths gate an execution on the entities it names here, so an entry dropped from a source list
+    is an entity the gate stops asking for, while a dropped snapshot entry costs only detail."""
+    ((source_assets, source_assets_truncated),
+     (source_databases, source_databases_truncated)) = truncate_collection_budget([
+         [{"databaseId": s.get("databaseId", ""), "assetId": s.get("assetId", "")}
+          for s in (metadata_source_assets or [])],
+         [d for d in (metadata_source_databases or []) if d],
+     ])
+    pipelines_snapshot, pipelines_truncated = truncate_list(
+        to_dynamodb_numerics(specified_pipelines_snapshot or []),
+        remaining_budget([source_assets, source_databases],
+                         total_limit=MAX_ITEM_COLLECTION_BYTES))
     ((config_content, config_truncated),
      (metadata_content, metadata_truncated)) = truncate_text_budget(
-        [workflow_configuration or "", input_metadata or ""])
+        [workflow_configuration or "", input_metadata or ""],
+        total_limit=remaining_budget([pipelines_snapshot, source_assets, source_databases]))
     record = {
         "workflowExecutionId": workflow_execution_id,  # PK
         "recordType": "configuration",  # SK
@@ -982,7 +1126,8 @@ def build_workflow_configuration_record(
         "workflowConfigurationTruncated": config_truncated,
         "inputMetadata": metadata_content,
         "inputMetadataTruncated": metadata_truncated,
-        "specifiedPipelinesSnapshot": specified_pipelines_snapshot or [],
+        "specifiedPipelinesSnapshot": pipelines_snapshot,
+        "specifiedPipelinesSnapshotTruncated": pipelines_truncated,
         # Output target (where the execution's outputs are written).
         "outputLocationType": output_location_type or "asset",
         "outputAssetId": output_asset_id or "",
@@ -998,14 +1143,13 @@ def build_workflow_configuration_record(
         "inputMetadataDatabaseId": input_metadata_database_id or "",
         "inputMetadataFileS3Key": input_metadata_file_s3_key or "",
         # Metadata-source assets, in selection order. A re-run rebuilds the same sources from these.
-        "metadataSourceAssets": [
-            {"databaseId": s.get("databaseId", ""), "assetId": s.get("assetId", "")}
-            for s in (metadata_source_assets or [])
-        ],
+        "metadataSourceAssets": source_assets,
+        "metadataSourceAssetsTruncated": source_assets_truncated,
         # Every database whose metadata the run captured, in capture order. This is the set the read
         # paths gate on, so a run deriving its databases from the input files does not have to re-derive
         # them (the input rows carry no database-metadata provenance).
-        "metadataSourceDatabases": [d for d in (metadata_source_databases or []) if d],
+        "metadataSourceDatabases": source_databases,
+        "metadataSourceDatabasesTruncated": source_databases_truncated,
     }
     # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
     # with a resolved destination. Omitting the attribute keeps the row out of the index entirely

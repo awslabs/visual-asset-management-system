@@ -68,6 +68,10 @@ interface ValidationError {
 
 const TAG_TYPES: TagType[] = ["string", "integer", "number", "boolean", "string-list", "enum"];
 
+// Mirrors _TAG_KEY_PATTERN in common/workflows/templateTagSchema.py: only these characters are
+// captured by a {{tag}} placeholder, so a key outside the set can be declared but never rendered.
+export const TAG_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
+
 /**
  * Coerce a default-value editor input to the tag's declared type. A blank input carries no default,
  * so it resolves to undefined rather than "" (the backend validates a present default against the
@@ -128,6 +132,13 @@ const TagSchemaBuilder: React.FC<TagSchemaBuilderProps> = ({
             // Check for empty tagKey
             if (!field.tagKey || field.tagKey.trim() === "") {
                 newErrors.push({ index, message: "Tag key is required" });
+            } else if (!TAG_KEY_PATTERN.test(field.tagKey)) {
+                newErrors.push({
+                    index,
+                    message:
+                        "Tag key may contain only letters, digits and underscores so a " +
+                        "{{tagKey}} placeholder can be substituted",
+                });
             } else if (isReservedTagKey(field.tagKey)) {
                 newErrors.push({
                     index,

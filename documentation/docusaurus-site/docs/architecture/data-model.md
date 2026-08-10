@@ -424,13 +424,24 @@ names its template but not the `inputFileArity` / `assetScope` / `metadataInputs
 that were enforced. Both fields are absent on runs recorded before they were captured, so readers treat
 a missing value as "not recorded" rather than as empty settings.
 
-**Input and output rows** — `WorkflowExecutionInputsStorageTable` and
-`PipelineExecutionInputFilesStorageTable` record each selected input file with the concrete S3
-`versionId` the run read (empty for a folder or whole-asset selection, which have no single version).
-`PipelineExecutionOutputFilesStorageTable` records each produced file with its `relativeFilePath`,
-`s3VersionId` and size; `Output*Metadata` and `Output*Results` records carry metadata written back to the
-asset and results text from a results-only run. `PipelineExecutionLogsStorageTable` holds the per-step
-result and error logs.
+**Input and output rows** — the two input tables record the same selected files at different scopes, and
+only one of them pins a version:
+
+-   `WorkflowExecutionInputsStorageTable` is the run-wide, asset-scoped source of truth. Each row carries
+    the locator (`databaseId`, `assetId`, `inputAssetFileKey`) plus `s3Bucket` and `assetRootS3Key` — the
+    bucket and bucket-relative asset-root prefix of _that file's own_ asset, stored per file because a
+    single run can read files from several assets in different buckets — and the concrete S3 `versionId`
+    the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
+    version is what makes the history show the exact bytes used rather than the time-relative "latest".
+-   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
+    carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
+    `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is
+    already pinned once per run on the workflow-inputs row.
+
+`PipelineExecutionOutputFilesStorageTable` records each produced file with its `fileType` (`file` or
+`preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
+and `Output*Results` records carry metadata written back to the asset and results text from a results-only
+run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
 
 ### Authorization Tables
 
@@ -513,17 +524,37 @@ When pipelines write output files adjacent to input files, the relative subdirec
 
 ### Auxiliary Bucket
 
-The auxiliary bucket stores non-versioned working files and special viewer data:
+The auxiliary bucket stores non-versioned working files and viewer data. It uses two layouts, one keyed
+by the input file that the data was derived from and one keyed by the execution that produced it:
 
 ```
-{assetId}/{viewer_type}/{generated_files}
+{databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
+pipelines/{pipelineName}/{executionId}/{working_files}
 ```
+
+Where:
+
+-   `databaseId` scopes every derived object to the database that owns the asset, so a read is confined to
+    one database's key space
+-   `assetFileKey` is the **full asset-bucket key** of the input file (asset root location key plus the
+    relative file path), not just the `assetId` — a bucket configured with a custom `baseAssetsPrefix`
+    keeps that prefix in the auxiliary key
+-   `preview` is the reserved subfolder for viewer data; a pipeline that writes viewer data appends its own
+    subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
+-   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
+    same pipeline cannot collide
 
 Common uses:
 
 -   Potree octree data for point cloud visualization
 -   Temporary pipeline processing files
 -   Pipeline intermediate outputs
+
+:::note
+Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data
+location, and the auxiliary objects for an asset are found by listing the `\{databaseId\}/\{assetRootKey\}/`
+prefix rather than a bare `\{assetId\}/` prefix.
+:::
 
 ### Web App Bucket
 

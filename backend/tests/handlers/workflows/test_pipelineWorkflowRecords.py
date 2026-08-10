@@ -240,16 +240,35 @@ class TestDefaultBucketResolver:
         with pytest.raises(db.DefaultBucketNotFoundError):
             db.resolve_default_bucket(table)
 
-    def test_multiple_default_buckets_pick_deterministic_winner(self):
+    def test_multiple_default_buckets_raise_rather_than_picking_one(self):
+        """A second isDefault row is a bucket that left the configuration and no longer carries VAMS's
+        grants, so picking either name would send template bodies and run I/O somewhere that may reject
+        the write. The ambiguity surfaces instead, in both row orders."""
         rows = [
-            {"bucketId": "b2", "bucketName": "zzz-external", "baseAssetsPrefix": "/",
+            {"bucketId": "b2", "bucketName": "zzz-current-default", "baseAssetsPrefix": "/",
              "isDefault": True},
-            {"bucketId": "b1", "bucketName": "aaa-vams", "baseAssetsPrefix": "/",
+            {"bucketId": "b1", "bucketName": "aaa-removed-bucket", "baseAssetsPrefix": "/",
              "isDefault": True},
         ]
-        assert db.resolve_default_bucket(self._table_with(rows))["bucketName"] == "aaa-vams"
-        assert db.resolve_default_bucket(
-            self._table_with(list(reversed(rows))))["bucketName"] == "aaa-vams"
+        for ordered in (rows, list(reversed(rows))):
+            with pytest.raises(db.DefaultBucketAmbiguousError):
+                db.resolve_default_bucket(self._table_with(ordered))
+        # Callers that already treat an unresolvable default bucket as fatal need no new arm.
+        assert issubclass(db.DefaultBucketAmbiguousError, db.DefaultBucketNotFoundError)
+
+    def test_default_bucket_key_joins_the_registered_prefix(self):
+        """A key builder produces the key relative to the area VAMS owns. An external bucket
+        registered under a prefix scopes VAMS to that prefix, so a bucket-root-relative write lands
+        outside it (and 403s under the normal cross-account bucket policy)."""
+        prefixed = {"bucketId": "b1", "bucketName": "customer", "baseAssetsPrefix": "vams/"}
+        assert db.default_bucket_key(
+            prefixed, "pipelines/templates/db/p/t/configBody") == "vams/pipelines/templates/db/p/t/configBody"
+        # A leading slash on the key does not produce a double slash.
+        assert db.default_bucket_key(prefixed, "/pipelines/x") == "vams/pipelines/x"
+        # A root-prefix bucket is unchanged.
+        for root in ("/", "", None):
+            assert db.default_bucket_key(
+                {"baseAssetsPrefix": root}, "pipelines/x") == "pipelines/x"
 
     def test_paginates_scan(self):
         table = MagicMock()

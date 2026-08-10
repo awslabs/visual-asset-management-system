@@ -24,7 +24,8 @@ This document provides comprehensive guidelines for developing and extending the
 
 ```
 web/
-  package.json              # npm, React 17, Vite scripts
+  package.json              # npm, React 18, Vite scripts
+  e2e/                      # Playwright specs against a deployed stack
   customInstalls/           # Viewer plugin custom install scripts
   src/
     App.tsx                 # Root app shell, HashRouter, TopNavigation
@@ -35,18 +36,29 @@ web/
 
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
+                            #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
       permissions/          # useAllowedRoutes.ts (Tier-1 gating)
-      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu, ...)
-      pipelines/ workflows/ executions/ wizard/
+      components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
+                            #   Stepper, Breadcrumb, ConfigEditor, ToastProvider, ...)
+      pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
+                            #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
+      workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor,
+                            #   WorkflowSystemConfigFields, DagPreview, workflowValidation
+      executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
+                            #   ExecutionQuickView, ExecuteWorkflowModal, logSearch
+      wizard/               # ExecuteWizard + pipeline/input/review stages, InputFileSelector,
+                            #   MetadataSourceSelector, resolveRestrictions, resolveTemplate
       types.ts reservedTagKeys.ts
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
 
-    services/               # API and data services (ONLY place apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/, the ONLY
+                            #   places apiClient is imported)
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts
       FileOperationsService.ts
@@ -56,16 +68,15 @@ web/
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
-      WorkflowContext.ts     # NOTE: typo is intentional, do NOT rename
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-      common/               # Shared components
-      containers/
-      createupdate/         # Workflow create/update
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        versions/           # Asset version management
+      common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/
-      interactive/          # Map/geospatial components
       list/
       loading/
       metadata/
@@ -73,22 +84,27 @@ web/
       metadataV2/
       modals/
       search/               # ModernSearchContainer.tsx - main search UI
+      searchSmall/
       selectors/
-      single/               # Single-entity views
+      single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx
       AssetUpload/
-      Assets.tsx
       auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
       Databases.tsx
       LandingPage.tsx
-      Pipelines.tsx
+      ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/
-      Workflows.tsx
+      Subscription/ Tag/
+      # Orchestration route shells rendering the matching features/orchestration component
+      PipelinesPage2.tsx PipelineBuilderPage.tsx
+      TemplateListPage.tsx TemplateBuilderPage.tsx
+      WorkflowsPage2.tsx WorkflowBuilderPage.tsx WorkflowTriggersPage.tsx
+      ExecutionsPage.tsx ExecutionDetail.tsx
 
-    visualizerPlugin/       # 3D/media viewer plugin system (17 plugins)
+    visualizerPlugin/       # 3D/media viewer plugin system
       core/
         PluginRegistry.ts   # Singleton registry
         types.ts
@@ -97,13 +113,18 @@ web/
       viewers/              # Individual viewer plugins
         manifest.ts
 
-    common/                 # Shared utilities and helpers
+    common/                 # Shared utilities, helpers, and feature-switch constants
+    constants/uploadLimits.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts
     layout/
       Navigation.tsx        # Left sidebar navigation
     utils/
+      apiEndpoint.ts        # Resolves the API base URL
       authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      sessionManager.ts     # Idle/expiry session handling
     styles/
       theme.css             # CSS custom properties for dark/light theming
+      tailwind.css          # Tailwind entry (scoped content glob; preflight disabled)
 ```
 
 ---
@@ -360,7 +381,7 @@ const session = await AmplifyAuth.currentSession();
 
 ### **Rule 15: Do NOT Rename Intentional Typos**
 
-`AssetContext.ts` and `WorkflowContext.ts` -- the file names are intentional. NEVER rename them.
+`AssetContext.ts` -- the file name is intentional. NEVER rename it.
 
 ### **Rule 16: Update Documentation When Making Frontend Changes**
 

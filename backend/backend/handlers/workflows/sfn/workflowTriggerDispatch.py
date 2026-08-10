@@ -38,9 +38,15 @@ from models.common import APIGatewayProxyResponseV2, success
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
+# The executeWorkflowV2 Invoke is synchronous and NOT idempotent: each delivered request launches an
+# execution. A retry on a slow-but-successful call would therefore launch a duplicate run, so this
+# client delivers exactly one Invoke and waits out the callee's full 15-minute runtime instead. The
+# retrying config stays on the read-only clients.
+invoke_config = Config(retries={"total_max_attempts": 1}, read_timeout=900, connect_timeout=60)
+
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 s3_client = boto3.client("s3", config=retry_config)
-lambda_client = boto3.client("lambda", config=retry_config)
+lambda_client = boto3.client("lambda", config=invoke_config)
 logger = safeLogger(service_name="WorkflowTriggerDispatch")
 
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
@@ -62,9 +68,9 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 workflow_storage_table_v2 = dynamodb.Table(workflow_storage_table_v2_name)
 
-# Per-invocation memo for allowWorkflowTriggerChaining. One SQS batch can carry many objects
-# destined for the same workflow, so the flag is read once per workflow rather than per object.
-_chaining_flag_cache = {}
+# Per-invocation memo of each workflow's systemConfig. One SQS batch can carry many objects destined
+# for the same workflow, so the record is read once per workflow rather than per object.
+_workflow_system_config_cache = {}
 
 _excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 _excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
@@ -181,27 +187,42 @@ def _resolve_asset_relative_key(bucket_name, s3_key, version_id=""):
     return database_id, asset_id, relative, change_source, change_workflow_id
 
 
-def _workflow_allows_trigger_chaining(workflow_database_id, workflow_id):
-    """That workflow's `systemConfig.allowWorkflowTriggerChaining`.
+def _workflow_system_config(workflow_database_id, workflow_id):
+    """That workflow's stored `systemConfig`, memoized per invocation.
 
     Read from the workflow record rather than mirrored onto the trigger row: a mirrored copy would go
-    stale the moment the workflow's systemConfig changed without the trigger being re-saved. Only
-    consulted for a workflow-written file (see triggerMatching.match_fileupload_triggers), so an
-    ordinary user upload performs no extra reads. Missing key / unreadable row -> False, which keeps
-    chaining opt-in and matches the pre-chaining behavior."""
+    stale the moment the workflow's systemConfig changed without the trigger being re-saved. An
+    unreadable row yields {}, so each reader falls back to its own conservative default."""
     cache_key = (workflow_database_id, workflow_id)
-    if cache_key in _chaining_flag_cache:
-        return _chaining_flag_cache[cache_key]
-    allowed = False
+    if cache_key in _workflow_system_config_cache:
+        return _workflow_system_config_cache[cache_key]
+    system_config = {}
     try:
         item = workflow_storage_table_v2.get_item(
             Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item") or {}
-        allowed = bool((item.get("systemConfig") or {}).get("allowWorkflowTriggerChaining", False))
+        system_config = item.get("systemConfig") or {}
     except Exception as e:
-        logger.info(f"Could not read allowWorkflowTriggerChaining for "
-                    f"{workflow_database_id}:{workflow_id} (treating as not allowed): {e}")
-    _chaining_flag_cache[cache_key] = allowed
-    return allowed
+        logger.info(f"Could not read systemConfig for {workflow_database_id}:{workflow_id} "
+                    f"(using defaults): {e}")
+    _workflow_system_config_cache[cache_key] = system_config
+    return system_config
+
+
+def _workflow_allows_trigger_chaining(workflow_database_id, workflow_id):
+    """That workflow's `systemConfig.allowWorkflowTriggerChaining`. Only consulted for a
+    workflow-written file (see triggerMatching.match_fileupload_triggers), so an ordinary user upload
+    performs no extra reads. Missing key / unreadable row -> False, which keeps chaining opt-in and
+    matches the pre-chaining behavior."""
+    return bool(_workflow_system_config(workflow_database_id, workflow_id)
+                .get("allowWorkflowTriggerChaining", False))
+
+
+def _workflow_input_file_arity(workflow_database_id, workflow_id):
+    """That workflow's `systemConfig.inputFileArity`. An arity-"none" workflow takes no input files, so
+    its trigger must fire with an empty selection rather than the uploaded file its own launch
+    validation would then reject. Missing key / unreadable row -> '', which the body builder treats as
+    "takes the uploaded file" (the behavior for every other arity)."""
+    return _workflow_system_config(workflow_database_id, workflow_id).get("inputFileArity") or ""
 
 
 def _invoke_execute(workflow_database_id, workflow_id, body):
@@ -252,7 +273,8 @@ def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id=""):
     matches = tm.match_fileupload_triggers(
         trigger_rows, database_id, asset_id, relative_key, version_id,
         change_source=change_source, change_workflow_id=change_workflow_id,
-        chaining_allowed_for=_workflow_allows_trigger_chaining)
+        chaining_allowed_for=_workflow_allows_trigger_chaining,
+        input_file_arity_for=_workflow_input_file_arity)
     launched = 0
     for workflow_database_id, workflow_id, body in matches:
         if _invoke_execute(workflow_database_id, workflow_id, body):
@@ -333,10 +355,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     eventually reaches the DLQ rather than being silently deleted."""
     import urllib.parse
 
-    # A warm container keeps module state between invocations, so the chaining-flag memo is cleared
-    # per invocation — a workflow whose flag changed since the last event must not be judged on a
+    # A warm container keeps module state between invocations, so the systemConfig memo is cleared per
+    # invocation — a workflow whose configuration changed since the last event must not be judged on a
     # stale value.
-    _chaining_flag_cache.clear()
+    _workflow_system_config_cache.clear()
 
     try:
         trigger_rows = _list_fileupload_triggers()

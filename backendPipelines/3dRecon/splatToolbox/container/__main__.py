@@ -24,6 +24,40 @@ def resolve_output_env(bucket_name: str, object_dir: str, job_name: str) -> tupl
     return f"s3://{bucket_name}/{parent}", (leaf or job_name)
 
 
+METADATA_SCHEMA_VERSION_GROUPED = 2
+
+
+def resolve_asset_metadata(metadata_obj: dict) -> dict:
+    """The asset-level metadata of an input-metadata envelope, as a flat {key: value} config map.
+
+    The envelope is grouped by asset (`{"schemaVersion": 2, "assets": [...]}`) and holds asset-level
+    metadata as each group's `fileKey` "/" record, with database metadata in its own top-level
+    section; the legacy `{"VAMS": {...}}` view carries the same values under `assetMetadata`. This
+    mirrors `manifestHelper`'s projection rule: the asset scope resolves only from an envelope naming
+    exactly ONE asset, since several assets leave no way to tell which one a setting belongs to.
+    Anything the envelope cannot supply is reported rather than left to look like an empty asset.
+    """
+    if not isinstance(metadata_obj, dict):
+        return {}
+
+    if metadata_obj.get('schemaVersion') == METADATA_SCHEMA_VERSION_GROUPED and 'assets' in metadata_obj:
+        assets = metadata_obj.get('assets') or []
+        if len(assets) != 1:
+            print(f"No asset metadata applied: the input metadata names {len(assets)} assets, "
+                  f"so no single asset's settings can be selected")
+            return {}
+        for record in (assets[0] or {}).get('files') or []:
+            if (record or {}).get('fileKey') == '/':
+                return record.get('metadata') or {}
+        print("No asset metadata applied: the input metadata carries no asset-level record")
+        return {}
+
+    if 'VAMS' in metadata_obj:
+        return (metadata_obj.get('VAMS') or {}).get('assetMetadata') or {}
+
+    return metadata_obj
+
+
 def set_config_parameters(params: dict, metadata: dict):
     """
     Set environment variables for valid config parameters.
@@ -106,12 +140,9 @@ def main():
     metadata_obj = manifest_io.fetch_metadata(input_metadata_s3_location)
     input_parameters_obj = manifest_io.fetch_input_configuration(input_configuration_s3_location)
 
-    # VAMS wraps asset metadata in {"VAMS": {"assetMetadata": {...}}}; unwrap to the inner config.
-    if isinstance(metadata_obj, dict) and 'VAMS' in metadata_obj:
-        metadata_config = metadata_obj.get('VAMS', {}).get('assetMetadata', {})
-        print(f"Extracted VAMS.assetMetadata: {metadata_config}")
-    else:
-        metadata_config = metadata_obj if isinstance(metadata_obj, dict) else {}
+    # Config settings come from the envelope's asset-level metadata (see resolve_asset_metadata).
+    metadata_config = resolve_asset_metadata(metadata_obj)
+    print(f"Asset metadata settings: {metadata_config}")
 
     # Store for main.py access
     if metadata_obj:

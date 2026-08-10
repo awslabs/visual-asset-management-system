@@ -45,27 +45,35 @@ infra/
 
 ### **Nested Stack Dependency Chain**
 
+Each arrow is an explicit `addDependency()` call in `core-stack.ts`, so the chain reads bottom-up: a stack is created after everything it points to.
+
 ```
 CoreVAMSStack (root)
   |
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
-  +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
+  +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- AuthBuilder (depends on Storage)
-  |     |     |
-  |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
-  |     |     |     |
-  |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
-  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types; depends on ApiBuilder)
-  |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
-  |     |     |     +-- SearchBuilder (OpenSearch)
-  |     |     |     +-- PipelineBuilder (all use-case pipelines)
-  |     |     |     +-- AddonBuilder (Garnet, Physna Sync)
-  |     |
+  |     +-- ResourceNamesBuilder (publishes 62 SSM resource-name parameters)
+  |     +-- AuthBuilder                                     -> storage, resourceNames
+  |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
+  |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
+  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |                                                    -> storage, resourceNames, ApiBuilder
+  |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
+  |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
+  |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
+  |     +-- AddonBuilder (Garnet, Physna Sync)               -> storage, resourceNames
+  |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
+  |     |                                                    -> storage, AuthBuilder, ApiBuilder,
+  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder
+  |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage
+  |
   +-- LocationService (conditional: useLocationService.enabled)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
 ```
+
+`RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
 
 ### **Cross-Stack Shared Interfaces**
 
@@ -79,7 +87,9 @@ interface storageResources {
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
     };
-    sqs: { workflowAutoExecuteQueue: sqs.Queue };
+    // No sqs member: the two Amazon SQS queues the builder creates buffer S3 object-created /
+    // object-deleted notifications for the indexers and are wired locally, and each workflow
+    // trigger Lambda owns its own queue + DLQ in lib/lambdaBuilder/workflowFunctions.ts.
     sns: {
         eventEmailSubscriptionTopic: sns.Topic;
         fileIndexerSnsTopic: sns.Topic;
@@ -103,7 +113,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 20+ DynamoDB tables -- see storageBuilder-nestedStack.ts lines 72-98
+        // 46 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -146,9 +156,18 @@ interface storageResources {
         apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
         workflowStorageTable: dynamodb.Table;
         // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
+
+        // Pipeline + workflow V2 data model tables
+        pipelineStorageTableV2: dynamodb.Table; // PK databaseId, SK pipelineId; GSIs PipelinesByDatabaseGSI / PipelinesByCategoryGSI / PipelinesByDateGSI
+        pipelineTemplatesStorageTable: dynamodb.Table; // PK pipelineDatabaseId:pipelineId, SK templateId
+        pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
+        workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
+        workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
     };
 }
 ```
+
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -609,6 +628,32 @@ def send_response(event: Dict[str, Any], context: Any, status: str, reason: str 
 
 ## 🔧 **Pipeline Development Patterns**
 
+### **Reporting Failure on a Task-Token Pipeline**
+
+A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
+workflow's task stays `RUNNING` until something reports against it. The pipeline owns both outcomes:
+`SendTaskSuccess` on completion and **`SendTaskFailure` on every failure route**. A route that returns or
+raises without reporting leaves the task pending for its full `taskTimeout` — hours on the GPU pipelines.
+
+Both halves are required, and each is inert without the other:
+
+-   **The handler** calls `SendTaskFailure` from every failing path — each `except` block _and_ every early
+    `return` that emits a 4xx. A pre-invoke rejection is the common case: the container never starts, so
+    nothing else can report.
+-   **The CDK lambda builder** grants `states:SendTaskFailure` on the `vamsExecute` function itself. Verify
+    the function, not the file — a builder often grants it on `openPipeline`/`pipelineEnd` while the
+    `vamsExecute` builder lacks it, which reads as present to a file-level grep:
+
+    ```bash
+    awk '/export function build.*VamsExecute/,/^}/' <builder>.ts | grep -c SendTaskFailure
+    ```
+
+    Without the grant the call raises `AccessDeniedException`, the handler logs it, and the task hangs
+    exactly as before.
+
+Report the token before propagating so the original error still reaches Amazon CloudWatch, and make the call
+conditional on a token being present — a direct invoke carries none.
+
 ### **Pipeline Directory Structure (`/backendPipelines/`)**
 
 All pipeline backend code (including containers) should be organized in `/backendPipelines/` by use case:
@@ -659,6 +704,22 @@ backendPipelines/{useCase}/{name}/vamsSchema/
     workflow.json                  # optional -- one built-in workflow per pipeline
     templates/{templateId}.json    # optional -- one file per template
 ```
+
+The registration custom resource re-fires only when the bundle changes: `schemaHash` covers
+`pipeline.json`, `workflow.json`, and the **top-level** `templates/*.json` (a subdirectory is skipped,
+not read). Two rules follow:
+
+-   **Never hash an unresolved CDK token.** Override values like `fn.functionName` stringify to
+    `${Token[TOKEN.n]}`, where `n` shifts when any unrelated construct is added. Hashing that text
+    re-fires every registration on an unrelated deploy, and each one overwrites operator edits to the
+    built-in (rename, retuned `systemConfig`, deliberate archive) from the schema files. Substitute a
+    placeholder for token values -- the resolved value still reaches CloudFormation via the
+    `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
+    `infra/test/vamsSchemaRegistrationHash.test.ts`.
+-   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
+    deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
+    `vamsSchema/*` -- otherwise refreshing an unrelated artefact deletes every bundle while the
+    registration resources still expect to read them. Test: `infra/test/artefactsBucketPrune.test.ts`.
 
 Register it from the pipeline's nested stack with the `VamsSchemaRegistration` construct, passing the
 deploy-time resolved resource values:

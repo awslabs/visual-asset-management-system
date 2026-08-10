@@ -125,15 +125,20 @@ def resolve_inputs_from_manifest(data):
     from the workflow manifest (inputManifestS3Location), falling back to the legacy top-level body
     fields for direct/local invocations. Locations are carried as bucket + relative keys, so s3://
     URIs are reconstructed here. Returns (input_s3_asset_file_path, output_s3_asset_files_path,
-    relative_subdir)."""
+    relative_subdir).
+
+    Mirrors ``manifestHelper.resolve_inputs`` + ``enforce_single_input_file``, which the pipelines
+    with a ``lambda/`` code asset vendor; this pipeline is a container image, so it reads the same
+    envelope fields directly. Any change to the envelope applies to both."""
     manifest = _fetch_json_from_s3(data.get("inputManifestS3Location", ""))
     input_files = (manifest or {}).get("inputFiles") or []
     # The pipeline is registered with inputFileArity 'one' and converts a single mesh per
     # execution; more than one resolved input would be silently dropped.
     if len(input_files) > 1:
         raise ValueError(
-            f"Trimesh pipeline accepts a single input file but the execution resolved "
-            f"{len(input_files)}"
+            f"This pipeline processes a single input file per execution, but the workflow "
+            f"manifest supplied {len(input_files)} input files. Multi-file input is not yet "
+            f"supported for this pipeline."
         )
     input_path = ""
     relative_subdir = ""

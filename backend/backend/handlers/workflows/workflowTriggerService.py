@@ -50,7 +50,7 @@ from models.workflows import (
 from common.workflows import workflowRecords as wr
 from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
-from common.workflows.defaultBucket import resolve_default_bucket
+from common.workflows.defaultBucket import resolve_default_bucket, default_bucket_key
 from common.workflows.triggerTemplateValidation import validate_trigger_default_templates
 
 logger = safeLogger(service_name="WorkflowTriggerService")
@@ -115,8 +115,9 @@ def _load_template_tag_schema_fields(pipeline_database_id, pipeline_id, template
             return None
         row = rows[0]
         if row.get("bodyStorage") == tbs.BODY_STORAGE_S3 and row.get("fieldsS3Key"):
-            bucket = resolve_default_bucket(dynamodb.Table(buckets_table_name))["bucketName"]
-            text = tbs.read_body_from_s3(s3_client, bucket, row["fieldsS3Key"])
+            default_bucket = resolve_default_bucket(dynamodb.Table(buckets_table_name))
+            text = tbs.read_body_from_s3(s3_client, default_bucket["bucketName"],
+                                         default_bucket_key(default_bucket, row["fieldsS3Key"]))
             return json.loads(text) if text else []
         fields = row.get("fields") or ""
         return json.loads(fields) if fields else []

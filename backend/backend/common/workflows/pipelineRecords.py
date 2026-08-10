@@ -28,12 +28,6 @@ TAG_SCHEMA_VERSION = 1
 # Constant PK for the global (cross-database) pipeline-list GSI (query, not table scan).
 ALL_PIPELINES_LIST_PARTITION = "pipeline"
 
-# Execution types a pipeline can be created with (aligns with the CDK executionConfig block).
-PIPELINE_EXECUTION_TYPES = ("Lambda", "SQS", "EventBridge", "DeadlineCloud")
-
-# Template config body formats. `raw` is free-text tag replacement for arbitrary formats.
-TEMPLATE_CONFIG_FORMATS = ("json", "yaml", "openjd", "xml", "raw")
-
 # Inline-vs-S3 discriminator values for the hybrid template body storage.
 BODY_STORAGE_INLINE = "inline"
 BODY_STORAGE_S3 = "s3"

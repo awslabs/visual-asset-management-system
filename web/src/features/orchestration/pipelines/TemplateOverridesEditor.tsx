@@ -37,6 +37,10 @@ interface TemplateOverridesEditorProps {
     onChange: (overrides: Record<string, any>) => void;
     /** The pipeline's assetScope, used as the starting point when the override is toggled on. */
     inheritedAssetScope?: Record<string, any>;
+    /** The pipeline's inputFileArity, used as the starting point when the override is toggled on. */
+    inheritedArity?: InputFileArity;
+    /** The pipeline's inputFileFilters, used as the starting point when the override is toggled on. */
+    inheritedFilters?: { allow?: string[]; exclude?: string[] };
 }
 
 const selectClass =
@@ -66,6 +70,16 @@ const seedAssetScope = (inherited?: Record<string, any>) => {
     return scopeWithSpan(scope, assetSpanFromScope(source));
 };
 
+/** The pipeline's declared arity, defaulting an absent one to "one" as the backend's own read does. */
+const seedArity = (inherited?: InputFileArity): InputFileArity => inherited || "one";
+
+/** The pipeline's filters as fresh lists, so toggling the override on keeps its file restriction
+ *  rather than writing empty lists the backend reads as allow-all. */
+const seedFilters = (inherited?: { allow?: string[]; exclude?: string[] }) => ({
+    allow: [...(inherited?.allow || [])],
+    exclude: [...(inherited?.exclude || [])],
+});
+
 const MetaRow: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string }> = ({
     checked,
     onChange,
@@ -81,6 +95,8 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
     value,
     onChange,
     inheritedAssetScope,
+    inheritedArity,
+    inheritedFilters,
 }) => {
     // A key is "overridden" when present in the object. Toggling off removes it (inherit).
     const has = (key: string) => value[key] !== undefined && value[key] !== null;
@@ -106,22 +122,31 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                 <OverrideToggle
                     checked={has("inputFileArity")}
                     onChange={(on) =>
-                        on ? setKey("inputFileArity", "one") : removeKey("inputFileArity")
+                        on
+                            ? setKey("inputFileArity", seedArity(inheritedArity))
+                            : removeKey("inputFileArity")
                     }
                     label="input file count"
                     info="Override how many input files an execution using this template takes."
                 />
                 {has("inputFileArity") && (
-                    <select
-                        aria-label="Override input file count"
-                        value={value.inputFileArity}
-                        onChange={(e) => setKey("inputFileArity", e.target.value as InputFileArity)}
-                        className={selectClass}
-                    >
-                        <option value="none">None</option>
-                        <option value="one">One file</option>
-                        <option value="multi">Multiple files</option>
-                    </select>
+                    <>
+                        <p className="text-xs text-text-secondary">
+                            Starts from the pipeline's current count.
+                        </p>
+                        <select
+                            aria-label="Override input file count"
+                            value={value.inputFileArity}
+                            onChange={(e) =>
+                                setKey("inputFileArity", e.target.value as InputFileArity)
+                            }
+                            className={selectClass}
+                        >
+                            <option value="none">None</option>
+                            <option value="one">One file</option>
+                            <option value="multi">Multiple files</option>
+                        </select>
+                    </>
                 )}
             </div>
 
@@ -157,7 +182,7 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                     checked={has("inputFileFilters")}
                     onChange={(on) =>
                         on
-                            ? setKey("inputFileFilters", { allow: [], exclude: [] })
+                            ? setKey("inputFileFilters", seedFilters(inheritedFilters))
                             : removeKey("inputFileFilters")
                     }
                     label="input file filters"
@@ -165,6 +190,10 @@ const TemplateOverridesEditor: React.FC<TemplateOverridesEditorProps> = ({
                 />
                 {has("inputFileFilters") && (
                     <div className="space-y-2 pl-1">
+                        <p className="text-xs text-text-secondary">
+                            Starts from the pipeline's current filters. An empty allow list accepts
+                            any file.
+                        </p>
                         <div>
                             <span className="block text-xs text-text-secondary mb-1">Allow</span>
                             <StringListInput

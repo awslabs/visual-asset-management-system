@@ -10,7 +10,7 @@ import type { Template, ConfigFormat, TagSchemaField } from "../types";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm from "../components/DynamicTagForm";
 import SystemTagHelp, { CONFIG_BODY_SYSTEM_TAG_INSTRUCTIONS } from "../components/SystemTagHelp";
-import TagSchemaBuilder from "./TagSchemaBuilder";
+import TagSchemaBuilder, { TAG_KEY_PATTERN } from "./TagSchemaBuilder";
 import TemplateOverridesEditor from "./TemplateOverridesEditor";
 import Stepper from "../components/Stepper";
 import InfoTooltip from "../components/InfoTooltip";
@@ -39,6 +39,22 @@ const STEPS = [
     { id: "tags", label: "Tags" },
     { id: "review", label: "Review" },
 ];
+
+/**
+ * The declared tags no `{{tagKey}}` in the body references. The renderer only substitutes tags the
+ * body names, so such a tag is collected on the execute form and then dropped — matched with the
+ * whitespace tolerance of the backend's own _TAG_PATTERN (common/workflows/templateRender.py). Keys
+ * outside the substitutable charset are skipped: they can never be referenced, and the tag builder
+ * already reports them.
+ */
+const unreferencedTagKeys = (schema: TagSchemaField[], body: string): string[] =>
+    schema
+        .map((field) => field.tagKey)
+        .filter(
+            (key) =>
+                TAG_KEY_PATTERN.test(key || "") &&
+                !new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`).test(body)
+        );
 
 /**
  * Full-page create/edit Template wizard (mirrors the pipeline/workflow builder pages). Reached from
@@ -77,6 +93,9 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
     // required to save at all); the Tags step requires every tag row to be valid.
     const basicError = !templateName.trim() ? "Template name is required" : null;
     const tagsError = !tagSchemaValid ? "Fix the highlighted tag definitions to continue" : null;
+    // A warning, not a save block: with allowCustomEdit the placeholder can legitimately be added to
+    // the body at launch time, and the backend accepts the schema either way.
+    const unreferencedTags = unreferencedTagKeys(tagSchema, configBody);
     const canAdvance =
         wizardStep === "basic" ? !basicError : wizardStep === "tags" ? !tagsError : true;
 
@@ -344,6 +363,8 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                 value={overrides}
                                 onChange={setOverrides}
                                 inheritedAssetScope={pipeline?.systemConfig?.assetScope}
+                                inheritedArity={pipeline?.systemConfig?.inputFileArity}
+                                inheritedFilters={pipeline?.systemConfig?.inputFileFilters}
                             />
                         </div>
                     </>
@@ -420,6 +441,21 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                         {tagsError} — the tag list shown may differ from what would be saved.
                     </p>
                 )}
+
+                {(wizardStep === "tags" || wizardStep === "review") &&
+                    unreferencedTags.length > 0 && (
+                        <p className="text-vams-warning text-sm">
+                            {unreferencedTags.join(", ")}{" "}
+                            {unreferencedTags.length === 1 ? "is" : "are"} declared but the config
+                            body never references{" "}
+                            {unreferencedTags.map((key) => `{{${key}}}`).join(", ")} — the value
+                            {unreferencedTags.length === 1 ? " is" : "s are"} collected on the
+                            execute form and then ignored.
+                            {allowCustomEdit
+                                ? " Add the placeholder to the body, or leave it for the execute-time body edit this template allows."
+                                : " Add the placeholder to the body, or remove the tag."}
+                        </p>
+                    )}
 
                 {saveError && (
                     <div className="orch-outline p-3 bg-red-100 dark:bg-red-900 border border-red-300 dark:border-red-700 rounded">

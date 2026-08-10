@@ -111,10 +111,10 @@ export class VamsSchemaRegistration extends Construct {
             onEventHandler: importFunction,
         });
 
-        // Content hash of the schema files + overrides so CloudFormation re-invokes the CR whenever
-        // the schema (or an injected resource/id value) changes — a template/config edit + redeploy
-        // then re-registers. Without this, the CR properties are stable across edits and CFN would
-        // not re-run the resource.
+        // Content hash of the schema files so CloudFormation re-invokes the CR whenever the schema
+        // changes — a template edit + redeploy then re-registers. Without this, the CR properties are
+        // stable across edits and CFN would not re-run the resource. A retarget of an override value
+        // is caught by that property changing, not by this hash.
         const schemaHash = this.hashSchema(
             dir,
             props.resourceOverrides,
@@ -161,7 +161,7 @@ export class VamsSchemaRegistration extends Construct {
         // checkout location or OS (an absolute path would make CI and a developer machine disagree).
         const addFile = (relativePath: string) => {
             const p = path.join(dir, relativePath);
-            if (fs.existsSync(p)) {
+            if (fs.existsSync(p) && fs.statSync(p).isFile()) {
                 hash.update(relativePath.split(path.sep).join("/"));
                 hash.update(fs.readFileSync(p));
             }
@@ -170,12 +170,27 @@ export class VamsSchemaRegistration extends Construct {
         addFile("workflow.json");
         const templatesDir = path.join(dir, "templates");
         if (fs.existsSync(templatesDir) && fs.statSync(templatesDir).isDirectory()) {
-            for (const f of fs.readdirSync(templatesDir).sort()) {
+            // Same selection the import lambda reads via bundleS3Keys: top-level *.json excluding the
+            // *.webform.json UI companions. A nested directory is skipped rather than read as a file.
+            for (const f of fs
+                .readdirSync(templatesDir)
+                .filter((f) => f.endsWith(".json") && !f.endsWith(".webform.json"))
+                .sort()) {
                 addFile(path.join("templates", f));
             }
         }
-        hash.update(JSON.stringify(resourceOverrides || {}));
-        hash.update(JSON.stringify(idOverrides || {}));
+        // Override values that are CloudFormation tokens resolve only at deploy time, so their
+        // synth-time text is a token index that shifts whenever an unrelated construct is added or
+        // removed. Hashing that text would change the hash on deploys where no schema changed and
+        // re-run every registration, overwriting operator edits to built-in pipelines. Substitute the
+        // key name: the resolved value still reaches CloudFormation through the resourceOverrides and
+        // idOverrides properties, which detect a genuine retarget on their own.
+        const stableOverrides = (overrides?: { [key: string]: string }) =>
+            Object.entries(overrides || {})
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([k, v]) => [k, cdk.Token.isUnresolved(v) ? "<deploy-time>" : v]);
+        hash.update(JSON.stringify(stableOverrides(resourceOverrides)));
+        hash.update(JSON.stringify(stableOverrides(idOverrides)));
         hash.update(JSON.stringify(triggerEnabled ?? null));
         return hash.digest("hex");
     }

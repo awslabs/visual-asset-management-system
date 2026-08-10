@@ -229,7 +229,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     "..",
                     "backendPipelines",
                     "genAi",
-                    "Metadata3dLabeling",
+                    "metadata3dLabeling",
                     "container"
                 ),
                 dockerfileName: "Dockerfile_BlenderRenderer",
@@ -266,12 +266,6 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
-
-        // creates pipeline definition based on event notification input
-        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
-            lambdaFunction: constructPipelineFunction,
-            outputPath: "$.Payload",
-        });
 
         // end state: success
         const successState = new sfn.Succeed(this, "SuccessState", {
@@ -316,6 +310,19 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         const handleMetadataGenerationError = new sfn.Pass(this, "HandleMetadataGenerationError", {
             resultPath: "$",
         }).next(pipeLineEndTask);
+
+        // error handler passthrough - Construct Pipeline Lambda
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // creates pipeline definition based on event notification input
+        const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
+            lambdaFunction: constructPipelineFunction,
+            outputPath: "$.Payload",
+        }).addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
 
         //Lambda Function step function task for metadataGeneration
         const metadataGenerationLambdaFunctionTask = new tasks.LambdaInvoke(

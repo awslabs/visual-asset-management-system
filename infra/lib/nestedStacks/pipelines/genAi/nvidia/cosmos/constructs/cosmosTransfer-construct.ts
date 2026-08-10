@@ -36,6 +36,7 @@ import {
     grantExternalAssetBucketKmsKeys,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
 export interface CosmosTransferConstructProps extends cdk.StackProps {
@@ -74,13 +75,21 @@ export class CosmosTransferConstruct extends Construct {
 
         /**
          * HuggingFace Token stored in Secrets Manager
-         * The token value comes from the CDK config and is stored as a secret
-         * so Batch can inject it securely without exposing it in environment variables.
+         * Batch injects the secret into the container so the token is never an env var value.
+         * The secret is created EMPTY and populated at deploy time from config by a custom
+         * resource that carries the token in its code asset, so the token never lands in the
+         * synthesized CloudFormation template.
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "CosmosTransferHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Cosmos Transfer models",
-            secretStringValue: cdk.SecretValue.unsafePlainText(cosmosConfig.huggingFaceToken),
         });
+
+        populateHuggingFaceTokenSecret(
+            this,
+            "CosmosTransferHfTokenSecretPopulate",
+            hfTokenSecret,
+            cosmosConfig.huggingFaceToken
+        );
 
         NagSuppressions.addResourceSuppressions(
             hfTokenSecret,
@@ -606,7 +615,10 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 `CosmosTransfer-${modelKey}-StateMachine`,
                 {
                     definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-                    timeout: Duration.hours(5),
+                    // Envelopes the Batch attempt (attemptDurationSeconds 28800) so a long-running
+                    // job reaches its own failure path — and the task-token callback — rather than
+                    // being cut short by the state machine.
+                    timeout: Duration.hours(9),
                     logs: {
                         destination: stateMachineLogGroup,
                         includeExecutionData: true,
@@ -614,6 +626,17 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                     },
                     tracingEnabled: true,
                 }
+            );
+
+            // The Batch `.sync` integration polls the submitted job and cancels it when the
+            // execution stops. Batch job ids are runtime-generated with no name pattern to
+            // scope on, so both actions take a wildcard resource.
+            pipelineStateMachine.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["batch:DescribeJobs", "batch:TerminateJob"],
+                    resources: ["*"],
+                })
             );
 
             /**

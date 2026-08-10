@@ -155,6 +155,20 @@ def create_retry_config(
 # step with a fresh task token.
 CALLBACK_NON_RETRYABLE_ERRORS = ["States.Timeout", "States.HeartbeatTimeout"]
 
+# The only errors a `.waitForTaskToken` task state may retry: transport/service faults raised while
+# the invocation is being delivered, so no pipeline run started. Once the pipeline holds the task
+# token, every failure it reports arrives through SendTaskFailure as an application error, and
+# retrying that re-runs the whole pipeline — hours of GPU work for a run that cannot succeed, into
+# the same execution-scoped output prefix the previous attempt may still be draining.
+CALLBACK_TRANSIENT_RETRYABLE_ERRORS = [
+    "Lambda.ServiceException",
+    "Lambda.AWSLambdaException",
+    "Lambda.SdkClientException",
+    "Lambda.TooManyRequestsException",
+    "SQS.SdkClientException",
+    "EventBridge.SdkClientException",
+]
+
 
 def create_task_retry_configs(wait_for_callback: bool = False) -> List[Dict[str, Any]]:
     """Retry list for a pipeline task state.
@@ -162,12 +176,13 @@ def create_task_retry_configs(wait_for_callback: bool = False) -> List[Dict[str,
     Fire-and-forget states retry any error, which can only be an invocation failure. Callback
     states put the timeout errors first with MaxAttempts 0 — Step Functions uses the FIRST
     matching retrier, so a callback timeout falls through to the Catch instead of re-invoking
-    the pipeline while the original run may still be in flight.
+    the pipeline while the original run may still be in flight — and retry only the transient
+    delivery faults, so an application failure the pipeline reported goes to the Catch.
     """
     if wait_for_callback:
         return [
             {"ErrorEquals": list(CALLBACK_NON_RETRYABLE_ERRORS), "MaxAttempts": 0},
-            create_retry_config(),
+            create_retry_config(error_equals=list(CALLBACK_TRANSIENT_RETRYABLE_ERRORS)),
         ]
     return [create_retry_config()]
 
@@ -197,6 +212,31 @@ def create_catch_config(
         catch["ResultPath"] = result_path
     
     return catch
+
+
+# Errors States.ALL does not match, so routing EVERY failure to a handler needs an explicit entry
+# for each. States.DataLimitExceeded is raised when a state's result — or its input after Parameters
+# processing — exceeds the 256 KiB payload quota; with only a States.ALL catcher the execution fails
+# straight to the top level, leaving the storage rows unreconciled.
+CATCH_ALL_EXCLUDED_ERRORS = ["States.DataLimitExceeded"]
+
+
+def create_catch_all_configs(
+    next_state: str,
+    result_path: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Catcher list routing every catchable error to next_state.
+
+    States.ALL must appear alone in a catcher, so each error it cannot match gets its own catcher
+    ahead of it (Step Functions uses the first matching catcher).
+    """
+    catchers = [
+        create_catch_config(error_equals=[error], next_state=next_state, result_path=result_path)
+        for error in CATCH_ALL_EXCLUDED_ERRORS
+    ]
+    catchers.append(create_catch_config(error_equals=["States.ALL"], next_state=next_state,
+                                        result_path=result_path))
+    return catchers
 
 
 def create_workflow_definition(
@@ -244,6 +284,28 @@ def create_workflow_definition(
     }
 
 
+# Step Functions hard quota on a state-machine definition (1 MB, not increasable). The aggregate is
+# what counts: a per-step body that passes its own cap — a Deadline Cloud job template, for instance —
+# can still push a multi-step workflow over the limit.
+MAX_STATE_MACHINE_DEFINITION_BYTES = 1024 * 1024
+
+
+def serialize_definition(definition: Dict[str, Any]) -> str:
+    """Serialize an ASL definition for create/update, rejecting one over the definition quota.
+
+    Raises ValueError so the save path reports a specific, actionable validation error instead of
+    the opaque service rejection the create/update call would otherwise return.
+    """
+    definition_json = json.dumps(definition, indent=2)
+    definition_bytes = len(definition_json.encode("utf-8"))
+    if definition_bytes > MAX_STATE_MACHINE_DEFINITION_BYTES:
+        raise ValueError(
+            f"The workflow's state machine definition is {definition_bytes} bytes, over the "
+            f"{MAX_STATE_MACHINE_DEFINITION_BYTES}-byte Step Functions limit. Reduce the number "
+            "of pipeline steps, or the size of the pipelines' job templates.")
+    return definition_json
+
+
 def create_state_machine(
     sf_client,
     name: str,
@@ -266,7 +328,7 @@ def create_state_machine(
     Returns:
         ARN of the created state machine
     """
-    definition_json = json.dumps(definition, indent=2)
+    definition_json = serialize_definition(definition)
     
     response = sf_client.create_state_machine(
         name=name,
@@ -307,7 +369,7 @@ def update_state_machine(
         role_arn: ARN of the IAM role for the state machine
         log_group_arn: ARN of the CloudWatch log group
     """
-    definition_json = json.dumps(definition, indent=2)
+    definition_json = serialize_definition(definition)
     
     sf_client.update_state_machine(
         stateMachineArn=state_machine_arn,
@@ -367,11 +429,8 @@ def create_interim_tracking_state(
         },
         "Retry": [create_retry_config(
             error_equals=["States.ALL"], interval_seconds=5, backoff_rate=2.0, max_attempts=3)],
-        "Catch": [create_catch_config(
-            error_equals=["States.ALL"],
-            next_state=error_handler_state,
-            result_path="$.errorInfo",
-        )],
+        "Catch": create_catch_all_configs(
+            next_state=error_handler_state, result_path="$.errorInfo"),
     }
 
 
@@ -395,7 +454,7 @@ def create_error_handler_state(
         "Retry": [create_retry_config(
             error_equals=["States.ALL"], interval_seconds=3, backoff_rate=2.0, max_attempts=2)],
         # If the error handler itself fails, still proceed to the Fail state.
-        "Catch": [create_catch_config(error_equals=["States.ALL"], next_state=fail_state)],
+        "Catch": create_catch_all_configs(next_state=fail_state),
         "Next": fail_state,
     }
 
@@ -517,10 +576,7 @@ class LambdaTaskBuilder(TaskStateBuilder):
                 "Payload": payload
             },
             "Retry": create_task_retry_configs(wait_for_callback),
-            "Catch": [create_catch_config(
-                error_equals=["States.ALL"],
-                next_state="WorkflowProcessingJobFailed"
-            )]
+            "Catch": create_catch_all_configs(next_state="WorkflowProcessingJobFailed")
         }
 
         state = self._apply_callback_timeout(state, pipeline)
@@ -552,10 +608,7 @@ class SqsTaskBuilder(TaskStateBuilder):
                 "MessageBody": payload
             },
             "Retry": create_task_retry_configs(wait_for_callback),
-            "Catch": [create_catch_config(
-                error_equals=["States.ALL"],
-                next_state="WorkflowProcessingJobFailed"
-            )]
+            "Catch": create_catch_all_configs(next_state="WorkflowProcessingJobFailed")
         }
 
         state = self._apply_callback_timeout(state, pipeline)
@@ -602,10 +655,7 @@ class EventBridgeTaskBuilder(TaskStateBuilder):
                 ]
             },
             "Retry": create_task_retry_configs(wait_for_callback),
-            "Catch": [create_catch_config(
-                error_equals=["States.ALL"],
-                next_state="WorkflowProcessingJobFailed"
-            )]
+            "Catch": create_catch_all_configs(next_state="WorkflowProcessingJobFailed")
         }
 
         state = self._apply_callback_timeout(state, pipeline)
@@ -772,10 +822,7 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
             # retry attempt could never be completed. Those go straight to the Catch.
             "Retry": [create_retry_config(
                 error_equals=["Deadline.ThrottlingException"])],
-            "Catch": [create_catch_config(
-                error_equals=["States.ALL"],
-                next_state="WorkflowProcessingJobFailed"
-            )]
+            "Catch": create_catch_all_configs(next_state="WorkflowProcessingJobFailed")
         }
 
         state = self._apply_callback_timeout(state, pipeline)

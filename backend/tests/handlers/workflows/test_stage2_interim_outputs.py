@@ -236,6 +236,7 @@ class TestInterimPipelineTracking:
         record_outputs = MagicMock()
         set_status = MagicMock()
         with patch.object(ipt.s3c, "put_object", put_object), \
+             patch.object(ipt.s3c, "get_object", MagicMock(side_effect=_absent_object_error())), \
              patch.object(ipt.eo, "recorded_output_versions", return_value={}), \
              patch.object(ipt.eo, "list_current_output_files", return_value=produced), \
              patch.object(ipt.eo, "record_pipeline_output_files", record_outputs), \
@@ -270,6 +271,7 @@ class TestInterimPipelineTracking:
         }
         run_status = MagicMock()
         with patch.object(ipt.s3c, "put_object", MagicMock()), \
+             patch.object(ipt.s3c, "get_object", MagicMock(side_effect=_absent_object_error())), \
              patch.object(ipt.eo, "recorded_output_versions", return_value={}), \
              patch.object(ipt.eo, "list_current_output_files", return_value=[]), \
              patch.object(ipt.eo, "record_pipeline_output_files", MagicMock()), \
@@ -321,6 +323,7 @@ class TestInterimPipelineTracking:
         put_object = MagicMock(side_effect=lambda **kw: captured.update({kw["Key"]: kw["Body"]}))
         with patch.object(ipt.dynamodb, "Table", return_value=inputs_table), \
              patch.object(ipt.s3c, "put_object", put_object), \
+             patch.object(ipt.s3c, "get_object", MagicMock(side_effect=_absent_object_error())), \
              patch.object(ipt.eo, "list_current_output_files", return_value=[
                  {"key": "pipelines/wei/EXEC1/files/test/pump.e57", "relativePath": "/test/pump.e57",
                   "versionId": "ov5", "fileSize": 1, "contentType": ""}]):
@@ -429,3 +432,191 @@ class TestHandleExecutionError:
     def test_extract_error_message_from_cause_json(self):
         msg = heh._extract_error_message({"Error": "X", "Cause": json.dumps({"errorMessage": "detail"})})
         assert "detail" in msg
+
+    def test_registered_sub_processes_are_stopped_before_rows_go_terminal(self):
+        """A row stamped terminal is no longer abortable, so the sub-processes it registered must be
+        stopped here. The already-terminal row's registration is left alone (that run finished)."""
+        body = {"workflowExecutionId": "EXEC1", "workflowDatabaseId": "wdb", "workflowId": "wf"}
+        pipeline_rows = [
+            {"pipelineExecutionId": "P1", "workflowExecutionId": "EXEC1", "executionStatus": "RUNNING",
+             "registeredSubExecutions": [
+                 {"resourceType": "stepFunctionsExecution",
+                  "executionArn": "arn:aws:states:us-east-1:1:execution:sub:x"},
+                 {"resourceType": "batchJob", "jobId": "job-abc"}]},
+            {"pipelineExecutionId": "P0", "workflowExecutionId": "EXEC1", "executionStatus": "SUCCEEDED",
+             "registeredSubExecutions": [
+                 {"resourceType": "stepFunctionsExecution",
+                  "executionArn": "arn:aws:states:us-east-1:1:execution:sub:done"}]},
+        ]
+        stop_execution = MagicMock()
+        terminate_job = MagicMock()
+        logs_table = MagicMock()
+        main_table = MagicMock(query=MagicMock(return_value={"Items": [{"executionStatus": "RUNNING"}]}))
+        pexec_table = MagicMock()
+
+        def _table(name):
+            if name == heh.pipeline_execution_logs_table:
+                return logs_table
+            if name == heh.pipeline_executions_table:
+                return pexec_table
+            return main_table
+
+        with patch.object(heh, "_get_pipeline_rows", return_value=pipeline_rows), \
+             patch.object(heh.eo, "finalize_main_row", MagicMock()), \
+             patch.object(heh, "_fetch_execution_log", return_value=""), \
+             patch.object(heh.sfn_client, "stop_execution", stop_execution), \
+             patch.object(heh.batch_client, "terminate_job", terminate_job), \
+             patch.object(heh.dynamodb, "Table", side_effect=_table):
+            heh.lambda_handler({"body": body, "errorInfo": {"Error": "States.Timeout"}}, MagicMock())
+
+        stop_execution.assert_called_once_with(
+            executionArn="arn:aws:states:us-east-1:1:execution:sub:x")
+        assert terminate_job.call_args.kwargs["jobId"] == "job-abc"
+        # The in-flight row was still stamped FAILED after the stops.
+        assert pexec_table.update_item.call_args.kwargs[
+            "ExpressionAttributeValues"][":st"] == "FAILED"
+
+    def test_unstoppable_sub_process_is_recorded_on_the_pipeline_log_row(self):
+        """Once the rows are terminal the log row is the only in-product record of what is still
+        running, so a stop failure lands there rather than only in CloudWatch."""
+        body = {"workflowExecutionId": "EXEC1", "workflowDatabaseId": "wdb", "workflowId": "wf"}
+        pipeline_rows = [
+            {"pipelineExecutionId": "P1", "workflowExecutionId": "EXEC1", "executionStatus": "RUNNING",
+             "registeredSubExecutions": [{"resourceType": "ecsTask", "taskArn": "arn:task:9"}]},
+        ]
+        logs_table = MagicMock()
+        main_table = MagicMock(query=MagicMock(return_value={"Items": []}))
+
+        def _table(name):
+            return logs_table if name == heh.pipeline_execution_logs_table else main_table
+
+        with patch.object(heh, "_get_pipeline_rows", return_value=pipeline_rows), \
+             patch.object(heh.eo, "set_pipeline_status", MagicMock()), \
+             patch.object(heh.eo, "finalize_main_row", MagicMock()), \
+             patch.object(heh, "_fetch_execution_log", return_value=""), \
+             patch.object(heh.dynamodb, "Table", side_effect=_table):
+            heh.lambda_handler({"body": body, "errorInfo": {"Error": "States.Timeout"}}, MagicMock())
+
+        error_log = logs_table.put_item.call_args.kwargs["Item"]["errorLog"]
+        assert "arn:task:9" in error_log
+
+
+@pytest.mark.unit
+class TestStopRegisteredSubProcesses:
+    """The shared stop helper the error handler and the abort path both need."""
+
+    def test_stops_sfn_and_batch_for_non_terminal_rows_only(self):
+        sfn = MagicMock()
+        batch = MagicMock()
+        rows = [
+            {"executionStatus": "RUNNING", "registeredSubExecutions": [
+                {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"},
+                {"resourceType": "batchJob", "jobId": "j1"}]},
+            {"executionStatus": "ABORTED", "registeredSubExecutions": [
+                {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:2"}]},
+        ]
+        assert eo.stop_registered_sub_processes(rows, sfn_client=sfn, batch_client=batch) == []
+        sfn.stop_execution.assert_called_once_with(executionArn="arn:sub:1")
+        batch.terminate_job.assert_called_once()
+
+    def test_already_stopped_execution_is_not_a_warning(self):
+        sfn = MagicMock()
+        sfn.stop_execution.side_effect = _client_error("ExecutionDoesNotExist")
+        assert eo.stop_registered_sub_process(
+            {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"},
+            sfn_client=sfn) == ""
+
+    def test_real_stop_failure_is_reported(self):
+        sfn = MagicMock()
+        sfn.stop_execution.side_effect = _client_error("AccessDeniedException")
+        message = eo.stop_registered_sub_process(
+            {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"},
+            sfn_client=sfn)
+        assert "arn:sub:1" in message and "AccessDeniedException" in message
+
+    def test_unsupported_resource_type_names_its_locator(self):
+        message = eo.stop_registered_sub_process({"resourceType": "ecsTask", "taskArn": "arn:task:1"})
+        assert "arn:task:1" in message
+
+    def test_no_client_is_a_silent_no_op(self):
+        # A caller without stop permissions still reconciles the rows rather than reporting noise.
+        assert eo.stop_registered_sub_process(
+            {"resourceType": "stepFunctionsExecution", "executionArn": "arn:sub:1"}) == ""
+
+
+def _client_error(code):
+    import botocore.exceptions
+    return botocore.exceptions.ClientError(
+        {"Error": {"Code": code, "Message": code}}, "StopExecution")
+
+
+def _absent_object_error():
+    """A missing-object GetObject fault, the case the interim step treats as 'no config/metadata to
+    render'. Any other fault propagates so the state machine's Catch reconciles the run."""
+    import botocore.exceptions
+    return botocore.exceptions.ClientError(
+        {"Error": {"Code": "NoSuchKey", "Message": "NoSuchKey"}}, "GetObject")
+
+
+@pytest.mark.unit
+class TestOutputListingVersionSource:
+    """The output-files listing takes each key's versionId from the SAME list_object_versions
+    pagination (the IsLatest entry), so a thousand-file folder costs list calls rather than a
+    HeadObject per object."""
+
+    def _versions_paginator(self, pages):
+        paginator = MagicMock()
+        paginator.paginate.return_value = pages
+        return paginator
+
+    def test_versions_come_from_the_listing_with_no_head_object(self):
+        s3 = MagicMock()
+        s3.get_paginator.return_value = self._versions_paginator([{"Versions": [
+            {"Key": "out/files/a.glb", "VersionId": "v9", "IsLatest": True, "Size": 12},
+            {"Key": "out/files/a.glb", "VersionId": "v8", "IsLatest": False, "Size": 11},
+            {"Key": "out/files/sub/", "VersionId": "v1", "IsLatest": True, "Size": 0},
+        ]}])
+        files = eo.list_current_output_files(s3, "bkt", "out/files/")
+        assert files == [{"key": "out/files/a.glb", "relativePath": "/a.glb", "versionId": "v9",
+                          "fileSize": 12, "contentType": ""}]
+        s3.head_object.assert_not_called()
+        s3.get_paginator.assert_called_once_with("list_object_versions")
+
+    def test_many_objects_cost_no_per_object_request(self):
+        s3 = MagicMock()
+        s3.get_paginator.return_value = self._versions_paginator([{"Versions": [
+            {"Key": f"out/files/f{i}.glb", "VersionId": f"v{i}", "IsLatest": True, "Size": 1}
+            for i in range(500)]}])
+        assert len(eo.list_current_output_files(s3, "bkt", "out/files/")) == 500
+        assert s3.head_object.call_count == 0
+
+    def test_unversioned_bucket_falls_back_to_a_plain_listing(self):
+        s3 = MagicMock()
+
+        def _paginator(name):
+            if name == "list_object_versions":
+                raise Exception("versioning not enabled")
+            return self._versions_paginator([
+                {"Contents": [{"Key": "out/files/a.glb", "Size": 5}]}])
+
+        s3.get_paginator.side_effect = _paginator
+        files = eo.list_current_output_files(s3, "bkt", "out/files/")
+        assert files[0]["versionId"] == ""
+        s3.head_object.assert_not_called()
+
+    def test_precomputed_listing_is_not_re_listed(self):
+        # The interim lambda already lists this exact set for attribution; passing it through must not
+        # cost a second pagination.
+        s3 = MagicMock()
+        listing = [{"key": "out/files/a.glb", "relativePath": "/a.glb", "versionId": "v3",
+                    "fileSize": 1, "contentType": ""}]
+        resolved = eo.resolve_manifest_input_files(
+            s3, [{"relativePath": "/a.glb", "bucket": "abkt", "key": "a1/a.glb", "versionId": ""}],
+            "bkt", "out/files/", current_output_files=listing)
+        s3.get_paginator.assert_not_called()
+        assert resolved[0]["key"] == "out/files/a.glb" and resolved[0]["versionId"] == "v3"
+
+        envelope = eo.build_resolved_manifest(
+            s3, [], "bkt", "out/files/", current_output_files=listing)
+        s3.get_paginator.assert_not_called()
+        assert envelope["inputFiles"][0]["versionId"] == "v3"

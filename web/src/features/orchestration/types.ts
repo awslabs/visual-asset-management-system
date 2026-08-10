@@ -36,6 +36,7 @@ export interface PipelineExecutionConfig {
         maxRetriesPerTask?: number;
         maxFailedTasksCount?: number;
         templateType?: string;
+        template?: string;
     };
 }
 

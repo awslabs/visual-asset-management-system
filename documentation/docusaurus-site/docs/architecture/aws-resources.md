@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys Amazon DynamoDB tables for persistent data storage. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 51 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 5 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 All tables use a `RETAIN` removal policy, so they and their data survive `cdk destroy` and require manual deletion. Because every table is auto-named by AWS CloudFormation (no explicit `tableName`), a retained orphan never collides with the freshly named table a redeploy creates. See [Uninstall the solution — Step 3: Delete DynamoDB tables](../deployment/uninstall.md#step-3-delete-dynamodb-tables) for cleanup steps.
 
@@ -90,6 +90,18 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 | UserStorageTable         | `userId`           | --            | --                                                                                                                                                               | User profile records                     |
 | ApiKeyStorageTable       | `apiKeyId`         | --            | `apiKeyHashIndex` (PK: apiKeyHash), `userIdIndex` (PK: userId, SK: apiKeyId)                                                                                     | API key records                          |
 
+### Migration Source Tables
+
+These tables are read only by the data-migration tooling, never by a Lambda handler. Their names are published under the `dynamoTables/legacy/` SSM parameter prefix.
+
+| Table                         | Partition Key (PK)       | Sort Key (SK)    | Streams   | GSIs                                                               | Purpose                               |
+| ----------------------------- | ------------------------ | ---------------- | --------- | ------------------------------------------------------------------ | ------------------------------------- |
+| MetadataStorageTable          | `databaseId`             | `assetId`        | NEW_IMAGE | --                                                                 | Asset-level metadata migration source |
+| MetadataSchemaStorageTable    | `databaseId`             | `field`          | --        | --                                                                 | Metadata schema migration source      |
+| AssetVersionsStorageTable     | `assetId`                | `assetVersionId` | --        | --                                                                 | Asset version migration source        |
+| AssetFileVersionsStorageTable | `assetId:assetVersionId` | `fileKey`        | --        | --                                                                 | File version migration source         |
+| AssetLinksStorageTable        | `assetIdFrom`            | `assetIdTo`      | --        | `AssetIdFromGSI` (PK: assetIdFrom), `AssetIdToGSI` (PK: assetIdTo) | Asset relationship migration source   |
+
 ### Classification and Configuration Tables
 
 | Table                         | Partition Key (PK) | Sort Key (SK)                 | Purpose                                                |
@@ -102,14 +114,15 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 
 ## Amazon S3 Buckets
 
-| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                             |
-| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
-| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets. |
-| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage.              |
-| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks and deployment artefacts.                                        |
-| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.              |
-| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                               |
-| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.            |
+| Bucket                         | Versioned | CORS | Access Logging                  | Removal on teardown     | Custom name (redeploy collision)     | Purpose                                                                                          |
+| ------------------------------ | --------- | ---- | ------------------------------- | ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| **Asset Bucket(s)**            | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Primary asset file storage. One auto-created bucket plus optional external buckets.              |
+| **Asset Auxiliary Bucket**     | Yes       | Yes  | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Auto-generated previews, visualizer files, pipeline temporary storage.                           |
+| **Artefacts Bucket**           | Yes       | No   | Yes (to Access Logs)            | Retained                | No (auto-named)                      | Template notebooks, deployment artefacts, and pipeline registration bundles under `vamsSchema/`. |
+| **Access Logs Bucket**         | Yes       | No   | No (self-referencing prevented) | Retained                | No (auto-named)                      | Server access logs for all other buckets. 90-day lifecycle expiration.                           |
+| **Web App Bucket**             | Yes       | No   | Yes (to Web App Access Logs)    | Deleted (emptied first) | ALB only (named for the domain host) | Built frontend static assets (CloudFront/ALB origin).                                            |
+| **Web App Access Logs Bucket** | Yes       | No   | No (self-referencing prevented) | Deleted (emptied first) | ALB only (named for the domain host) | Access logs for the web app bucket and ALB. 30-day lifecycle expiration.                         |
+| **Model Cache Bucket(s)**      | No        | No   | No                              | Retained                | No (auto-named)                      | Cached model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines.                           |
 
 :::note[Asset Bucket Configuration]
 VAMS supports multiple asset buckets. The `createNewBucket` configuration option creates a VAMS-managed bucket. The `externalAssetBuckets` configuration option registers pre-existing buckets by ARN. Each external bucket requires a `defaultSyncDatabaseId` and optional `baseAssetsPrefix`.
@@ -118,8 +131,8 @@ VAMS supports multiple asset buckets. The `createNewBucket` configuration option
 :::note[Removal policy and redeploy collisions are separate concerns]
 Two independent properties matter when tearing down or redeploying VAMS:
 
--   **Removal on teardown** — The asset, auxiliary, artefacts, and access logs buckets use a `RETAIN` removal policy, so they (and their contents) survive `cdk destroy` and require manual deletion. This protects against accidental data loss. The web app bucket and its access logs bucket use a `DESTROY` removal policy with automatic object deletion, so they are emptied and removed during teardown.
--   **Custom name (redeploy collision)** — Only buckets with an explicit, fixed name can block a redeploy with a same-name conflict. The asset, auxiliary, artefacts, and access logs buckets are **auto-named** by AWS CloudFormation, so even though they are retained they do **not** need to be deleted before redeploying with the same configuration. Under ALB deployments, the web app bucket and its access logs bucket are named for the configured domain host; if a teardown fails and leaves them behind, delete them before redeploying with the same domain host.
+-   **Removal on teardown** — The asset, auxiliary, artefacts, access logs, and model cache buckets use a `RETAIN` removal policy, so they (and their contents) survive `cdk destroy` and require manual deletion. This protects against accidental data loss. The web app bucket and its access logs bucket use a `DESTROY` removal policy with automatic object deletion, so they are emptied and removed during teardown.
+-   **Custom name (redeploy collision)** — Only buckets with an explicit, fixed name can block a redeploy with a same-name conflict. The asset, auxiliary, artefacts, access logs, and model cache buckets are **auto-named** by AWS CloudFormation, so even though they are retained they do **not** need to be deleted before redeploying with the same configuration. Under ALB deployments, the web app bucket and its access logs bucket are named for the configured domain host; if a teardown fails and leaves them behind, delete them before redeploying with the same domain host.
 
 See [Uninstall the solution](../deployment/uninstall.md) for the full cleanup procedure.
 :::
@@ -230,11 +243,14 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 | **WorkflowTriggerDispatchQueue**       | Buffers file-upload trigger events fanned out to workflow executions                                                                                            |
 | **WorkflowTriggerDispatchDLQ**         | Dead-letter queue for trigger events that fail three delivery attempts                                                                                          |
 | **DeadlineCloudJobCallbackDLQ**        | Dead-letter queue for Deadline Cloud job-status events the callback Lambda could not process (conditional on `app.pipelines.deadlineCloudExecutionTypeEnabled`) |
+| **LargeFileProcessingQueue**           | Buffers large multi-part upload finalization work (5-day retention, no dead-letter queue)                                                                       |
 | **BucketSyncCreated** (per bucket)     | Processes S3 ObjectCreated events for bucket synchronization                                                                                                    |
 | **BucketSyncDeleted** (per bucket)     | Processes S3 ObjectRemoved events for bucket synchronization                                                                                                    |
 | **File/Asset/Database Indexer Queues** | Buffer indexing events between Amazon SNS and indexer Lambdas                                                                                                   |
+| **Physna File/Asset Sync Queues**      | Buffer sync events for the Physna addon (conditional on `app.addons.usePhysnaSync`)                                                                             |
+| **Garnet File/Asset/Database Queues**  | Buffer indexing events for the Garnet Framework addon (conditional on `app.addons.useGarnetFramework`)                                                          |
 
-All Amazon SQS queues enforce SSL and use optional AWS KMS encryption.
+All Amazon SQS queues enforce SSL and use optional AWS KMS encryption. The workflow trigger dispatch and Deadline Cloud callback queues are auto-named by AWS CloudFormation. The large file processing, bucket sync, indexer, Physna sync, and Garnet queues carry explicit names derived from the configuration name, so an orphaned copy left by a failed teardown blocks a redeploy with the same configuration name until it is deleted.
 
 ## Amazon EventBridge
 
@@ -249,7 +265,7 @@ The bus name and event source prefix are deployment-unique, so multiple VAMS dep
 
 VAMS creates explicitly named Amazon CloudWatch log groups under the `/aws/vendedlogs/` namespace. Each name ends with a deterministic hash suffix derived from the stack name, account ID, and a resource identifier, so the same configuration redeployed into the same account regenerates the same log group names. Because these log groups are explicitly named, an orphaned group left from a prior deployment can block a redeploy with a name conflict. See [Uninstall the solution](../deployment/uninstall.md) for cleanup steps.
 
-### Audit Log Groups (10-Year Retention)
+### Audit Log Groups
 
 Named `/aws/vendedlogs/<identifier>-<hash>`:
 
@@ -267,22 +283,22 @@ Named `/aws/vendedlogs/<identifier>-<hash>`:
 
 ### Infrastructure and Orchestration Log Groups
 
-Named `/aws/vendedlogs/<identifier>-<hash>`:
+| Log Group Name                                     | Purpose                                                                                                              | Condition                | Removal Policy | Custom Name |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------- | ----------- |
+| REST API access logs                               | REST API access logs (structured JSON). CloudFormation-auto-named (no fixed name), so it never collides on redeploy. | Always                   | DESTROY        | No          |
+| `/aws/vendedlogs/vamsPipelineWorkflows<hash>`      | Workflow Step Functions execution logs, shared by every workflow state machine                                       | Always                   | DESTROY        | Yes         |
+| `/aws/vendedlogs/VAMSOrchestrationBusAudit-<hash>` | EventBridge orchestration bus audit rule target                                                                      | Always                   | DESTROY        | Yes         |
+| `/aws/vendedlogs/VAMSCloudWatchVPCLogs<hash>`      | VPC flow logs                                                                                                        | `useGlobalVpc`           | DESTROY        | Yes         |
+| `/aws/vendedlogs/VAMSCloudTrailLogs<hash>`         | AWS CloudTrail logs                                                                                                  | `addStackCloudTrailLogs` | DESTROY        | Yes         |
 
-| Log Group Identifier        | Purpose                                                                                                              | Condition                | Removal Policy | Custom Name |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------- | ----------- |
-| REST API access logs        | REST API access logs (structured JSON). CloudFormation-auto-named (no fixed name), so it never collides on redeploy. | Always                   | DESTROY        | No          |
-| `vamsPipelineWorkflows`     | Workflow Step Functions execution logs                                                                               | Always                   | DESTROY        | Yes         |
-| `VAMSOrchestrationBusAudit` | EventBridge orchestration bus audit rule target                                                                      | Always                   | DESTROY        | Yes         |
-| `VAMSCloudWatchVPCLogs`     | VPC flow logs                                                                                                        | `useGlobalVpc`           | DESTROY        | Yes         |
-| `VAMSCloudTrailLogs`        | AWS CloudTrail logs                                                                                                  | `addStackCloudTrailLogs` | DESTROY        | Yes         |
+The hyphen before the hash is part of the identifier rather than a fixed convention, so it is present on the audit and orchestration bus groups and absent on the workflow, VPC flow log, and AWS CloudTrail groups. Match on the identifier prefix when searching for a group.
 
 ### Pipeline Log Groups (per enabled pipeline)
 
-Named `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]-<hash>` for each enabled pipeline's Step Functions state machine (for example, `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`). Container-based pipelines (RapidPipeline, ModelOps) additionally create `/aws/vendedlogs/Pipelines/<containerName>` groups.
+Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines (RapidPipeline, ModelOps) additionally create `/aws/vendedlogs/Pipelines/<containerName>` groups.
 
 :::note[Log Retention]
-A CDK aspect (`LogRetentionAspect`) forces one-year retention on all CloudWatch Log Groups in the stack. Audit log groups are explicitly set to 10-year retention.
+A CDK aspect (`LogRetentionAspect`) sets one-year retention on every CloudWatch log group in the stack, including the audit groups.
 :::
 
 :::warning[Named log groups are retained and block redeploys]
@@ -291,21 +307,26 @@ All VAMS log groups use the `DESTROY` removal policy and are deleted when the st
 
 ## AWS Systems Manager Parameter Store
 
-VAMS publishes deployment configuration values as explicitly named SSM `String` parameters. All parameters use the `DESTROY` removal policy and are deleted with the stack.
+VAMS publishes deployment configuration values as explicitly named SSM `String` parameters.
 
-| Parameter Group                                               | Count | Purpose                                                                |
-| ------------------------------------------------------------- | ----- | ---------------------------------------------------------------------- |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 28    | DynamoDB table names resolved by Lambda functions at cold start        |
-| `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2     | Asset auxiliary and artefacts bucket names                             |
-| `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9     | Audit log group names                                                  |
-| `/<name>-<baseStackName>/aos/*`                               | 3     | OpenSearch endpoint and index names (when search is enabled)           |
-| `/<name>-<baseStackName>/web/deployedUrl`                     | 1     | Deployed web application URL                                           |
-| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1     | Amazon Location Service API key ARN (when Location Service is enabled) |
+| Parameter Group                                               | Count  | Purpose                                                                     |
+| ------------------------------------------------------------- | ------ | --------------------------------------------------------------------------- |
+| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start             |
+| `/<name>-<baseStackName>/resourceNames/dynamoTables/legacy/*` | 5      | Migration source table names, read by the data-migration tooling only       |
+| `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                  |
+| `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                       |
+| `/<name>-<baseStackName>/resourceNames/lambdaFunctions/*`     | 1      | OpenSearch reindexer function name, read by the data-migration tooling only |
+| `/<name>-<baseStackName>/aos/*`                               | 3      | OpenSearch endpoint and index names (when search is enabled)                |
+| `/<name>-<baseStackName>/web/deployedUrl`                     | 1      | Deployed web application URL                                                |
+| `/<name>-<baseStackName>/location/apiKeyArn`                  | 1      | Amazon Location Service API key ARN (when Location Service is enabled)      |
+| `waf_acl_arn_<wafStackName>`                                  | 1 or 2 | AWS WAF Web ACL ARN, one per web ACL stack (when `useWaf` is enabled)       |
 
-The `resourceNames` parameters are materialized by a dedicated nested stack (`ResourceNamesBuilder`) from descriptors registered by the storage builder. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
+The `ResourceNamesBuilder` nested stack materializes 62 of the 63 `resourceNames` parameters from descriptors registered by the storage builder. The search stack publishes `lambdaFunctions/crOsReindexer` on its own because it builds after the registry is materialized. Every Lambda function receives the prefix in the `VAMS_RESOURCE_PARAM_PREFIX` environment variable and resolves the values through `backend/common/resourceNames.py` (environment-variable override, then a cached batched Parameter Store fetch). Resource names are configuration pointers rather than data, so the parameters use the `String` type without KMS encryption.
+
+The `resourceNames`, `web/deployedUrl`, `location/apiKeyArn`, and `waf_acl_arn_*` parameters are AWS CloudFormation resources with the `DESTROY` removal policy and are deleted with their stack. The three `aos/*` parameters are written at deploy time by the OpenSearch schema-deploy custom resource rather than declared as stack resources, so they survive teardown and are removed by the manual cleanup step. Amazon Cognito deployments add three further parameters holding the user pool, identity pool, and web client ids; these are auto-named by AWS CloudFormation, so they never collide on redeploy.
 
 :::warning[Named parameters block redeploys]
-Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete any remaining parameters under the deployment's prefix before redeploying with the same configuration name and account.
+Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete every remaining parameter under the deployment's `/<name>-<baseStackName>/` prefix — all 63 `resourceNames` parameters, not only the table names — plus any `waf_acl_arn_<wafStackName>` parameter, before redeploying with the same configuration name and account. Enumerate them with a recursive `get-parameters-by-path` call on the prefix rather than from a list, so a parameter group added by a later release is not missed.
 :::
 
 ## AWS KMS

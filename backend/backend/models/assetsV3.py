@@ -454,7 +454,11 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
         if values.get('workflowExecutionId') is not None:
-            (valid, message) = validate({'workflowExecutionId': {'value': values.get('workflowExecutionId'), 'validator': 'STRING_256'}})
+            # GUID, not STRING_256: this records the execution that produced the file, and every
+            # writer supplies an id from executionRecords.new_guid() (32 hex) or the dashed uuid Step
+            # Functions assigns. The same validator the execution routes use keeps the provenance
+            # field from accepting arbitrary text.
+            (valid, message) = validate({'workflowExecutionId': {'value': values.get('workflowExecutionId'), 'validator': 'GUID'}})
             if not valid:
                 logger.error(message)
                 raise ValueError(message)

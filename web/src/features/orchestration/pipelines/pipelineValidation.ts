@@ -23,14 +23,23 @@ const timeoutSchema = z
         { message: "Must be an integer between 1 and 604800" }
     );
 
-// Optional numeric settings. A blank number input carries no value, so an empty string or NaN
-// resolves to "unset" (the backend treats an absent numeric field as unset).
-const optionalNumberSchema = z.preprocess(
-    (val) =>
-        val === "" || val === null || (typeof val === "number" && Number.isNaN(val))
-            ? undefined
-            : val,
-    z.number().optional()
+// A blank number input carries no value, so an empty string or NaN resolves to "unset" (the backend
+// treats an absent numeric field as unset).
+const blankNumberToUndefined = (val: unknown) =>
+    val === "" || val === null || (typeof val === "number" && Number.isNaN(val)) ? undefined : val;
+
+// The two job-template dialects Deadline Cloud createJob accepts (models/pipelines.py
+// DEADLINE_TEMPLATE_TYPES). Blank leaves the createJob task on its own default of YAML.
+export const DEADLINE_TEMPLATE_TYPES = ["JSON", "YAML"];
+// The template travels inline in the state-machine definition, which Step Functions caps at 1 MB
+// (models/pipelines.py MAX_DEADLINE_TEMPLATE_LENGTH).
+const MAX_DEADLINE_TEMPLATE_LENGTH = 256 * 1024;
+
+// Deadline job priority and task counts. The createJob task state casts each to an integer, so a
+// fractional value is not the value that would run, and a negative one is rejected outright.
+const deadlineCountSchema = z.preprocess(
+    blankNumberToUndefined,
+    z.number().int("Must be a whole number").min(0, "Cannot be negative").optional()
 );
 
 // Mirrors of the backend resource patterns (common/validators.py: aws_partition_group and
@@ -70,46 +79,85 @@ const lambdaConfigSchema = z.object({
         ),
 });
 
-const sqsConfigSchema = z.object({
-    queueUrl: z
+// Format checks on the per-type resource fields. Each is declared optional here and its PRESENCE is
+// required by the superRefine on the active executionType, mirroring the backend, which requires the
+// field in its type branch and then runs the format validator on the supplied value
+// (models/pipelines.py _validate_execution_config). Splitting the two means a blank required field
+// reports "is required" rather than a format complaint, and every missing field of the active type is
+// reported in one pass instead of one at a time.
+const formatted = (pattern: RegExp, message: string) =>
+    z
         .string()
-        .min(1, "SQS queueUrl is required")
-        .regex(
-            SQS_QUEUE_URL,
-            "Must be a valid SQS queue URL (e.g. https://sqs.us-east-1.amazonaws.com/123456789012/my-queue)"
-        ),
+        .optional()
+        .refine((val) => !val || pattern.test(val), { message });
+
+const sqsConfigSchema = z.object({
+    queueUrl: formatted(
+        SQS_QUEUE_URL,
+        "Must be a valid SQS queue URL (e.g. https://sqs.us-east-1.amazonaws.com/123456789012/my-queue)"
+    ),
 });
 
 const eventBridgeConfigSchema = z.object({
-    busArn: z
-        .string()
-        .min(1, "EventBridge busArn is required")
-        .regex(
-            EVENTBRIDGE_BUS_ARN,
-            "Must be a valid event-bus ARN (e.g. arn:aws:events:us-east-1:123456789012:event-bus/my-bus)"
-        ),
-    source: z
-        .string()
-        .min(1, "EventBridge source is required")
-        .regex(
-            EVENTBRIDGE_SOURCE,
-            "Must be 1-256 characters of letters, digits, dots, hyphens or underscores, and cannot start with 'aws.'"
-        ),
-    detailType: z
-        .string()
-        .min(1, "EventBridge detailType is required")
-        .regex(EVENTBRIDGE_DETAIL_TYPE, "Must be 1-256 characters"),
+    busArn: formatted(
+        EVENTBRIDGE_BUS_ARN,
+        "Must be a valid event-bus ARN (e.g. arn:aws:events:us-east-1:123456789012:event-bus/my-bus)"
+    ),
+    source: formatted(
+        EVENTBRIDGE_SOURCE,
+        "Must be 1-256 characters of letters, digits, dots, hyphens or underscores, and cannot start with 'aws.'"
+    ),
+    detailType: formatted(EVENTBRIDGE_DETAIL_TYPE, "Must be 1-256 characters"),
 });
 
 const deadlineCloudConfigSchema = z.object({
-    farmId: z.string().min(1, "DeadlineCloud farmId is required"),
-    queueId: z.string().min(1, "DeadlineCloud queueId is required"),
+    farmId: z.string().optional(),
+    queueId: z.string().optional(),
     storageProfileId: z.string().optional(),
-    priority: optionalNumberSchema,
-    maxRetriesPerTask: optionalNumberSchema,
-    maxFailedTasksCount: optionalNumberSchema,
-    templateType: z.string().optional(),
+    priority: deadlineCountSchema,
+    maxRetriesPerTask: deadlineCountSchema,
+    maxFailedTasksCount: deadlineCountSchema,
+    templateType: z
+        .string()
+        .optional()
+        .refine((val) => !val || DEADLINE_TEMPLATE_TYPES.includes(val), {
+            message: `Must be one of ${DEADLINE_TEMPLATE_TYPES.join(", ")}`,
+        }),
+    template: z
+        .string()
+        .max(
+            MAX_DEADLINE_TEMPLATE_LENGTH,
+            `Cannot exceed ${MAX_DEADLINE_TEMPLATE_LENGTH} characters`
+        )
+        .optional(),
 });
+
+// Each execution type's own sub-block key.
+const EXECUTION_TYPE_CONFIG_KEYS: Record<ExecutionType, string> = {
+    Lambda: "lambda",
+    SQS: "sqs",
+    EventBridge: "eventBridge",
+    DeadlineCloud: "deadlineCloud",
+};
+const ALL_EXECUTION_CONFIG_KEYS = Object.values(EXECUTION_TYPE_CONFIG_KEYS);
+
+/**
+ * Drop the per-type sub-blocks that do not belong to `executionType`, mirroring the backend, which
+ * switches on the type and reads only the matching block (models/pipelines.py
+ * _validate_execution_config). Two shapes need this: every stored pipeline carries ALL FOUR blocks
+ * because the record builder fills the unused ones with `{}`
+ * (common/workflows/pipelineRecords.py build_pipeline_execution_config), and a form session that
+ * visited another type retains that type's fields. Neither belongs to the pipeline being saved.
+ */
+export function pruneExecutionConfig<T extends Record<string, any> | undefined>(config: T): T {
+    if (!config) return config;
+    const keep = EXECUTION_TYPE_CONFIG_KEYS[config.executionType as ExecutionType];
+    const pruned: Record<string, any> = { ...config };
+    ALL_EXECUTION_CONFIG_KEYS.forEach((key) => {
+        if (key !== keep) delete pruned[key];
+    });
+    return pruned as T;
+}
 
 const executionConfigSchema = z
     .object({
@@ -173,6 +221,17 @@ const executionConfigSchema = z
                     path: ["deadlineCloud", "queueId"],
                 });
             }
+            // The OpenJD job template is embedded verbatim in the state-machine definition, so the
+            // ASL builder refuses to generate a task state without it
+            // (common/workflows/stepfunctions_builder.py DeadlineCloudTaskBuilder). The pipeline row
+            // would save and then break every workflow that referenced it.
+            if (!data.deadlineCloud?.template) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: "DeadlineCloud job template is required",
+                    path: ["deadlineCloud", "template"],
+                });
+            }
             if (data.waitForCallback !== "Enabled") {
                 ctx.addIssue({
                     code: z.ZodIssueCode.custom,
@@ -203,7 +262,10 @@ export interface ValidationResult {
 }
 
 export function validatePipeline(values: Partial<Pipeline>): ValidationResult {
-    const result = pipelineSchema.safeParse(values);
+    const result = pipelineSchema.safeParse({
+        ...values,
+        executionConfig: pruneExecutionConfig(values.executionConfig),
+    });
     if (result.success) {
         return { ok: true };
     }

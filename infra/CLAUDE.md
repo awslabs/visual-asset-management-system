@@ -46,13 +46,13 @@ infra/
       s3AssetBuckets.ts         # Global asset bucket registry
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
-    lambdaBuilder/              # ~17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
+    lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
                                 # metadataSchema, assetsLink, searchIndexBucketSync)
     nestedStacks/
       vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints
       storage/
-        storageBuilder-nestedStack.ts    # ~1800 lines: DynamoDB, S3, SNS, SQS, KMS, CloudWatch
+        storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
         resourceNamesBuilder-nestedStack.ts  # Publishes 62 SSM String parameters (57 resource names + 5 legacy)
@@ -64,7 +64,9 @@ infra/
         api-nestedStack.ts                 # Selects impl by config.app.api.apiType
         apiRouteRegistry.ts                # Cross-stack route registry + attachFunctionToApi()
         apiBuilder-nestedStack.ts          # Primary API routes + Lambda wiring
-        apiBuilder2-nestedStack.ts         # Secondary API stack (Tags, Tag Types, Auth Constraints)
+        apiBuilder2-nestedStack.ts         # Secondary API stack: Tags, Tag Types, Auth Constraints,
+                                           # asset history, and the pipeline / pipeline template /
+                                           # workflow / workflow trigger / execution routes
         lambdaLayersBuilder-nestedStack.ts
         constructs/                        # rest-api-gateway-construct, buildOpenApiSpec, amplify-config-lambda,
                                            # vams-version-lambda, dynamodb-metadataschema-defaults
@@ -76,10 +78,11 @@ infra/
         constructs/                        # opensearch-serverless, opensearch-provisioned, schemaDeploy/deployschema.ts
       pipelines/                           # Pipeline stacks — see pipelines/CLAUDE.md
         pipelineBuilder-nestedStack.ts     # Pipeline orchestrator
-        constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline, securitygroup-gateway-pipeline
+        constructs/                        # batch-fargate-pipeline, batch-gpu-pipeline,
+                                           # securitygroup-gateway-pipeline, vamsSchemaRegistration
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/cosmos/{3,predict}}/
+        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -87,8 +90,13 @@ infra/
         addonBuilder-nestedStack.ts        # Addon orchestrator
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
         physna/                            # Physna 3D/CAD geometric search sync (builds physnaFileSync, physnaAssetSync, physnaViewer lambdas for addon API)
-  test/infra.test.ts             # Single snapshot test (outdated, uses legacy @aws-cdk/assert)
-  deploymentDataMigration/v2.4_to_v2.5/upgrade/  # Backfills databaseId + databaseId:assetId on asset version records
+  test/                          # Jest suites: route registry, OpenAPI spec, config-builder drift, WAF,
+                                 # lambda grants, presigned-URL policy, migration tooling, plus the legacy
+                                 # infra.test.ts snapshot (uses the outdated @aws-cdk/assert)
+  deploymentDataMigration/
+    tools/ssm_resource_lookup.py                 # Resolves resource names from the SSM parameters
+    v2.4_to_v2.5/upgrade/                        # Backfills databaseId + databaseId:assetId on asset versions
+    v2.5_to_v2.6/upgrade/                        # Transforms pipeline/workflow/execution rows into the V2 tables
 ```
 
 ---
@@ -97,27 +105,34 @@ infra/
 
 ### Nested Stack Dependency Chain
 
+Each arrow is an explicit `addDependency()` call in `core-stack.ts` (Rule 9), so the chain reads bottom-up: a stack is created after everything it points to.
+
 ```
 CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
-  +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, KMS, CloudWatch — foundation)
+  +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
   |     +-- ResourceNamesBuilder (publishes 62 SSM parameters)
-  |     +-- AuthBuilder (Cognito, SAML, external OAuth)
-  |           +-- ApiGatewayV2Amplify (API Gateway + authorizer)
-  |                 +-- ApiBuilder (primary API routes; includes pipeline + workflow)
-  |                 +-- ApiBuilder2 (Tags, Tag Types, Auth Constraints; depends on ApiBuilder)
-  |                 +-- StaticWeb (CloudFront or ALB hosting)
-  |                 +-- SearchBuilder (OpenSearch)
-  |                 +-- PipelineBuilder (all use-case pipelines)
-  |                 +-- AddonBuilder (Garnet, Physna Sync)
+  |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
+  |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
+  |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
+  |     +-- SearchBuilder (OpenSearch)                           -> storage, resourceNames
+  |     +-- PipelineBuilder (all use-case pipelines)             -> storage, ApiBuilder2
+  |     |                                                           (its vamsSchema registration custom
+  |     |                                                            resources invoke an ApiBuilder2 Lambda)
+  |     +-- AddonBuilder (Garnet, Physna Sync)                   -> storage, resourceNames
+  |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)   -> storage, AuthBuilder, ApiBuilder,
+  |     |                                                           ApiBuilder2, SearchBuilder, AddonBuilder
+  |     +-- StaticWeb (CloudFront or ALB hosting)                -> storage
   +-- LocationService (conditional: useLocationService.enabled)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
 ```
 
+`RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
+
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sqs.workflowAutoExecuteQueue`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 20+ DynamoDB tables (see `storageBuilder-nestedStack.ts` ~lines 72-98). Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId).
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 46 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). There is no `sqs` member: the two Amazon SQS queues the builder creates buffer S3 object-created/deleted notifications for the indexers and are wired locally, and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
 
 **`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
@@ -233,7 +248,7 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 ### Route Registration (attachFunctionToApi helper)
 
-Routes are registered across nested stacks (`apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts`) via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })`. For each route this (1) grants the REST API's execution role invoke permission on the Lambda, and (2) adds a descriptor (path, method, function ARN, allow-anonymous flag) to `RouteRegistry`. The REST API builder then renders all descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`.
+Routes are registered across nested stacks (`apiBuilder-nestedStack.ts`, `apiBuilder2-nestedStack.ts`) via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })`. The pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. For each route this (1) grants the REST API's execution role invoke permission on the Lambda, and (2) adds a descriptor (path, method, function ARN, allow-anonymous flag) to `RouteRegistry`. The REST API builder then renders all descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`.
 
 ### RESTful Route Convention
 
@@ -435,7 +450,7 @@ Note: `test/infra.test.ts` uses legacy `@aws-cdk/assert` with an outdated mock c
 | Config & constants                | `config/config.ts`                                                                           |
 | Root stack                        | `lib/core-stack.ts`                                                                          |
 | Storage (DynamoDB, S3, SNS, SQS)  | `lib/nestedStacks/storage/storageBuilder-nestedStack.ts`                                     |
-| API routes                        | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts`                                       |
+| API routes                        | `lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` + `apiBuilder2-nestedStack.ts`        |
 | API Gateway setup                 | `lib/nestedStacks/apiLambda/api-nestedStack.ts` + `constructs/rest-api-gateway-construct.ts` |
 | Auth (Cognito/SAML/OAuth)         | `lib/nestedStacks/auth/authBuilder-nestedStack.ts`                                           |
 | Security / Service / Partition    | `lib/helper/{security,service-helper,const}.ts`                                              |

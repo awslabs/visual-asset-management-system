@@ -130,7 +130,7 @@ const WorkflowSystemConfigFields: React.FC<WorkflowSystemConfigFieldsProps> = ({
             <div>
                 <div className="flex items-center gap-1.5 text-sm font-medium mb-2 text-text-primary">
                     Asset selection rules
-                    <InfoTooltip text="Constrains which input-file selections an execution may make. Each rule is enforced at execute time." />
+                    <InfoTooltip text="Constrains which input-file selections an execution may make. Each rule is enforced at execute time. These are the OUTER boundary: a selection is offered only when every pipeline in the workflow also accepts it, so a whole-asset or folder selection allowed here is still withheld when one of the pipelines declines it. The validation panel names any pipeline that narrows what is set here." />
                 </div>
                 <AssetSpanControl
                     scope={assetScope}

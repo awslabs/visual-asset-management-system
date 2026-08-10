@@ -652,3 +652,78 @@ class TestRestShapedEvent:
             resp = le.lambda_handler(event, MagicMock())
         assert resp["statusCode"] == 200, resp["body"]
         assert json.loads(resp["body"])["message"]["collection"] == "input"
+
+
+def _step_tuples(*pipeline_ids):
+    """The (pipelineExecutionId, pipelineId) tuples _detail_metadata_step_order returns.
+
+    Distinct from _steps(), which builds the DynamoDB rows get_pipeline_execution_rows yields; the
+    token decoder is handed the sorted tuple list, not those rows.
+    """
+    return sorted((f"pe-{pid}", pid) for pid in pipeline_ids)
+
+
+@pytest.mark.unit
+class TestTokenIsBoundToItsQuery:
+    """A continuation token is only meaningful against the query that issued it.
+
+    Each collection reads a DIFFERENT table and each pipelineId filter a DIFFERENT step list, so a
+    token cross-applied to another one indexes into the wrong thing. The failure is silent: the read
+    succeeds and serves rows from the wrong query (or an empty page that looks complete), which is
+    worse than an error. Live, replaying an `input` token against `inputDatabase` returned 200 with
+    database rows, and against `output` it 500'd.
+    """
+
+    def _first_token(self, collection, pipeline_id=""):
+        """The NextToken from a bounded first page, so a real resume point is under test."""
+        rows = {"pe-pA": [_input_row("pe-pA", file_path=f"/a{i}.glb") for i in range(4)],
+                "pe-pB": [_input_row("pe-pB", file_path=f"/b{i}.glb") for i in range(4)]}
+        table = FakeTable(rows, INPUT_SORT_KEY)
+        with patch(f"{MOD}.dynamodb") as ddb, \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=_steps("pA", "pB")):
+            ddb.Table.return_value = table
+            result = le.page_detail_metadata("e1000000000000000000000000000001", collection,
+                                             2, "", pipeline_id)
+        token = result.get("NextToken")
+        assert token, "the first page must be bounded for this test to exercise a resume point"
+        return token
+
+    def test_a_token_from_another_collection_is_refused(self):
+        token = self._first_token(le.DETAIL_METADATA_COLLECTION_INPUT)
+        for other in (le.DETAIL_METADATA_COLLECTION_INPUT_DATABASE,
+                      le.DETAIL_METADATA_COLLECTION_OUTPUT):
+            steps = _step_tuples("pA", "pB")
+            assert le._decode_detail_metadata_token(token, steps, other, "") is None, (
+                f"an input token was accepted for collection={other}")
+
+    def test_the_same_collection_still_resumes(self):
+        # Positive control: the refusals above must not come from rejecting every token.
+        token = self._first_token(le.DETAIL_METADATA_COLLECTION_INPUT)
+        resumed = le._decode_detail_metadata_token(
+            token, _step_tuples("pA", "pB"), le.DETAIL_METADATA_COLLECTION_INPUT, "")
+        assert resumed is not None, "a token replayed against its own collection must resume"
+
+    def test_a_filterless_token_is_refused_under_a_pipeline_filter(self):
+        token = self._first_token(le.DETAIL_METADATA_COLLECTION_INPUT)
+        assert le._decode_detail_metadata_token(
+            token, _step_tuples("pA"), le.DETAIL_METADATA_COLLECTION_INPUT, "pA") is None, (
+            "a token issued without a pipelineId filter was accepted under one")
+
+    def test_a_filtered_token_is_refused_without_the_filter(self):
+        token = self._first_token(le.DETAIL_METADATA_COLLECTION_INPUT, pipeline_id="pA")
+        assert le._decode_detail_metadata_token(
+            token, _step_tuples("pA", "pB"), le.DETAIL_METADATA_COLLECTION_INPUT, "") is None, (
+            "a filtered token was accepted for the unfiltered read")
+
+    def test_a_filtered_token_resumes_under_the_same_filter(self):
+        token = self._first_token(le.DETAIL_METADATA_COLLECTION_INPUT, pipeline_id="pA")
+        assert le._decode_detail_metadata_token(
+            token, _step_tuples("pA"), le.DETAIL_METADATA_COLLECTION_INPUT, "pA") is not None
+
+    def test_a_token_predating_the_binding_is_refused(self):
+        # A token carrying neither value cannot prove which query produced it. A restart is
+        # recoverable; serving another query's rows is not.
+        legacy = le.base64.b64encode(json.dumps(
+            {"stepIndex": 1, "stepKey": "", "lastEvaluatedKey": None}).encode("utf-8")).decode("utf-8")
+        assert le._decode_detail_metadata_token(
+            legacy, _step_tuples("pA", "pB"), le.DETAIL_METADATA_COLLECTION_INPUT, "") is None

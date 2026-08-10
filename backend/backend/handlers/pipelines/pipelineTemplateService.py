@@ -255,6 +255,44 @@ def _store_tag_schema(database_id, pipeline_id, template_id, fields, username):
     return []
 
 
+def _set_tag_schema_on_template(database_id, pipeline_id, template_id, template_row, fields,
+                                username):
+    """Validate + persist a tag schema against the template that already exists, applying the same
+    cross-checks the template PUT applies. Returns a mapping of error lists (empty = stored).
+
+    The schema and the stored configBody are validated together because they are one contract: a tag's
+    declared type decides whether its placeholder may stand unquoted as a JSON value, so changing a
+    type here can leave a body that renders structurally invalid JSON — which the pipeline silently
+    discards in favour of its built-in defaults. Trigger references are checked for the same reason
+    update_template checks them: a headless run cannot supply a required tag that carries no default."""
+    trigger_errors = validate_template_not_breaking_triggers(
+        _triggers_table(), database_id, pipeline_id, template_id, fields)
+    if trigger_errors:
+        return {"triggerTemplateErrors": trigger_errors}
+
+    config_format = template_row.get("configFormat", "json")
+    config_body = ""
+    if config_format == "json":
+        # Only a json body is parse-checked, and only a body that references a tag can be affected by
+        # the schema — so the S3 read for an offloaded body is skipped for every other case.
+        config_body = _rehydrate_template(template_row)["configBody"]
+        if not tr.uses_template_tags(config_body):
+            config_body = ""
+    if config_body:
+        try:
+            _validate_template_bodies(config_format, config_body, None, fields)
+        except ValidationError as ve:
+            logger.exception(f"Validation error: {ve}")
+            return {"tagSchemaErrors": [validation_error_message(ve)]}
+        except ValueError as ve:
+            return {"tagSchemaErrors": [str(ve)]}
+
+    errors = _store_tag_schema(database_id, pipeline_id, template_id, fields, username)
+    if errors:
+        return {"tagSchemaErrors": errors}
+    return {}
+
+
 #######################
 # Template body storage
 #######################
@@ -367,10 +405,17 @@ def _get_template_row(database_id, pipeline_id, template_id):
 
 def _clear_other_defaults(database_id, pipeline_id, keep_template_id):
     """Ensure at most one default template per pipeline: unset isDefault on every OTHER template of
-    this pipeline. Called when a template is created/updated as the default."""
+    this pipeline. Called BEFORE the template that is becoming the default is written, so a failure
+    part-way through leaves the pipeline with NO default — which the execute path reports as
+    "this pipeline requires a template" — rather than two, which it would resolve silently by
+    templateId sort order.
+
+    The read is strongly consistent: an eventually-consistent query can miss a default written
+    moments earlier by another request and leave it flagged."""
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
     table = _templates_table()
-    query_kwargs = {"KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite)}
+    query_kwargs = {"KeyConditionExpression": Key("pipelineDatabaseId:pipelineId").eq(composite),
+                    "ConsistentRead": True}
     while True:
         response = table.query(**query_kwargs)
         for row in response.get("Items", []):
@@ -392,10 +437,24 @@ def _clear_other_defaults(database_id, pipeline_id, keep_template_id):
 # Data operations
 #######################
 
+def _decode_starting_token(starting_token):
+    """Decode a base64 pagination token back into an ExclusiveStartKey, or None when it cannot be
+    decoded or does not carry a key mapping."""
+    try:
+        decoded = json.loads(base64.b64decode(starting_token).decode("utf-8"))
+    except Exception as e:
+        logger.exception(f"Invalid startingToken: {e}")
+        return None
+    return decoded if isinstance(decoded, dict) and decoded else None
+
+
 def list_templates(database_id, pipeline_id, query_params=None):
     """One page of a pipeline's template descriptors plus a NextToken when more remain. An inline
     body can be up to the inline threshold (320KB), so the page is bounded to keep the response
-    under the 6MB Lambda limit; callers drain the pages via startingToken."""
+    under the 6MB Lambda limit; callers drain the pages via startingToken.
+
+    Raises ValueError for a token that cannot be decoded: continuing without it would serve page 1
+    again carrying the same NextToken, which is an endless loop for a client draining the pages."""
     params = query_params or {}
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
     query_kwargs = {
@@ -404,11 +463,10 @@ def list_templates(database_id, pipeline_id, query_params=None):
     }
     starting_token = params.get("startingToken") or params.get("NextToken")
     if starting_token:
-        try:
-            query_kwargs["ExclusiveStartKey"] = json.loads(
-                base64.b64decode(starting_token).decode("utf-8"))
-        except Exception as e:
-            logger.exception(f"Invalid startingToken: {e}")
+        decoded = _decode_starting_token(starting_token)
+        if decoded is None:
+            raise ValueError("startingToken is invalid.")
+        query_kwargs["ExclusiveStartKey"] = decoded
     response = _templates_table().query(**query_kwargs)
     # Lightweight list descriptors — no per-row S3 rehydration of offloaded bodies. Callers fetch
     # the full configBody/webFormJson via the single-template GET.
@@ -436,8 +494,7 @@ def create_template(database_id, pipeline_id, request, username, event=None):
         # the headless trigger. On create the id is usually new, but a client may supply an id that a
         # trigger already references, so check here too.
         trigger_errors = validate_template_not_breaking_triggers(
-            _triggers_table(), _workflow_table(), database_id, pipeline_id, template_id,
-            request.tagSchema)
+            _triggers_table(), database_id, pipeline_id, template_id, request.tagSchema)
         if trigger_errors:
             return validation_error(body={"message": {"triggerTemplateErrors": trigger_errors}})
 
@@ -456,6 +513,10 @@ def create_template(database_id, pipeline_id, request, username, event=None):
         is_default=bool(request.isDefault),
         created_by=username, modified_by=username,
     )
+    # Enforce single-default-per-pipeline BEFORE the write: unset any prior default so the pipeline is
+    # never durably left with two, which the execute path would resolve by templateId sort order.
+    if request.isDefault:
+        _clear_other_defaults(database_id, pipeline_id, template_id)
     _templates_table().put_item(Item=record)
     # AUDIT LOG: template created. The configuration BODY is deliberately not logged — it can carry
     # prompts and credential-shaped values; the id, format and default flag identify it.
@@ -467,9 +528,6 @@ def create_template(database_id, pipeline_id, request, username, event=None):
         "isDefault": bool(request.isDefault),
         "operation": "create",
     })
-    # Enforce single-default-per-pipeline: unset any prior default when this one is the default.
-    if request.isDefault:
-        _clear_other_defaults(database_id, pipeline_id, template_id)
 
     tag_fields = None
     if request.tagSchema is not None:
@@ -494,8 +552,7 @@ def update_template(database_id, pipeline_id, template_id, request, username, ev
         # A template already chosen as a trigger default must stay renderable headlessly: reject an
         # update that introduces a required tag with no default value while triggers reference it.
         trigger_errors = validate_template_not_breaking_triggers(
-            _triggers_table(), _workflow_table(), database_id, pipeline_id, template_id,
-            request.tagSchema)
+            _triggers_table(), database_id, pipeline_id, template_id, request.tagSchema)
         if trigger_errors:
             return validation_error(body={"message": {"triggerTemplateErrors": trigger_errors}})
 
@@ -506,7 +563,12 @@ def update_template(database_id, pipeline_id, template_id, request, username, ev
     effective_format = request.configFormat if request.configFormat is not None else row.get("configFormat", "json")
     format_changed = (request.configFormat is not None
                       and request.configFormat != row.get("configFormat", "json"))
-    if request.configBody is not None or format_changed:
+    # A tagSchema-only update is checked too. The schema and the body are one contract — a tag's
+    # declared type decides whether its placeholder renders into valid JSON — so retyping a tag can
+    # break a body that neither the request nor this handler otherwise touches. Without this the
+    # template PUT accepted a change the tag-schema PUT (which validates the same pair in
+    # _set_tag_schema_on_template) rejected, leaving two routes to the same contract disagreeing.
+    if request.configBody is not None or format_changed or request.tagSchema is not None:
         effective_body = (request.configBody if request.configBody is not None
                           else _rehydrate_template(row)["configBody"])
         # The EFFECTIVE tag schema, for the same reason as the body and format: a body-only update must
@@ -571,6 +633,9 @@ def update_template(database_id, pipeline_id, template_id, request, username, ev
 
     row["dateModified"] = pr.iso_now()
     row["modifiedBy"] = username
+    # Enforce single-default-per-pipeline before the write, for the same reason as on create.
+    if request.isDefault:
+        _clear_other_defaults(database_id, pipeline_id, template_id)
     _templates_table().put_item(Item=row)
     # AUDIT LOG: template updated (body omitted, as on create).
     log_actions(event or {}, "pipelineTemplateUpdate", {
@@ -581,9 +646,6 @@ def update_template(database_id, pipeline_id, template_id, request, username, ev
     })
     if orphaned_storage:
         _delete_offloaded_objects(orphaned_storage)
-    # Enforce single-default-per-pipeline when this update sets the template as the default.
-    if request.isDefault:
-        _clear_other_defaults(database_id, pipeline_id, template_id)
 
     tag_fields = None
     if request.tagSchema is not None:
@@ -706,7 +768,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if is_tag_schema:
             # The tag schema is a sub-resource of a template; the template must exist.
-            if not _get_template_row(database_id, pipeline_id, template_id):
+            template_row = _get_template_row(database_id, pipeline_id, template_id)
+            if not template_row:
                 return validation_error(status_code=404, body={"message": "Template not found"}, event=event)
             if method == "GET":
                 fields = _load_tag_schema_fields(database_id, pipeline_id, template_id) or []
@@ -718,9 +781,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Round-trip through JSON so enum types serialize to their string values (a plain
                 # .dict() would leave TemplateTagType enum objects that are not JSON-serializable).
                 fields = [json.loads(f.json()) for f in request.fields]
-                errors = _store_tag_schema(database_id, pipeline_id, template_id, fields, username)
+                errors = _set_tag_schema_on_template(
+                    database_id, pipeline_id, template_id, template_row, fields, username)
                 if errors:
-                    return validation_error(body={"message": {"tagSchemaErrors": errors}}, event=event)
+                    return validation_error(body={"message": errors}, event=event)
                 return success(body={"message": TagSchemaResponseModel(
                     pipelineDatabaseId=database_id, pipelineId=pipeline_id,
                     templateId=template_id, fields=fields).dict()})

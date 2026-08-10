@@ -4,24 +4,14 @@
  */
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import * as logs from "aws-cdk-lib/aws-logs";
-import * as sfn from "aws-cdk-lib/aws-stepfunctions";
-import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
-import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
-import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
+import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { buildVamsExecuteMeshCadMetadataExtractionPipelineFunction } from "../lambdaBuilder/conversionMeshCadMetadataExtractionFunctions";
-import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import * as ServiceHelper from "../../../../../helper/service-helper";
-import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
-import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
-import { layerBundlingCommand } from "../../../../../helper/lambda";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 
 export interface ConversionMeshCadMetadataExtractionConstructProps extends cdk.StackProps {

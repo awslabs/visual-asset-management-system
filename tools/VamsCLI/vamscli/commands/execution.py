@@ -200,8 +200,14 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count}
+            # Both stop conditions carry the outstanding token: it is the only way to continue, and
+            # without it a caller chunking a large deployment has to re-walk every page already paid
+            # for (each of which re-pays the per-page authorization fan-out).
             if next_token and len(all_items) >= max_total:
-                result['note'] = f"Reached maximum of {max_total} items. More may be available."
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Reached maximum of {max_total} items. More may be available — resume with "
+                    f"--starting-token {next_token}")
             elif next_token and page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
                 result['NextToken'] = next_token
                 result['note'] = (
@@ -444,8 +450,14 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
                     break
             result = {'Items': all_items, 'collection': collection, 'totalItems': len(all_items),
                       'autoPaginated': True, 'pageCount': page_count}
+            # The token is emitted on both stop conditions: a token is only valid alongside the
+            # --collection and --pipeline-id it was issued with, and dropping it leaves the caller
+            # re-walking the collection from row one.
             if next_token and len(all_items) >= max_total:
-                result['note'] = f"Reached maximum of {max_total} rows. More may be available."
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Reached maximum of {max_total} rows. More may be available — resume with "
+                    f"--starting-token {next_token}")
             elif next_token and page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
                 result['NextToken'] = next_token
                 result['note'] = (

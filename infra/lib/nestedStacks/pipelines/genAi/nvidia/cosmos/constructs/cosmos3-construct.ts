@@ -36,6 +36,7 @@ import {
     grantExternalAssetBucketKmsKeys,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
 export interface Cosmos3ConstructProps extends cdk.StackProps {
@@ -76,13 +77,21 @@ export class Cosmos3Construct extends Construct {
 
         /**
          * HuggingFace Token stored in Secrets Manager
-         * The token value comes from the CDK config and is stored as a secret
-         * so Batch can inject it securely without exposing it in environment variables.
+         * Batch injects the secret into the container so the token is never an env var value.
+         * The secret is created EMPTY and populated at deploy time from config by a custom
+         * resource that carries the token in its code asset, so the token never lands in the
+         * synthesized CloudFormation template.
          */
         const hfTokenSecret = new secretsmanager.Secret(this, "CosmosHfTokenSecret", {
             description: "HuggingFace API token for downloading NVIDIA Cosmos models",
-            secretStringValue: cdk.SecretValue.unsafePlainText(cosmosConfig.huggingFaceToken),
         });
+
+        populateHuggingFaceTokenSecret(
+            this,
+            "CosmosHfTokenSecretPopulate",
+            hfTokenSecret,
+            cosmosConfig.huggingFaceToken
+        );
 
         NagSuppressions.addResourceSuppressions(
             hfTokenSecret,

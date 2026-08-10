@@ -667,6 +667,26 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        ...(props.config.app.addons.usePhysnaSync.enabled
+                            ? [
+                                  {
+                                      M: {
+                                          field: {
+                                              S: "route__path",
+                                          },
+                                          id: {
+                                              S: `16_${roleNameIDClean}_api_paths`,
+                                          },
+                                          operator: {
+                                              S: "starts_with",
+                                          },
+                                          value: {
+                                              S: "/addon/physna/viewer", //Physna viewer proxy (per-asset authorization is enforced server-side)
+                                          },
+                                      },
+                                  },
+                              ]
+                            : []),
                     ],
                 },
                 description: {
@@ -730,7 +750,24 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     ],
                 },
                 criteriaAnd: {
-                    L: [],
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_execution_logs`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/workflows/executions/", //Scopes the /logs suffix to the execution logs route; "logs" is a legal pipeline/workflow/template/database/asset id
+                                },
+                            },
+                        },
+                    ],
                 },
                 description: {
                     S: "Withhold the administrative execution logs route. A deny overrides the broader GET allow on /workflows.",

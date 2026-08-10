@@ -118,10 +118,29 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 past the bound `get_execution_details` applies — use it when that response names
 a metadata collection in `truncatedCollections`.
 
+`get_execution_details` returns a step's configuration in two forms:
+`renderedConfig` inline (pre-system-tag, and size-bounded) and
+`renderedConfigLocation` whenever that S3 object exists — the fully substituted
+body the pipeline read. Read the location to see what actually ran, not only when
+`renderedConfigTruncated` is set.
+
+`get_execution_logs` full mode takes `limit` (default 100, server cap 1000),
+`next_token`, `filter_pattern`, `start_time`, and `end_time` (epoch
+milliseconds). A pipeline container emits thousands of lines, so raise `limit` and
+walk the returned `nextToken` with the same parameters rather than concluding
+anything from the first page.
+
 `list_workflow_executions` covers ONE asset's history and accepts optional
 `workflow_id` / `workflow_database_id` filters; `list_executions` is the global,
 cross-asset list. A workflow id is unique only within its database, so pass both
 filters when the same id exists in more than one (`GLOBAL` is the shared catalog).
+`list_executions` echoes the applied `filterStartDate` window (90 days back by
+default) and surfaces a `warnings` array — plus `truncated` — when a page withheld
+rows it could not evaluate, so a short list is never mistaken for a complete one.
+
+`list_workflows` takes `include_archived` (default off, matching `list_pipelines`
+and `list_assets`); it is how an archived workflow's id is found in order to
+restore it with `unarchive_workflow`.
 
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
@@ -140,7 +159,14 @@ Pipelines, workflows, and executions: `create_pipeline`, `update_pipeline`,
 `abort_execution`.
 
 `execute_workflow`, `rerun_execution`, and the pipelines they launch start real
-AWS compute and can incur cost. Keep them out of `autoApprove`.
+AWS compute and can incur cost. Keep them out of `autoApprove`. `rerun_execution`
+re-runs ONE execution; its `execution_group_id` assigns the new execution's group
+membership rather than selecting a group to re-run.
+
+`create_pipeline` and `update_pipeline` can return a `warnings` array on a
+successful save (for example a `requireTemplate` pipeline with no default template
+chosen, or the stale-deployment notice after an `executionConfig` change).
+The save succeeded; the warnings still need relaying.
 
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 

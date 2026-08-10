@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from xml.sax.saxutils import escape as _xml_escape
 
 from common.workflows import templateTags as tags
+from common.workflows.templateTagSchema import normalize_tag_type
 
 # A template tag: {{ tagName }} — the name is alphanumeric + underscore. Whitespace inside the
 # braces is tolerated. This is intentionally strict so it does not accidentally match JSON/Jinja
@@ -61,6 +62,30 @@ class MissingTemplateTagError(Exception):
         )
 
 
+# The rendered-output ceiling. Substitution is expansive: a metadata-content tag emits the whole
+# metadata payload at EVERY occurrence, so a small body repeating one tag renders to that payload
+# times the occurrence count. The limit is well above any legitimate configuration — several whole
+# metadata payloads plus the largest body a caller may submit (models.executions.
+# MAX_CUSTOM_TEMPLATE_OVERRIDE_LENGTH) — and is checked as the output accumulates, so an amplifying
+# body is refused rather than materialized.
+MAX_RENDERED_CONFIG_LENGTH = 16 * 1024 * 1024
+
+
+class RenderedConfigTooLargeError(Exception):
+    """Raised when substitution would render more text than MAX_RENDERED_CONFIG_LENGTH.
+
+    Carries the limit so the caller can name it; the rendered text itself is never carried (it is
+    caller content, and the point of the error is that it is too large to hold)."""
+
+    def __init__(self, limit=MAX_RENDERED_CONFIG_LENGTH):
+        self.limit = limit
+        super().__init__(
+            f"The input configuration renders to more than {limit} characters. A template tag that "
+            f"substitutes metadata content emits the whole payload at every occurrence, so a body "
+            f"repeating such a tag renders far larger than the body itself."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Value helpers
 # ---------------------------------------------------------------------------
@@ -71,11 +96,15 @@ def _s(value):
 
 
 # The config format whose quoted scalars are escaped with XML character references rather than JSON
-# string escapes (mirrors the 'xml' member of pipelineRecords.TEMPLATE_CONFIG_FORMATS).
+# string escapes (mirrors the 'xml' member of models.pipelines.TEMPLATE_CONFIG_FORMATS).
 CONFIG_FORMAT_XML = "xml"
 
+# The format a text with no declared one is escaped as; also the escape json / yaml / openjd / raw
+# quoted scalars share.
+CONFIG_FORMAT_JSON = "json"
 
-def escape_scalar(value, config_format="json"):
+
+def escape_scalar(value, config_format=CONFIG_FORMAT_JSON):
     """Escape a scalar tag value for substitution inside the template's own quoting, per config
     format.
 
@@ -300,24 +329,46 @@ def _metadata_context(metadata_payload):
     return context
 
 
-def _substitute(text, context, config_format="json"):
+def _substitute(text, context, config_format=CONFIG_FORMAT_JSON, limit=MAX_RENDERED_CONFIG_LENGTH):
     """Replace every ``{{tag}}`` in ``text`` using ``context`` ({tag: (kind, value)}). Raises
     MissingTemplateTagError listing any tags not in the context. Scalars are escaped for
     ``config_format`` (see escape_scalar) so they sit safely inside the template's own quotes; json
-    values are emitted as JSON literals."""
+    values are emitted as JSON literals.
+
+    Raises RenderedConfigTooLargeError once the output passes ``limit``. The pieces are accumulated
+    and measured as they are produced, so an amplifying body stops at the limit rather than building
+    the whole result first and being told afterwards."""
     found = set(_TAG_PATTERN.findall(text))
     unknown = found - set(context.keys())
     if unknown:
         raise MissingTemplateTagError(unknown)
 
-    def _replace(match):
-        name = match.group(1)
-        kind, value = context[name]
-        if kind == "json":
-            return json.dumps(value)
-        return escape_scalar(value, config_format)
+    # Each tag's substitution is rendered once and reused: the same value repeated N times costs one
+    # serialization rather than N, which matters most for a metadata-content payload.
+    rendered_tags = {}
 
-    return _TAG_PATTERN.sub(_replace, text)
+    def _rendered(name):
+        if name not in rendered_tags:
+            kind, value = context[name]
+            rendered_tags[name] = (json.dumps(value) if kind == "json"
+                                   else escape_scalar(value, config_format))
+        return rendered_tags[name]
+
+    pieces = []
+    total = 0
+    position = 0
+    for match in _TAG_PATTERN.finditer(text):
+        pieces.append(text[position:match.start()])
+        pieces.append(_rendered(match.group(1)))
+        total += (match.start() - position) + len(pieces[-1])
+        if total > limit:
+            raise RenderedConfigTooLargeError(limit)
+        position = match.end()
+    pieces.append(text[position:])
+    if total + len(pieces[-1]) > limit:
+        raise RenderedConfigTooLargeError(limit)
+
+    return "".join(pieces)
 
 
 def uses_template_tags(text):
@@ -380,16 +431,18 @@ STRUCTURED_USER_TAG_TYPES = frozenset(USER_TAG_TYPE_SHAPES)
 def user_tag_shapes(tag_schema):
     """{tagKey: JSON literal text} for the typed user tags in a template's ``tagSchema``.
 
-    Only the types that render a NON-text value appear. A malformed or partial schema entry is skipped
-    rather than raising: this feeds a structural parse check, and the schema's own shape is validated
-    separately by ``validate_tag_schema``.
+    Only the types that render a NON-text value appear. A declared type is normalized the same way
+    ``validate_tag_schema`` normalizes it, so a schema stored as "INTEGER" is classified as the integer
+    it is accepted as rather than falling through to the text stand-in. A malformed or partial schema
+    entry is skipped rather than raising: this feeds a structural parse check, and the schema's own
+    shape is validated separately by ``validate_tag_schema``.
     """
     shapes = {}
     for field in tag_schema or []:
         if not isinstance(field, dict):
             continue
         key = field.get("tagKey")
-        shape = USER_TAG_TYPE_SHAPES.get(field.get("type"))
+        shape = USER_TAG_TYPE_SHAPES.get(normalize_tag_type(field.get("type")))
         if key and shape:
             shapes[key] = shape
     return shapes
@@ -420,7 +473,8 @@ def json_body_placeholder_text(text, structured_as_string=False, tag_schema=None
     structured_user_tags = {
         field.get("tagKey")
         for field in (tag_schema or [])
-        if isinstance(field, dict) and field.get("type") in STRUCTURED_USER_TAG_TYPES
+        if isinstance(field, dict)
+        and normalize_tag_type(field.get("type")) in STRUCTURED_USER_TAG_TYPES
     }
 
     def _replace(match):
@@ -443,14 +497,22 @@ def json_body_placeholder_text(text, structured_as_string=False, tag_schema=None
 
 
 def render_config(text, manifest, execution, metadata_loader=None, now=None,
-                  config_format="json"):
+                  config_format=CONFIG_FORMAT_JSON):
     """Render an input-configuration text (or any templated field) against a task's manifest +
     execution context. Returns the rendered text unchanged when it contains no tags.
 
     ``metadata_loader`` is an optional zero-arg callable returning the metadata payload dict; it is
     invoked at most once, and only when a metadata-content tag is actually present (lazy read).
-    ``config_format`` is the template's configuration format, which decides how a scalar tag value is
-    escaped (see escape_scalar). Raises MissingTemplateTagError on an unknown tag (strict)."""
+
+    ``config_format`` is the format of THIS text, and it decides how a scalar tag value is escaped
+    (see escape_scalar). A caller rendering a template's configuration body must pass that template's
+    declared configFormat: the default JSON string escape is the quoted-scalar syntax of json / yaml /
+    openjd / raw, but it leaves ``&``, ``<`` and ``>`` intact, so applying it to an ``xml`` body emits
+    a value that its parser rejects or reads as markup. The default suits a plain templated field (an
+    output path, a name), which carries no declared format.
+
+    Raises MissingTemplateTagError on an unknown tag (strict) and RenderedConfigTooLargeError when the
+    text renders past MAX_RENDERED_CONFIG_LENGTH."""
     if not uses_template_tags(text):
         return text
 

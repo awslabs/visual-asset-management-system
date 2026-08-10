@@ -59,6 +59,40 @@ class TestTriggerMatching:
         assert body["pipelineExecutionParameters"]["convert"] == {"templateId": "tpl-A"}
         assert body["pipelineExecutionParameters"]["label"] == {"templateId": "tpl-B"}
 
+    def test_arity_none_workflow_fires_with_no_input_files(self):
+        """An arity-'none' workflow rejects any input file at launch, so a trigger emitting the
+        uploaded file would make it permanently inert. The uploaded file still names the asset the run
+        writes back to — the explicit output pair the zero-input launch path requires."""
+        rows = [self._trigger(wf_id="wfNone")]
+        matches = tm.match_fileupload_triggers(
+            rows, "db1", "a1", "/prompt.txt", version_id="v3",
+            input_file_arity_for=lambda wfdb, wf: "none")
+        assert len(matches) == 1
+        _wfdb, _wfid, body = matches[0]
+        assert body["inputFiles"] == []
+        assert body["outputAssetId"] == "a1" and body["outputDatabaseId"] == "db1"
+        assert body["triggerType"] == "fileUpload"
+
+    def test_other_arities_still_take_the_uploaded_file(self):
+        rows = [self._trigger(wf_id="wf1")]
+        for arity in ("one", "multi", "", None):
+            _wfdb, _wfid, body = tm.match_fileupload_triggers(
+                rows, "db1", "a1", "/x.glb",
+                input_file_arity_for=lambda wfdb, wf, a=arity: a)[0]
+            assert [f["relativeFileKey"] for f in body["inputFiles"]] == ["/x.glb"]
+        # No lookup supplied at all reads the same way.
+        _wfdb, _wfid, body = tm.match_fileupload_triggers(rows, "db1", "a1", "/x.glb")[0]
+        assert len(body["inputFiles"]) == 1
+
+    def test_arity_is_resolved_per_workflow(self):
+        rows = [self._trigger(wf_id="wfNone"), self._trigger(wf_id="wfOne")]
+        arities = {"wfNone": "none", "wfOne": "one"}
+        bodies = {wf: body for _db, wf, body in tm.match_fileupload_triggers(
+            rows, "db1", "a1", "/x.glb",
+            input_file_arity_for=lambda wfdb, wf: arities[wf])}
+        assert bodies["wfNone"]["inputFiles"] == []
+        assert len(bodies["wfOne"]["inputFiles"]) == 1
+
 
 # ---- Dispatcher handler ----
 
@@ -185,6 +219,62 @@ class TestDispatcher:
             wd._dispatch_uploaded_file("b1", "a1/model.glb", [trigger], "ver-7")
         _wfdb, _wfid, body = m_invoke.call_args.args
         assert body["inputFiles"][0]["versionId"] == "ver-7"
+
+    def test_dispatch_reads_the_targets_arity_from_its_workflow_record(self):
+        # An arity-'none' workflow's trigger fires with no input files, sourced from the same
+        # systemConfig read the chaining flag uses.
+        trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfNone",
+                   "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": []},
+                                                      "defaultTemplateIds": {}}}
+        wd._workflow_system_config_cache.clear()
+        with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/p.txt", "", "")), \
+             patch.object(wd.workflow_storage_table_v2, "get_item",
+                          return_value={"Item": {"systemConfig": {"inputFileArity": "none"}}}), \
+             patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke:
+            wd._dispatch_uploaded_file("b1", "a1/p.txt", [trigger])
+        _wfdb, _wfid, body = m_invoke.call_args.args
+        assert body["inputFiles"] == []
+        assert body["outputAssetId"] == "a1" and body["outputDatabaseId"] == "db1"
+
+    def test_systemconfig_read_is_memoized_per_invocation(self):
+        # One SQS batch can carry many objects for the same workflow; the record is read once.
+        wd._workflow_system_config_cache.clear()
+        with patch.object(wd.workflow_storage_table_v2, "get_item",
+                          return_value={"Item": {"systemConfig": {"inputFileArity": "one",
+                                                                  "allowWorkflowTriggerChaining": True}}}) as m_get:
+            assert wd._workflow_input_file_arity("GLOBAL", "wf1") == "one"
+            assert wd._workflow_allows_trigger_chaining("GLOBAL", "wf1") is True
+            assert wd._workflow_input_file_arity("GLOBAL", "wf1") == "one"
+        assert m_get.call_count == 1
+
+    def test_unreadable_workflow_record_falls_back_to_conservative_defaults(self):
+        wd._workflow_system_config_cache.clear()
+        with patch.object(wd.workflow_storage_table_v2, "get_item",
+                          side_effect=RuntimeError("throttled")):
+            assert wd._workflow_input_file_arity("GLOBAL", "wf1") == ""
+            assert wd._workflow_allows_trigger_chaining("GLOBAL", "wf1") is False
+
+
+@pytest.mark.unit
+class TestExecuteInvokeIsNotRetried:
+    """The executeWorkflowV2 Invoke is synchronous and launches an execution per delivered request, so
+    a botocore retry of a slow-but-successful call would launch duplicate runs. The client must
+    deliver exactly one attempt and wait out the callee's full runtime."""
+
+    def test_invoke_client_delivers_one_attempt(self):
+        # botocore normalizes to total_max_attempts (initial attempt included), so 1 means no retry.
+        assert (wd.lambda_client.meta.config.retries or {}).get("total_max_attempts") == 1
+
+    def test_read_timeout_covers_the_callees_runtime(self):
+        # executeWorkflowV2 runs up to 15 minutes; a shorter read timeout would abandon a launch that
+        # actually happened and report it as a failure.
+        assert wd.lambda_client.meta.config.read_timeout >= 900
+
+    def test_read_clients_keep_the_retrying_config(self):
+        # Only the non-idempotent Invoke opts out; the read paths still retry throttles. Their
+        # max_attempts=5 normalizes to 6 total attempts (5 retries on top of the initial one).
+        assert wd.s3_client.meta.config.retries.get("total_max_attempts") == 6
+        assert wd.dynamodb.meta.client.meta.config.retries.get("total_max_attempts") == 6
 
 
 @pytest.mark.unit

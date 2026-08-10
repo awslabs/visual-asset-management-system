@@ -5,15 +5,41 @@
 
 Run from this directory:  python -m pytest test_v2_5_to_v2_6_migration.py -q
 
-The migration module's filename is not a valid python identifier, so it is loaded by path.
+The migration module's filename is not a valid python identifier, so it is loaded by path. Several
+tests feed an emitted row to the BACKEND reader that consumes it (the re-run key reconstruction, the
+trigger file-filter matcher, the template body-storage plan), so an emitted shape is proved against
+the code that reads it rather than against a restatement of it.
 """
 
 import importlib.util
+import json
 import os
+import sys
 
 import pytest
 
-_MODULE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "v2.5_to_v2.6_migration.py")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_MODULE_PATH = os.path.join(_HERE, "v2.5_to_v2.6_migration.py")
+
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "..", "..", "backend", "backend"))
+from common.workflows import templateBodyStorage as _tbs  # noqa: E402
+from common.workflows.executionValidation import (  # noqa: E402
+    apply_input_file_filters as _apply_input_file_filters,
+)
+
+
+def _to_asset_relative_key(full_key, asset_root_s3_key):
+    """The v2.6 re-run conversion (executionService._to_asset_relative_key), restated here because
+    importing executionService pulls in its module-level SSM resource-name resolution."""
+    fk = "/" + (full_key or "").lstrip("/")
+    root = (asset_root_s3_key or "").strip("/")
+    if root:
+        body = fk.lstrip("/")
+        if body == root or body == root + "/":
+            return "/"
+        if body.startswith(root + "/"):
+            return "/" + body[len(root) + 1:]
+    return fk
 
 
 def _load_module():
@@ -54,6 +80,17 @@ class FakeDynamoClient:
         return {}
 
 
+class FakeS3Client:
+    """Minimal S3 client double: records every put_object body by key."""
+
+    def __init__(self):
+        self.objects = {}
+
+    def put_object(self, Bucket, Key, Body):
+        self.objects[(Bucket, Key)] = Body
+        return {}
+
+
 _EXEC_CFG = {
     "workflow_executions_storage_table_name_v1": "legacy",
     "workflow_executions_storage_table_name_v2": "mainV2",
@@ -63,7 +100,27 @@ _EXEC_CFG = {
     "workflow_storage_table_name": "workflowV1",
     "workflow_execution_configuration_storage_table_name": "wfConfig",
     "pipeline_execution_input_configuration_storage_table_name": "pexecConfig",
+    "asset_storage_table_name": "assets",
+    "s3_asset_buckets_storage_table_name": "buckets",
 }
+
+
+def _asset_row(database_id="db1", asset_id="asset1", location_key="myasset/", bucket_id="b1"):
+    return {
+        "databaseId": {"S": database_id},
+        "assetId": {"S": asset_id},
+        "bucketId": {"S": bucket_id},
+        "assetLocation": {"M": {"Key": {"S": location_key}}},
+    }
+
+
+def _bucket_row(bucket_id="b1", bucket_name="vams-assets", prefix="", is_default=True):
+    return {
+        "bucketId": {"S": bucket_id},
+        "bucketName": {"S": bucket_name},
+        "baseAssetsPrefix": {"S": prefix},
+        "isDefault": {"BOOL": is_default},
+    }
 
 
 def _legacy_execution(execution_id, start_date):
@@ -93,12 +150,15 @@ def _workflow_v1_with_two_pipelines():
     }
 
 
-def _run_executions(legacy_rows, workflow_rows=None):
+def _run_executions(legacy_rows, workflow_rows=None, asset_rows=None, bucket_rows=None, cfg=None):
     client = FakeDynamoClient({
         "legacy": legacy_rows,
         "workflowV1": workflow_rows if workflow_rows is not None else [_workflow_v1_with_two_pipelines()],
+        "assets": asset_rows if asset_rows is not None else [_asset_row()],
+        "buckets": bucket_rows if bucket_rows is not None else [_bucket_row()],
     })
-    counts, total = mig.migrate_workflow_executions(client, _EXEC_CFG, dry_run=False, limit=None)
+    counts, total = mig.migrate_workflow_executions(
+        client, cfg if cfg is not None else _EXEC_CFG, dry_run=False, limit=None)
     return client, counts, total
 
 
@@ -308,6 +368,8 @@ _DEF_CFG = {
     "pipeline_templates_storage_table_name": "templates",
     "workflow_storage_table_name": "workflowV1",
     "workflow_storage_table_name_v2": "workflowV2",
+    "workflow_triggers_storage_table_name": "triggers",
+    "pipeline_template_body_bucket_name": "vams-assets",
 }
 
 
@@ -336,14 +398,15 @@ def _v1_workflow(pipeline_ids):
     }
 
 
-def _run_definitions(pipelines, workflows, existing_v2_workflows=None):
+def _run_definitions(pipelines, workflows, existing_v2_workflows=None, cfg=None, s3_client=None):
     client = FakeDynamoClient({
         "pipelineV1": pipelines,
         "workflowV1": workflows,
         "workflowV2": existing_v2_workflows or [],
     })
     counts, totals = mig.migrate_pipeline_workflow_definitions(
-        client, _DEF_CFG, dry_run=False, limit=None)
+        client, cfg if cfg is not None else _DEF_CFG, dry_run=False, limit=None,
+        s3_client=s3_client if s3_client is not None else FakeS3Client())
     return client, counts, totals
 
 
@@ -620,6 +683,333 @@ class TestMigratedWorkflowStateMachine:
         row = client.writes["workflowV2"][0]
         assert row["workflow_arn"] == {"S": "arn:aws:states:us-east-1:1:stateMachine:vams-wf1redeployed"}
         assert row["jobNames"] == {"L": [{"S": "abcde-p1"}]}
+
+
+class TestMigratedEventBridgeEventSignature:
+    """A V1 EventBridge pipeline stored resourceId + eventSource + eventDetailType. Dropping the last
+    two silently repoints the migrated pipeline at 'vams.pipeline' / the pipelineId, so the customer's
+    EventBridge rule no longer matches and a waitForCallback run hangs for its whole taskTimeout."""
+
+    @staticmethod
+    def _v1_eventbridge_pipeline(bus_arn, source="customer.vams.render",
+                                 detail_type="RenderJobRequested"):
+        row = _v1_pipeline("eb-pipeline")
+        row["pipelineExecutionType"] = {"S": "EventBridge"}
+        row["waitForCallback"] = {"S": "Enabled"}
+        row["userProvidedResource"] = {"S": json.dumps({
+            "isProvided": True, "resourceId": bus_arn, "resourceType": "EventBridge",
+            "eventSource": source, "eventDetailType": detail_type,
+        })}
+        return row
+
+    def test_source_and_detail_type_are_carried_through(self):
+        client, _counts, _totals = _run_definitions(
+            [self._v1_eventbridge_pipeline("arn:aws:events:us-east-1:123456789012:event-bus/my-bus")],
+            [])
+
+        eb = client.writes["pipelineV2"][0]["executionConfig"]["M"]["eventBridge"]["M"]
+        assert eb["busArn"] == {"S": "arn:aws:events:us-east-1:123456789012:event-bus/my-bus"}
+        assert eb["source"] == {"S": "customer.vams.render"}
+        assert eb["detailType"] == {"S": "RenderJobRequested"}
+
+    def test_the_v1_default_bus_keyword_becomes_an_empty_bus_arn(self):
+        """V1 stored the literal 'default' for the account default bus, which is not a bus ARN and
+        fails EVENTBRIDGE_BUS_ARN validation. An empty value is what the task builder resolves to
+        'default'."""
+        client, _counts, _totals = _run_definitions(
+            [self._v1_eventbridge_pipeline("default")], [])
+
+        eb = client.writes["pipelineV2"][0]["executionConfig"]["M"]["eventBridge"]["M"]
+        assert eb["busArn"] == {"S": ""}
+        assert eb["source"] == {"S": "customer.vams.render"}
+
+    def test_an_eventbridge_pipeline_with_no_stored_resource_still_gets_the_block(self):
+        row = _v1_pipeline("eb-pipeline")
+        row["pipelineExecutionType"] = {"S": "EventBridge"}
+        client, _counts, _totals = _run_definitions([row], [])
+
+        eb = client.writes["pipelineV2"][0]["executionConfig"]["M"]["eventBridge"]["M"]
+        assert eb == {"busArn": {"S": ""}, "source": {"S": ""}, "detailType": {"S": ""}}
+
+
+class TestMigratedAssetScopeAllowsWholeAsset:
+    """A V1 execute request that omitted fileKey ran against the whole asset, so a migrated pipeline
+    and workflow must keep permitting the whole-asset ('/') selection or every launch 400s."""
+
+    def test_migrated_pipeline_allows_a_whole_asset_run(self):
+        client, _counts, _totals = _run_definitions([_v1_pipeline("p1")], [])
+
+        scope = client.writes["pipelineV2"][0]["systemConfig"]["M"]["assetScope"]["M"]
+        assert scope["wholeAssetAllowed"] == {"BOOL": True}
+        assert scope["folderAllowed"] == {"BOOL": False}
+        assert scope["crossAssetAllowed"] == {"BOOL": False}
+        assert scope["singleAssetOnly"] == {"BOOL": True}
+
+    def test_migrated_workflow_allows_a_whole_asset_run(self):
+        client, _counts, _totals = _run_definitions([], [_v1_workflow(["p1"])])
+
+        scope = client.writes["workflowV2"][0]["systemConfig"]["M"]["assetScope"]["M"]
+        assert scope["wholeAssetAllowed"] == {"BOOL": True}
+        assert scope["folderAllowed"] == {"BOOL": False}
+
+
+class TestMigratedWorkflowInputAssetRoot:
+    """The V2 workflow-input record locates each input file's own asset root; a re-run strips that root
+    to recover the asset-relative key. Without it a whole-asset input is re-read as a folder
+    selection."""
+
+    def test_input_row_carries_its_asset_bucket_and_root(self):
+        client, _counts, _total = _run_executions([_legacy_execution("e1", "")])
+
+        row = client.writes["inputs"][0]
+        assert row["s3Bucket"] == {"S": "vams-assets"}
+        assert row["assetRootS3Key"] == {"S": "myasset/"}
+
+    def test_a_whole_asset_input_round_trips_back_to_the_root_selection(self):
+        """The v2.6 re-run path is _to_asset_relative_key(inputAssetFileKey, assetRootS3Key)."""
+        legacy = _legacy_execution("e1", "")
+        # V1 stored inputAssetFileKey as the FULL asset-bucket key; with no fileKey that was the
+        # asset base prefix.
+        legacy["inputAssetFileKey"] = {"S": "myasset/"}
+        client, _counts, _total = _run_executions([legacy])
+
+        row = client.writes["inputs"][0]
+        full_key = row["inputAssetFileKey"]["S"]
+        root = row["assetRootS3Key"]["S"]
+        assert _to_asset_relative_key(full_key, root) == "/"
+
+    def test_a_per_file_input_round_trips_back_to_its_relative_key(self):
+        legacy = _legacy_execution("e1", "")
+        legacy["inputAssetFileKey"] = {"S": "myasset/models/model.glb"}
+        client, _counts, _total = _run_executions([legacy])
+
+        row = client.writes["inputs"][0]
+        assert _to_asset_relative_key(
+            row["inputAssetFileKey"]["S"], row["assetRootS3Key"]["S"]) == "/models/model.glb"
+
+    def test_an_archived_asset_partition_still_resolves_its_location(self):
+        client, _counts, _total = _run_executions(
+            [_legacy_execution("e1", "")],
+            asset_rows=[_asset_row(database_id="db1#deleted")])
+
+        assert client.writes["inputs"][0]["assetRootS3Key"] == {"S": "myasset/"}
+
+    def test_the_fields_are_empty_when_the_asset_tables_are_unconfigured(self):
+        cfg = {k: v for k, v in _EXEC_CFG.items()
+               if k not in ("asset_storage_table_name", "s3_asset_buckets_storage_table_name")}
+        client, counts, _total = _run_executions([_legacy_execution("e1", "")], cfg=cfg)
+
+        row = client.writes["inputs"][0]
+        assert row["s3Bucket"] == {"S": ""}
+        assert row["assetRootS3Key"] == {"S": ""}
+        assert counts["errors"] == 0
+
+
+class TestMigratedPipelineDatabaseIdFallback:
+    """A v2.4.x workflow entry carried no databaseId, so the pipeline cache holds the key with an EMPTY
+    value — dict.get(key, default) can never return the default. An empty pipelineDatabaseId resolves
+    no pipeline definition and indexes the row under ':pipelineId'."""
+
+    def test_an_entry_without_a_database_id_falls_back_to_the_workflow_database(self):
+        client, _counts, _total = _run_executions(
+            [_legacy_execution("e1", "")],
+            workflow_rows=[{
+                "workflowId": {"S": "wf1"},
+                "databaseId": {"S": "db1"},
+                "specifiedPipelines": {"M": {"functions": {"L": [
+                    {"M": {"name": {"S": "my-conv"}}},
+                ]}}},
+            }])
+
+        row = client.writes["pexec"][0]
+        assert row["pipelineDatabaseId"] == {"S": "db1"}
+        assert row["pipelineDatabaseId:pipelineId"] == {"S": "db1:my-conv"}
+
+    def test_an_explicit_entry_database_id_still_wins(self):
+        client, _counts, _total = _run_executions(
+            [_legacy_execution("e1", "")],
+            workflow_rows=[{
+                "workflowId": {"S": "wf1"},
+                "databaseId": {"S": "db1"},
+                "specifiedPipelines": {"M": {"functions": {"L": [
+                    {"M": {"name": {"S": "my-conv"}, "databaseId": {"S": "db2"}}},
+                ]}}},
+            }])
+
+        assert client.writes["pexec"][0]["pipelineDatabaseId"] == {"S": "db2"}
+
+
+class TestMigratedTemplateBodyStorage:
+    """Template bodies route through the same hybrid inline/S3 storage the template service uses. A V1
+    inputParameters JSON had no length cap, so a body written inline above the threshold exceeds
+    DynamoDB's 400 KB item limit and the pipeline migrates WITHOUT its template."""
+
+    def test_a_small_body_stays_inline_and_carries_its_hash(self):
+        body = '{"quality": "high"}'
+        client, counts, _totals = _run_definitions([_v1_pipeline("p1", body)], [])
+
+        template = client.writes["templates"][0]
+        assert template["bodyStorage"] == {"S": "inline"}
+        assert template["configBody"] == {"S": body}
+        assert template["configBodyS3Key"] == {"S": ""}
+        assert template["configBodyHash"] == {"S": _tbs.content_hash(body)}
+        assert counts["templates"] == 1
+
+    def test_a_body_over_the_inline_threshold_is_offloaded_to_the_default_bucket(self):
+        body = '{"blob": "' + ("x" * (_tbs.INLINE_THRESHOLD_BYTES + 1)) + '"}'
+        assert _tbs.should_offload(body, "")
+        s3_client = FakeS3Client()
+        client, counts, _totals = _run_definitions(
+            [_v1_pipeline("p1", body)], [], s3_client=s3_client)
+
+        template = client.writes["templates"][0]
+        expected_key = _tbs.config_body_s3_key("db1", "p1", "migrated-default")
+        assert template["bodyStorage"] == {"S": "s3"}
+        assert template["configBody"] == {"S": ""}
+        assert template["configBodyS3Key"] == {"S": expected_key}
+        assert template["configBodyHash"] == {"S": _tbs.content_hash(body)}
+        assert s3_client.objects[("vams-assets", expected_key)] == body.encode("utf-8")
+        assert counts["templates"] == 1
+
+    def test_an_unresolvable_bucket_skips_the_template_rather_than_writing_an_oversized_row(self):
+        body = '{"blob": "' + ("x" * (_tbs.INLINE_THRESHOLD_BYTES + 1)) + '"}'
+        cfg = dict(_DEF_CFG, pipeline_template_body_bucket_name=None)
+        client, counts, _totals = _run_definitions([_v1_pipeline("p1", body)], [], cfg=cfg)
+
+        assert client.writes.get("templates") is None
+        assert counts["templates"] == 0
+        assert counts["errors"] == 1
+        # The pipeline itself still migrates.
+        assert counts["pipelines"] == 1
+
+    def test_a_skipped_template_is_not_referenced_by_a_migrated_workflow(self):
+        body = '{"blob": "' + ("x" * (_tbs.INLINE_THRESHOLD_BYTES + 1)) + '"}'
+        cfg = dict(_DEF_CFG, pipeline_template_body_bucket_name=None)
+        client, _counts, _totals = _run_definitions(
+            [_v1_pipeline("p1", body)], [_v1_workflow(["p1"])], cfg=cfg)
+
+        ref = client.writes["workflowV2"][0]["specifiedPipelines"]["L"][0]["M"]
+        assert ref["defaultTemplateId"] == {"S": ""}
+
+
+class TestMigratedFileUploadTrigger:
+    """V1's autoTriggerOnFileExtensionsUpload is a WorkflowTriggersStorageTable fileUpload row in V2.
+    Without one, every auto-execute workflow silently stops firing on upload after the upgrade."""
+
+    @staticmethod
+    def _v1_workflow_with_auto_trigger(extensions):
+        workflow = _v1_workflow(["p1"])
+        workflow["autoTriggerOnFileExtensionsUpload"] = {"S": extensions}
+        return workflow
+
+    def test_an_extension_list_becomes_a_filtered_file_upload_trigger(self):
+        client, counts, _totals = _run_definitions(
+            [], [self._v1_workflow_with_auto_trigger("glb,.laz, E57")])
+
+        row = client.writes["triggers"][0]
+        assert row["workflowDatabaseId:workflowId"] == {"S": "db1:wf1"}
+        assert row["triggerType"] == {"S": "fileUpload"}
+        # TriggersByBaseTypeGSI is queried by exact type, so the bare type must be carried separately.
+        assert row["triggerBaseType"] == {"S": "fileUpload"}
+        assert row["triggerId"] == {"S": ""}
+        assert row["enabled"] == {"BOOL": True}
+        filters = row["triggerConfig"]["M"]["inputFileFilters"]["M"]
+        assert filters["allow"] == {"L": [{"S": "*.glb"}, {"S": "*.laz"}, {"S": "*.e57"}]}
+        assert filters["exclude"] == {"L": []}
+        assert counts["triggers"] == 1
+
+    def test_the_allow_all_keyword_becomes_an_unrestricted_trigger(self):
+        for keyword in ("all", ".all", "ALL"):
+            client, _counts, _totals = _run_definitions(
+                [], [self._v1_workflow_with_auto_trigger(keyword)])
+
+            filters = client.writes["triggers"][0]["triggerConfig"]["M"]["inputFileFilters"]["M"]
+            assert filters["allow"] == {"L": []}, keyword
+
+    def test_the_emitted_patterns_match_an_uploaded_file(self):
+        """The dispatcher applies the trigger's allow list with the same matcher the execute path
+        uses, so the migrated patterns must be in the form that matcher reads."""
+        client, _counts, _totals = _run_definitions(
+            [], [self._v1_workflow_with_auto_trigger("glb")])
+
+        filters = client.writes["triggers"][0]["triggerConfig"]["M"]["inputFileFilters"]["M"]
+        allow = [entry["S"] for entry in filters["allow"]["L"]]
+        assert _apply_input_file_filters(
+            [{"relativeFileKey": "/models/model.glb"}], {"allow": allow, "exclude": []})
+        assert not _apply_input_file_filters(
+            [{"relativeFileKey": "/models/model.stl"}], {"allow": allow, "exclude": []})
+
+    def test_a_workflow_without_an_auto_trigger_writes_no_trigger_row(self):
+        client, counts, _totals = _run_definitions([], [_v1_workflow(["p1"])])
+
+        assert client.writes.get("triggers") is None
+        assert counts["triggers"] == 0
+
+    def test_a_disabled_workflow_migrates_a_disabled_trigger(self):
+        workflow = self._v1_workflow_with_auto_trigger("glb")
+        workflow["enabled"] = {"BOOL": False}
+        client, _counts, _totals = _run_definitions([], [workflow])
+
+        assert client.writes["triggers"][0]["enabled"] == {"BOOL": False}
+
+    def test_a_skipped_built_in_workflow_writes_no_trigger_row(self):
+        workflow = self._v1_workflow_with_auto_trigger("glb")
+        workflow["databaseId"] = {"S": "GLOBAL"}
+        workflow["workflowId"] = {"S": "conversion-3d-basic-to-obj"}
+        client, counts, _totals = _run_definitions([], [workflow])
+
+        assert client.writes.get("triggers") is None
+        assert counts["skipped_global"] == 1
+
+
+class TestBatchWriteUnprocessedItemsRetry:
+    """DynamoDB returns rows unprocessed when the table or a GSI throttles. Retries fired back to back
+    hit the same exhausted write bucket, so the rows come back unprocessed and are dropped."""
+
+    class _ThrottlingClient(FakeDynamoClient):
+        def __init__(self, throttle_times):
+            super().__init__({})
+            self.throttle_times = throttle_times
+            self.batch_calls = 0
+
+        def batch_write_item(self, RequestItems):
+            self.batch_calls += 1
+            if self.batch_calls <= self.throttle_times:
+                table_name = next(iter(RequestItems))
+                return {"UnprocessedItems": {table_name: RequestItems[table_name]}}
+            return super().batch_write_item(RequestItems)
+
+    def test_retries_sleep_between_attempts(self, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(mig.time, "sleep", sleeps.append)
+        client = self._ThrottlingClient(throttle_times=3)
+
+        written, errors = mig.flush_batch_write(
+            client, "mainV2", [{"workflowExecutionId": {"S": "e0"}}], dry_run=False)
+
+        assert (written, errors) == (1, 0)
+        assert len(sleeps) == 3
+        # Exponential with jitter: each window is strictly larger than the previous one's ceiling.
+        assert sleeps[0] < sleeps[1] < sleeps[2]
+
+    def test_a_prolonged_throttle_falls_back_to_per_row_writes_rather_than_dropping_rows(
+            self, monkeypatch):
+        monkeypatch.setattr(mig.time, "sleep", lambda _seconds: None)
+        # Throttles past the retry budget, so every retry returns the rows unprocessed.
+        client = self._ThrottlingClient(throttle_times=mig._BATCH_WRITE_MAX_RETRIES + 1)
+        batch = [{"workflowExecutionId": {"S": f"e{i}"}} for i in range(3)]
+
+        written, errors = mig.flush_batch_write(client, "mainV2", batch, dry_run=False)
+
+        assert (written, errors) == (3, 0)
+        assert [r["workflowExecutionId"] for r in client.writes["mainV2"]] == [
+            {"S": "e0"}, {"S": "e1"}, {"S": "e2"}]
+
+    def test_the_retry_budget_is_not_three_back_to_back_attempts(self):
+        assert mig._BATCH_WRITE_MAX_RETRIES > 3
+        assert mig._batch_write_backoff_seconds(1) > 0
+        assert (mig._batch_write_backoff_seconds(20)
+                <= mig._BATCH_WRITE_BACKOFF_MAX_SECONDS * 2)
 
 
 if __name__ == "__main__":

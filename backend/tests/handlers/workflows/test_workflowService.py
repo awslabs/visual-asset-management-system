@@ -433,6 +433,89 @@ class TestExecutionCountEnrichment:
 
 
 @pytest.mark.unit
+class TestListPageByteBudget:
+    """The row cap alone does not bound the list response: a workflow row carries specifiedPipelines,
+    systemConfig and the computed aggregate filters, so a page at the row cap can pass the 6 MB Lambda
+    synchronous-response limit — which returns a 502 with no body and no NextToken, so the caller
+    cannot page past it. The page stops at a byte budget and resumes from the last row it kept."""
+
+    def _fat_item(self, workflow_id, filter_count=400):
+        # A strict extension whitelist is normal for a conversion workflow, and it is echoed back in
+        # both systemConfig and the computed aggregate.
+        allow = [f"*.ext{n:04d}" for n in range(filter_count)]
+        return {
+            "databaseId": "db1", "workflowId": workflow_id, "workflowName": workflow_id,
+            "allListPartition": "workflow", "dateModified": f"2026-01-01T00:00:{int(workflow_id[-1]):02d}Z",
+            "systemConfig": {"inputFileFilters": {"allow": allow, "exclude": []}},
+            "specifiedPipelines": [{"pipelineId": "pipe1"}],
+        }
+
+    def _run(self, items, max_bytes, on_by_date_gsi=False):
+        from backend.backend.handlers.workflows import workflowService as ws
+        with patch.object(ws, "_enforce_workflow", return_value=True), \
+             patch.object(ws, "_execution_count", return_value=1), \
+             patch.object(ws, "_trigger_summary", return_value={"triggerCount": 0,
+                                                               "triggersEnabledCount": 0}), \
+             patch.object(ws, "_batch_pipeline_system_configs", return_value={}), \
+             patch.object(ws, "MAX_LIST_PAGE_BYTES", max_bytes):
+            return ws._filtered_page({"Items": items}, include_archived=False,
+                                     claims_and_roles={"tokens": ["u"]},
+                                     on_by_date_gsi=on_by_date_gsi)
+
+    def _page_bytes(self, result):
+        return len(json.dumps(result.dict(), default=str).encode("utf-8"))
+
+    def test_page_stops_at_the_byte_budget(self):
+        items = [self._fat_item(f"wf-{n}") for n in range(8)]
+        # A budget of roughly three items' worth: the page must return fewer than all eight.
+        one_item = self._page_bytes(self._run(items[:1], max_bytes=10 * 1024 * 1024))
+        result = self._run(items, max_bytes=one_item * 3)
+        assert 0 < len(result.Items) < len(items)
+        assert self._page_bytes(result) <= one_item * 4
+
+    def test_a_trimmed_page_reports_a_resume_token_for_the_deferred_rows(self):
+        from botocore.paginate import TokenDecoder
+        items = [self._fat_item(f"wf-{n}") for n in range(8)]
+        one_item = self._page_bytes(self._run(items[:1], max_bytes=10 * 1024 * 1024))
+        result = self._run(items, max_bytes=one_item * 3, on_by_date_gsi=True)
+        assert result.NextToken
+        # The token is the paginator's own encoding, so the caller passes it straight back, and it
+        # names the LAST ROW KEPT (a GSI continuation carries the index keys plus the table keys).
+        decoded = TokenDecoder().decode(result.NextToken)["ExclusiveStartKey"]
+        last_kept = result.Items[-1]
+        assert decoded["workflowId"] == last_kept.workflowId
+        assert decoded["databaseId"] == last_kept.databaseId
+        assert set(decoded) == {"databaseId", "workflowId", "allListPartition", "dateModified"}
+
+    def test_a_database_scoped_page_resumes_on_the_table_keys_only(self):
+        from botocore.paginate import TokenDecoder
+        items = [self._fat_item(f"wf-{n}") for n in range(8)]
+        one_item = self._page_bytes(self._run(items[:1], max_bytes=10 * 1024 * 1024))
+        result = self._run(items, max_bytes=one_item * 3)
+        decoded = TokenDecoder().decode(result.NextToken)["ExclusiveStartKey"]
+        assert set(decoded) == {"databaseId", "workflowId"}
+
+    def test_an_untrimmed_page_keeps_the_paginators_own_token(self):
+        from backend.backend.handlers.workflows import workflowService as ws
+        page = {"Items": [{"databaseId": "db1", "workflowId": "wf-a", "workflowName": "A"}],
+                "NextToken": "paginator-token"}
+        with patch.object(ws, "_enforce_workflow", return_value=True), \
+             patch.object(ws, "_execution_count", return_value=0), \
+             patch.object(ws, "_trigger_summary", return_value=None), \
+             patch.object(ws, "_batch_pipeline_system_configs", return_value={}):
+            result = ws._filtered_page(page, include_archived=False,
+                                       claims_and_roles={"tokens": ["u"]})
+        assert result.NextToken == "paginator-token"
+        assert len(result.Items) == 1
+
+    def test_one_oversized_row_is_still_returned(self):
+        # A page that came back empty would read as "no workflows" and the caller could not page past
+        # it either, so the first row is always kept whatever it measures.
+        result = self._run([self._fat_item("wf-0"), self._fat_item("wf-1")], max_bytes=1)
+        assert len(result.Items) == 1
+
+
+@pytest.mark.unit
 class TestTriggerSummaryEnrichment:
     """The workflow list reports how many triggers each workflow has and how many are ENABLED.
 

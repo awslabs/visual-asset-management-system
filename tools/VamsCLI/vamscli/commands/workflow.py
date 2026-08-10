@@ -654,7 +654,9 @@ def delete_trigger(ctx: click.Context, database_id: str, workflow_id: str, trigg
 @click.option('--workflow-database-id', required=True, help="Workflow's database ID (GLOBAL allowed)")
 @click.option('-w', '--workflow-id', required=True, help='Workflow ID to execute')
 @click.option('--input-file', 'input_file_refs', multiple=True,
-              help="Input file 'databaseId:assetId:relativeFileKey[:versionId]' (repeatable)")
+              help="Input file 'databaseId:assetId:relativeFileKey' (repeatable). Everything after "
+                   'the second colon is the file key, so a key containing a colon is kept intact; '
+                   'pin a versionId via --input-files/--input-files-file')
 @click.option('--input-files', help='inputFiles as inline JSON list (alternative to --input-file)')
 @click.option('--input-files-file', type=click.Path(exists=True), help='inputFiles from a JSON file')
 @click.option('--metadata-source-asset', 'metadata_source_asset_refs', multiple=True,
@@ -738,15 +740,18 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
     if parsed_inputs is None:
         parsed_inputs = []
         for ref in input_file_refs:
-            parts = ref.split(':')
-            if len(parts) < 3:
+            # Split on the first two colons only: a ':' is legal in an S3 key (ISO-timestamped and
+            # bucket-sync-ingested names carry them routinely) and an S3 VersionId shares the file
+            # key's charset, so a trailing segment cannot be told apart from part of the key. The key
+            # wins here; a versionId is pinned through the named-field JSON options instead.
+            parts = ref.split(':', 2)
+            if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
                 raise click.ClickException(
-                    f"Invalid --input-file ref '{ref}'. "
-                    "Use 'databaseId:assetId:relativeFileKey[:versionId]'.")
-            entry = {'databaseId': parts[0], 'assetId': parts[1], 'relativeFileKey': parts[2]}
-            if len(parts) >= 4 and parts[3]:
-                entry['versionId'] = parts[3]
-            parsed_inputs.append(entry)
+                    f"Invalid --input-file ref '{ref}'. Use "
+                    "'databaseId:assetId:relativeFileKey' — the file key is everything after the "
+                    "second colon. To pin a versionId, use --input-files/--input-files-file.")
+            parsed_inputs.append(
+                {'databaseId': parts[0], 'assetId': parts[1], 'relativeFileKey': parts[2]})
     elif not isinstance(parsed_inputs, list):
         raise click.ClickException("inputFiles must be a JSON list.")
 
@@ -828,6 +833,12 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
 @click.option('-a', '--asset-id', required=True, help='Asset ID to list executions for')
 @click.option('-w', '--workflow-id', help='Filter by specific workflow ID')
 @click.option('--workflow-database-id', help="Workflow's database ID (for filtering)")
+@click.option('--filter-start-date',
+              help='Only executions started on/after this UTC date-time, as '
+                   'YYYY-MM-DDTHH:MM:SSZ (default: 90 days ago). Widen it to reach older history.')
+@click.option('--filter-end-date',
+              help='Only executions started on/before this UTC date-time, as '
+                   'YYYY-MM-DDTHH:MM:SSZ (optional upper bound).')
 @click.option('--page-size', type=int, help='Number of items per page (max 50 due to API throttling)')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default 10000)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
@@ -836,15 +847,21 @@ def execute(ctx: click.Context, workflow_database_id: str, workflow_id: str, inp
 @click.pass_context
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflow_id: Optional[str],
-                    workflow_database_id: Optional[str], page_size: Optional[int],
+                    workflow_database_id: Optional[str], filter_start_date: Optional[str],
+                    filter_end_date: Optional[str], page_size: Optional[int],
                     max_items: Optional[int], starting_token: Optional[str], auto_paginate: bool,
                     json_output: bool):
     """List an asset's workflow executions (per-asset history).
+
+    Only recent executions (started within the last 90 days) are listed by default; use
+    --filter-start-date / --filter-end-date to query an explicit date range. The window actually
+    applied is reported alongside the results.
 
     For the global, cross-asset execution list with rich filters, use 'vamscli execution list'.
 
     Examples:
         vamscli workflow list-executions -d my-db -a my-asset
+        vamscli workflow list-executions -d my-db -a my-asset --filter-start-date 2025-01-01T00:00:00Z
         vamscli workflow list-executions -d my-db -a my-asset -w workflow-123 --auto-paginate
     """
     api_client = _api(ctx)
@@ -860,16 +877,37 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
     if not page_size:
         page_size = MAX_WORKFLOW_EXECUTION_PAGE_SIZE
 
+    def _base_params() -> Dict[str, Any]:
+        params: Dict[str, Any] = {'pageSize': page_size}
+        if filter_start_date:
+            params['filterStartDate'] = filter_start_date
+        if filter_end_date:
+            params['filterEndDate'] = filter_end_date
+        return params
+
+    def _window(data: Dict[str, Any]) -> str:
+        """The date window the service reports applying, which is the 90-day default unless the
+        caller set one — the reason an asset with older history can list as empty."""
+        applied = data.get('filterStartDate')
+        if not applied:
+            return ""
+        end = data.get('filterEndDate')
+        return f"Window: {applied} to {end}" if end else f"Window: from {applied}"
+
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])
+        window = _window(data)
         if not items:
             # The backend applies authorization and filters after the candidate cap, so an empty
             # page may still carry a NextToken for later pages that do contain matches.
             if not data.get('autoPaginated') and data.get('NextToken'):
                 return ("No workflow executions on this page; more pages available."
                         f"\n\nNext token: {data['NextToken']}")
-            return "No workflow executions found."
+            empty = "No workflow executions found."
+            return f"{empty}\n{window}" if window else empty
         out = []
+        if window:
+            out.append(window)
         if data.get('autoPaginated'):
             out.append(f"Auto-paginated: {data.get('totalItems', 0)} item(s) in "
                        f"{data.get('pageCount', 0)} page(s)")
@@ -885,6 +923,8 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             out.append("-" * 80)
         if not data.get('autoPaginated') and data.get('NextToken'):
             out.append(f"\nNext token: {data['NextToken']}")
+        if data.get('note'):
+            out.append(f"\n{data['note']}")
         return '\n'.join(out)
 
     try:
@@ -895,9 +935,10 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
             all_items = []
             next_token = None
             page_count = 0
+            applied_window: Dict[str, Any] = {}
             while True:
                 page_count += 1
-                params = {'pageSize': page_size}
+                params = _base_params()
                 if next_token:
                     params['startingToken'] = next_token
                 page = _message(api_client.list_workflow_executions(
@@ -905,18 +946,28 @@ def list_executions(ctx: click.Context, database_id: str, asset_id: str, workflo
                     workflow_database_id=workflow_database_id, workflow_id=workflow_id, params=params))
                 items = page.get('Items', [])
                 all_items.extend(items)
+                for key in ('filterStartDate', 'filterEndDate'):
+                    if page.get(key):
+                        applied_window[key] = page[key]
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
                 if not next_token or len(all_items) >= max_total:
                     break
             result = {'Items': all_items, 'totalItems': len(all_items),
-                      'autoPaginated': True, 'pageCount': page_count}
+                      'autoPaginated': True, 'pageCount': page_count, **applied_window}
+            if next_token and len(all_items) >= max_total:
+                # The outstanding token is the only way to resume; a bare "more may be available"
+                # would force the caller to re-walk every page already paid for.
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Reached maximum of {max_total} items. More may be available — resume with "
+                    f"--starting-token {next_token}")
             output_result(_message(result), json_output, cli_formatter=_fmt)
             return result
 
         output_status(f"Listing executions for asset '{asset_id}'...", json_output)
-        params = {'pageSize': page_size}
+        params = _base_params()
         if starting_token:
             params['startingToken'] = starting_token
         result = _message(api_client.list_workflow_executions(

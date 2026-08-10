@@ -63,8 +63,26 @@ def register_sub_execution(orchestration_event_prefix, sub_execution_arn):
         logger.warning(f"Sub-process registration failed (non-critical): {e}")
 
 
+def abort_external_workflow(error, task_token):
+    """Fail the VAMS workflow's waitForCallback task token so the pipeline task does not wait
+    for the full taskTimeout when this lambda cannot start the pipeline."""
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_failure(
+            taskToken=task_token,
+            error="IsaacLabPipelineError",
+            cause=str(error)[:256]
+        )
+        logger.info("Sent task failure callback to Step Functions")
+    except Exception as e:
+        logger.error(f"Failed to send task failure callback: {e}")
+
+
 def lambda_handler(event, context):
     logger.info(f"Event: {event}")
+
+    external_task_token = None
 
     try:
         response = {
@@ -79,6 +97,7 @@ def lambda_handler(event, context):
             response["body"] = json.dumps({"message": message})
             response["statusCode"] = 400
             logger.error(response)
+            abort_external_workflow(message, external_task_token)
             return response
 
         if isinstance(event["body"], str):
@@ -173,6 +192,7 @@ def lambda_handler(event, context):
 
     except Exception as e:
         logger.exception(e)
+        abort_external_workflow(e, external_task_token)
         return {
             "statusCode": 500,
             "body": json.dumps({"message": "Internal Server Error"}),

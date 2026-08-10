@@ -64,6 +64,48 @@ function isAbsentTagValue(value: any): boolean {
 }
 
 /**
+ * Whether a schema field declares a usable default. The backend's test is `is not None`, and pydantic
+ * serializes an absent default as `null`, so a schema saved through the tagSchema sub-resource comes
+ * back carrying nulls that must read as "no default" rather than as a declared one.
+ */
+export function hasDeclaredDefault(field: TagSchemaField): boolean {
+    return field.default !== undefined && field.default !== null;
+}
+
+/**
+ * The tag types that materialize an empty value for a blank OPTIONAL tag with no declared default, so
+ * a {{tag}} referencing one renders empty instead of failing resolution as unmatched. Mirrors
+ * `_TYPE_EMPTY_VALUES` in common/workflows/templateTagSchema.py; integer, number and boolean have no
+ * representable empty value and are absent from the map on both sides.
+ */
+const TYPES_WITH_EMPTY_VALUE = new Set(["string", "enum", "string-list"]);
+
+/** A declared type, defaulted and lower-cased the way the backend's `_normalize_type` does. */
+function normalizeTagType(raw: any): string {
+    return raw === undefined || raw === null ? "string" : String(raw).trim().toLowerCase();
+}
+
+/**
+ * The schema keys that carry a value at render time whether or not the caller supplied one: a declared
+ * default, or the empty value a blank optional tag of a representable type materializes. Mirrors the
+ * `filled` map `validate_tags` returns — a REQUIRED tag left blank is deliberately absent, because the
+ * backend errors on it rather than filling it.
+ */
+function schemaFilledKeys(schema?: TagSchemaField[]): string[] {
+    const keys: string[] = [];
+    for (const field of schema || []) {
+        if (!field?.tagKey) continue;
+        if (
+            hasDeclaredDefault(field) ||
+            (field.required !== true && TYPES_WITH_EMPTY_VALUE.has(normalizeTagType(field.type)))
+        ) {
+            keys.push(field.tagKey);
+        }
+    }
+    return keys;
+}
+
+/**
  * Return tagKeys of schema fields with required===true that have no provided value
  * (missing or empty/undefined/null) and no default.
  */
@@ -79,7 +121,7 @@ export function missingRequiredTags(
     const missing: string[] = [];
     for (const field of schema) {
         if (field.required !== true) continue;
-        if (field.default !== undefined) continue;
+        if (hasDeclaredDefault(field)) continue;
 
         if (isAbsentTagValue(tagMap.get(field.tagKey))) {
             missing.push(field.tagKey);
@@ -102,14 +144,10 @@ export function resolvePipelineParams(
     const requireTemplate = !!pipeline.systemConfig?.requireTemplate;
     const allowOverride = !!pipeline.systemConfig?.allowCustomTemplateOverride;
 
-    // Build providedKeys set: all tag keys + schema defaults
+    // Build providedKeys set: all tag keys + whatever the schema fills on its own
     const providedKeys = new Set<string>(tags.map((t) => t.key));
-    if (template?.tagSchema) {
-        for (const field of template.tagSchema) {
-            if (field.default !== undefined) {
-                providedKeys.add(field.tagKey);
-            }
-        }
+    for (const key of schemaFilledKeys(template?.tagSchema)) {
+        providedKeys.add(key);
     }
 
     // Check for reserved key collisions

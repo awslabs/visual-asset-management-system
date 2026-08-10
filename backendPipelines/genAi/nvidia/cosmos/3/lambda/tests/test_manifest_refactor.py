@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import types
+import datetime
 import importlib
 from unittest.mock import MagicMock, patch
 
@@ -386,3 +387,116 @@ class TestFileLessRunResolvesTheOutputTargetIdentity:
     def test_no_identity_anywhere_leaves_it_empty_rather_than_raising(self):
         resolved = mh.resolve_inputs({}, {"schemaVersion": 2, "inputFiles": [], "outputs": {}})
         assert (resolved["assetId"], resolved["databaseId"]) == ("", "")
+
+
+# ============== sub-state-machine execution name uniqueness / retry idempotence ==============
+
+@pytest.mark.unit
+class TestSubStateMachineExecutionName:
+    """The name openPipeline runs its own state machine under must be unique across concurrent runs
+    yet identical across retries of the same run.
+
+    A workflow may carry several triggers of one type, so one upload fans out to simultaneous runs
+    of the SAME variant; Step Functions rejects a repeated name with ExecutionAlreadyExists, which
+    openPipeline turns into a generic 500. A random suffix would fix the collision but break SFN
+    retry idempotence, so the name is derived from the pipeline execution id.
+    """
+
+    def _load(self):
+        if "openPipeline" in sys.modules:
+            return importlib.reload(sys.modules["openPipeline"])
+        return importlib.import_module("openPipeline")
+
+    def _prefix(self, pipeline_execution_id):
+        return f"vams.prod.execution.E1.pipeline.{pipeline_execution_id}"
+
+    def test_two_runs_in_the_same_second_get_different_names(self):
+        mod = self._load()
+        first = mod.build_job_name("nano", self._prefix("P1"))
+        second = mod.build_job_name("nano", self._prefix("P2"))
+        assert first != second
+
+    def test_the_same_run_always_derives_the_same_name(self):
+        # An SFN retry re-invokes this lambda with the same body; a second start_execution under a
+        # NEW name would launch a duplicate sub-execution.
+        mod = self._load()
+        prefix = self._prefix("P1")
+        assert mod.build_job_name("nano", prefix) == mod.build_job_name("nano", prefix)
+
+    def test_a_direct_invocation_without_a_prefix_is_still_unique(self):
+        mod = self._load()
+        names = {mod.build_job_name("nano", "") for _ in range(20)}
+        assert len(names) == 20
+
+    def test_the_name_obeys_the_step_functions_constraints(self):
+        mod = self._load()
+        for prefix in (self._prefix("P1"), ""):
+            name = mod.build_job_name("super-image2video", prefix)
+            assert len(name) <= 80
+            assert ":" not in name and "/" not in name
+
+
+# ============== launch-time gating of the container's hard requirements ==============
+
+@pytest.mark.unit
+class TestBlankIdentityFailsBeforeTheGpuIsProvisioned:
+    """An unreadable manifest resolves to blank assetId/output paths (resolve_inputs is
+    best-effort). The container treats both as hard requirements but only checks them once the
+    Batch job has provisioned a GPU instance, so the run must be rejected here instead."""
+
+    def _load(self):
+        if "openPipeline" in sys.modules:
+            return importlib.reload(sys.modules["openPipeline"])
+        return importlib.import_module("openPipeline")
+
+    def _event(self):
+        return {
+            "modelVariant": "nano",
+            "taskMode": "text2video",
+            "cosmosPrompt": "A drone shot.",
+            "outputS3AssetFilesPath": "s3://abkt/pipelines/p1/MJOB/output/E1/files/",
+            "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/pipelines/cosmos3/E1/",
+            "assetId": "xidM",
+            "databaseId": "dbM",
+            "sfnExternalTaskToken": "tok-123",
+        }
+
+    def test_a_blank_asset_id_fails_fast_and_reports_the_task_failure(self):
+        mod = self._load()
+        start = MagicMock()
+        send_failure = MagicMock()
+        event = self._event()
+        event["assetId"] = ""
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.sfn, "send_task_failure", send_failure):
+            resp = mod.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 400
+        start.assert_not_called()
+        # The parent workflow must be failed rather than left to its multi-hour taskTimeout.
+        assert send_failure.call_count == 1
+        assert send_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_a_blank_output_files_path_fails_fast(self):
+        mod = self._load()
+        start = MagicMock()
+        send_failure = MagicMock()
+        event = self._event()
+        event["outputS3AssetFilesPath"] = ""
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.sfn, "send_task_failure", send_failure):
+            resp = mod.lambda_handler(event, MagicMock())
+        assert resp["statusCode"] == 400
+        start.assert_not_called()
+        assert send_failure.call_count == 1
+
+    def test_a_fully_resolved_run_still_starts(self):
+        mod = self._load()
+        start = MagicMock(return_value={
+            "executionArn": "arn:aws:states:us-east-1:1:execution:Cosmos3:x",
+            "startDate": datetime.datetime(2026, 1, 1, 0, 0, 0),
+        })
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", MagicMock()):
+            resp = mod.lambda_handler(self._event(), MagicMock())
+        assert resp["statusCode"] == 200
+        start.assert_called_once()

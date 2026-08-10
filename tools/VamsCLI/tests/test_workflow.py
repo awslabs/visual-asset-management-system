@@ -314,14 +314,53 @@ class TestWorkflowExecute:
             assert args[2]['inputFiles'][0] == {
                 'databaseId': 'my-db', 'assetId': 'asset1', 'relativeFileKey': '/model.glb'}
 
-    def test_execute_with_version_in_ref(self, cli_runner, generic_command_mocks):
+    def test_execute_keeps_a_colon_in_the_file_key(self, cli_runner, generic_command_mocks):
+        """A ':' is legal in an S3 key, so everything past the second colon is the key. Splitting
+        further would send a truncated path the caller never typed."""
         with generic_command_mocks('workflow') as mocks:
             mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
             result = cli_runner.invoke(cli, [
                 'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
-                '--input-file', 'my-db:asset1:/model.glb:v123'])
+                '--input-file', 'my-db:asset1:/scans/scan:2024.las'])
             assert result.exit_code == 0
-            assert mocks['api_client'].execute_workflow.call_args.args[2]['inputFiles'][0]['versionId'] == 'v123'
+            assert mocks['api_client'].execute_workflow.call_args.args[2]['inputFiles'][0] == {
+                'databaseId': 'my-db', 'assetId': 'asset1',
+                'relativeFileKey': '/scans/scan:2024.las'}
+
+    def test_execute_keeps_multiple_colons_in_the_file_key(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--input-file', 'my-db:asset1:/exports/2024-01-01T12:30:00Z/scan.las'])
+            assert result.exit_code == 0
+            assert (mocks['api_client'].execute_workflow.call_args.args[2]['inputFiles'][0]
+                    ['relativeFileKey'] == '/exports/2024-01-01T12:30:00Z/scan.las')
+
+    def test_execute_pins_a_version_through_the_json_option(self, cli_runner, generic_command_mocks):
+        """versionId is a named field of --input-files, which is unambiguous where the positional
+        ref is not."""
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].execute_workflow.return_value = {'message': {'executionId': 'e1'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--input-files', '[{"databaseId": "my-db", "assetId": "asset1", '
+                                 '"relativeFileKey": "/model.glb", "versionId": "v123"}]'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].execute_workflow.call_args.args[2]['inputFiles'][0][
+                'versionId'] == 'v123'
+
+    @pytest.mark.parametrize('ref', [
+        ':asset1:/model.glb',
+        'my-db::/model.glb',
+        'my-db:asset1:',
+    ])
+    def test_execute_rejects_an_empty_ref_segment(self, ref, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow'):
+            result = cli_runner.invoke(cli, [
+                'workflow', 'execute', '--workflow-database-id', 'global', '-w', 'wf1',
+                '--input-file', ref])
+            assert result.exit_code != 0
 
     def test_execute_no_input_files_allowed(self, cli_runner, generic_command_mocks):
         # 0 input files is valid (arity validated server-side).
@@ -575,6 +614,70 @@ class TestWorkflowListExecutions:
                 'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1', '--page-size', '100'])
             assert result.exit_code != 0
             assert 'page size' in result.output.lower()
+
+    def test_list_executions_sends_the_date_range(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1',
+                '--filter-start-date', '2024-01-01T00:00:00Z',
+                '--filter-end-date', '2024-06-01T00:00:00Z'])
+            assert result.exit_code == 0
+            params = mocks['api_client'].list_workflow_executions.call_args.kwargs['params']
+            assert params['filterStartDate'] == '2024-01-01T00:00:00Z'
+            assert params['filterEndDate'] == '2024-06-01T00:00:00Z'
+
+    def test_list_executions_sends_the_date_range_on_every_page(self, cli_runner,
+                                                               generic_command_mocks):
+        # A bound missing from page 2 onward widens the window mid-walk, so the combined result
+        # includes rows outside the range the caller asked for.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.side_effect = [
+                {'message': {'Items': [{'workflowExecutionId': 'e1'}], 'NextToken': 't1'}},
+                {'message': {'Items': [{'workflowExecutionId': 'e2'}]}},
+            ]
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1', '--auto-paginate',
+                '--filter-start-date', '2024-01-01T00:00:00Z'])
+            assert result.exit_code == 0
+            for call in mocks['api_client'].list_workflow_executions.call_args_list:
+                assert call.kwargs['params']['filterStartDate'] == '2024-01-01T00:00:00Z'
+
+    def test_list_executions_omits_the_dates_when_not_supplied(self, cli_runner,
+                                                              generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {'message': {'Items': []}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            params = mocks['api_client'].list_workflow_executions.call_args.kwargs['params']
+            assert 'filterStartDate' not in params and 'filterEndDate' not in params
+
+    def test_list_executions_reports_the_applied_window_on_an_empty_list(self, cli_runner,
+                                                                        generic_command_mocks):
+        # An asset whose history predates the default window lists as empty; the echoed window is
+        # what tells the caller a floor was applied rather than that no history exists.
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [], 'filterStartDate': '2026-05-11T00:00:00Z'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1'])
+            assert result.exit_code == 0
+            assert 'No workflow executions found.' in result.output
+            assert '2026-05-11T00:00:00Z' in result.output
+
+    def test_list_executions_auto_paginate_max_items_keeps_the_token(self, cli_runner,
+                                                                    generic_command_mocks):
+        with generic_command_mocks('workflow') as mocks:
+            mocks['api_client'].list_workflow_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}], 'NextToken': 'tok-resume'}}
+            result = cli_runner.invoke(cli, [
+                'workflow', 'list-executions', '-d', 'my-db', '-a', 'asset1', '--auto-paginate',
+                '--max-items', '1', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['NextToken'] == 'tok-resume'
+            assert '--starting-token tok-resume' in data['note']
 
     def test_list_executions_asset_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('workflow') as mocks:

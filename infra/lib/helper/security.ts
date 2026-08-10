@@ -213,7 +213,6 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     storageResources: storageResources
 ): void {
     // Grant read permissions to authentication and authorization tables
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.constraintsStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);

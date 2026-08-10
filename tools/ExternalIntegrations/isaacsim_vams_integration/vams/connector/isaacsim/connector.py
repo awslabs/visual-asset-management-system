@@ -295,18 +295,22 @@ class IsaacVAMSConnector:
     # Workflows
     # -------------------------------------------------------------------------
 
-    def list_workflows(self, database_id: Optional[str] = None) -> List[Workflow]:
+    def list_workflows(self, database_id: Optional[str] = None,
+                       include_unrunnable: bool = False) -> List[Workflow]:
         """
         List available workflows.
 
         Args:
             database_id: Optional database ID to filter workflows.
                          If None, lists workflows across all databases.
+            include_unrunnable: Keep disabled workflows in the result. They are dropped by default
+                                because executing one is rejected; archived workflows are already
+                                absent from the listing.
 
         Returns:
             List of Workflow objects.
         """
-        return self._cli.list_workflows(database_id)
+        return self._cli.list_workflows(database_id, include_unrunnable=include_unrunnable)
 
     def list_workflow_executions(
         self,

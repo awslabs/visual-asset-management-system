@@ -20,10 +20,10 @@ GET /workflows
 
 | Parameter         | Type   | Required | Default | Description                                                                                                                                                      |
 | ----------------- | ------ | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxItems`        | number | No       | `100`   | Maximum number of items to return                                                                                                                                |
-| `pageSize`        | number | No       | `100`   | Number of items per page                                                                                                                                         |
-| `startingToken`   | string | No       | `null`  | Pagination token from previous response                                                                                                                          |
-| `includeArchived` | string | No       | `false` | Include archived workflows                                                                                                                                       |
+| `maxItems`        | number | No       | `100`   | Maximum number of items to return. Clamped to 500 — a larger request is served a 500-row page; the remainder is reached through `NextToken`.                     |
+| `pageSize`        | number | No       | `100`   | Number of items per page, clamped to `maxItems`.                                                                                                                 |
+| `startingToken`   | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                                                                       |
+| `includeArchived` | string | No       | `false` | Include archived workflows (`true`/`false`)                                                                                                                      |
 | `hasTriggers`     | string | No       | --      | `true` returns only workflows with at least one **enabled** trigger; `false` only those with none. Any other value is rejected with a `400` rather than ignored. |
 
 Each returned workflow carries `triggerCount` and `triggersEnabledCount`. Both are reported because they
@@ -31,11 +31,13 @@ differ when a trigger exists but is switched off — the state behind a workflow
 never fires. They are best-effort: a workflow whose triggers could not be read returns `null` for both
 and is never dropped from a filtered result.
 
-:::note[Filtering happens after the page is read]
-Triggers live in their own table, so "has an enabled trigger" is not expressible as a condition on the
-workflow record. A filtered page can therefore return fewer items than `pageSize` while still reporting a
-`NextToken` — page until the token is absent, exactly as with the authorization filter.
-:::
+:::note[A page may hold fewer items than requested]
+Three things shorten a page, so page until `NextToken` is absent rather than until a page looks short:
+
+-   **The authorization filter.** Workflows the caller cannot read are dropped after the page is read.
+-   **The trigger filter.** Triggers live in their own table, so "has an enabled trigger" is not expressible as a condition on the workflow record and `hasTriggers` is applied after the page is read.
+-   **A 4 MB page budget**, measured over the serialized items. A page that reaches it stops accumulating and its `NextToken` resumes at the last item it kept, so the remaining rows are deferred rather than lost.
+    :::
 
 ### Response
 
@@ -53,12 +55,16 @@ workflow record. A filtered page can therefore return fewer items than `pageSize
                     {
                         "pipelineDatabaseId": "GLOBAL",
                         "pipelineId": "3d-conversion-pipeline",
-                        "jobName": ""
+                        "pipelineDatabaseId:pipelineId": "GLOBAL:3d-conversion-pipeline",
+                        "jobName": "",
+                        "defaultTemplateId": ""
                     },
                     {
                         "pipelineDatabaseId": "GLOBAL",
                         "pipelineId": "3d-thumbnail-preview",
-                        "jobName": ""
+                        "pipelineDatabaseId:pipelineId": "GLOBAL:3d-thumbnail-preview",
+                        "jobName": "",
+                        "defaultTemplateId": ""
                     }
                 ],
                 "systemConfig": {
@@ -85,10 +91,11 @@ Each item in a list response includes an `executionCount` — the total number o
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                    |
+| ------ | ------------------------------ |
+| `400`  | An invalid `hasTriggers` value |
+| `403`  | Not authorized                 |
+| `500`  | Internal server error          |
 
 ---
 
@@ -123,6 +130,14 @@ Archived workflows are hidden by default. Set `includeArchived=true` to include 
 
 Same structure as [List all workflows](#list-all-workflows).
 
+### Error responses
+
+| Status | Description                                              |
+| ------ | -------------------------------------------------------- |
+| `400`  | Invalid `databaseId` format, or an invalid `hasTriggers` |
+| `403`  | Not authorized                                           |
+| `500`  | Internal server error                                    |
+
 ---
 
 ## Get a workflow
@@ -152,7 +167,7 @@ Archived workflows are hidden by default. Set `includeArchived=true` to retrieve
 
 ### Response
 
-Returns a single workflow object, including its `triggers` array and `systemConfig`. See [System configuration](#system-configuration) for the shape of `systemConfig`.
+Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`.
 
 ### Error responses
 
@@ -181,17 +196,17 @@ POST /database/{databaseId}/workflows
 
 ### Request body
 
-| Field                | Type    | Required | Description                                                                                                 |
-| -------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `databaseId`         | string  | Yes      | Database identifier. Must match the `databaseId` path parameter. Use `GLOBAL` for a global workflow.        |
-| `workflowId`         | string  | No       | Workflow identifier. Send `null` or omit to have one generated. Must be unique across all databases.        |
-| `workflowName`       | string  | Yes      | Human-readable workflow name.                                                                               |
-| `category`           | string  | No       | Optional grouping label.                                                                                    |
-| `description`        | string  | No       | Workflow description.                                                                                       |
-| `specifiedPipelines` | array   | Yes      | Ordered, non-empty list of pipeline references. See [Specified pipelines](#specified-pipelines).            |
-| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults. See [System configuration](#system-configuration). |
-| `subDashboardUrl`    | string  | No       | URL of an external dashboard associated with the workflow.                                                  |
-| `enabled`            | boolean | No       | Whether the workflow is enabled (default `true`).                                                           |
+| Field                | Type    | Required | Description                                                                                                                                                           |
+| -------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`         | string  | Yes      | Database identifier. Send the same value as the `databaseId` path parameter, which is the database the workflow is written under. Use `GLOBAL` for a global workflow. |
+| `workflowId`         | string  | No       | Workflow identifier. Send `null` or omit to have one generated. Must be unique across all databases.                                                                  |
+| `workflowName`       | string  | Yes      | Human-readable workflow name, at most 256 characters.                                                                                                                 |
+| `category`           | string  | No       | Optional grouping label, at most 256 characters.                                                                                                                      |
+| `description`        | string  | No       | Workflow description, at most 1,024 characters.                                                                                                                       |
+| `specifiedPipelines` | array   | Yes      | Ordered list of 1 to 100 pipeline references. See [Specified pipelines](#specified-pipelines).                                                                        |
+| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults. See [System configuration](#system-configuration).                                                           |
+| `subDashboardUrl`    | string  | No       | Absolute `http://` or `https://` URL of an external dashboard associated with the workflow, at most 2,048 characters. Any other scheme is rejected.                   |
+| `enabled`            | boolean | No       | Whether the workflow is enabled (default `true`).                                                                                                                     |
 
 :::note[Pipeline reference rules]
 
@@ -211,7 +226,8 @@ POST /database/{databaseId}/workflows
         {
             "pipelineId": "3d-conversion-pipeline",
             "pipelineDatabaseId": "GLOBAL",
-            "jobName": "convert"
+            "jobName": "convert",
+            "defaultTemplateId": "high-quality"
         },
         {
             "pipelineId": "preview-pipeline",
@@ -256,12 +272,16 @@ Returns the created workflow, in the same shape as [Get a workflow](#get-a-workf
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `400`  | Validation error      |
-| `403`  | Not authorized        |
-| `404`  | Database not found    |
-| `500`  | Internal server error |
+| Status | Description                                                                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, a workflow ID already in use, a referenced pipeline out of the workflow's database scope or archived, or a save-consistency error (`saveErrors` under `message`) |
+| `403`  | Not authorized (API, workflow, or one of the referenced pipelines)                                                                                                                 |
+| `404`  | A referenced pipeline was not found                                                                                                                                                |
+| `500`  | Internal server error                                                                                                                                                              |
+
+:::note[A workflow is created without reading the database record]
+Create writes the workflow row under the `databaseId` in the path without looking that database up, so a mistyped identifier returns `200` and a workflow nobody finds in a database listing. Confirm the database exists with [Get a database](databases.md#get-a-database) before creating a workflow under it.
+:::
 
 ---
 
@@ -282,18 +302,29 @@ PUT /database/{databaseId}/workflows/{workflowId}
 
 ### Request body
 
-| Field                | Type    | Required | Description                                                                                                 |
-| -------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `workflowName`       | string  | No       | Human-readable workflow name.                                                                               |
-| `category`           | string  | No       | Grouping label.                                                                                             |
-| `description`        | string  | No       | Workflow description.                                                                                       |
-| `specifiedPipelines` | array   | No       | Ordered, non-empty list of pipeline references. See [Specified pipelines](#specified-pipelines).            |
-| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults. See [System configuration](#system-configuration). |
-| `subDashboardUrl`    | string  | No       | URL of an external dashboard associated with the workflow.                                                  |
-| `enabled`            | boolean | No       | Whether the workflow is enabled.                                                                            |
+At least one field must be supplied.
+
+| Field                | Type    | Required | Description                                                                                                                       |
+| -------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `workflowName`       | string  | No       | Human-readable workflow name, at most 256 characters.                                                                             |
+| `category`           | string  | No       | Grouping label, at most 256 characters.                                                                                           |
+| `description`        | string  | No       | Workflow description, at most 1,024 characters.                                                                                   |
+| `specifiedPipelines` | array   | No       | Ordered list of up to 100 pipeline references, replaced wholesale. See [Specified pipelines](#specified-pipelines).               |
+| `systemConfig`       | object  | No       | Input handling, asset-scope gating, and output defaults, replaced wholesale. See [System configuration](#system-configuration).   |
+| `subDashboardUrl`    | string  | No       | Absolute `http://` or `https://` URL of an external dashboard associated with the workflow, at most 2,048 characters.             |
+| `enabled`            | boolean | No       | Whether the workflow is enabled.                                                                                                  |
+| `archived`           | boolean | No       | The soft-delete flag. Send `false` to restore a workflow archived by [Delete a workflow](#delete-a-workflow); `true` archives it. |
 
 :::tip[Enable or disable a workflow]
 Set `enabled` to `true` or `false` to enable or disable a workflow without changing any other field.
+:::
+
+:::tip[Restore an archived workflow]
+`PUT` with `\{"archived": false\}` returns an archived workflow to the active listings under its original identifier, together with every execution record that names it. Set `enabled` back to `true` in the same request — the archive also disables the workflow.
+:::
+
+:::warning[`specifiedPipelines` and `systemConfig` replace the stored value]
+Both are stored whole. A request that supplies either one persists exactly what it sends, and anything it omits is gone rather than retained — send the complete list or block, not the part being changed. Supplying `specifiedPipelines` also regenerates the workflow's AWS Step Functions definition, which is how a change to a referenced pipeline's execution binding is picked up.
 :::
 
 ### Request body example
@@ -311,18 +342,22 @@ Returns the updated workflow, in the same shape as [Get a workflow](#get-a-workf
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `400`  | Validation error      |
-| `403`  | Not authorized        |
-| `404`  | Workflow not found    |
-| `500`  | Internal server error |
+| Status | Description                                                                                                                                                             |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no field supplied, a referenced pipeline out of the workflow's database scope or archived, or a save-consistency error (`saveErrors` under `message`) |
+| `403`  | Not authorized (API, the workflow as read, the workflow as changed, or one of the referenced pipelines)                                                                 |
+| `404`  | Workflow not found, or a referenced pipeline was not found                                                                                                              |
+| `500`  | Internal server error                                                                                                                                                   |
+
+:::note[A save-consistency problem blocks or warns depending on the request]
+When the request supplies `specifiedPipelines`, a consistency problem in that set is a `400` carrying a `saveErrors` list. An edit that leaves the stored pipeline set untouched — a rename, a description change, enable or disable — reports the same conditions as `warnings` on a successful save instead, so a workflow whose pipeline was archived after it was added stays editable without replacing the pipeline list.
+:::
 
 ---
 
 ## Delete a workflow
 
-Archives a workflow. The delete is a soft-delete that sets the workflow's `archived` flag to `true`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied.
+Archives a workflow. The delete is a soft-delete that sets the workflow's `archived` flag to `true` and its `enabled` flag to `false`; the record is retained but hidden from listings and lookups unless `includeArchived=true` is supplied. The archive is reversible — see [Update a workflow](#update-a-workflow) for the restore.
 
 ```
 DELETE /database/{databaseId}/workflows/{workflowId}
@@ -367,6 +402,10 @@ Each trigger is addressed by its key, which is the `triggerType` path parameter 
 | `fileUpload`         | The workflow's first trigger of that type                   |
 | `fileUpload#nightly` | An additional trigger of that type, identified by `nightly` |
 
+:::warning[Percent-encode the `#` in a suffixed key]
+A raw `#` in a URL is the fragment delimiter, so a request path carrying one never reaches the trigger it names — it addresses the workflow's first trigger of that type instead, silently returning, replacing, or deleting the wrong trigger. Encode the separator as `%23`: `.../triggers/fileUpload%23nightly`.
+:::
+
 A response also reports `triggerBaseType` (the plain type, for grouping and display) and `triggerId` (empty for the first trigger of a type), so a client never has to parse the key.
 
 Two conditions are rejected with `400`:
@@ -403,6 +442,8 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers
                 "workflowDatabaseId": "GLOBAL",
                 "workflowId": "convert-and-preview",
                 "triggerType": "fileUpload",
+                "triggerBaseType": "fileUpload",
+                "triggerId": "",
                 "triggerConfig": {
                     "inputFileFilters": {
                         "allow": ["*.fbx", "*.obj"],
@@ -423,11 +464,12 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers
 
 #### Error responses
 
-| Status | Description                    |
-| ------ | ------------------------------ |
-| `403`  | Not authorized                 |
-| `404`  | Database or workflow not found |
-| `500`  | Internal server error          |
+| Status | Description             |
+| ------ | ----------------------- |
+| `400`  | Invalid path parameters |
+| `403`  | Not authorized          |
+| `404`  | Workflow not found      |
+| `500`  | Internal server error   |
 
 ### Get a trigger
 
@@ -439,11 +481,11 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Path parameters
 
-| Parameter     | Type   | Required | Description                                                                                                                                   |
-| ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`  | string | Yes      | Database identifier                                                                                                                           |
-| `workflowId`  | string | Yes      | Workflow identifier                                                                                                                           |
-| `triggerType` | string | Yes      | The trigger's key: the bare type (`fileUpload`) for the workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one. |
+| Parameter     | Type   | Required | Description                                                                                                                                                               |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`  | string | Yes      | Database identifier                                                                                                                                                       |
+| `workflowId`  | string | Yes      | Workflow identifier                                                                                                                                                       |
+| `triggerType` | string | Yes      | The trigger's key: the bare type (`fileUpload`) for the workflow's first trigger of that type, or `<type>%23<triggerId>` for an additional one (the `#` percent-encoded). |
 
 #### Response
 
@@ -453,6 +495,8 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
         "workflowDatabaseId": "GLOBAL",
         "workflowId": "convert-and-preview",
         "triggerType": "fileUpload",
+        "triggerBaseType": "fileUpload",
+        "triggerId": "",
         "triggerConfig": {
             "inputFileFilters": {
                 "allow": ["*.fbx", "*.obj"],
@@ -471,11 +515,11 @@ GET /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Error responses
 
-| Status | Description                              |
-| ------ | ---------------------------------------- |
-| `403`  | Not authorized                           |
-| `404`  | Database, workflow, or trigger not found |
-| `500`  | Internal server error                    |
+| Status | Description                   |
+| ------ | ----------------------------- |
+| `403`  | Not authorized                |
+| `404`  | Workflow or trigger not found |
+| `500`  | Internal server error         |
 
 ### Set a trigger
 
@@ -487,11 +531,11 @@ PUT /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Path parameters
 
-| Parameter     | Type   | Required | Description                                                                                                                                   |
-| ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`  | string | Yes      | Database identifier                                                                                                                           |
-| `workflowId`  | string | Yes      | Workflow identifier                                                                                                                           |
-| `triggerType` | string | Yes      | The trigger's key: the bare type (`fileUpload`) for the workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one. |
+| Parameter     | Type   | Required | Description                                                                                                                                                               |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`  | string | Yes      | Database identifier                                                                                                                                                       |
+| `workflowId`  | string | Yes      | Workflow identifier                                                                                                                                                       |
+| `triggerType` | string | Yes      | The trigger's key: the bare type (`fileUpload`) for the workflow's first trigger of that type, or `<type>%23<triggerId>` for an additional one (the `#` percent-encoded). |
 
 #### Request body
 
@@ -542,7 +586,7 @@ A trigger fires headless executions, which cannot supply template tags interacti
 | ------ | ------------------------------------------------------------------------------------------------------------------ |
 | `400`  | Validation error, or a chosen default template has a required tag with no default value (`triggerTemplateErrors`). |
 | `403`  | Not authorized                                                                                                     |
-| `404`  | Database or workflow not found                                                                                     |
+| `404`  | Workflow not found                                                                                                 |
 | `500`  | Internal server error                                                                                              |
 
 ### Delete a trigger
@@ -555,11 +599,11 @@ DELETE /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Path parameters
 
-| Parameter     | Type   | Required | Description                                                                                                                                   |
-| ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`  | string | Yes      | Database identifier                                                                                                                           |
-| `workflowId`  | string | Yes      | Workflow identifier                                                                                                                           |
-| `triggerType` | string | Yes      | The trigger's key: the bare type (`fileUpload`) for the workflow's first trigger of that type, or `<type>#<triggerId>` for an additional one. |
+| Parameter     | Type   | Required | Description                                                                                                                                                               |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`  | string | Yes      | Database identifier                                                                                                                                                       |
+| `workflowId`  | string | Yes      | Workflow identifier                                                                                                                                                       |
+| `triggerType` | string | Yes      | The trigger's key: the bare type (`fileUpload`) for the workflow's first trigger of that type, or `<type>%23<triggerId>` for an additional one (the `#` percent-encoded). |
 
 #### Response
 
@@ -571,12 +615,12 @@ DELETE /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 #### Error responses
 
-| Status | Description                              |
-| ------ | ---------------------------------------- |
-| `400`  | Invalid path parameters                  |
-| `403`  | Not authorized                           |
-| `404`  | Database, workflow, or trigger not found |
-| `500`  | Internal server error                    |
+| Status | Description                   |
+| ------ | ----------------------------- |
+| `400`  | Invalid path parameters       |
+| `403`  | Not authorized                |
+| `404`  | Workflow or trigger not found |
+| `500`  | Internal server error         |
 
 ---
 
@@ -584,21 +628,40 @@ DELETE /database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}
 
 The `specifiedPipelines` array lists, in order, the pipelines a workflow runs. Each entry references one pipeline:
 
-| Field                | Type   | Required | Description                                                                      |
-| -------------------- | ------ | -------- | -------------------------------------------------------------------------------- |
-| `pipelineId`         | string | Yes      | Identifier of the referenced pipeline.                                           |
-| `pipelineDatabaseId` | string | No       | Database that owns the referenced pipeline. Defaults to the workflow's database. |
-| `jobName`            | string | No       | Label for this pipeline step within the workflow. See below.                     |
+| Field                | Type   | Required | Description                                                                                             |
+| -------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------- |
+| `pipelineId`         | string | Yes      | Identifier of the referenced pipeline.                                                                  |
+| `pipelineDatabaseId` | string | No       | Database that owns the referenced pipeline. Defaults to the workflow's database.                        |
+| `jobName`            | string | No       | Label for this pipeline step within the workflow. See below.                                            |
+| `defaultTemplateId`  | string | No       | Template this step resolves against when an execute request supplies no `templateId` for it. See below. |
 
-A `jobName` names the step in the workflow's state machine and becomes a segment of the step's output paths (`pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`). When empty or omitted, the pipeline's id is used in its place, so each step's outputs stay in a distinct folder — omitting it is the normal choice.
+A workflow may reference each pipeline at most once. Everything resolved per step — the execution parameters, the template configuration, and the filtered input files — is keyed by the pipeline, so a second reference to the same pipeline resolves to the first reference's settings. When one container or model needs to run twice in a workflow with different settings, define two pipelines that share the image and list one of each.
 
-Supply one when the pipeline id alone would not identify the step: a general-purpose pipeline used for a narrower purpose in this workflow, a pipeline whose id is generated or abbreviated, or output that downstream tooling locates by S3 prefix and therefore benefits from a stable, meaningful folder name.
+#### Job names
 
-The value is 3–63 characters of letters, numbers, hyphens, and underscores. It is a fixed label rather than a template: `{{tag}}` placeholders are not substituted in a `jobName` and are rejected, because the name is written into the state machine when the workflow is deployed rather than resolved per execution. Use the workflow's `defaultOutputFileBaseExecutionPathExtension`, or an execution's `outputFileBaseExecutionPathExtension`, to vary the output path per run.
+A `jobName` names the step in the workflow's AWS Step Functions state machine, and — for the workflow's **first** step — names the folder that holds the whole execution's output:
 
-:::warning[A job name is part of the output path]
-Changing a `jobName` on an existing workflow redirects where subsequent output is written. Output already written remains at its original path, splitting the workflow's history across two folders.
+```
+pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
+```
+
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
+
+The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow needs its own: two steps sharing a job name collapse into one state-machine state, leaving one of the two pipelines unrun. It is a fixed label rather than a template — `{{tag}}` placeholders are not substituted in a `jobName` and are rejected, because the name is written into the state machine when the workflow is deployed rather than resolved per execution.
+
+:::warning[Separate a run's output with the output path prefix, not the job name]
+Only the first step's name reaches the output path, and the generated portion of the folder name is reassigned whenever the workflow's pipeline list changes — so an S3 prefix built from a job name is neither per-step nor stable across edits. To give runs their own predictable folders, set the workflow's `defaultOutputFileBaseExecutionPathExtension` or an execution's own `outputFileBaseExecutionPathExtension`, both of which resolve `{{tag}}` placeholders at launch. See [Output path prefix](#output-path-prefix).
 :::
+
+#### Default templates
+
+`defaultTemplateId` pins one template per step, so a workflow whose pipelines require a template runs without the caller naming one on every request. A step resolves its template in this order:
+
+1. The `templateId` in the execute request's `pipelineExecutionParameters` for that pipeline. A trigger-launched run supplies this from the trigger's own `defaultTemplateIds`, so a trigger's choice reaches the step this way.
+2. This reference's `defaultTemplateId`.
+3. The pipeline's own default template (the one whose `isDefault` is `true`) — applied only when the pipeline's `systemConfig.requireTemplate` is `true`. A pipeline that does not require a template stays template-less unless a template is named, so its default is a form pre-selection rather than an automatic fallback.
+
+The value carries the identifier character set, at most 64 characters.
 
 ## System configuration
 
@@ -666,7 +729,7 @@ The two span keys — `crossAssetAllowed` and `singleAssetOnly` — bound the **
 | `fileAttributes`   | Each input file's attributes.          |
 | `databaseMetadata` | Each involved database's own metadata. |
 
-Every key defaults to `true`, so the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three on. This is also what keeps a configuration written before a key existed working: the key it cannot carry reads as its default rather than as an opt-out.
+Every key defaults to `true`, so the map is a list of opt-outs rather than opt-ins: a key the map omits is gathered. Create and update store `systemConfig` as sent, so a request naming only some keys persists exactly those and the rest keep their default — sending `{"fileMetadata": false}` suppresses file metadata and leaves the other three on. A key a block does not carry therefore reads as its default rather than as an opt-out.
 
 The workflow's booleans are the outer gate; each pipeline's own `metadataInputs` decides what that step receives. A type reaches a pipeline only when both have it on, so a workflow that gates a type off suppresses it for every step. A workflow response reports the resolved combination as `aggregateWorkflowPipelineMetadataInputs`, with `gatedOffByWorkflow` naming the types a pipeline asked for but the workflow suppresses.
 
@@ -885,7 +948,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 ```json
 {
     "message": {
-        "executionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "executionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "executionGroupId": "nightly-batch-2026-07",
         "warnings": []
     }
@@ -953,6 +1016,7 @@ Each filter is optional and all supplied filters are AND-ed.
 | `status`             | string | No       | --                 | List only executions with this `executionStatus` (for example `RUNNING`, `SUCCEEDED`, `FAILED`).                                                                                            |
 | `triggerType`        | string | No       | --                 | List only executions with this trigger type (`Manual` or `File-Upload`).                                                                                                                    |
 | `groupId`            | string | No       | --                 | List only executions in this execution group.                                                                                                                                               |
+| `startingToken`      | string | No       | --                 | Continuation token from a previous response's `NextToken`. A token that cannot be decoded returns 400 rather than serving the first page again.                                             |
 
 ### Response
 
@@ -965,15 +1029,20 @@ The applied lower bound is echoed back as `filterStartDate`.
             {
                 "workflowDatabaseId": "GLOBAL",
                 "workflowId": "convert-and-preview",
-                "workflowExecutionId": "a1b2c3d4-e5f6-7890",
+                "workflowExecutionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
                 "executionStatus": "SUCCEEDED",
                 "startDate": "2026-03-15T10:30:00Z",
                 "stopDate": "2026-03-15T10:32:15Z",
                 "executionStartDate": "2026-03-15T10:30:00Z",
                 "executionStopDate": "2026-03-15T10:32:15Z",
                 "triggerType": "Manual",
+                "triggeredByUserId": "user@example.com",
                 "executionGroupId": "",
-                "inputAssetFileKey": "models/building.fbx"
+                "inputAssetFileKey": "/models/building.fbx",
+                "databaseId": "my-database",
+                "assetId": "building-01",
+                "executionError": "",
+                "executionLog": ""
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z"
@@ -981,16 +1050,20 @@ The applied lower bound is echoed back as `filterStartDate`.
 }
 ```
 
+One request lists the asset's 200 most recent executions across both directions; the page size is fixed rather than caller-controlled, because each listed execution costs a record read and a permission check. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
+
 :::note
 All executions are returned, both completed and running. Completed executions use the stored `startDate`, `stopDate`, and `executionStatus`; executions without a stored stop date are refreshed from AWS Step Functions, and once found to have stopped their status and dates are persisted.
 :::
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                                                     |
+| ------ | --------------------------------------------------------------- |
+| `400`  | Invalid path or filter parameter, or an invalid `startingToken` |
+| `403`  | Not authorized                                                  |
+| `404`  | Asset not found                                                 |
+| `500`  | Internal server error                                           |
 
 ---
 
@@ -1010,8 +1083,8 @@ GET /workflows/executions
 
 | Parameter                     | Type    | Required | Description                                                                                                                                                                        |
 | ----------------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxItems` / `pageSize`       | integer | No       | Page size (capped; excess pages via `NextToken`).                                                                                                                                  |
-| `startingToken` / `NextToken` | string  | No       | Pagination continuation token.                                                                                                                                                     |
+| `maxItems` / `pageSize`       | integer | No       | Rows per page, default 50. Clamped to a maximum of 100 — a larger request is served a 100-row page rather than rejected; the remainder is reached through `NextToken`.             |
+| `startingToken` / `NextToken` | string  | No       | Continuation token from a previous response. Either name is accepted. A token that cannot be decoded returns 400 rather than serving the first page again.                         |
 | `filterStartDate`             | string  | No       | UTC lower bound on execution start date, as `YYYY-MM-DDTHH:MM:SSZ`; only executions started on or after this date are listed. Any other form returns 400. Defaults to 90 days ago. |
 | `filterEndDate`               | string  | No       | UTC upper bound on execution start date, as `YYYY-MM-DDTHH:MM:SSZ`; only executions started on or before this date are listed. Any other form returns 400.                         |
 | `workflowId`                  | string  | No       | Filter by workflow id.                                                                                                                                                             |
@@ -1028,7 +1101,7 @@ GET /workflows/executions
     "message": {
         "Items": [
             {
-                "workflowExecutionId": "a1b2c3d4-e5f6-7890",
+                "workflowExecutionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
                 "workflowId": "convert-and-preview",
                 "workflowDatabaseId": "GLOBAL",
                 "executionStatus": "SUCCEEDED",
@@ -1054,14 +1127,30 @@ are empty strings for a results-only run. They are read from the execution's con
 which the endpoint loads at most once per listed row and shares with the output-asset visibility check,
 so reporting them costs no extra lookup.
 
+:::note[A page resolves at most 500 distinct assets for its permission checks]
+Deciding whether a row is visible means resolving every asset the run read, so one page is bounded by the number of distinct assets it resolves. A page that reaches the bound withholds the executions it did not evaluate rather than listing them unchecked, and returns a `warnings` array naming the bound. The withheld rows are deferred, not lost: a `NextToken` accompanies the warning whenever the walk can continue, and the next request resolves its own entities. Narrow the filters to reach them in fewer pages.
+:::
+
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                                                            |
+| ------ | ---------------------------------------------------------------------- |
+| `400`  | A filter or pagination parameter is invalid, including `startingToken` |
+| `403`  | Not authorized                                                         |
+| `500`  | Internal server error                                                  |
 
 ---
+
+## Execution identifiers
+
+Every route that takes an `executionId` path parameter accepts the identifier in either shape an execution can carry:
+
+| Shape             | Example                                | Notes                                                                                       |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Undashed 32-hex   | `b9a3aba3c092475f978ad39e5d5a2657`     | The identifier VAMS generates. Lowercase only.                                              |
+| Dashed 8-4-4-4-12 | `b9a3aba3-c092-475f-978a-d39e5d5a2657` | The name AWS Step Functions assigns when an execution is started unnamed. Case-insensitive. |
+
+The undashed form is lowercase-only because it is compared as an exact Amazon DynamoDB key, so an uppercase variant matches no record. Anything else is rejected with `400`. The same rule applies to a pipeline-execution identifier and to the `groupId` used for a group abort.
 
 ## Abort a workflow execution
 
@@ -1104,8 +1193,8 @@ When `groupId` is supplied, every active execution in the group is aborted and t
     "message": {
         "groupId": "nightly-batch-2026-07",
         "results": [
-            { "executionId": "a1b2c3d4-e5f6-7890", "status": "aborted" },
-            { "executionId": "b2c3d4e5-f6a7-8901", "status": "skipped-terminal" }
+            { "executionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "status": "aborted" },
+            { "executionId": "b2c3d4e5f6a789011a2b3c4d5e6f7081", "status": "skipped-terminal" }
         ],
         "skippedInaccessibleCount": 1,
         "moreRemaining": true
@@ -1116,18 +1205,18 @@ When `groupId` is supplied, every active execution in the group is aborted and t
 `skippedInaccessibleCount` (members the caller is not authorized on, counted but not identified) and `moreRemaining` (more active authorized members remain beyond this request's cap — re-invoke to continue) are present only when non-zero/applicable.
 
 :::note[Authorization]
-Aborting an execution requires `GET` permission on the execution's workflow and `POST` permission on every input-file asset tied to the execution. Because the execution does not modify the workflow definition, only read access to the workflow is required; because it affects the processed assets, write (`POST`) access to those assets is required.
+Aborting an execution requires `GET` permission on the execution's workflow, `POST` permission on every asset the run read (and, for a run with no input files, the asset it wrote to), and `GET` on every database whose metadata the run captured. Because the abort does not modify the workflow definition, only read access to the workflow is required; because it changes the run's effect on the processed assets, write (`POST`) access to those assets is required.
 :::
 
 ### Error responses
 
-| Status | Description                                                     |
-| ------ | --------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`                                |
-| `403`  | Not authorized (API, workflow, or one of the input-file assets) |
-| `404`  | Execution not found                                             |
-| `429`  | Throttling -- too many requests                                 |
-| `500`  | Internal server error                                           |
+| Status | Description                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid or missing `executionId`                                                                 |
+| `403`  | Not authorized (API, workflow, an asset the run touched, or a captured metadata-source database) |
+| `404`  | Execution not found, or no executions found for the supplied `groupId`                           |
+| `429`  | Throttling -- too many requests                                                                  |
+| `500`  | Internal server error                                                                            |
 
 ---
 
@@ -1147,18 +1236,27 @@ POST /workflows/executions/{executionId}/rerun
 
 ### Request body
 
-| Field              | Type   | Required | Description                              |
-| ------------------ | ------ | -------- | ---------------------------------------- |
-| `executionGroupId` | string | No       | Group id to assign to the new execution. |
+| Field              | Type   | Required | Description                                                                             |
+| ------------------ | ------ | -------- | --------------------------------------------------------------------------------------- |
+| `executionGroupId` | string | No       | Group id to assign to the new execution, at most 64 characters. Omit to leave it unset. |
+
+### Response
+
+The response of the launch itself, in the same shape as [Execute a workflow](#execute-a-workflow) — the new `executionId`, the `executionGroupId` when one is set, and any launch `warnings`.
+
+:::note[Authorization]
+A re-run requires that the caller can view the original execution (`GET` on its workflow and on every asset it read) **and** hold API access to the workflow's execute route. The launch then runs the full execute authorization again as the calling user, so a re-run never exceeds what a direct execute would grant — including the caller's real MFA state.
+:::
 
 ### Error responses
 
-| Status | Description                                   |
-| ------ | --------------------------------------------- |
-| `400`  | The reconstructed execution failed validation |
-| `403`  | Not authorized                                |
-| `404`  | Execution not found                           |
-| `500`  | Internal server error                         |
+| Status | Description                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `executionId` or `executionGroupId`, or the reconstructed execution failed validation |
+| `403`  | Not authorized (API, the execute route, workflow, an asset, or a referenced pipeline)         |
+| `404`  | Execution not found, or the workflow or an asset the reconstruction references is gone        |
+| `429`  | Throttling -- too many requests                                                               |
+| `500`  | Internal server error, or re-run is unavailable in this deployment                            |
 
 ---
 
@@ -1182,14 +1280,26 @@ DELETE /workflows/executions/{executionId}/permanent
 | --------------- | ------- | -------- | ------------------------------------------------- |
 | `confirmDelete` | boolean | Yes      | Must be `true` to permanently delete the records. |
 
+### Response
+
+```json
+{
+    "message": "Execution records permanently deleted"
+}
+```
+
+:::note[Authorization]
+A permanent delete is authorized like an abort: `GET` on the execution's workflow, `POST` on every asset the run touched, and `GET` on every database whose metadata it captured. It is irreversible — after it, the execution's own records no longer evidence what the run did.
+:::
+
 ### Error responses
 
-| Status | Description                                              |
-| ------ | -------------------------------------------------------- |
-| `400`  | Missing `confirmDelete`, or the execution is in progress |
-| `403`  | Not authorized                                           |
-| `404`  | Execution not found                                      |
-| `500`  | Internal server error                                    |
+| Status | Description                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid `executionId`, missing `confirmDelete`, or the execution is in progress                  |
+| `403`  | Not authorized (API, workflow, an asset the run touched, or a captured metadata-source database) |
+| `404`  | Execution not found                                                                              |
+| `500`  | Internal server error                                                                            |
 
 ---
 
@@ -1214,11 +1324,15 @@ The route is keyed on the execution identifier because an execution may span inp
 ```json
 {
     "message": {
-        "executionId": "a1b2c3d4e5f6",
+        "workflowExecutionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "workflowId": "convert-and-preview",
         "workflowDatabaseId": "GLOBAL",
         "workflowName": "Convert and preview",
         "workflowDescription": "Convert 3D files and generate preview thumbnails",
+        "workflowSystemConfig": {
+            "inputFileArity": "one",
+            "outputTarget": { "locationType": "asset", "allowOverride": false }
+        },
         "executionStatus": "SUCCEEDED",
         "executionStartDate": "2026-06-16T00:00:00Z",
         "executionStopDate": "2026-06-16T00:05:00Z",
@@ -1236,8 +1350,8 @@ The route is keyed on the execution identifier because an execution may span inp
             {
                 "pipelineId": "3d-conversion-pipeline",
                 "pipelineDatabaseId": "GLOBAL",
-                "pipelineExecutionId": "p1a2b3",
-                "name": "3d-conversion-pipeline",
+                "pipelineExecutionId": "b7c1d2e3f405162738495a6b7c8d9e0f",
+                "name": "Convert to glTF",
                 "description": "Converts 3D files to glTF",
                 "pipelineType": "conversion",
                 "pipelineExecutionType": "Lambda",
@@ -1245,12 +1359,21 @@ The route is keyed on the execution identifier because an execution may span inp
                 "executionStatus": "SUCCEEDED",
                 "executionStartDate": "2026-06-16T00:00:05Z",
                 "executionStopDate": "2026-06-16T00:04:50Z",
-                "renderedConfig": "{\"outputFormat\": \"gltf\"}",
+                "renderedConfig": "{\"outputFormat\": \"gltf\", \"assetId\": \"{{firstAssetFileAssetId}}\"}",
                 "renderedConfigTruncated": false,
+                "renderedConfigLocation": {
+                    "bucket": "vams-execution-run-bucket",
+                    "key": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json"
+                },
                 "templateId": "high-quality",
                 "templateTags": [{ "key": "scale", "value": "1.0" }],
                 "customTemplateOverrideUsed": false,
-                "configFormat": "json"
+                "configFormat": "json",
+                "effectiveSystemConfig": {
+                    "inputFileArity": "one",
+                    "inputFileFilters": { "allow": ["*.fbx"], "exclude": [] }
+                },
+                "templateOverrides": {}
             }
         ],
         "inputFiles": [
@@ -1319,19 +1442,18 @@ The route is keyed on the execution identifier because an execution may span inp
         "inputConfigurations": [
             {
                 "pipelineId": "3d-conversion-pipeline",
-                "inputConfiguration": "",
                 "inputConfigurationTruncated": false
             }
         ],
         "outputs": {
             "files": [
                 {
-                    "relativeFilePath": "/models/building.gltf",
+                    "relativeFilePath": "models/building.gltf",
                     "fileType": "file",
                     "fileSize": 20480,
                     "contentType": "model/gltf-binary",
-                    "assetId": "building-001",
-                    "databaseId": "default",
+                    "assetId": "a1b2c3",
+                    "databaseId": "my-database",
                     "assetFileVersionId": "PvT3.K9mZ0xq1aBcd2EfGhI"
                 }
             ],
@@ -1357,6 +1479,14 @@ Each entry in `pipelines[]` carries its own `executionStatus` that advances thro
 Each entry also carries `pipelineType`, which reports the referenced pipeline's free-text `category` label (empty when the pipeline sets no category, or when its definition no longer exists). It is a display label, not an enumerated value. `pipelineExecutionType` carries the pipeline's execution type (`Lambda`, `SQS`, `EventBridge`, or `DeadlineCloud`).
 :::
 
+:::note[Settings as-run versus settings as they stand]
+Two settings blocks in the response describe different points in time, so a view showing both must label them apart.
+
+`pipelines[].effectiveSystemConfig` is the resolved `systemConfig` **that step ran under** — the pipeline's own block with the chosen template's `overrides` applied — captured when the execution launched. `pipelines[].templateOverrides` reports those overrides alone, so a reader can see what the template changed. Both are empty objects when a step's settings were not captured.
+
+`workflowSystemConfig` is the workflow's `systemConfig` **as it stands now**, read from the workflow definition rather than snapshotted, so it reflects any edit made since the run. It is the outer gate of the workflow → pipeline → template chain.
+:::
+
 :::note[Traceability, not internals]
 The response is scoped to input/output traceability. Internal details — Step Functions and resource ARNs, temporary and auxiliary S3 input/output locations, and credential-vending fields — are intentionally omitted. Output file size and content type are included when still available; a lifecycle policy may expire temporary output files, in which case only the relative path and type are returned.
 
@@ -1374,17 +1504,19 @@ Which pipeline a row belongs to follows from what that pipeline reads:
 
 The metadata sources of the run are reported alongside its inputs. `metadataSourceDatabases` lists every database whose metadata the run captured, matching the rows in `inputDatabaseMetadata`, and `metadataSourceAssets` lists the assets named purely as metadata sources. `metadataSourceDatabaseId` is the single database a run with no input files named; it is empty for a run whose databases came from its input files. Viewing an execution requires `GET` permission on every database in `metadataSourceDatabases`, so the databases reported are exactly those access to this view required. See [Metadata inputs](#metadata-inputs).
 
-For executions whose output target is an asset, each output file carries the target asset identity — `assetId` and `databaseId` — derived from the execution's output target. When a matching file version-history record exists, `assetFileVersionId` is also added, identifying the specific S3 file version the execution wrote. `assetFileVersionId` is absent for outputs with no history record (for example, executions that ran before file version history was recorded).
+For executions whose output target is an asset, each output file carries the target asset identity — `assetId` and `databaseId` — derived from the execution's output target. When a matching file version-history record exists, `assetFileVersionId` is also added, identifying the specific S3 file version the execution wrote in the output asset. It is absent for an output with no history record. A `s3VersionId` may also be present, which is the version of the object as the execution staged it rather than as the asset holds it.
+
+An output file's `relativeFilePath` is relative to the output asset with no leading slash, and it reflects where the file landed — the run's output path prefix is already applied, so it always matches the write location.
 
 `results` lists structured result files a pipeline emits to the execution's `results/` output folder (as opposed to asset files). Each entry carries the file's path relative to that folder (`relativeFilePath`), the file content (`resultsContent`), and `resultsContentTruncated`, which is `true` when the stored content was truncated to fit the field limit.
 :::
 
 :::note[Collection limits and truncation]
-Every collection in the response is bounded so a run with a very large number of inputs or outputs still fits the AWS Lambda synchronous-response limit. Each collection is read to at most 2,000 rows, and the input collections — `inputFiles`, `inputMetadata`, and `inputDatabaseMetadata` — are then trimmed to at most 1,000 returned rows.
+Every collection in the response is bounded so a run with a very large number of inputs or outputs still fits the AWS Lambda synchronous-response limit. Each collection is read to at most 2,000 rows and is then trimmed to at most 1,000 returned rows — `outputs.files` is the exception, bounded by the read cap and the byte budget alone.
 
 A file counts once against those bounds whatever it carries. Its metadata and its attributes ride on one row rather than two, so granting a pipeline `fileAttributes` adds keys to existing rows instead of adding rows — the bounds are spent per entity, not per key. A file carrying attributes and no metadata still occupies one row, so a run whose pipelines read attributes alone reaches the same bound as one reading metadata alone.
 
-`truncatedCollections` names every collection that came back partial, and is an empty array when the view is complete. The names it can contain are `inputFiles`, `inputMetadata`, `inputDatabaseMetadata`, `outputs.files`, `outputs.metadata`, and `outputs.results`. A collection named there holds fewer rows than the execution produced. The route has no continuation token, so the remaining rows are not retrievable through it — treat a named collection as a sample rather than a count.
+`truncatedCollections` names every collection that came back partial, and is an empty array when the view is complete. The names it can contain are `inputFiles`, `inputMetadata`, `inputDatabaseMetadata`, `outputs.files`, `outputs.metadata`, `outputs.results`, and — when the step section's configuration bodies were bounded — `pipelines` and `inputConfigurations`. A collection named there holds fewer rows than the execution produced. The three metadata collections — `inputMetadata`, `inputDatabaseMetadata`, and `outputs.metadata` — are retrievable in full from [Read a metadata collection by page](#read-a-metadata-collection-by-page), one page at a time. `inputFiles`, `outputs.files`, and `outputs.results` have no paged equivalent, which is why this view spends its budget on them first: a row trimmed from one of those three is reachable only by re-running the execution.
 
 A collection is bounded two ways, and either bound names it here: a row count, and a size budget measured over the serialized rows. The size budget is what keeps the response inside the AWS Lambda synchronous-response limit, because a metadata row carries a whole entity's captured map and a row count alone says nothing about how large each row is. An execution over many files that each carry hundreds of metadata entries therefore returns a bounded, flagged view rather than failing. When a collection reports the metadata each pipeline read, the budget is spent evenly across the pipelines, so every pipeline stays represented and no step's absence is mistaken for a step that read nothing.
 
@@ -1400,7 +1532,7 @@ A pipeline entry's `renderedConfig` is the configuration body after the executio
 
 The fully substituted body — the one the pipeline actually read — is written to Amazon S3 per step, and `renderedConfigLocation` points at it. The two fields describe different stages of the same body: `renderedConfig` is pre-system-tag, `renderedConfigLocation` is post. Read the object when you need the exact values a step ran with.
 
-The inline copy is bounded by the record's field limit.
+The inline copy is bounded by the record's field limit, and again by the response's own share for the step section: a run whose steps together carry more configuration than that share has each step's inline copy shortened, or removed when what would remain is too short to read as configuration. `renderedConfigLocation` survives either bound, so the fully substituted body stays reachable.
 
 `renderedConfigTruncated` reports whether the inline copy was shortened. The entry carries `renderedConfigLocation` — a \{`bucket`, `key`\} pair identifying the Amazon S3 object that holds the fully substituted body — whenever that object exists, not only on truncation:
 
@@ -1411,24 +1543,107 @@ The inline copy is bounded by the record's field limit.
     "renderedConfigTruncated": true,
     "renderedConfigLocation": {
         "bucket": "vams-execution-run-bucket",
-        "key": "executions/a1b2c3d4e5f6/input/1/config.json"
+        "key": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json"
     }
 }
 ```
 
-`renderedConfigLocation` is present whenever the object exists, including when the inline body is complete — that is the common case, and the pointer is the only route to the fully substituted body a step ran with. `renderedConfigTruncated` is the truncation signal on its own. Reading the object requires Amazon S3 access to that bucket — the response carries the location, not a presigned URL.
+`renderedConfigTruncated` is the truncation signal on its own, and it is reported on every pipeline entry. Reading the object requires Amazon S3 access to that bucket — the response carries the location, not a presigned URL.
 
-Because the location is emitted only on truncation, an execution whose inline body fits carries no pointer to its fully substituted body. The object is still written at the same per-step key, so it remains readable directly from the run bucket.
+The `pipelines` array and `inputConfigurations` are charged against the response byte ceiling before the collections divide what is left, and are held to their own share of it. Every step of the run is always reported — a step's identity is what the view exists to report — so what yields to that share is the inline configuration body. When it does, the affected steps report `renderedConfigTruncated` as `true` and `truncatedCollections` names `pipelines` and `inputConfigurations` alongside any bounded collection.
+
+`inputConfigurations` indexes the steps that recorded a configuration and reports each one's `pipelineId` and `inputConfigurationTruncated`. The body itself is reported once, on the pipeline entry's `renderedConfig`.
 :::
 
 ### Error responses
 
-| Status | Description                                                     |
-| ------ | --------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`                                |
-| `403`  | Not authorized (API, workflow, or one of the input-file assets) |
-| `404`  | Execution not found                                             |
-| `500`  | Internal server error                                           |
+| Status | Description                                                                                                          |
+| ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`                                                                                     |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, or a captured metadata-source database) |
+| `404`  | Execution not found                                                                                                  |
+| `500`  | Internal server error                                                                                                |
+
+---
+
+## Read a metadata collection by page
+
+Returns one page of a single metadata collection of an execution, with a continuation token, so a collection [Get execution details](#get-execution-details) reported in `truncatedCollections` can be walked in full. Rows carry the same scrubbed shape the detail view returns, plus the `pipelineId` of the step that read or wrote the entity, so a client renders a page with the columns it already has.
+
+```
+GET /workflows/executions/{executionId}/details/metadata
+```
+
+Three collections are addressable, matching the detail view's three metadata sections:
+
+| `collection`    | Detail-view section     | Rows                                          |
+| --------------- | ----------------------- | --------------------------------------------- |
+| `input`         | `inputMetadata`         | The asset and file metadata each step read.   |
+| `inputDatabase` | `inputDatabaseMetadata` | Each metadata-source database's own metadata. |
+| `output`        | `outputs.metadata`      | The metadata each step wrote.                 |
+
+The detail view's `inputFiles`, `outputs.files`, and `outputs.results` collections have no paged equivalent.
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description          |
+| ------------- | ------ | -------- | -------------------- |
+| `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                                                                        |
+| --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collection`    | string | No       | `input` | `input`, `inputDatabase`, or `output`. An omitted or empty value reads `input`; any other value returns `400`.                                     |
+| `pageSize`      | number | No       | `100`   | Rows requested per page. Clamped to a maximum of 500 — a larger request is served a 500-row page rather than rejected. Below 1 returns `400`.      |
+| `startingToken` | string | No       | --      | Continuation token from a previous page's `NextToken`.                                                                                             |
+| `NextToken`     | string | No       | --      | Accepted as a synonym for `startingToken`, so a response's token can be sent back under the name it was returned as. `startingToken` wins on both. |
+| `pipelineId`    | string | No       | --      | Narrow the page to the rows of the steps running this pipeline. A value outside the identifier pattern returns `400` rather than an empty page.    |
+
+### Response
+
+```json
+{
+    "message": {
+        "collection": "input",
+        "Items": [
+            {
+                "pipelineId": "3d-conversion-pipeline",
+                "databaseId": "my-database",
+                "assetId": "a1b2c3",
+                "filePath": "/models/building.fbx",
+                "scope": "asset",
+                "metadata": { "captured": "2026-05-01" },
+                "attributes": { "sensor": "faro" }
+            }
+        ],
+        "NextToken": "eyJzdGVwSW5kZXgiOiAwLCAi…"
+    }
+}
+```
+
+`NextToken` is absent on the last page, so its presence is the only signal that more rows remain — page until it is gone. A page carries at most the requested row count and at most 4 MB of serialized rows, whichever comes first, and nothing is dropped by either bound: a page ends at the first row it could not carry, and the token resumes there.
+
+Every metadata collection is keyed per pipeline execution, so the walk visits the execution's steps in a stable order and the token names a position within it — which step to continue in, and where inside that step. A token whose step order has changed underneath it returns `400` rather than resuming in the wrong step.
+
+:::warning[Send a token back with the request that produced it]
+A token names a position in one collection's walk under one `pipelineId` filter. Repeat the `collection` and `pipelineId` of the request the token came from on every follow-up request. A token replayed against a different `collection` or filter describes a position that does not exist in the walk being made, and the rows it returns — or the error it raises — say nothing useful about either collection.
+:::
+
+`input` and `inputDatabase` are the two `scope` halves of one stored collection, so a request for either reads past the other's rows. A single request scans at most 20,000 rows and then ends the page with a token at the last row scanned, so a sparse collection on a large execution is walked across several requests rather than in one.
+
+:::note[Same authorization as the detail view]
+This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for `GET`: `GET` on the execution's workflow, `GET` on every input-file asset tied to the execution, `GET` on every asset named as a metadata source, and `GET` on every database in the execution's `metadataSourceDatabases`. Exactly the callers who can open an execution's detail view can page its metadata, and no others.
+:::
+
+### Error responses
+
+| Status | Description                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an unknown `collection`, an invalid `pipelineId` or `pageSize`, or an unusable token |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, or a captured metadata-source database)   |
+| `404`  | Execution not found                                                                                                    |
+| `500`  | Internal server error                                                                                                  |
 
 ---
 
@@ -1481,7 +1696,7 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
 {
     "message": {
         "mode": "truncated",
-        "pipelineExecutionId": "p1a2b3",
+        "pipelineExecutionId": "b7c1d2e3f405162738495a6b7c8d9e0f",
         "resultLog": "...",
         "errorLog": "",
         "logsSource": "stored"
@@ -1538,12 +1753,12 @@ A full-mode CloudWatch search is always restricted to the requested execution wi
 
 ### Error responses
 
-| Status | Description                                                     |
-| ------ | --------------------------------------------------------------- |
-| `400`  | Invalid or missing `executionId`, or invalid `mode`             |
-| `403`  | Not authorized (API, workflow, or one of the input-file assets) |
-| `404`  | Execution (or specified pipeline execution) not found           |
-| `500`  | Internal server error                                           |
+| Status | Description                                                                                                          |
+| ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an invalid `mode`, or a non-integer `limit`, `startTime`, or `endTime`             |
+| `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, or a captured metadata-source database) |
+| `404`  | Execution (or specified pipeline execution) not found                                                                |
+| `500`  | Internal server error                                                                                                |
 
 ---
 

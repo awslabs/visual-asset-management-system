@@ -90,6 +90,10 @@ interface PipelineCardProps {
     index: number;
     pipelineOptions: Pipeline[];
     templateOptions: Template[];
+    /** `databaseId:pipelineId` keys already chosen by the OTHER cards. */
+    takenPipelineKeys: Set<string>;
+    /** Lower-cased job names already used by an EARLIER card. */
+    takenJobNames: Set<string>;
     onUpdate: (index: number, updated: SpecifiedPipelineRef) => void;
     onRemove: (index: number) => void;
 }
@@ -99,6 +103,8 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
     index,
     pipelineOptions,
     templateOptions,
+    takenPipelineKeys,
+    takenJobNames,
     onUpdate,
     onRemove,
 }) => {
@@ -144,6 +150,11 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
     };
 
     const jobNameInvalid = !!pipelineRef.jobName && !JOB_NAME_PATTERN.test(pipelineRef.jobName);
+    // A repeat of an earlier card's job name collapses both steps into one state machine state, so
+    // one of the pipelines never runs. Compared case-insensitively: the name is also an output-path
+    // segment, where two casings read as the same step.
+    const jobNameDuplicate =
+        !!pipelineRef.jobName && takenJobNames.has(pipelineRef.jobName.toLowerCase());
 
     return (
         <div ref={setNodeRef} style={style}>
@@ -176,18 +187,28 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                             >
                                 <option value="">Select a pipeline</option>
                                 {/* Archived pipelines are listed so an existing reference to one
-                                    still resolves to a named card, but cannot be newly chosen. */}
-                                {pipelineOptions.map((p) => (
-                                    <option
-                                        key={`${p.databaseId}:${p.pipelineId}`}
-                                        value={`${p.databaseId}:${p.pipelineId}`}
-                                        disabled={p.archived === true}
-                                    >
-                                        {p.archived === true
-                                            ? `${p.pipelineName} (archived)`
-                                            : p.pipelineName}
-                                    </option>
-                                ))}
+                                    still resolves to a named card, but cannot be newly chosen.
+                                    A pipeline another card already uses is listed the same way: the
+                                    backend keys each step's parameters, resolved config and filtered
+                                    inputs by pipeline id, so a second reference to one overwrites
+                                    the first and only one of the two steps runs. */}
+                                {pipelineOptions.map((p) => {
+                                    const key = `${p.databaseId}:${p.pipelineId}`;
+                                    const alreadyUsed = takenPipelineKeys.has(key);
+                                    return (
+                                        <option
+                                            key={key}
+                                            value={key}
+                                            disabled={p.archived === true || alreadyUsed}
+                                        >
+                                            {p.archived === true
+                                                ? `${p.pipelineName} (archived)`
+                                                : alreadyUsed
+                                                ? `${p.pipelineName} (already in this workflow)`
+                                                : p.pipelineName}
+                                        </option>
+                                    );
+                                })}
                             </select>
                         </div>
                         {templateOptions.length > 0 && (
@@ -237,6 +258,12 @@ const PipelineCard: React.FC<PipelineCardProps> = ({
                             {jobNameInvalid && (
                                 <p className="mt-1 text-sm text-vams-error">
                                     Letters, numbers, hyphens, and underscores only (3-63).
+                                </p>
+                            )}
+                            {!jobNameInvalid && jobNameDuplicate && (
+                                <p className="mt-1 text-sm text-vams-error">
+                                    Another step already uses this job name. Each step needs its
+                                    own, or the two steps become one and only one pipeline runs.
                                 </p>
                             )}
                         </div>
@@ -347,6 +374,20 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
                     {value.map((pipelineRef, index) => {
                         const compositeKey = `${pipelineRef.pipelineDatabaseId}:${pipelineRef.pipelineId}`;
                         const templateOptions = templatesByPipeline[compositeKey] || [];
+                        // Excludes this card's own selection, so its current value stays selectable.
+                        const takenPipelineKeys = new Set(
+                            value
+                                .filter((r, i) => i !== index && r.pipelineId)
+                                .map((r) => `${r.pipelineDatabaseId}:${r.pipelineId}`)
+                        );
+                        // Only EARLIER cards, so the collision is reported on the second one rather
+                        // than on both — a name is not wrong until it repeats.
+                        const takenJobNames = new Set(
+                            value
+                                .slice(0, index)
+                                .map((r) => (r.jobName || "").toLowerCase())
+                                .filter(Boolean)
+                        );
                         return (
                             <PipelineCard
                                 key={index}
@@ -354,6 +395,8 @@ const PipelineOrderList: React.FC<PipelineOrderListProps> = ({
                                 index={index}
                                 pipelineOptions={pipelineOptions}
                                 templateOptions={templateOptions}
+                                takenPipelineKeys={takenPipelineKeys}
+                                takenJobNames={takenJobNames}
                                 onUpdate={handleUpdate}
                                 onRemove={handleRemove}
                             />

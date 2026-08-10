@@ -50,14 +50,24 @@ backendPipelines/
         openPipeline.py               # Starts Step Functions
         constructPipeline.py          # Builds pipeline definition
         pipelineEnd.py                # Cleanup and callback
-        customLogging/
+        manifestHelper.py             # Resolves the manifest (copy from an existing pipeline)
+        customLogging/                # Required in every pipeline lambda/ directory
           __init__.py
           logger.py
+      vamsSchema/                     # Registration bundle
+        pipeline.json
+        workflow.json
+        templates/
       container/                      # Optional: container code
         Dockerfile
         __main__.py
         requirements.txt
 ```
+
+The `customLogging/` package and `manifestHelper.py` are copied into each pipeline's `lambda/`
+directory — copy both from an existing pipeline, for example
+`backendPipelines/3dRecon/splatToolbox/lambda/`. Without the local `customLogging/` package the Lambda
+function fails at import with `No module named 'customLogging'`.
 
 #### vamsExecute Lambda
 
@@ -259,7 +269,8 @@ if (props.config.app.pipelines.useYourPipeline.enabled) {
         pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
         lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-        importGlobalPipelineWorkflowFunctionName: props.importGlobalPipelineWorkflowFunctionName,
+        importGlobalPipelineWorkflowV2FunctionName:
+            props.importGlobalPipelineWorkflowV2FunctionName,
     });
     this.pipelineVamsLambdaFunctionNames.push(
         yourPipelineNestedStack.pipelineVamsLambdaFunctionName
@@ -311,10 +322,11 @@ Wrong output:   xd130a6d6.../pump.e57.previewFile.gif   (relative path lost)
 
 ### Computing the relative subdirectory
 
-The `assetId` is passed as a workflow state variable. Thread it through the entire pipeline chain and use it in the container to compute the relative subdirectory:
+The `assetId` is resolved from the manifest in the `vamsExecute` Lambda and threaded from there through
+the rest of the chain. Use it in the container to compute the relative subdirectory:
 
 ```python
-# assetId comes from the pipeline definition (threaded from workflow state)
+# assetId comes from the pipeline definition (resolved from the manifest in vamsExecute)
 input_parts = stage_input.objectKey.split("/")
 asset_id_idx = input_parts.index(assetId)
 relative_subdir = "/".join(input_parts[asset_id_idx + 1:-1])  # "" if file is at asset root
@@ -322,19 +334,22 @@ relative_subdir = "/".join(input_parts[asset_id_idx + 1:-1])  # "" if file is at
 
 ## Threading assetId through the pipeline
 
-The `assetId` is a workflow state variable that must be threaded through every stage of the pipeline chain. Never attempt to derive the asset ID from Amazon S3 path segments.
+The task body does not carry `assetId`. Resolve it from the manifest in the `vamsExecute` Lambda, then
+thread it through every stage of the chain. Never attempt to derive the asset ID from Amazon S3 path
+segments.
 
 ```mermaid
 flowchart LR
-    A[Workflow Event<br/>assetId] --> B[vamsExecute Lambda<br/>captures assetId]
+    A[Manifest<br/>inputManifestS3Location] --> B[vamsExecute Lambda<br/>resolves assetId]
     B --> C[constructPipeline Lambda<br/>includes assetId in definition]
     C --> D[Container<br/>reads assetId from definition]
 ```
 
 ```python
-# In vamsExecute Lambda: capture assetId from event body
+# In vamsExecute Lambda: resolve assetId from the manifest
+resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
 message_payload = {
-    "assetId": data.get("assetId", ""),
+    "assetId": resolved["assetId"],
     # ... other fields
 }
 
@@ -347,6 +362,10 @@ definition = {
 # In container: read from pipeline definition
 asset_id = pipeline_definition.get("assetId")
 ```
+
+The helper takes the identity from the manifest's first input file, and for a pipeline whose
+`inputFileArity` is `none` it falls back to the manifest's `outputTarget` block — so the same call
+covers a run that selects no input file.
 
 ## The pipeline input contract
 
@@ -375,9 +394,8 @@ input-file-agnostic and multi-file ready.
 | `TaskToken`                            | Callback only  | Present only when the pipeline sets `waitForCallback` to `"Enabled"`       |
 
 :::warning[Input and output paths are not in the body]
-Earlier VAMS versions passed fields such as `inputS3AssetFilePath` and `outputS3AssetFilesPath`
-directly in the payload. They are no longer there. Read them from the manifest instead -- a pipeline
-that indexes the body for those keys fails on its first invocation.
+The body carries no `inputS3AssetFilePath` and no output paths. Read them from the manifest instead --
+a pipeline that indexes the body for those keys fails on its first invocation.
 :::
 
 ### Reading the manifest
@@ -513,6 +531,43 @@ Synchronous AWS Lambda pipelines (`waitForCallback` disabled) return normally an
 `TaskToken`. Amazon SQS, Amazon EventBridge, and AWS Deadline Cloud pipelines are asynchronous;
 Deadline Cloud always uses the callback.
 
+### Every failure route reports the token
+
+The routes that most often go unreported are the ones that fail **before** the processing container or job
+starts — a manifest that resolves to the wrong input-file count, an unreadable input configuration, a
+malformed request body. On those paths nothing downstream exists to report the outcome, so the entry-point
+Lambda is the only place that can.
+
+Cover every path that ends the invocation without success:
+
+-   each `except` block, including a broad catch-all;
+-   every early `return` that emits a `4xx` **after** the token has been parsed from the body.
+
+An early return that fires before the body is parsed carries no token and needs no callback.
+
+:::warning[Verify the grant on the entry-point function, not the pipeline]
+A pipeline's AWS CDK builder file usually grants `states:SendTaskSuccess` and `states:SendTaskFailure` to
+its own callback-sending functions, so searching the file finds the actions even when the entry-point
+function lacks them. Scope the check to the function that receives the token:
+
+```bash
+awk '/export function build.*VamsExecute/,/^}/' <builder>.ts | grep -c SendTaskFailure
+```
+
+Without the grant, `send_task_failure` raises `AccessDeniedException`, the handler logs it, and the
+workflow task waits for its full timeout — the same behavior as omitting the call, distinguishable only by
+a log line.
+:::
+
+Three details make the callback reliable:
+
+-   **Report before propagating.** Send the callback, then re-raise or return the error, so the original
+    cause still reaches Amazon CloudWatch Logs.
+-   **Make the call conditional on a token.** A direct invocation carries no `TaskToken`; the callback
+    helper returns without calling AWS Step Functions rather than failing on the missing value.
+-   **Keep `cause` within 256 characters.** Longer text is truncated in the execution history; the full
+    message belongs in the log entry.
+
 ## Registering sub-processes and logs
 
 VAMS can only stop, and only read logs from, the resources a pipeline tells it about. A pipeline that
@@ -552,6 +607,32 @@ already-registered resource is skipped, so an at-least-once event delivery does 
 keys are reported (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`, `queueId`, or a
 generic `arn`). A type VAMS cannot yet stop is still recorded, and an abort reports it as left running
 instead of silently forgetting it.
+
+### What registration enables
+
+A registration is a durable record on the pipeline-execution row, and three separate capabilities read it.
+Registering once is what turns each of them on:
+
+| Capability             | Reads                              | Behavior without registration                                                                                 |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Abort**              | `registeredSubExecutions`          | Aborting the VAMS execution stops the workflow but leaves the pipeline's own work running — and billing.      |
+| **Logs**               | `registeredLogs`                   | The step's log viewer has no source, so it renders empty even though the pipeline is writing logs somewhere.  |
+| **Sub-process status** | `registeredSubExecutions` locators | The execution view cannot report what the sub-process is doing, because it does not know the resource exists. |
+
+The logs a step shows come from all three sources merged and sorted together — the pipeline's own Lambda log
+group, any group reported through `registeredLogs`, and the sub-process history. See
+[`GET /workflows/executions/{executionId}/logs`](../api/workflows.md) for the `subProcessEvents` and
+`sfnHistoryEvents` shape a client receives.
+
+:::info[Stopping is type-aware; recording is not]
+Registration accepts any `resourceType`, but only the types VAMS has a stop API for are actually stopped
+today: a Step Functions execution (`stepFunctionsExecution`) and an AWS Batch job (`batchJob`). Any other
+type is stored and, on abort, reported back to the caller as left running rather than dropped.
+
+That distinction is deliberate — it means registering a resource is always worth doing. A type VAMS cannot
+stop yet becomes visible in the abort result immediately, and gains automatic stop and status handling when
+support is added, with no change to the pipeline.
+:::
 
 :::tip[AWS Batch: which integration submits the job matters]
 When a nested state machine submits its Batch job through the Step Functions `.sync` integration
@@ -659,17 +740,42 @@ GovCloud and European Sovereign Cloud partitions.
 Deploying a pipeline's AWS resources does not make it usable. A pipeline becomes selectable in VAMS —
 with its configuration templates and a runnable workflow — only once it is **registered** into the
 pipeline and workflow tables. Registration is driven by a `vamsSchema/` bundle: a set of static JSON
-files describing the pipeline, its optional workflow, and its optional templates.
+files describing the pipeline, its workflow, and its optional templates.
 
 ```
 backendPipelines/{useCase}/{name}/vamsSchema/
     pipeline.json                  # required
-    workflow.json                  # optional -- one built-in workflow for the pipeline
+    workflow.json                  # one workflow for the pipeline
     templates/{templateId}.json    # optional -- one file per configuration template
+```
+
+Templates are read from the top level of `templates/` only. A subdirectory under `templates/` is
+ignored, so a template file placed inside one registers nothing.
+
+A pipeline that ships several model or mode variants gives each variant its own bundle directory, and
+each is registered separately:
+
+```
+backendPipelines/{useCase}/{name}/vamsSchema/{variant}/
+    pipeline.json
+    workflow.json
+    templates/{templateId}.json
 ```
 
 Registration is idempotent. Re-deploying overwrites the existing definition and clears the archived
 flag, so a redeploy neither duplicates a pipeline nor leaves a previously archived one hidden.
+
+Re-registration runs only when the bundle's contents change. The registration resource carries a
+content hash of `pipeline.json`, `workflow.json`, and the top-level `templates/*.json` files, so a
+deployment that changes nothing under `vamsSchema/` leaves the registered definition untouched.
+
+:::warning[An edit to a built-in is reverted the next time its bundle changes]
+The bundle is the source of truth for a registered built-in pipeline. Changing one through the web
+interface, the API, or the CLI — renaming it, retuning its `systemConfig`, or archiving it — is
+overwritten the next time that bundle's contents change and the pipeline re-registers. To customize a
+built-in durably, either edit its `vamsSchema/` files so the bundle carries the change, or create a
+separate pipeline of your own rather than editing the built-in in place.
+:::
 
 ### pipeline.json
 
@@ -726,12 +832,15 @@ replaces `systemConfig` wholesale rather than merging into it. This is also what
 A bundle written against an earlier version of VAMS keeps registering, so an external solution that
 pins a bundle shape does not have to track every field VAMS adds. Two properties make that hold:
 
--   **Two fields are required — `pipeline.pipelineId` and `pipeline.pipelineName`.** Everything else is
-    optional, including the whole `systemConfig` block, the whole `executionConfig` block, `workflow`,
-    and `templates`. A bundle declaring only those two registers a pipeline whose every setting is the
-    documented default. `pipelineId` may instead be supplied as a deploy-time id override, which is how
-    the VAMS CDK names its built-ins. A `workflow` needs only `workflowId` and `workflowName`, a
-    template only `templateId` and `templateName`, and a trigger only `triggerType`.
+-   **Two fields are required in `pipeline.json` — `pipeline.pipelineId` and `pipeline.pipelineName`.**
+    Everything else in that file is optional, including the whole `systemConfig` block and the whole
+    `executionConfig` block, so a bundle declaring only those two registers a pipeline whose every
+    setting is the documented default. `pipelineId` may instead be supplied as a deploy-time id
+    override, which is how the VAMS CDK names its built-ins. A `workflow` needs only `workflowId` and
+    `workflowName`, a template only `templateId` and `templateName`, and a trigger only `triggerType`.
+    `templates/` is optional. The importer also accepts a bundle with no workflow, but the
+    `VamsSchemaRegistration` construct requires `workflow.json` on disk and fails synth without it — a
+    pipeline is launchable only through a workflow, so ship one.
 -   **Unknown fields are ignored rather than rejected.** A bundle carrying a field a given VAMS version
     does not recognize — because it was written for a newer one — still registers. Fields inside
     `systemConfig` are preserved on the stored record; fields elsewhere in the bundle are dropped. A
@@ -843,11 +952,22 @@ custom resource during deployment, passing the deploy-time resolved resource val
 
 ```typescript
 new VamsSchemaRegistration(this, "MyPipelineSchema", {
-    schemaPath: path.join(__dirname, "../../../../../backendPipelines/{useCase}/{name}/vamsSchema"),
-    resourceOverrides: { lambdaName: myPipelineFunction.functionName },
     importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+    artefactsBucket: props.storageResources.s3.artefactsBucket,
+    vamsSchemaDir: path.join(
+        __dirname,
+        "../../../../../backendPipelines/{useCase}/{name}/vamsSchema"
+    ),
+    resourceOverrides: { lambdaName: myPipelineFunction.functionName },
+    idOverrides: { pipelineId: "my-pipeline", workflowId: "my-pipeline" },
 });
 ```
+
+`resourceOverrides` is a **flat** map of deploy-time resolved values, keyed by the execution type's
+override name — `lambdaName`, `sqsQueueUrl`, `eventBridgeBusArn` / `eventBridgeSource` /
+`eventBridgeDetailType`, or `deadlineFarmId` / `deadlineQueueId` / `deadlineStorageProfileId`. The
+importer reads only these flat keys; a nested object is ignored and the pipeline registers with an
+empty resource identifier, so every execution of it fails at the invoke state.
 
 Set `autoRegisterWithVAMS` to `true` in the pipeline's configuration to enable registration. To also
 create a file-upload trigger on the registered workflow, a pipeline uses one of two configuration
@@ -1128,9 +1248,10 @@ Use this checklist when building a new pipeline:
 -   [ ] `vamsExecute` Lambda passes through all Amazon S3 output paths (never hardcodes empty strings)
 -   [ ] `constructPipeline` Lambda uses the correct output path for the pipeline's output type
 -   [ ] Container preserves relative paths when writing asset-adjacent files
--   [ ] `assetId` is threaded through the entire chain (vamsExecute -> constructPipeline -> container)
+-   [ ] `assetId` resolved from the manifest in `vamsExecute` and threaded from there (vamsExecute -> constructPipeline -> container), never read off the task body or derived from S3 path segments
 -   [ ] Every sub-process and log location registered (nested state machines, log groups, and any compute job the pipeline submits itself) — see [Registering sub-processes and logs](#registering-sub-processes-and-logs)
--   [ ] `SendTaskFailure` sent on every error path, not only the expected ones
+-   [ ] `SendTaskFailure` sent on every error path, not only the expected ones — including the pre-invoke rejections that fail before the container or job starts, and every post-token early `return` that emits a `4xx`
+-   [ ] `states:SendTaskFailure` granted on the **entry-point** Lambda builder specifically, not merely present somewhere in the builder file — see [Every failure route reports the token](#every-failure-route-reports-the-token)
 -   [ ] CDK nested stack created with Lambda builders, AWS Step Functions, and compute resources
 -   [ ] All Lambda builders follow the standard security pattern (4 required security calls)
 -   [ ] Configuration flag added to `ConfigPublic` with backward-compatibility defaults in `getConfig()`

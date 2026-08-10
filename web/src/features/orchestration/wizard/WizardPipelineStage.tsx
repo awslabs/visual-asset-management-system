@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import CollapsibleSection from "../components/CollapsibleSection";
 import InstructionsPanel from "../components/InstructionsPanel";
 import ConfigEditor from "../components/ConfigEditor";
 import DynamicTagForm, { formDataToTags } from "../components/DynamicTagForm";
 import SystemTagHelp from "../components/SystemTagHelp";
 import { useTemplates, useTemplate } from "../api/queries";
-import { resolvePipelineParams } from "./resolveTemplate";
+import { resolvePipelineParams, hasDeclaredDefault } from "./resolveTemplate";
 import type { Workflow, Pipeline, SpecifiedPipelineRef, Template } from "../types";
 import type { PipelineStageData } from "./ExecuteWizard";
 
@@ -84,35 +84,36 @@ const WizardPipelineStage: React.FC<WizardPipelineStageProps> = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [templates]);
 
-    // Initialize tagFormData from data or template defaults (only on template change)
-    const [initializedTemplateId, setInitializedTemplateId] = useState<string | undefined>(
-        undefined
-    );
+    // The tag form belongs to ONE template, so a template change re-seeds it from that template's own
+    // tagSchema defaults. The run's already-entered tags (revisiting the step) are restored only for
+    // the template the run was carrying — values entered against a different template are not its
+    // values, and its schema may not even declare those keys.
+    const runTags = useRef(data?.tags);
+    const runTemplateId = useRef(data?.templateId);
+    // The templates LIST omits tagSchema, so a template picked before its detail arrives seeds from an
+    // incomplete schema; the seed is redone once the schema is in hand.
+    const seedKey = `${selectedTemplateId || ""}:${selectedTemplate?.tagSchema ? "schema" : "row"}`;
+    const [seededFor, setSeededFor] = useState<string | undefined>(undefined);
     useEffect(() => {
-        // Only initialize when the template ID changes
-        if (selectedTemplateId !== initializedTemplateId) {
-            setInitializedTemplateId(selectedTemplateId);
+        if (seedKey === seededFor) return;
+        setSeededFor(seedKey);
 
-            if (data && data.tags) {
-                const formData: Record<string, any> = {};
-                data.tags.forEach((tag) => {
-                    formData[tag.key] = tag.value;
-                });
-                setTagFormData(formData);
-            } else if (selectedTemplate?.tagSchema) {
-                const formData: Record<string, any> = {};
-                selectedTemplate.tagSchema.forEach((field) => {
-                    if (field.default !== undefined) {
-                        formData[field.tagKey] = field.default;
-                    }
-                });
-                setTagFormData(formData);
-            } else {
-                setTagFormData({});
+        const formData: Record<string, any> = {};
+        // A blank optional tag is left out rather than seeded: the backend materializes an empty value
+        // for the types that have one, and a metadata fallback fills the rest.
+        (selectedTemplate?.tagSchema || []).forEach((field) => {
+            if (hasDeclaredDefault(field)) {
+                formData[field.tagKey] = field.default;
             }
+        });
+        if (selectedTemplateId === runTemplateId.current) {
+            (runTags.current || []).forEach((tag) => {
+                formData[tag.key] = tag.value;
+            });
         }
+        setTagFormData(formData);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedTemplateId, selectedTemplate]);
+    }, [seedKey]);
 
     const handleTemplateChange = (templateId: string) => {
         setSelectedTemplateId(templateId);

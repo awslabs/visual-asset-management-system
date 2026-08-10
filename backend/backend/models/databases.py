@@ -198,6 +198,11 @@ class BucketModel(BaseModel, extra='ignore'):
     bucketId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
     bucketName: str = Field(min_length=1, max_length=256, strip_whitespace=True)
     baseAssetsPrefix: str = Field(min_length=0, max_length=256, strip_whitespace=True)
+    # Marks the single bucket that houses all VAMS-managed pipeline data (template config/webform
+    # offload and execution-time run I/O under the `pipelines/` prefix). Exactly one bucket carries
+    # true. Defaults to false so a row written before the flag existed reads as non-default rather
+    # than absent, which keeps a client's boolean check total.
+    isDefault: bool = False
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""

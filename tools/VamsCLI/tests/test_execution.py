@@ -85,6 +85,32 @@ class TestExecutionList:
             assert result.exit_code == 0
             assert mocks['api_client'].list_executions.call_count == 2
 
+    def test_list_auto_paginate_max_items_keeps_the_token(self, cli_runner, generic_command_mocks):
+        """A script chunking a large deployment resumes from the outstanding token; without it the
+        next chunk has to re-walk every page already fetched."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}], 'NextToken': 'tok-resume'}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'list', '--auto-paginate', '--max-items', '1', '--json-output'])
+            assert result.exit_code == 0
+            assert mocks['api_client'].list_executions.call_count == 1
+            data = json.loads(result.output)
+            assert data['NextToken'] == 'tok-resume'
+            assert '--starting-token tok-resume' in data['note']
+
+    def test_list_auto_paginate_omits_the_token_when_the_walk_completed(self, cli_runner,
+                                                                      generic_command_mocks):
+        # A token on a completed walk would send the caller after a page that does not exist.
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].list_executions.return_value = {
+                'message': {'Items': [{'workflowExecutionId': 'e1'}]}}
+            result = cli_runner.invoke(cli, [
+                'execution', 'list', '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert 'NextToken' not in data and 'note' not in data
+
     def test_list_no_setup(self, cli_runner, no_setup_command_mocks):
         with no_setup_command_mocks('execution'):
             result = cli_runner.invoke(cli, ['execution', 'list'])
@@ -363,7 +389,11 @@ class TestExecutionDetailsMetadata:
                 '--json-output'])
             assert result.exit_code == 0
             assert mocks['api_client'].get_execution_details_metadata.call_count == 1
-            assert 'More may be available' in json.loads(result.output)['note']
+            data = json.loads(result.output)
+            assert 'More may be available' in data['note']
+            # The outstanding token is the only way to continue the walk.
+            assert data['NextToken'] == 'tok'
+            assert '--starting-token tok' in data['note']
 
     def test_auto_paginate_rejects_a_starting_token(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:

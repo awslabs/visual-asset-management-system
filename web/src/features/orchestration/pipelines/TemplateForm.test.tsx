@@ -72,7 +72,13 @@ const advanceToSaveAndSubmit = async () => {
 };
 
 describe("TemplateForm — tag schema and body preservation", () => {
-    beforeEach(() => jest.clearAllMocks());
+    beforeEach(() => {
+        jest.clearAllMocks();
+        // clearAllMocks resets calls but keeps a mockReturnValue, so a test that overrides a query
+        // hook would leak its pipeline into every later test.
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1" } });
+    });
 
     it("loads the edit form from the single-template GET, not the list", () => {
         const { useTemplate, useTemplates } = require("../api/queries");
@@ -156,6 +162,105 @@ describe("TemplateForm — tag schema and body preservation", () => {
         await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
         const body = mockUpdate.mock.calls[0][0].body;
         expect(JSON.parse(body.webFormJson)).toEqual(body.tagSchema);
+    });
+
+    it("hands the pipeline's arity and filters to the overrides editor", async () => {
+        // The override REPLACES the pipeline's value per key, so the editor can only seed from the
+        // pipeline's settings if the form passes them through.
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({
+            data: {
+                pipelineName: "P1",
+                systemConfig: {
+                    inputFileArity: "multi",
+                    inputFileFilters: { allow: ["*.glb"], exclude: [] },
+                },
+            },
+        });
+        const user = userEvent.setup();
+
+        render(
+            <TemplateForm mode="edit" databaseId="db1" pipelineId="p1" initial={fullTemplate} />,
+            {
+                wrapper: createWrapper(),
+            }
+        );
+
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("checkbox", { name: /Override input file count/i }));
+        expect(
+            (
+                screen.getByRole("combobox", {
+                    name: "Override input file count",
+                }) as HTMLSelectElement
+            ).value
+        ).toBe("multi");
+
+        await user.click(screen.getByRole("checkbox", { name: /Override input file filters/i }));
+        expect(screen.getByText("*.glb")).toBeInTheDocument();
+    });
+
+    it("warns on the Tags and Review steps when a declared tag is unreferenced", async () => {
+        // The renderer only substitutes tags the body names, so the value is collected on the
+        // execute form and then dropped.
+        const user = userEvent.setup();
+
+        render(
+            <TemplateForm mode="edit" databaseId="db1" pipelineId="p1" initial={fullTemplate} />,
+            {
+                wrapper: createWrapper(),
+            }
+        );
+
+        // Basic and Configuration carry no warning.
+        expect(screen.queryByText(/never references/)).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.queryByText(/never references/)).not.toBeInTheDocument();
+
+        // Tags.
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText(/never references/)).toHaveTextContent("{{prompt}}");
+        // Review.
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText(/never references/)).toHaveTextContent("{{prompt}}");
+    });
+
+    it("does not warn when the body references the tag, whitespace and all", async () => {
+        // Matches the backend _TAG_PATTERN's tolerance of {{ tag }}.
+        const user = userEvent.setup();
+        const referenced = {
+            ...fullTemplate,
+            configBody: '{"p":"{{ prompt }}"}',
+        } as unknown as Template;
+
+        render(<TemplateForm mode="edit" databaseId="db1" pipelineId="p1" initial={referenced} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.queryByText(/never references/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the unreferenced-tag warning non-blocking", async () => {
+        // allowCustomEdit can legitimately supply the placeholder at launch, and the backend
+        // accepts the schema either way, so the warning must not gate Next or Save.
+        const user = userEvent.setup();
+
+        render(
+            <TemplateForm mode="edit" databaseId="db1" pipelineId="p1" initial={fullTemplate} />,
+            {
+                wrapper: createWrapper(),
+            }
+        );
+
+        for (let i = 0; i < 3; i++) {
+            await user.click(screen.getByRole("button", { name: "Next" }));
+        }
+        const save = screen.getByRole("button", { name: "Save" });
+        expect(save).toBeEnabled();
+        await user.click(save);
+        await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
     });
 
     it("blocks advancing and saving while a tag row is invalid", async () => {

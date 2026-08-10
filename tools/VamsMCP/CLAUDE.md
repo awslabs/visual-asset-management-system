@@ -29,11 +29,16 @@ authentication.
 ```
 tools/VamsMCP/
   pyproject.toml             # package + deps (mcp, vamscli, requests)
+  .env.example               # documents every supported env var
   vams_mcp/
-    __init__.py
+    __init__.py              # __version__ (roll with pyproject.toml)
     config.py                # env-based config (profile, feature gates, pagination)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager
-    server.py                # FastMCP app, tool definitions, logging guard
+    server.py                # FastMCP app, response-shape helpers, tool definitions, logging guard
+  tests/
+    test_config.py           # env parsing + the writes/destructive gate interaction
+    test_client_helpers.py   # paginate(), unwrap_message(), trim_search_results()
+    test_server_tools.py     # tool behavior + the source-layout assertions of Mandatory Rule 4
 ```
 
 ### Layers
@@ -49,6 +54,22 @@ tools/VamsMCP/
 any list field onto `Items`, flags `truncated`), `unwrap_message()` (strips the
 legacy `message` envelope), and `trim_search_results()` (compacts an OpenSearch
 response to `total` / `returned` / `results`).
+
+`server.py` adds two response-shape helpers of its own, deliberately kept out of
+`VamsClient` because they describe how the tool surface presents a response
+rather than the client's contract with the CLI (whose `message`-envelope
+asymmetry other callers rely on):
+
+-   `_unwrap_message_with_warnings(page)` — unwraps the envelope while keeping a
+    sibling top-level `warnings` array. Used by `create_pipeline` /
+    `update_pipeline` (and `unarchive_pipeline`, which routes through the
+    update), whose response model has no warnings field, so that array is the
+    only copy.
+-   `_paginate_with_page_metadata(fetch_page, passthrough_keys=..., ...)` —
+    paginates while collecting each page's `warnings` (deduplicated, in order)
+    and named echo fields onto the result, marking it `truncated` when any page
+    withheld rows. `list_executions` uses it to carry `warnings` plus the applied
+    `filterStartDate` / `filterEndDate` window.
 
 ---
 
@@ -67,6 +88,8 @@ response to `total` / `returned` / `results`).
 4. **Gate mutations.** New create/update tools go inside the
    `if CONFIG.enable_writes:` block. Destructive tools (delete/archive) go inside
    `if CONFIG.enable_destructive:` and must never be in `autoApprove`.
+   `enable_destructive` is AND-ed with `enable_writes` in `Config.from_env()`, so
+   `VAMS_ENABLE_DESTRUCTIVE=true` alone registers nothing.
    `execute_workflow` and `rerun_execution` start real AWS compute, so keep them
    out of `autoApprove` too even though they are write-tier, not destructive.
    Because the tools are module-level `def`s, misplacement fails **silently**: a
@@ -103,11 +126,38 @@ response to `total` / `returned` / `results`).
     and `startingToken`, so merge the filters into the params inside the
     `fetch_page` callable rather than sending them on the first request alone.
 
-8. **Support both `mcp` major versions.** `mcp` 1.x exposes `FastMCP` from
-   `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
-   `mcp.server.mcpserver` and removed the old module. `server.py` imports it
-   through a `try`/`except ImportError` alias (`McpServer`) — keep that shim and
-   the `mcp>=1.2.0,<3.0.0` pin, and test against both before widening it.
+8. **Never let a bounded response read as a complete one.** A VAMS handler can
+   answer successfully while withholding rows, and it reports that out of band: a
+   top-level `warnings` array (a page that hit its distinct-asset permission-check
+   cap), a `truncatedCollections` list (a bounded execution-detail collection), or
+   an echoed filter window (`filterStartDate` on the executions list). Because
+   `paginate()` rebuilds its result from the accumulated items alone, every one of
+   those is dropped by default, and the agent reports an understated count or
+   concludes an object does not exist.
+
+    Use `_paginate_with_page_metadata()` instead of `CLIENT.paginate()` for any
+    list endpoint that can report a `warnings` array or echo its applied filters,
+    and `_unwrap_message_with_warnings()` for any single-call endpoint that returns
+    `warnings` as a sibling of `message`. Then say in the docstring what the flag
+    means for the agent's conclusion, not just that the field exists — a tool
+    description is the only place an agent learns not to trust a short list.
+
+9. **Forward every narrowing parameter the endpoint supports.** A tool that omits
+   one silently pins the agent to the server default: `get_execution_logs` without
+   `limit`/`next_token` caps a container's output at 100 events with no way past
+   the first page, and `list_workflows` without `include_archived` makes an
+   archived workflow's id — the argument `unarchive_workflow` requires —
+   undiscoverable. Read the matching `vamscli` command in
+   `tools/VamsCLI/vamscli/commands/` for the full parameter set the endpoint
+   accepts, and forward a parameter only in the mode that acts on it (the log
+   paging parameters are sent in `full` mode only, since truncated mode returns
+   one joined blob and no continuation token).
+
+10. **Support both `mcp` major versions.** `mcp` 1.x exposes `FastMCP` from
+    `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
+    `mcp.server.mcpserver` and removed the old module. `server.py` imports it
+    through a `try`/`except ImportError` alias (`McpServer`) — keep that shim and
+    the `mcp>=1.2.0,<3.0.0` pin, and test against both before widening it.
 
 ---
 
@@ -122,13 +172,25 @@ response to `total` / `returned` / `results`).
 3. Place it in the correct section: read (top), write (`enable_writes`), or
    destructive (`enable_destructive`).
 4. For list endpoints, use `CLIENT.paginate(...)` with the correct `items_key`
-   (see Mandatory Rule 7). For search, use `CLIENT.trim_search_results(...)`.
+   (see Mandatory Rule 7), or `_paginate_with_page_metadata(...)` when the
+   endpoint reports `warnings` or echoes its applied filters (Rule 8). For search,
+   use `CLIENT.trim_search_results(...)`.
 5. Check the request payload against the backend Pydantic model in
    `backend/backend/models/` — required fields, minimum lengths, and exact key
    names (for example `createFolder` takes `relativeKey` and it must end in `/`).
-6. If it's a safe read tool, add it to `autoApprove` in the sample
-   `.kiro/settings/mcp.json` and the README tool list.
-7. Add a unit test in `tests/` mocking `CLIENT`.
+6. Forward the endpoint's full narrowing/paging parameter set (Rule 9), and state
+   in the docstring what a bound or a warning means for the agent's conclusion.
+7. Add the tool to the README's tool list, and — if it is a safe read — to the
+   `autoApprove` array of the sample MCP host config in that same README. Any tool
+   whose parameters or response fields change also needs its README paragraph
+   updated: the tool list is the only place the parameter set is documented
+   outside the docstring.
+8. Add a unit test in `tests/` mocking `CLIENT`. Assert the params that reach the
+   `APIClient`, not just that the call happened: a dropped optional parameter is a
+   silent server-default, which no assertion on the return value catches.
+9. When the server's contract with the CLI changes, roll the version in **both**
+   `pyproject.toml` and `vams_mcp/__init__.py`, alongside
+   `tools/VamsCLI/vamscli/version.py` (root `CLAUDE.md` Pattern 7 rule 6).
 
 ## Upstream Dependency on the CLI
 

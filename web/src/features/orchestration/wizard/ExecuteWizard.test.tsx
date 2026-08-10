@@ -629,6 +629,64 @@ describe("ExecuteWizard", () => {
         expect(onClose).not.toHaveBeenCalled();
     });
 
+    // A cross-entity validation failure is reported per pipeline: the backend returns a LIST of
+    // reasons and apiClient flattens it to newline-joined text, which a plain div collapses to
+    // spaces — three distinct per-pipeline reasons then read as one unbroken sentence.
+    it("renders a multi-reason launch rejection as separate lines", async () => {
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const { tagSchema: _omitLines, ...listRowLines } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRowLines], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+
+        const reasons = [
+            "pipeline 'db1:a' rejects the selected input files",
+            "pipeline 'db1:b' requires exactly one input file",
+            "pipeline 'db1:c' is disabled",
+        ];
+        mockExecuteWorkflow.mutateAsync.mockRejectedValue(new Error(reasons.join("\n")));
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open={true}
+                    onClose={jest.fn()}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
+            </QueryClientProvider>
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: /Launch/i }));
+
+        const alert = await screen.findByRole("alert");
+        const items = alert.querySelectorAll("li");
+        expect(Array.from(items).map((li) => li.textContent)).toEqual(reasons);
+    });
+
     it("shows backend warnings on the success path instead of closing silently", async () => {
         const onClose = jest.fn();
 

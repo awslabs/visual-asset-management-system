@@ -65,9 +65,13 @@ outputs. See [Amazon S3 output path conventions](custom-pipelines.md#amazon-s3-o
 
 Two further consequences worth checking in your code:
 
--   **`assetId` is threaded, not derived.** It arrives as a field. A v2.5 pipeline that reverse-engineered
-    the asset ID from S3 path segments will now be wrong whenever the asset uses a custom base prefix.
-    See [Threading assetId through the pipeline](custom-pipelines.md#threading-assetid-through-the-pipeline).
+-   **`assetId` is resolved from the manifest, not read off the payload.** The same
+    `manifestHelper.resolve_pipeline_inputs()` call returns it as `resolved["assetId"]`, falling back to
+    the manifest's `outputTarget` block when the pipeline's `inputFileArity` is `none`. The v2.6 task body
+    does not carry the field at all, and a v2.5 pipeline that reverse-engineered the asset ID from S3
+    path segments is wrong whenever the asset uses a custom base prefix. Thread the resolved value from
+    your `vamsExecute` handler through the rest of your chain. See
+    [Threading assetId through the pipeline](custom-pipelines.md#threading-assetid-through-the-pipeline).
 -   **Your pipeline may receive more than one file.** If it was written assuming exactly one input, either
     handle the list or declare `systemConfig.inputFileArity: "one"` so VAMS rejects a multi-file selection
     up front instead of handing you a list you ignore.
@@ -175,9 +179,12 @@ one hidden.
 ```
 vamsSchema/
     pipeline.json                  # required
-    workflow.json                  # optional — one runnable workflow for the pipeline
+    workflow.json                  # one runnable workflow for the pipeline
     templates/{templateId}.json    # optional — one file per configuration template
 ```
+
+Ship the workflow file: a pipeline is launchable only through a workflow, and the
+`VamsSchemaRegistration` construct (option 3 below) fails synth when it is absent.
 
 The bundle carries **no account identifiers or ARNs**: the execution target is injected at registration
 time, so the same file works in any account, Region, and partition. Full field reference:
@@ -221,9 +228,16 @@ coupling to the VAMS deployment:
         importFunctionName: vamsImportFunctionName,
         artefactsBucket: vamsArtefactsBucket,
         vamsSchemaDir: path.join(__dirname, "../vamsSchema"),
-        resourceOverrides: { lambda: { resourceId: myFunction.functionName } },
+        resourceOverrides: { lambdaName: myFunction.functionName },
     });
     ```
+
+    `resourceOverrides` is a **flat** map keyed by the override name for your execution type —
+    `lambdaName`, `sqsQueueUrl`, `eventBridgeBusArn` / `eventBridgeSource` / `eventBridgeDetailType`, or
+    `deadlineFarmId` / `deadlineQueueId` / `deadlineStorageProfileId`. The importer reads only those flat
+    keys, so a nested object is ignored and the pipeline registers with an empty resource identifier —
+    a deployment that reports success and a pipeline whose every execution then fails at the invoke
+    state.
 
     Options 2 and 3 use the same importer, so the bundle is identical either way — option 3 only saves you
     from wiring the upload and the custom resource yourself.
@@ -243,7 +257,7 @@ vamscli pipeline template list -d GLOBAL -p my-pipeline
 
 -   [ ] Inputs resolved from `inputManifestS3Location` via `manifestHelper`, not read off the payload
 -   [ ] All four output paths forwarded, none hardcoded empty
--   [ ] `assetId` taken from the payload field, never derived from S3 path segments
+-   [ ] `assetId` taken from `resolved["assetId"]`, never off the payload or derived from S3 path segments
 -   [ ] Multi-file input either handled or excluded by declaring `inputFileArity: "one"`
 -   [ ] `SendTaskSuccess` on completion and `SendTaskFailure` on **every** error path
 -   [ ] `taskTimeout` realistic; `taskHeartbeatTimeout` set for long-running work

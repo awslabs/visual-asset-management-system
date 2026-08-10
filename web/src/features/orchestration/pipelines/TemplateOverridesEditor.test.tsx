@@ -16,7 +16,14 @@ import userEvent from "@testing-library/user-event";
 import TemplateOverridesEditor from "./TemplateOverridesEditor";
 
 /** Renders the editor as a controlled form so a toggle reflects back like the real template form. */
-function renderEditor(initial: Record<string, any> = {}) {
+function renderEditor(
+    initial: Record<string, any> = {},
+    inherited: {
+        inheritedAssetScope?: Record<string, any>;
+        inheritedArity?: any;
+        inheritedFilters?: { allow?: string[]; exclude?: string[] };
+    } = {}
+) {
     const seen: Record<string, any>[] = [];
     const Harness: React.FC = () => {
         const [value, setValue] = React.useState(initial);
@@ -27,6 +34,7 @@ function renderEditor(initial: Record<string, any> = {}) {
                     seen.push(next);
                     setValue(next);
                 }}
+                {...inherited}
             />
         );
     };
@@ -112,5 +120,73 @@ describe("TemplateOverridesEditor metadata inputs", () => {
         const { latest } = renderEditor({ metadataInputs: { databaseMetadata: false } });
         await userEvent.click(screen.getByRole("checkbox", { name: /Override metadata inputs/i }));
         expect(latest()).not.toHaveProperty("metadataInputs");
+    });
+});
+
+/**
+ * An override REPLACES the pipeline's value for its key, so a seed that does not start from the
+ * pipeline's own setting silently rewrites it: empty filter lists read as allow-all
+ * (executionValidation.is_open_allow_list), and a hardcoded arity narrows a multi-file pipeline.
+ */
+describe("TemplateOverridesEditor inherited seeds", () => {
+    it("seeds the input-file filters from the pipeline's own filters", async () => {
+        const { latest } = renderEditor(
+            {},
+            { inheritedFilters: { allow: ["*.glb", "*.gltf"], exclude: ["*.previewFile.*"] } }
+        );
+        await userEvent.click(
+            screen.getByRole("checkbox", { name: /Override input file filters/i })
+        );
+        expect(latest().inputFileFilters).toEqual({
+            allow: ["*.glb", "*.gltf"],
+            exclude: ["*.previewFile.*"],
+        });
+    });
+
+    it("does not alias the pipeline's filter arrays into the override", async () => {
+        const inheritedFilters = { allow: ["*.glb"], exclude: [] };
+        const { latest } = renderEditor({}, { inheritedFilters });
+        await userEvent.click(
+            screen.getByRole("checkbox", { name: /Override input file filters/i })
+        );
+        await userEvent.type(screen.getByLabelText("Override allow filter"), "*.usd");
+        await userEvent.click(screen.getAllByRole("button", { name: "Add" })[0]);
+        expect(latest().inputFileFilters.allow).toEqual(["*.glb", "*.usd"]);
+        // The pipeline's own list must be untouched by editing the template's copy.
+        expect(inheritedFilters.allow).toEqual(["*.glb"]);
+    });
+
+    it("seeds empty filter lists when the pipeline declares none", async () => {
+        const { latest } = renderEditor();
+        await userEvent.click(
+            screen.getByRole("checkbox", { name: /Override input file filters/i })
+        );
+        expect(latest().inputFileFilters).toEqual({ allow: [], exclude: [] });
+    });
+
+    it("seeds the input file count from the pipeline's arity", async () => {
+        const { latest } = renderEditor({}, { inheritedArity: "multi" });
+        await userEvent.click(screen.getByRole("checkbox", { name: /Override input file count/i }));
+        expect(latest().inputFileArity).toBe("multi");
+        expect(
+            (
+                screen.getByRole("combobox", {
+                    name: "Override input file count",
+                }) as HTMLSelectElement
+            ).value
+        ).toBe("multi");
+    });
+
+    it("seeds arity 'none' rather than defaulting it to one file", async () => {
+        const { latest } = renderEditor({}, { inheritedArity: "none" });
+        await userEvent.click(screen.getByRole("checkbox", { name: /Override input file count/i }));
+        expect(latest().inputFileArity).toBe("none");
+    });
+
+    it("defaults the arity seed to one file when the pipeline declares none", async () => {
+        // Matches the backend's own read of an absent inputFileArity.
+        const { latest } = renderEditor();
+        await userEvent.click(screen.getByRole("checkbox", { name: /Override input file count/i }));
+        expect(latest().inputFileArity).toBe("one");
     });
 });

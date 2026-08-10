@@ -845,6 +845,11 @@ export function storageResourcesBuilder(
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],
         destinationBucket: artefactsBucket,
+        // This deployment owns the bucket root and prunes anything absent from ./lib/artefacts. The
+        // pipeline schema bundles live in the same bucket under vamsSchema/, uploaded by a separate
+        // per-registration deployment, so they are excluded from the prune — otherwise refreshing an
+        // artefact deletes every bundle while the registration resources still expect to read them.
+        exclude: ["vamsSchema/*"],
     });
 
     //S3 Buckets handling for assets

@@ -57,7 +57,11 @@ const multiWorkflow = (systemConfig: Record<string, any> = {}): Workflow =>
     } as Workflow);
 
 /** Renders the stage as a controlled list so add/remove/edit reflect back like the real wizard. */
-function renderStage(initial: ExecuteInputFile[] = [], workflow = multiWorkflow()) {
+function renderStage(
+    initial: ExecuteInputFile[] = [],
+    workflow = multiWorkflow(),
+    extraProps: Record<string, any> = {}
+) {
     const seen: ExecuteInputFile[][] = [];
     const Harness: React.FC = () => {
         const [files, setFiles] = React.useState<ExecuteInputFile[]>(initial);
@@ -73,6 +77,7 @@ function renderStage(initial: ExecuteInputFile[] = [], workflow = multiWorkflow(
                 onOutputAssetIdChange={jest.fn()}
                 onOutputDatabaseIdChange={jest.fn()}
                 onOutputPathPrefixChange={jest.fn()}
+                {...extraProps}
             />
         );
     };
@@ -242,6 +247,275 @@ describe("WizardInputStage multi-file arity", () => {
         await userEvent.click(screen.getByLabelText("File"));
         expect(await screen.findByRole("option", { name: "/a-one.glb" })).toBeInTheDocument();
         expect(screen.queryByRole("option", { name: "/a-two.glb" })).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * A row's databaseId must be an ASSET database the picker can display.
+ *
+ * The wizard's own `databaseId` is the SCOPE it was opened in, which on the workflows page and the
+ * global executions board is "GLOBAL" — the shared pipeline/workflow catalog, not an asset database.
+ * Seeding it into a row left the Database select blank (no option matches it) while the Asset picker
+ * was enabled and full of assets, so the user picked one and launched against a database that does not
+ * exist. All shipped workflows are GLOBAL, so this is the primary discovery path.
+ */
+describe("WizardInputStage row database seeding", () => {
+    const globalDatabases = () =>
+        queries().useDatabases.mockReturnValue({
+            data: [{ databaseId: "db1" }, { databaseId: "db2" }, { databaseId: "GLOBAL" }],
+        });
+
+    it("seeds an added row with no database when the wizard scope is GLOBAL", async () => {
+        globalDatabases();
+        const seen: ExecuteInputFile[][] = [];
+        const Harness: React.FC = () => {
+            const [files, setFiles] = React.useState<ExecuteInputFile[]>([]);
+            return (
+                <WizardInputStage
+                    workflow={multiWorkflow()}
+                    databaseId="GLOBAL"
+                    inputFiles={files}
+                    onInputFilesChange={(next) => {
+                        seen.push(next);
+                        setFiles(next);
+                    }}
+                    onOutputAssetIdChange={jest.fn()}
+                    onOutputDatabaseIdChange={jest.fn()}
+                    onOutputPathPrefixChange={jest.fn()}
+                />
+            );
+        };
+        render(<Harness />);
+        await userEvent.click(screen.getByRole("button", { name: "Add Input File" }));
+        expect(seen[seen.length - 1][0].databaseId).toBe("");
+        // The blank value is what the Database select can display, and it keeps the Asset picker
+        // disabled until a real database is chosen.
+        await waitFor(() =>
+            expect((screen.getByLabelText("Database") as HTMLSelectElement).value).toBe("")
+        );
+        expect(screen.getByLabelText("Asset")).toBeDisabled();
+    });
+
+    it("still seeds a real database scope into an added row", async () => {
+        const { latest } = renderStage();
+        await userEvent.click(screen.getByRole("button", { name: "Add Input File" }));
+        expect(latest()[0].databaseId).toBe("db1");
+    });
+
+    it("prefers the preset asset's database over the GLOBAL scope", async () => {
+        globalDatabases();
+        const seen: ExecuteInputFile[][] = [];
+        const Harness: React.FC = () => {
+            const [files, setFiles] = React.useState<ExecuteInputFile[]>([]);
+            return (
+                <WizardInputStage
+                    workflow={multiWorkflow()}
+                    databaseId="GLOBAL"
+                    presetAsset={{ databaseId: "db2", assetId: "asset-c" }}
+                    inputFiles={files}
+                    onInputFilesChange={(next) => {
+                        seen.push(next);
+                        setFiles(next);
+                    }}
+                    onOutputAssetIdChange={jest.fn()}
+                    onOutputDatabaseIdChange={jest.fn()}
+                    onOutputPathPrefixChange={jest.fn()}
+                />
+            );
+        };
+        render(<Harness />);
+        await userEvent.click(screen.getByRole("button", { name: "Add Input File" }));
+        expect(seen[seen.length - 1][0]).toEqual(
+            expect.objectContaining({ databaseId: "db2", assetId: "asset-c" })
+        );
+    });
+
+    it("seeds no database into the arity-one fallback row under a GLOBAL scope", () => {
+        globalDatabases();
+        render(
+            <WizardInputStage
+                workflow={
+                    {
+                        ...multiWorkflow(),
+                        systemConfig: { inputFileArity: "one" },
+                    } as Workflow
+                }
+                databaseId="GLOBAL"
+                inputFiles={[]}
+                onInputFilesChange={jest.fn()}
+                onOutputAssetIdChange={jest.fn()}
+                onOutputDatabaseIdChange={jest.fn()}
+                onOutputPathPrefixChange={jest.fn()}
+            />
+        );
+        expect((screen.getByLabelText("Database") as HTMLSelectElement).value).toBe("");
+        expect(screen.getByLabelText("Asset")).toBeDisabled();
+    });
+});
+
+/**
+ * The file pickers filter on the RESOLVED restrictions, not the workflow's alone.
+ *
+ * A workflow that restricts nothing but whose pipelines do would otherwise offer files the chain
+ * rejects: the picker offered `/notes.txt`, the validation panel below it then said the pipeline's
+ * filters exclude every selected input, and the picker's own "N files hidden" note never appeared
+ * because it had hidden nothing.
+ */
+describe("WizardInputStage resolved input-file filters", () => {
+    const stepAllowing = (allow: string[]) => [
+        { label: "Pipeline 1", systemConfig: { inputFileFilters: { allow } } },
+    ];
+
+    it("hides a file the PIPELINE's filters reject even when the workflow restricts nothing", async () => {
+        queries().useAssetFileSearch.mockReturnValue({
+            data: {
+                items: ["/a-one.glb", "/notes.txt"].map((p) => ({
+                    fileName: p.slice(1),
+                    key: p,
+                    relativePath: p,
+                    isFolder: false,
+                })),
+                total: 2,
+            },
+            isFetching: false,
+        });
+        renderStage(
+            [{ databaseId: "db1", assetId: "asset-a", relativeFileKey: "" }],
+            multiWorkflow(),
+            {
+                pipelineConstraints: stepAllowing(["*.glb"]),
+            }
+        );
+        await userEvent.click(screen.getByLabelText("File"));
+        expect(await screen.findByRole("option", { name: "/a-one.glb" })).toBeInTheDocument();
+        expect(screen.queryByRole("option", { name: "/notes.txt" })).not.toBeInTheDocument();
+    });
+
+    it("hides a file a TEMPLATE's overrides reject", async () => {
+        renderStage(
+            [{ databaseId: "db1", assetId: "asset-a", relativeFileKey: "" }],
+            multiWorkflow(),
+            {
+                pipelineConstraints: [
+                    {
+                        label: "Pipeline 1",
+                        systemConfig: { inputFileFilters: { allow: [] } },
+                        templateOverrides: { inputFileFilters: { allow: ["*a-one*"] } },
+                    },
+                ],
+            }
+        );
+        await userEvent.click(screen.getByLabelText("File"));
+        expect(await screen.findByRole("option", { name: "/a-one.glb" })).toBeInTheDocument();
+        expect(screen.queryByRole("option", { name: "/a-two.glb" })).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * folderAllowed is a gate the stage resolves and must pass on.
+ *
+ * The backend accepts a trailing-slash key wherever the resolved scope grants it (`_scope_errors`), and
+ * the authoring UI offers folderAllowed as an independent checkbox — so a workflow with
+ * `{folderAllowed: true, wholeAssetAllowed: false}` is a legitimate configuration whose only reachable
+ * path was the file manager's Automation action.
+ */
+describe("WizardInputStage folder selections", () => {
+    const scoped = (assetScope: Record<string, boolean>) => multiWorkflow({ assetScope });
+
+    it("offers each folder the asset's files sit in", async () => {
+        queries().useAssetFileSearch.mockReturnValue({
+            data: {
+                items: ["/models/pump.glb", "/textures/skin.png"].map((p) => ({
+                    fileName: p.split("/").pop(),
+                    key: p,
+                    relativePath: p,
+                    isFolder: false,
+                })),
+                total: 2,
+            },
+            isFetching: false,
+        });
+        renderStage(
+            [{ databaseId: "db1", assetId: "asset-a", relativeFileKey: "" }],
+            scoped({ folderAllowed: true })
+        );
+        await userEvent.click(screen.getByLabelText("File"));
+        const list = await screen.findByRole("listbox");
+        const labels = Array.from(list.querySelectorAll('[role="option"]')).map(
+            (o) => o.textContent || ""
+        );
+        expect(labels.some((l) => l.startsWith("/models/") && !l.includes("pump"))).toBe(true);
+        expect(labels.some((l) => l.startsWith("/textures/") && !l.includes("skin"))).toBe(true);
+    });
+
+    it("offers no folder when the resolved scope does not allow one", async () => {
+        queries().useAssetFileSearch.mockReturnValue({
+            data: {
+                items: [
+                    {
+                        fileName: "pump.glb",
+                        key: "/models/pump.glb",
+                        relativePath: "/models/pump.glb",
+                        isFolder: false,
+                    },
+                ],
+                total: 1,
+            },
+            isFetching: false,
+        });
+        renderStage(
+            [{ databaseId: "db1", assetId: "asset-a", relativeFileKey: "" }],
+            multiWorkflow()
+        );
+        await userEvent.click(screen.getByLabelText("File"));
+        const list = await screen.findByRole("listbox");
+        const labels = Array.from(list.querySelectorAll('[role="option"]')).map(
+            (o) => o.textContent || ""
+        );
+        expect(labels).toEqual(["/models/pump.glb"]);
+    });
+});
+
+/**
+ * A large selection does not open a version request per row on mount.
+ *
+ * The file manager's Automation action can carry hundreds of files into this step; each row's version
+ * list is its own `fileInfo?includeVersions=true` call, which saturates the browser's connection pool
+ * and delays first paint for lists nobody opens.
+ */
+describe("WizardInputStage version-request fan-out", () => {
+    const rowsFor = (count: number): ExecuteInputFile[] =>
+        Array.from({ length: count }, (_, i) => ({
+            databaseId: "db1",
+            assetId: "asset-a",
+            relativeFileKey: `/f${i}.glb`,
+        }));
+
+    /** The distinct rows whose version query is actually enabled (a databaseId was passed). */
+    const enabledVersionRows = () => [
+        ...new Set(
+            queries()
+                .useFileVersions.mock.calls.filter((c: any[]) => !!c[0])
+                .map((c: any[]) => c[2])
+        ),
+    ];
+
+    it("keeps the requests eager for a small selection", () => {
+        renderStage(rowsFor(3));
+        expect(enabledVersionRows()).toHaveLength(3);
+    });
+
+    it("opens none of them up front for a large selection", () => {
+        renderStage(rowsFor(40));
+        expect(enabledVersionRows()).toEqual([]);
+        // The selectors themselves stay present — deferral is about the request, not the control.
+        expect(screen.getAllByLabelText("File version")).toHaveLength(40);
+    });
+
+    it("loads one row's history when its selector is reached", async () => {
+        renderStage(rowsFor(40));
+        await userEvent.click(screen.getAllByLabelText("File version")[7]);
+        await waitFor(() => expect(enabledVersionRows()).toEqual(["/f7.glb"]));
     });
 });
 

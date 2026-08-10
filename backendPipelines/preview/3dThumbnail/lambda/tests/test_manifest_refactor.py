@@ -171,10 +171,20 @@ class TestFetchManifest:
         assert mh.fetch_manifest(s3, "") is None
         s3.get_object.assert_not_called()
 
-    def test_fetch_s3_error_returns_none_best_effort(self):
+    def test_fetch_s3_error_raises(self):
+        # A supplied-but-unreadable manifest must fail here. It is the only carrier of the asset,
+        # database, and output paths, so swallowing the error starts a job with blank identity that
+        # provisions its compute before failing.
         s3 = MagicMock()
         s3.get_object.side_effect = Exception("AccessDenied")
-        assert mh.fetch_manifest(s3, "s3://abkt/k/manifest.json") is None
+        with pytest.raises(Exception, match="Could not read the workflow input manifest"):
+            mh.fetch_manifest(s3, "s3://abkt/k/manifest.json")
+
+    def test_fetch_malformed_location_raises(self):
+        s3 = MagicMock()
+        with pytest.raises(Exception, match="malformed input manifest location"):
+            mh.fetch_manifest(s3, "not-an-s3-uri")
+        s3.get_object.assert_not_called()
 
     def test_resolve_pipeline_inputs_uses_fetched_manifest(self):
         manifest = {"inputFiles": [{"bucket": "abkt", "key": "xid/a.glb", "assetId": "xid"}],
@@ -187,15 +197,24 @@ class TestFetchManifest:
         assert r["manifestUsed"] is True
         assert r["inputS3AssetFilePath"] == "s3://abkt/xid/a.glb"
 
-    def test_resolve_pipeline_inputs_no_manifest_falls_back(self):
+    def test_resolve_pipeline_inputs_falls_back_when_no_manifest_is_referenced(self):
+        # A payload carrying its paths inline and NO manifest pointer still resolves. This is the
+        # only shape the legacy fallback serves; a real task body from stepfunctions_builder carries
+        # inputManifestS3Location and none of these keys.
         s3 = MagicMock()
-        s3.get_object.side_effect = Exception("missing")
-        data = {"inputManifestS3Location": "s3://abkt/k/manifest.json",
-                "inputS3AssetFilePath": "s3://abkt/legacy.glb",
+        data = {"inputS3AssetFilePath": "s3://abkt/legacy.glb",
                 "outputS3AssetFilesPath": "s3://abkt/legacy/files/"}
         r = mh.resolve_pipeline_inputs(data, s3)
         assert r["manifestUsed"] is False
         assert r["inputS3AssetFilePath"] == "s3://abkt/legacy.glb"
+        s3.get_object.assert_not_called()
+
+    def test_resolve_pipeline_inputs_raises_when_a_referenced_manifest_is_unreadable(self):
+        s3 = MagicMock()
+        s3.get_object.side_effect = Exception("missing")
+        data = {"inputManifestS3Location": "s3://abkt/k/manifest.json"}
+        with pytest.raises(Exception, match="Could not read the workflow input manifest"):
+            mh.resolve_pipeline_inputs(data, s3)
 
 
 @pytest.mark.unit
@@ -318,14 +337,46 @@ class TestVamsExecuteUsesManifest:
         s3 = MagicMock()
         s3.get_object.side_effect = Exception("no manifest")
         invoke = MagicMock(return_value={"StatusCode": 200})
+        sfn = MagicMock()
         body = self._manifest_body()
         body.pop("inputManifestS3Location")
         body["inputS3AssetFilePath"] = "s3://abkt/legacy/folder/"
-        with patch.object(mod, "s3_client", s3), \
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn), \
                 patch.object(mod.lambda_client, "invoke", invoke):
             resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
         assert resp["statusCode"] == 400
         invoke.assert_not_called()
+        # The workflow task waits on the callback token, so the rejection must be reported rather
+        # than only returned.
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_pre_invoke_failure_fails_the_task_token(self):
+        mod = self._load_module()
+        manifest = self._manifest()
+        manifest["inputFiles"].append(
+            {"bucket": "abkt", "key": "xidM/test/second.glb", "assetId": "xidM", "databaseId": "dbM"})
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(manifest).encode("utf-8"))}
+        invoke = MagicMock(return_value={"StatusCode": 200})
+        sfn = MagicMock()
+        with patch.object(mod, "s3_client", s3), patch.object(mod, "sfn_client", sfn), \
+                patch.object(mod.lambda_client, "invoke", invoke):
+            resp = mod.lambda_handler({"body": json.dumps(self._manifest_body())}, MagicMock())
+        assert resp["statusCode"] == 500
+        invoke.assert_not_called()
+        assert sfn.send_task_failure.call_count == 1
+        assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-123"
+
+    def test_no_task_token_skips_the_callback(self):
+        mod = self._load_module()
+        body = self._manifest_body()
+        del body["TaskToken"]
+        sfn = MagicMock()
+        with patch.object(mod, "sfn_client", sfn):
+            resp = mod.lambda_handler({"body": json.dumps(body)}, MagicMock())
+        assert resp["statusCode"] == 500
+        sfn.send_task_failure.assert_not_called()
 
     def test_handler_missing_task_token_errors(self):
         mod = self._load_module()

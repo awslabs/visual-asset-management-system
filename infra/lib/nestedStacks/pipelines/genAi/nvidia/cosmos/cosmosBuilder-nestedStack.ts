@@ -76,21 +76,25 @@ export class CosmosBuilderNestedStack extends NestedStack {
             storageResources: props.storageResources,
         });
 
-        // Conditionally create CodeBuild construct for container image builds. Built when EITHER the
-        // main Cosmos (Predict/Transfer/Reason) OR Cosmos3 (omni) opts into CodeBuild — the construct
-        // builds whichever pipeline repos are enabled, so a Cosmos3-only deployment with
-        // useNvidiaCosmos3.useCodeBuild=true still gets a cloud-built image (was previously ignored,
-        // falling back to a large local Docker build).
+        // Conditionally create CodeBuild construct for container image builds. Each Cosmos family
+        // opts in independently: `useNvidiaCosmos.useCodeBuild` covers Predict/Transfer/Reason and
+        // `useNvidiaCosmos3.useCodeBuild` covers Cosmos3 (omni). The construct is created when
+        // EITHER opts in and builds only the repos of the families that did, so a family left on
+        // the local Docker build never receives a CodeBuild-built image.
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
         const cosmos3ConfigEarly = props.config.app.pipelines.useNvidiaCosmos3;
+        const cosmosUseCodeBuild = cosmosConfig.useCodeBuild === true;
+        const cosmos3UseCodeBuild = cosmos3ConfigEarly?.useCodeBuild === true;
         let codeBuildConstruct: CosmosCodeBuildConstruct | undefined;
-        if (cosmosConfig.useCodeBuild || cosmos3ConfigEarly?.useCodeBuild) {
+        if (cosmosUseCodeBuild || cosmos3UseCodeBuild) {
             codeBuildConstruct = new CosmosCodeBuildConstruct(this, "CosmosCodeBuild", {
                 config: props.config,
                 modelCacheBucket: cosmosCommon.modelCacheBucket,
                 vpc: props.vpc,
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
+                buildCosmosRepos: cosmosUseCodeBuild,
+                buildCosmos3Repos: cosmos3UseCodeBuild,
             });
         }
 

@@ -181,7 +181,7 @@ def get_single_item(event, item_id):
     # Step 3: Object-level authorization
     item['object__type'] = 'yourObjectType'
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    if not casbin_enforcer.enforce(event, item):
+    if not casbin_enforcer.enforce(item, "GET"):
         return authorization_error()
 
     # Step 4: Return response
@@ -215,15 +215,17 @@ if not casbin_enforcer.enforceAPI(event):
 
 ### Tier 2: Object-Level Authorization
 
-Controls which specific data entities a role can access. Performed in business logic functions using `enforce()`.
+Controls which specific data entities a role can access. Performed in business logic functions using `enforce(obj, act)`, where `obj` is the entity dictionary and `act` is the HTTP method the caller must be allowed to perform on it (`GET`, `POST`, `PUT`, `DELETE`).
 
 ```python
 # MUST annotate the object type before calling enforce()
 item['object__type'] = 'asset'
 casbin_enforcer = CasbinEnforcer(claims_and_roles)
-if not casbin_enforcer.enforce(event, item):
+if not casbin_enforcer.enforce(item, "GET"):
     return authorization_error()
 ```
+
+Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
 You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
