@@ -386,19 +386,29 @@ def _decode_starting_token(starting_token):
 
 
 def _split_asset_list_token(decoded):
-    """Read an asset-list continuation into (inputs cursor, output cursor, input side drained).
+    """Read an asset-list continuation into (inputs cursor, output cursor, drained, servedThrough).
 
     The asset listing walks two independent queries under one shared budget, so a continuation names
     a cursor for EACH direction plus whether the input side is drained — a cap reached through the
     output query has to be resumable on its own, and the output direction has to stay reachable once
-    the input side is exhausted. A token naming none of the three is the single-cursor input form."""
-    if not any(k in decoded for k in ('inputsKey', 'outputKey', 'inputsDone')):
-        return decoded, None, False
+    the input side is exhausted. A token naming none of these is the single-cursor input form.
+
+    `servedThrough` is the oldest executionStartDate any earlier page already returned. Both GSIs are
+    walked newest-first, so it is the high-water mark that lets the output query skip executions that
+    were already served through the INPUT direction — the two queries are deduped only within one
+    request, so without it a dual-role execution (an input for this asset AND its output target) is
+    returned again on the page that first reaches the output side."""
+    if not any(k in decoded for k in ('inputsKey', 'outputKey', 'inputsDone', 'servedThrough')):
+        return decoded, None, False, '', ''
     inputs_key = decoded.get('inputsKey')
     output_key = decoded.get('outputKey')
+    served_through = decoded.get('servedThrough') or ''
+    served_through_id = decoded.get('servedThroughId') or ''
     return (inputs_key if isinstance(inputs_key, dict) and inputs_key else None,
             output_key if isinstance(output_key, dict) and output_key else None,
-            bool(decoded.get('inputsDone')))
+            bool(decoded.get('inputsDone')),
+            served_through if isinstance(served_through, str) else '',
+            served_through_id if isinstance(served_through_id, str) else '')
 
 
 def _asset_list_input_row_key(input_item):
@@ -713,15 +723,24 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # be decoded is a caller error: continuing without it would silently serve page 1 again.
         resume_output_key = None
         inputs_drained = False
+        # The oldest executionStartDate an earlier page already returned, and the execution at that
+        # exact date that was served. Empty on the first page.
+        served_through = ''
+        served_through_id = ''
         starting_token = query_params.get('startingToken') if query_params else None
         if starting_token:
             decoded = _decode_starting_token(starting_token)
             if decoded is None:
                 return validation_error(
                     body={'message': "startingToken is invalid."}, event=event)
-            resume_inputs_key, resume_output_key, inputs_drained = _split_asset_list_token(decoded)
+            (resume_inputs_key, resume_output_key, inputs_drained,
+             served_through, served_through_id) = _split_asset_list_token(decoded)
+            # The cursor IS the last row served, so it supplies both halves of the high-water mark.
             if resume_inputs_key:
                 query_kwargs['ExclusiveStartKey'] = resume_inputs_key
+                if not served_through:
+                    served_through = resume_inputs_key.get('executionStartDate', '')
+                    served_through_id = resume_inputs_key.get('workflowExecutionId', '')
 
         # Page the asset's inputs GSI newest-first (sorted by executionStartDate),
         # deduping by workflowExecutionId as we go (first-seen wins = newest input
@@ -770,6 +789,12 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                     # already served. The row-derived key is used whenever it is available, and the
                     # server's key only as the fallback for a page that yielded no new row.
                     last_evaluated_key = last_input_row_key or resp.get('LastEvaluatedKey')
+                    # Advance the high-water mark to the row this page stops at. The GSI is walked
+                    # newest-first, so the last row served is the oldest one served, and the output
+                    # walk on a later page uses it to skip what the input direction already returned.
+                    if last_input_row_key:
+                        served_through = last_input_row_key.get('executionStartDate', '') or served_through
+                        served_through_id = last_input_row_key.get('workflowExecutionId', '') or served_through_id
                     break
             if bounded or 'LastEvaluatedKey' not in resp:
                 inputs_drained = inputs_drained or not bounded
@@ -794,9 +819,22 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             cfg_table = dynamodb.Table(workflow_execution_configuration_table)
             output_key_condition = Key('outputDatabaseId:outputAssetId').eq(
                 er.output_asset_partition_key(database_id, asset_id))
-            if filter_end_date:
+            # An earlier page's oldest served row bounds this query from above. Both GSIs are walked
+            # newest-first, so anything at or newer than that date has already been returned — through
+            # the INPUT direction, which this query cannot see: dedupe is per-request, so a dual-role
+            # execution (an input for this asset AND its output target) would otherwise be served
+            # again on the page that first reaches the output side. Narrowing the range is what makes
+            # the two independent walks behave as one ordered sequence across pages.
+            output_upper_bound = filter_end_date
+            if served_through and (not output_upper_bound or served_through < output_upper_bound):
+                output_upper_bound = served_through
+            if output_upper_bound:
+                # `between` is inclusive, so a row at exactly the boundary date is still returned; the
+                # per-row guard below drops it. Keeping the bound inclusive is deliberate — excluding
+                # it would need a synthesized "just below" timestamp, and two executions can legitimately
+                # share a start date, so an exclusive bound could skip a sibling that was never served.
                 output_key_condition = output_key_condition & Key('executionStartDate').between(
-                    filter_start_date, filter_end_date)
+                    filter_start_date, output_upper_bound)
             else:
                 output_key_condition = output_key_condition & Key('executionStartDate').gte(
                     filter_start_date)
@@ -815,6 +853,15 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                         last_output_row_key = (_asset_list_output_row_key(cfg_item)
                                               or last_output_row_key)
                         if not execution_id or execution_id in deduped_inputs:
+                            continue
+                        # The range bound above is inclusive, so rows at exactly the high-water date
+                        # still arrive. Newer than it was already served. AT it, only the one execution
+                        # the cursor names was served — two executions can share a start date, so
+                        # dropping the whole date would lose a sibling that was never returned.
+                        row_date = cfg_item.get('executionStartDate', '')
+                        if served_through and (row_date > served_through
+                                               or (row_date == served_through
+                                                   and execution_id == served_through_id)):
                             continue
                         # A placeholder input row: this execution has no input file for the asset (it
                         # only wrote here), so the per-row input fields the response builder reads are
@@ -985,6 +1032,14 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                 token_payload['inputsDone'] = True
             elif last_evaluated_key:
                 token_payload['inputsKey'] = last_evaluated_key
+            # Carried forward explicitly. Once the inputs drain there is no inputsKey to derive it
+            # from, yet the output walk still needs to know which executions earlier pages returned
+            # through the input direction — without it, the page that first reaches the output side
+            # re-serves every dual-role execution.
+            if served_through:
+                token_payload['servedThrough'] = served_through
+                if served_through_id:
+                    token_payload['servedThroughId'] = served_through_id
             if output_last_evaluated_key:
                 token_payload['outputKey'] = output_last_evaluated_key
             if 'inputsKey' in token_payload or 'outputKey' in token_payload:

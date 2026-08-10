@@ -328,3 +328,123 @@ class TestACappedPageNeitherSkipsNorRepeats:
             [{"Items": _input_rows(40), "LastEvaluatedKey": {"k": "srv"}}],
             [{"Items": []}], query_params={"pageSize": "3"})
         assert _decode(message["NextToken"])["inputsKey"] != {"k": "srv"}
+
+
+@pytest.mark.unit
+class TestTheOutputWalkAdvancesAcrossPages:
+    """The output direction must not restart from its newest row on every page.
+
+    The output query is deduped against `deduped_inputs`, which is per-request. A row served on an
+    EARLIER page is invisible to it, so restarting the query re-serves every execution that is both an
+    input and the output target for the asset.
+
+    Live symptom on a 71-input-row asset at pageSize 44: page 1 capped on the inputs at index 43, page
+    2 served inputs 44..70, drained them, then spent its remaining budget re-reading the output GSI
+    from the newest row — repeating exactly the 17 executions that carry both roles. Reproduced against
+    the GSI directly: page 1's cursor was correct (27 clean rows follow it), so the repeats came from
+    the output side alone.
+    """
+
+    def test_a_page_that_read_output_rows_carries_an_output_cursor(self):
+        # Inputs drain within the page, so the walk reaches the output query; the CAP then fires part
+        # way through the output rows, leaving that direction unfinished. Before the fix the page was
+        # continuable only through inputsDone, and the next page re-read the output GSI from newest.
+        cap = le.MAX_EXECUTIONS_INSPECTED
+        message, _i, cfg_table = _run(
+            [{"Items": _input_rows(3)}],
+            [{"Items": _cfg_rows(cap + 10), "LastEvaluatedKey": {"k": "out-more"}}],
+            query_params={"pageSize": str(cap)})
+        cfg_table.query.assert_called()
+        token = _decode(message["NextToken"])
+        assert "outputKey" in token, (
+            f"an unfinished output walk must carry its cursor, else its rows repeat: {token}")
+
+    def test_a_fully_walked_listing_still_carries_no_token(self):
+        # The negative control: both directions exhausted is genuinely the end, and must not now
+        # emit a token just because the output query was read.
+        message, _i, _c = _run(
+            [{"Items": _input_rows(3)}], [{"Items": _cfg_rows(2)}],
+            query_params={"pageSize": "50"})
+        assert "NextToken" not in message, message
+        assert "warnings" not in message
+
+    def test_an_output_continuation_page_carries_no_work_budget_warning(self):
+        # The warning names the MAX_EXECUTIONS_INSPECTED budget; an ordinary output continuation has
+        # not hit it, so claiming a limit would misreport a normal paged read.
+        message, _i, _c = _run(
+            [{"Items": _input_rows(3)}],
+            [{"Items": _cfg_rows(4), "LastEvaluatedKey": {"k": "out-more"}},
+             {"Items": _cfg_rows(2, start=4)}],
+            query_params={"pageSize": "50"})
+        # Both output pages are supplied here, so the walk finishes and the page is genuinely the end.
+        # The claim under test is only that no work-budget warning is attached to it.
+        assert not message.get("warnings"), message.get("warnings")
+
+
+
+def _condition_values(condition):
+    """Every literal value inside a boto3 DynamoDB condition tree.
+
+    The objects have an opaque repr, so the operands are walked instead of string-matched.
+    """
+    values = []
+    stack = [condition]
+    while stack:
+        node = stack.pop()
+        operands = getattr(node, "_values", None)
+        if operands is None:
+            values.append(node)
+            continue
+        stack.extend(operands)
+    return [v for v in values if isinstance(v, str)]
+
+
+@pytest.mark.unit
+class TestADualRoleExecutionIsNotServedTwiceAcrossPages:
+    """An execution that is BOTH an input for the asset and its output target must appear once.
+
+    The two GSI walks are deduped only within one request. Page 1 can cap on the inputs and serve a
+    dual-role execution as an input row; page 2 then drains the inputs, reaches the output side for the
+    first time, and — knowing nothing of page 1 — serves that same execution again. Live, an asset with
+    71 input rows repeated exactly the 17 executions carrying both roles.
+
+    The token therefore carries a high-water mark: the oldest executionStartDate already returned, plus
+    the id served at that exact date. The output query is bounded above by it, and rows newer than it
+    are dropped.
+    """
+
+    def test_the_token_carries_the_high_water_mark(self):
+        message, _i, _c = _run(
+            [{"Items": _input_rows(8), "LastEvaluatedKey": {"k": "in"}}],
+            [{"Items": []}], query_params={"pageSize": "4"})
+        token = _decode(message["NextToken"])
+        assert token.get("servedThrough"), f"the mark must be recorded: {token}"
+        assert token.get("servedThroughId"), f"the id at that date must be recorded: {token}"
+
+    def test_the_output_query_is_bounded_by_the_mark(self):
+        # The mark is the upper bound of the output range, so the output GSI is never re-read from the
+        # newest row on a later page.
+        rows = _input_rows(8)
+        first, _i, _c = _run([{"Items": rows, "LastEvaluatedKey": {"k": "in"}}],
+                             [{"Items": []}], query_params={"pageSize": "4"})
+        mark = _decode(first["NextToken"])["servedThrough"]
+        # Page 2 needs headroom under its cap after the remaining inputs, or the output query is never
+        # reached and this would assert on a call that never happened.
+        _m2, _i2, cfg_table = _run([{"Items": rows[4:]}], [{"Items": []}],
+                                   query_params={"pageSize": "50",
+                                                 "startingToken": first["NextToken"]})
+        cfg_table.query.assert_called()
+        values = _condition_values(cfg_table.query.call_args.kwargs["KeyConditionExpression"])
+        assert mark in values, (
+            f"the output query must be bounded by the high-water mark {mark}: {values}")
+
+    def test_the_first_page_has_no_mark_so_the_output_range_is_unbounded_above(self):
+        # The negative control: without a token there is nothing served yet, so the output walk must
+        # not be narrowed at all.
+        _m, _i, cfg_table = _run([{"Items": _input_rows(2)}], [{"Items": []}],
+                                 query_params={"pageSize": "50"})
+        cfg_table.query.assert_called()
+        cond = cfg_table.query.call_args.kwargs["KeyConditionExpression"]
+        # A first page uses gte(start) only; a narrowed one would carry a second date operand.
+        dates = [v for v in _condition_values(cond) if v.endswith("Z")]
+        assert len(dates) <= 1, f"an unbounded first page must not narrow the output range: {dates}"

@@ -8,6 +8,8 @@
  * builder, and the core stack's nested-stack dependency graph.
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -88,8 +90,8 @@ describe("Deadline Cloud VPC interface endpoint gating", () => {
 describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
     // Every Batch/ECS/Fargate pipeline flag must appear in all three condition blocks:
     // subnet creation, the Batch/ECR endpoint block, and the ECS endpoint block.
-    const source = require("fs").readFileSync(
-        require("path").join(__dirname, "../lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts"),
+    const source = fs.readFileSync(
+        path.join(__dirname, "../lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts"),
         "utf8"
     );
 
@@ -139,10 +141,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
 describe("core stack nested-stack dependencies", () => {
     // Every Lambda-bearing nested stack resolves resource names from the SSM parameters
     // published by ResourceNamesBuilder, so each must declare that dependency explicitly.
-    const source = require("fs").readFileSync(
-        require("path").join(__dirname, "../lib/core-stack.ts"),
-        "utf8"
-    );
+    const source = fs.readFileSync(path.join(__dirname, "../lib/core-stack.ts"), "utf8");
 
     // Source text is matched with the comment lines stripped, so a dependency that has been
     // commented out cannot satisfy the assertion.
