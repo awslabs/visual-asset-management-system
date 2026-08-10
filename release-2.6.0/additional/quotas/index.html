@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Service Quotas and Limits | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/quotas"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Service Quotas and Limits | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration."><meta data-rh="true" property="og:description" content="This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/quotas"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/quotas" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/quotas" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Service Quotas and Limits","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/additional/quotas"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.13c32ab4.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.62133664.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.38810f5f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -118,7 +118,7 @@
 
 
 
-<table><thead><tr><th>Parameter</th><th>Default</th><th>Configurable</th><th>Configuration Key</th></tr></thead><tbody><tr><td>Credential/token timeout</td><td>3,600 seconds (1 hour)</td><td>Yes</td><td><code>app.authProvider.useCognito.credTokenTimeoutSeconds</code></td></tr><tr><td>Presigned URL timeout</td><td>86,400 seconds (24 hours)</td><td>Yes</td><td><code>app.authProvider.presignedUrlTimeoutSeconds</code></td></tr><tr><td>Upload initializations</td><td>10 per user per minute</td><td>No</td><td>Hardcoded rate limit</td></tr></tbody></table>
+<table><thead><tr><th>Parameter</th><th>Default</th><th>Configurable</th><th>Configuration Key</th></tr></thead><tbody><tr><td>Credential/token timeout</td><td>3,600 seconds (1 hour)</td><td>Yes</td><td><code>app.authProvider.useCognito.credTokenTimeoutSeconds</code></td></tr><tr><td>Presigned URL timeout</td><td>86,400 seconds (24 hours)</td><td>Yes</td><td><code>app.authProvider.presignedUrlTimeoutSeconds</code></td></tr><tr><td>Upload initializations</td><td>20 per user per minute</td><td>No</td><td>Hardcoded rate limit</td></tr></tbody></table>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="storage-limits">Storage Limits<a href="#storage-limits" class="hash-link" aria-label="Direct link to Storage Limits" title="Direct link to Storage Limits" translate="no">​</a></h2>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="amazon-dynamodb">Amazon DynamoDB<a href="#amazon-dynamodb" class="hash-link" aria-label="Direct link to Amazon DynamoDB" title="Direct link to Amazon DynamoDB" translate="no">​</a></h3>
@@ -148,7 +148,7 @@
 
 
 
-<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>Billing mode</td><td>On-demand (PAY_PER_REQUEST)</td></tr><tr><td>Maximum item size</td><td>400 KB (DynamoDB service limit)</td></tr><tr><td>Metadata records per entity</td><td>500</td></tr><tr><td>Table count</td><td>25+ tables</td></tr></tbody></table>
+<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>Billing mode</td><td>On-demand (PAY_PER_REQUEST)</td></tr><tr><td>Maximum item size</td><td>400 KB (DynamoDB service limit)</td></tr><tr><td>Metadata records per entity</td><td>500</td></tr><tr><td>Table count</td><td>46 tables (plus 5 retained for migration)</td></tr></tbody></table>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="amazon-s3">Amazon S3<a href="#amazon-s3" class="hash-link" aria-label="Direct link to Amazon S3" title="Direct link to Amazon S3" translate="no">​</a></h3>
 
@@ -180,7 +180,11 @@
 
 
 
-<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>Maximum object size</td><td>5 TB (Amazon S3 service limit)</td></tr><tr><td>Multipart upload threshold</td><td>5 GB (parts required above this size)</td></tr><tr><td>Maximum parts per upload</td><td>10,000 (Amazon S3 service limit)</td></tr><tr><td>Part size range</td><td>5 MB to 5 GB</td></tr><tr><td>Bucket encryption</td><td>AWS KMS (when CMK enabled) or Amazon S3-managed</td></tr></tbody></table>
+
+
+
+
+<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>Maximum object size</td><td>5 TB (Amazon S3 service limit)</td></tr><tr><td>Multipart upload threshold</td><td>5 GB (parts required above this size)</td></tr><tr><td>Maximum parts per upload</td><td>10,000 (Amazon S3 service limit)</td></tr><tr><td>Part size range</td><td>5 MB to 5 GB</td></tr><tr><td>VAMS upload part size</td><td>150 MB</td></tr><tr><td>Bucket encryption</td><td>AWS KMS (when CMK enabled) or Amazon S3-managed</td></tr></tbody></table>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="amazon-opensearch">Amazon OpenSearch<a href="#amazon-opensearch" class="hash-link" aria-label="Direct link to Amazon OpenSearch" title="Direct link to Amazon OpenSearch" translate="no">​</a></h3>
 
 
@@ -252,7 +256,14 @@
 
 
 
-<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>AWS Step Functions state transitions</td><td>Based on workflow complexity</td></tr><tr><td>Pipeline execution types</td><td>Lambda, Amazon SQS, Amazon EventBridge</td></tr><tr><td>Concurrent workflow executions per asset</td><td>Multiple (with different input files)</td></tr></tbody></table>
+
+
+
+
+<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>AWS Step Functions state transitions</td><td>Based on workflow complexity</td></tr><tr><td>Pipeline execution types</td><td>AWS Lambda, Amazon SQS, Amazon EventBridge, AWS Deadline Cloud</td></tr><tr><td>Pipeline steps per workflow</td><td>100</td></tr><tr><td>Concurrent workflow executions per asset</td><td>Multiple (with different input files)</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>The AWS Deadline Cloud execution type is available when the deployment sets
+<code>app.pipelines.deadlineCloudExecutionTypeEnabled</code>, and only in the commercial AWS partition. See
+<a class="" href="/visual-asset-management-system/release-2.6.0/pipelines/custom-pipelines#aws-deadline-cloud">Building custom pipelines</a>.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-specific-limits">Pipeline-Specific Limits<a href="#pipeline-specific-limits" class="hash-link" aria-label="Direct link to Pipeline-Specific Limits" title="Direct link to Pipeline-Specific Limits" translate="no">​</a></h3>
 
 
@@ -300,6 +311,251 @@
 
 
 <table><thead><tr><th>Pipeline</th><th>Parameter</th><th>Limit</th></tr></thead><tbody><tr><td>3D Preview Thumbnail</td><td>Maximum input file size</td><td>100 GB</td></tr><tr><td>All ECS pipelines</td><td>Metadata JSON input</td><td>8,000 characters</td></tr><tr><td>Gaussian Splat Toolbox</td><td>GPU instance required</td><td><code>g6e.2xlarge</code> or <code>g5.xlarge</code></td></tr><tr><td>Isaac Lab Training</td><td>GPU instance required</td><td><code>g6e.2xlarge</code> or <code>g5.xlarge</code></td></tr><tr><td>RapidPipeline (EKS)</td><td>Node instance type</td><td>Configurable</td></tr><tr><td>RapidPipeline (EKS)</td><td>Job timeout</td><td>Configurable</td></tr><tr><td>RapidPipeline (EKS)</td><td>Job backoff limit</td><td>Configurable</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-template-and-tag-schema-limits">Pipeline Template and Tag-Schema Limits<a href="#pipeline-template-and-tag-schema-limits" class="hash-link" aria-label="Direct link to Pipeline Template and Tag-Schema Limits" title="Direct link to Pipeline Template and Tag-Schema Limits" translate="no">​</a></h3>
+<p>Bounds on a pipeline configuration template and the typed tag schema that supplies its <code>{{tagName}}</code>
+placeholders. Every limit in this table <strong>rejects the create or update request</strong> with a <code>400</code> response,
+so an authoring mistake is reported immediately rather than surfacing at run time.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>Tag definitions per tag schema</td><td>250</td></tr><tr><td><code>tagKey</code> length</td><td>128 characters</td></tr><tr><td><code>label</code> / <code>description</code> length</td><td>1,024 characters each</td></tr><tr><td><code>enumValues</code> entries per <code>enum</code> tag</td><td>250</td></tr><tr><td><code>enumValues</code> entry length</td><td>256 characters</td></tr><tr><td><code>default</code> value length</td><td>4,096 characters (serialized)</td></tr><tr><td><code>inputInstructions</code> length</td><td>4,096 characters</td></tr><tr><td>Input-file filter patterns per list</td><td>250 (<code>allow</code> and <code>exclude</code> each)</td></tr><tr><td>Input-file filter pattern length</td><td>512 characters</td></tr><tr><td>Auxiliary preview suffix length</td><td>256 characters</td></tr><tr><td>AWS Deadline Cloud job template length</td><td>256 KB</td></tr><tr><td>Pipeline task timeout</td><td>604,800 seconds (7 days)</td></tr><tr><td><code>systemConfig</code> serialized size</td><td>64 KB</td></tr><tr><td><code>executionConfig</code> serialized size</td><td>320 KB</td></tr><tr><td><code>configBody</code> + <code>webFormJson</code> combined</td><td>5 MB</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>A template&#x27;s <code>configBody</code> has no length limit of its own — it is bounded together with its
+<code>webFormJson</code> by the combined 5 MB ceiling in the table above. A combined body over 320 KB is
+offloaded to Amazon S3 automatically and the record keeps a pointer to it, so a large body is stored
+without a client ever addressing Amazon S3 directly.</p></div></div>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>The two configuration blocks are bounded by their serialized size so an oversized request is rejected
+with a <code>400</code> at validation time rather than failing when the record is written. <code>executionConfig</code> has
+the larger allowance because an AWS Deadline Cloud block carries a job template up to its own 256 KB
+limit, alongside the settings for the other execution types.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-execution-limits">Workflow Execution Limits<a href="#workflow-execution-limits" class="hash-link" aria-label="Direct link to Workflow Execution Limits" title="Direct link to Workflow Execution Limits" translate="no">​</a></h3>
+<p>Bounds that apply when an execution is launched. These divide into two kinds, and the difference
+matters when reading a result:</p>
+<ul>
+<li class=""><strong>Rejected</strong> — the request fails with a <code>400</code> and nothing runs.</li>
+<li class=""><strong>Truncated and reported</strong> — the execution proceeds, and the response&#x27;s <code>warnings</code> array names what
+was dropped. A run that hits one of these succeeds with less input than was available, so treat a
+warning as a signal to narrow the run rather than as noise.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Parameter</th><th>Value</th><th>Exceeding it</th></tr></thead><tbody><tr><td>Input files per execution</td><td>1,000</td><td>Rejected</td></tr><tr><td>Metadata-source assets per execution</td><td>1,000</td><td>Rejected</td></tr><tr><td>Per-pipeline parameter entries per execution</td><td>100</td><td>Rejected</td></tr><tr><td>Template tag values per pipeline</td><td>250</td><td>Rejected</td></tr><tr><td>Template tag key length</td><td>128 characters</td><td>Rejected</td></tr><tr><td>Template tag value length</td><td>65,536 characters (serialized)</td><td>Rejected</td></tr><tr><td>Template tag values combined per pipeline</td><td>128 KB (serialized)</td><td>Rejected</td></tr><tr><td><code>customTemplateOverride</code> length per pipeline</td><td>5 MB</td><td>Rejected</td></tr><tr><td>Output base-path extension length</td><td>1,024 characters</td><td>Rejected</td></tr><tr><td>Metadata entries captured per entity</td><td>1,000</td><td>Truncated and reported</td></tr><tr><td>Metadata bytes captured per entity</td><td>300 KB</td><td>Truncated and reported</td></tr><tr><td>Metadata bytes captured per execution</td><td>128 MB</td><td>Truncated and reported</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p><strong>The input-file limit counts individually specified files only.</strong> It bounds the number of file
+selections an execute request enumerates. A whole-asset selection, a folder selection, and any files a
+pipeline reads for itself from the asset directory once it is running are <strong>not</strong> counted and are not
+limited — a whole-asset run over an asset holding tens of thousands of files is a single selection.
+Reach the limit only by naming more than 1,000 individual files in one request; select the folder or the
+whole asset instead.</p></div></div>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>The per-entity metadata bounds are applied to each database, each asset, and each file&#x27;s metadata and
+attributes <strong>independently</strong>, and keys are kept in sorted order until the bound is reached. The
+per-execution bound is applied across the whole run: rows are considered broadest-first, and a row that
+does not fit is emptied rather than partially kept, so a reader never sees a silently half-populated
+entity. A tag value is generous at 64 KB because a tag may legitimately carry a long generative-AI
+prompt.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-detail-and-log-limits">Execution Detail and Log Limits<a href="#execution-detail-and-log-limits" class="hash-link" aria-label="Direct link to Execution Detail and Log Limits" title="Direct link to Execution Detail and Log Limits" translate="no">​</a></h3>
+<p>Bounds on what a single API response returns for one execution. These are response-shaping limits, not
+data limits — the full data remains stored and reachable.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Parameter</th><th>Value</th><th>Exceeding it</th></tr></thead><tbody><tr><td>Rows read per detail collection</td><td>2,000</td><td>Truncated, flagged</td></tr><tr><td>Rows returned per detail collection</td><td>1,000</td><td>Truncated, flagged</td></tr><tr><td>Rows returned in the output-files collection</td><td>2,000</td><td>Truncated, flagged</td></tr><tr><td>Bytes returned per detail collection</td><td>4 MB</td><td>Truncated, flagged</td></tr><tr><td>Total detail response size</td><td>5 MB</td><td>Truncated, flagged</td></tr><tr><td>Metadata bytes guaranteed in a detail response</td><td>256 KB minimum</td><td>Reserved so a file-heavy run still shows metadata</td></tr><tr><td>Metadata rows per detail-metadata page</td><td>500 (default 100)</td><td>Clamped to the maximum; page with <code>NextToken</code></td></tr><tr><td>Executions per global list page</td><td>100</td><td>Clamped to the maximum; page with <code>NextToken</code></td></tr><tr><td>Free-form text bytes per execution record</td><td>380 KB</td><td>Truncated, flagged</td></tr><tr><td>Log text bytes per execution record</td><td>390 KB</td><td>Truncated</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>A page-size cap bounds the size of one response rather than the amount of data a caller may read, so a
+<code>pageSize</code> above the maximum is answered with a page at the maximum and its <code>NextToken</code> instead of a
+<code>400</code>. Continue the walk with the returned token to read the remainder.</p></div></div>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>A truncated detail collection is named in the response&#x27;s <code>truncatedCollections</code> array, and a truncated
+configuration or result body sets its own flag (<code>renderedConfigTruncated</code>, <code>resultsContentTruncated</code>)
+alongside a pointer to the complete object in Amazon S3. Retrieve a large collection through its paged
+endpoint rather than the detail response.</p></div></div>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="upload-limits">Upload Limits<a href="#upload-limits" class="hash-link" aria-label="Direct link to Upload Limits" title="Direct link to Upload Limits" translate="no">​</a></h2>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="file-upload-restrictions">File Upload Restrictions<a href="#file-upload-restrictions" class="hash-link" aria-label="Direct link to File Upload Restrictions" title="Direct link to File Upload Restrictions" translate="no">​</a></h3>
@@ -439,7 +695,7 @@
 
 
 
-<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>VPC endpoints per configuration</td><td>1-11 per Availability Zone</td></tr><tr><td>Availability Zones required (ALB)</td><td>2 minimum</td></tr><tr><td>Availability Zones required (OpenSearch Provisioned)</td><td>3 minimum</td></tr><tr><td>Availability Zones required (Lambda in VPC)</td><td>1 minimum</td></tr></tbody></table>
-<p>For detailed cost implications of VPC endpoint configurations, see the <a class="" href="/visual-asset-management-system/release-2.6.0/overview/costs">cost estimates</a>.</p></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/troubleshooting/faq"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Frequently Asked Questions</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/additional/partner-integrations"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Partner Integrations</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#api-limits" class="table-of-contents__link toc-highlight">API Limits</a><ul><li><a href="#api-gateway-throttling" class="table-of-contents__link toc-highlight">API Gateway Throttling</a></li><li><a href="#aws-lambda-function-limits" class="table-of-contents__link toc-highlight">AWS Lambda Function Limits</a></li><li><a href="#authentication-limits" class="table-of-contents__link toc-highlight">Authentication Limits</a></li></ul></li><li><a href="#storage-limits" class="table-of-contents__link toc-highlight">Storage Limits</a><ul><li><a href="#amazon-dynamodb" class="table-of-contents__link toc-highlight">Amazon DynamoDB</a></li><li><a href="#amazon-s3" class="table-of-contents__link toc-highlight">Amazon S3</a></li><li><a href="#amazon-opensearch" class="table-of-contents__link toc-highlight">Amazon OpenSearch</a></li></ul></li><li><a href="#pipeline-limits" class="table-of-contents__link toc-highlight">Pipeline Limits</a><ul><li><a href="#general-pipeline-limits" class="table-of-contents__link toc-highlight">General Pipeline Limits</a></li><li><a href="#pipeline-specific-limits" class="table-of-contents__link toc-highlight">Pipeline-Specific Limits</a></li></ul></li><li><a href="#upload-limits" class="table-of-contents__link toc-highlight">Upload Limits</a><ul><li><a href="#file-upload-restrictions" class="table-of-contents__link toc-highlight">File Upload Restrictions</a></li><li><a href="#blocked-mime-types" class="table-of-contents__link toc-highlight">Blocked MIME Types</a></li></ul></li><li><a href="#amazon-cognito-limits" class="table-of-contents__link toc-highlight">Amazon Cognito Limits</a></li><li><a href="#network-and-vpc-limits" class="table-of-contents__link toc-highlight">Network and VPC Limits</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+<table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody><tr><td>VPC endpoints per configuration</td><td>1-11 per Availability Zone</td></tr><tr><td>Availability Zones required (ALB)</td><td>2 minimum</td></tr><tr><td>Availability Zones required (OpenSearch Provisioned)</td><td>2 or 3 (default 2)</td></tr><tr><td>Availability Zones required (Lambda in VPC)</td><td>1 minimum</td></tr></tbody></table>
+<p>For detailed cost implications of VPC endpoint configurations, see the <a class="" href="/visual-asset-management-system/release-2.6.0/overview/costs">cost estimates</a>.</p></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/troubleshooting/faq"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Frequently Asked Questions</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/additional/partner-integrations"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Partner Integrations</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#api-limits" class="table-of-contents__link toc-highlight">API Limits</a><ul><li><a href="#api-gateway-throttling" class="table-of-contents__link toc-highlight">API Gateway Throttling</a></li><li><a href="#aws-lambda-function-limits" class="table-of-contents__link toc-highlight">AWS Lambda Function Limits</a></li><li><a href="#authentication-limits" class="table-of-contents__link toc-highlight">Authentication Limits</a></li></ul></li><li><a href="#storage-limits" class="table-of-contents__link toc-highlight">Storage Limits</a><ul><li><a href="#amazon-dynamodb" class="table-of-contents__link toc-highlight">Amazon DynamoDB</a></li><li><a href="#amazon-s3" class="table-of-contents__link toc-highlight">Amazon S3</a></li><li><a href="#amazon-opensearch" class="table-of-contents__link toc-highlight">Amazon OpenSearch</a></li></ul></li><li><a href="#pipeline-limits" class="table-of-contents__link toc-highlight">Pipeline Limits</a><ul><li><a href="#general-pipeline-limits" class="table-of-contents__link toc-highlight">General Pipeline Limits</a></li><li><a href="#pipeline-specific-limits" class="table-of-contents__link toc-highlight">Pipeline-Specific Limits</a></li><li><a href="#pipeline-template-and-tag-schema-limits" class="table-of-contents__link toc-highlight">Pipeline Template and Tag-Schema Limits</a></li><li><a href="#workflow-execution-limits" class="table-of-contents__link toc-highlight">Workflow Execution Limits</a></li><li><a href="#execution-detail-and-log-limits" class="table-of-contents__link toc-highlight">Execution Detail and Log Limits</a></li></ul></li><li><a href="#upload-limits" class="table-of-contents__link toc-highlight">Upload Limits</a><ul><li><a href="#file-upload-restrictions" class="table-of-contents__link toc-highlight">File Upload Restrictions</a></li><li><a href="#blocked-mime-types" class="table-of-contents__link toc-highlight">Blocked MIME Types</a></li></ul></li><li><a href="#amazon-cognito-limits" class="table-of-contents__link toc-highlight">Amazon Cognito Limits</a></li><li><a href="#network-and-vpc-limits" class="table-of-contents__link toc-highlight">Network and VPC Limits</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
 </body>
 </html>

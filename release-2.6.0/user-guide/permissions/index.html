@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Permissions | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/permissions"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Permissions | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="VAMS uses a two-tier authorization system to control access to both the user interface and the underlying data. Every request must pass both tiers before access is granted. This defense-in-depth approach ensures that even if a user can reach an API endpoint, they can only interact with the specific resources they are authorized to access."><meta data-rh="true" property="og:description" content="VAMS uses a two-tier authorization system to control access to both the user interface and the underlying data. Every request must pass both tiers before access is granted. This defense-in-depth approach ensures that even if a user can reach an API endpoint, they can only interact with the specific resources they are authorized to access."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/permissions"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/permissions" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/permissions" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Permissions","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/permissions"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.13c32ab4.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.62133664.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.38810f5f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -46,7 +46,18 @@
 
 
 
-<table><thead><tr><th>Role</th><th>Description</th></tr></thead><tbody><tr><td><strong>Admin</strong></td><td>Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management.</td></tr><tr><td><strong>ReadOnly</strong></td><td>Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.</td></tr></tbody></table>
+<table><thead><tr><th>Role</th><th>Description</th></tr></thead><tbody><tr><td><code>admin</code></td><td>Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management.</td></tr><tr><td><code>basicReadOnly</code></td><td>Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.</td></tr></tbody></table>
+<p>The deployment assigns the administrator account named by <code>app.adminUserId</code> to <code>admin</code>. The reserved
+<code>SYSTEM_USER</code> identity is also assigned to <code>admin</code> so system processes pass both authorization tiers.</p>
+<p><code>basicReadOnly</code> reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
+comments, subscriptions, and metadata schemas, and it may manage its own API keys. It cannot reach the
+administrative routes that <code>admin</code> holds: detailed execution logs
+(<code>GET /workflows/executions/\{executionId\}/logs</code>) and execution permanent delete
+(<code>DELETE /workflows/executions/\{executionId\}/permanent</code>). Because read access is granted through
+broad path prefixes such as <code>/workflows</code>, those two routes are withheld by explicit <code>deny</code> constraints,
+which override a matching <code>allow</code>.</p>
+<p>In the web interface a user without execution-log access still sees the <strong>Logs</strong> tab on an execution,
+and the tab reports that the logs are not viewable.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="creating-a-custom-role">Creating a custom role<a href="#creating-a-custom-role" class="hash-link" aria-label="Direct link to Creating a custom role" title="Direct link to Creating a custom role" translate="no">​</a></h3>
 <ol>
 <li class="">Navigate to <strong>Roles</strong> from the left navigation menu.</li>

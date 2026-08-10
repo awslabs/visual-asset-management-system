@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Data Model | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/data-model"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Data Model | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page documents the data model used by VAMS across Amazon DynamoDB, Amazon S3, and Amazon OpenSearch. It covers table schemas with partition keys, sort keys, and global secondary indexes; S3 bucket organization and key structure; OpenSearch index mappings; and data lifecycle patterns such as archiving and versioning."><meta data-rh="true" property="og:description" content="This page documents the data model used by VAMS across Amazon DynamoDB, Amazon S3, and Amazon OpenSearch. It covers table schemas with partition keys, sort keys, and global secondary indexes; S3 bucket organization and key structure; OpenSearch index mappings; and data lifecycle patterns such as archiving and versioning."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/data-model"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/data-model" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/data-model" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Data Model","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/architecture/data-model"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.13c32ab4.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.62133664.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.38810f5f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -233,7 +233,14 @@
 
 
 
-<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th></tr></thead><tbody><tr><td><code>DatabaseIdAssetIdIndex</code></td><td><code>databaseId:assetId</code></td><td><code>versionId</code></td><td>ALL</td></tr></tbody></table>
+
+
+
+
+
+
+<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th></tr></thead><tbody><tr><td><code>DatabaseIdAssetIdIndex</code></td><td><code>databaseId:assetId</code></td><td><code>versionId</code></td><td>ALL</td></tr><tr><td><code>WorkflowExecutionIdIndex</code></td><td><code>changeWorkflowExecutionId</code></td><td><code>databaseId:assetId:filePath</code></td><td>ALL</td></tr></tbody></table>
+<p>The <code>WorkflowExecutionIdIndex</code> is sparse: only versions produced by a workflow execution carry <code>changeWorkflowExecutionId</code>, so direct uploads and other change sources are absent from the index. It resolves which asset file versions a given workflow execution produced.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="asset-history-storage-table">Asset History Storage Table<a href="#asset-history-storage-table" class="hash-link" aria-label="Direct link to Asset History Storage Table" title="Direct link to Asset History Storage Table" translate="no">​</a></h3>
 <p>Records asset lifecycle operations (create, edit, archive, unarchive, permanent delete), one record per operation, queried newest first. Records are permanent: they survive asset permanent deletion, and an asset recreated with the same asset ID continues the same history partition.</p>
 
@@ -630,8 +637,8 @@
 
 <table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th></tr></thead><tbody><tr><td><code>assetLinkId</code></td><td>String</td><td>Partition Key</td></tr><tr><td><code>metadataKey</code></td><td>String</td><td>Sort Key</td></tr></tbody></table>
 <p><strong>DynamoDB Streams:</strong> NEW_IMAGE</p>
-<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-storage-table">Pipeline Storage Table<a href="#pipeline-storage-table" class="hash-link" aria-label="Direct link to Pipeline Storage Table" title="Direct link to Pipeline Storage Table" translate="no">​</a></h3>
-<p>Stores pipeline definitions scoped to a database.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-storage-table-legacy">Pipeline Storage Table (legacy)<a href="#pipeline-storage-table-legacy" class="hash-link" aria-label="Direct link to Pipeline Storage Table (legacy)" title="Direct link to Pipeline Storage Table (legacy)" translate="no">​</a></h3>
+<p>Stores pipeline definitions scoped to a database. Retained as the migration source for the V2 pipeline table.</p>
 
 
 
@@ -653,8 +660,8 @@
 
 
 <table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th></tr></thead><tbody><tr><td><code>databaseId</code></td><td>String</td><td>Partition Key</td></tr><tr><td><code>pipelineId</code></td><td>String</td><td>Sort Key</td></tr></tbody></table>
-<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-storage-table">Workflow Storage Table<a href="#workflow-storage-table" class="hash-link" aria-label="Direct link to Workflow Storage Table" title="Direct link to Workflow Storage Table" translate="no">​</a></h3>
-<p>Stores workflow definitions scoped to a database.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-storage-table-legacy">Workflow Storage Table (legacy)<a href="#workflow-storage-table-legacy" class="hash-link" aria-label="Direct link to Workflow Storage Table (legacy)" title="Direct link to Workflow Storage Table (legacy)" translate="no">​</a></h3>
+<p>Stores workflow definitions scoped to a database. Retained as the migration source for the V2 workflow table.</p>
 
 
 
@@ -676,8 +683,8 @@
 
 
 <table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th></tr></thead><tbody><tr><td><code>databaseId</code></td><td>String</td><td>Partition Key</td></tr><tr><td><code>workflowId</code></td><td>String</td><td>Sort Key</td></tr></tbody></table>
-<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-executions-storage-table">Workflow Executions Storage Table<a href="#workflow-executions-storage-table" class="hash-link" aria-label="Direct link to Workflow Executions Storage Table" title="Direct link to Workflow Executions Storage Table" translate="no">​</a></h3>
-<p>Stores individual workflow execution records.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-executions-storage-table-legacy">Workflow Executions Storage Table (legacy)<a href="#workflow-executions-storage-table-legacy" class="hash-link" aria-label="Direct link to Workflow Executions Storage Table (legacy)" title="Direct link to Workflow Executions Storage Table (legacy)" translate="no">​</a></h3>
+<p>Stores individual workflow execution records. Retained as the migration source for the V2 execution tables.</p>
 
 
 
@@ -739,6 +746,401 @@
 
 
 <table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th></tr></thead><tbody><tr><td><code>WorkflowGSI</code></td><td><code>workflowDatabaseId:workflowId</code></td><td><code>executionId</code></td><td>Keys Only</td></tr><tr><td><code>ExecutionIdGSI</code></td><td><code>workflowId</code></td><td><code>executionId</code></td><td>Keys Only</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-storage-table-v2">Pipeline Storage Table (V2)<a href="#pipeline-storage-table-v2" class="hash-link" aria-label="Direct link to Pipeline Storage Table (V2)" title="Direct link to Pipeline Storage Table (V2)" translate="no">​</a></h3>
+<p>Stores pipeline definitions scoped to a database. The <code>(databaseId, pipelineId)</code> composite key keeps a pipeline unique even when its id is overridden to a known value.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th></tr></thead><tbody><tr><td><code>databaseId</code></td><td>String</td><td>Partition Key</td></tr><tr><td><code>pipelineId</code></td><td>String</td><td>Sort Key</td></tr></tbody></table>
+<p><strong>Global Secondary Indexes:</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th><th>Purpose</th></tr></thead><tbody><tr><td><code>PipelinesByDatabaseGSI</code></td><td><code>databaseId</code></td><td><code>dateModified</code></td><td>ALL</td><td>List a database&#x27;s pipelines newest-first</td></tr><tr><td><code>PipelinesByCategoryGSI</code></td><td><code>databaseId:category</code></td><td><code>pipelineId</code></td><td>ALL</td><td>List a database&#x27;s pipelines within a category</td></tr><tr><td><code>PipelinesByDateGSI</code></td><td><code>allListPartition</code></td><td><code>dateModified</code></td><td>ALL</td><td>Global (cross-database) pipeline list as a query</td></tr></tbody></table>
+<p>The <code>allListPartition</code> attribute holds the constant value <code>pipeline</code> on every row, so the global &quot;all pipelines&quot; list resolves as a single newest-first query instead of a table scan.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-storage-table-v2">Workflow Storage Table (V2)<a href="#workflow-storage-table-v2" class="hash-link" aria-label="Direct link to Workflow Storage Table (V2)" title="Direct link to Workflow Storage Table (V2)" translate="no">​</a></h3>
+<p>Stores workflow definitions scoped to a database.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th></tr></thead><tbody><tr><td><code>databaseId</code></td><td>String</td><td>Partition Key</td></tr><tr><td><code>workflowId</code></td><td>String</td><td>Sort Key</td></tr></tbody></table>
+<p><strong>Global Secondary Indexes:</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th><th>Purpose</th></tr></thead><tbody><tr><td><code>WorkflowsByDatabaseGSI</code></td><td><code>databaseId</code></td><td><code>dateModified</code></td><td>ALL</td><td>List a database&#x27;s workflows newest-first</td></tr><tr><td><code>WorkflowsByCategoryGSI</code></td><td><code>databaseId:category</code></td><td><code>workflowId</code></td><td>ALL</td><td>List a database&#x27;s workflows within a category</td></tr><tr><td><code>WorkflowsByDateGSI</code></td><td><code>allListPartition</code></td><td><code>dateModified</code></td><td>ALL</td><td>Global (cross-database) workflow list as a query</td></tr></tbody></table>
+<p>The <code>allListPartition</code> attribute holds the constant value <code>workflow</code> on every row.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-triggers-storage-table">Workflow Triggers Storage Table<a href="#workflow-triggers-storage-table" class="hash-link" aria-label="Direct link to Workflow Triggers Storage Table" title="Direct link to Workflow Triggers Storage Table" translate="no">​</a></h3>
+<p>Stores the triggers that auto-launch a workflow. A workflow may carry several triggers of one type, each
+with its own input-file filters and default templates.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th><th>Notes</th></tr></thead><tbody><tr><td><code>workflowDatabaseId:workflowId</code></td><td>String</td><td>Partition Key</td><td>Composite key matching the workflow table</td></tr><tr><td><code>triggerType</code></td><td>String</td><td>Sort Key</td><td>The trigger&#x27;s key: the bare type (<code>fileUpload</code>) for a workflow&#x27;s first trigger of that type, or <code>&lt;type&gt;#&lt;triggerId&gt;</code> for an additional one</td></tr><tr><td><code>triggerBaseType</code></td><td>String</td><td></td><td>The bare type, always unsuffixed. The by-type index partitions on this</td></tr><tr><td><code>triggerId</code></td><td>String</td><td></td><td>Distinguishes several triggers of one type; empty for the first trigger of a type</td></tr><tr><td><code>triggerConfig</code></td><td>Map</td><td></td><td>For <code>fileUpload</code>: <code>inputFileFilters</code> plus <code>defaultTemplateIds</code> keyed by <code>&lt;pipelineDatabaseId&gt;:&lt;pipelineId&gt;</code></td></tr><tr><td><code>enabled</code></td><td>Bool</td><td></td><td>A disabled trigger never fires</td></tr></tbody></table>
+<p><strong>Global Secondary Indexes:</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th><th>Purpose</th></tr></thead><tbody><tr><td><code>TriggersByBaseTypeGSI</code></td><td><code>triggerBaseType</code></td><td><code>workflowDatabaseId:workflowId</code></td><td>ALL</td><td>Find every workflow with a trigger of a type, without scanning</td></tr></tbody></table>
+<p>The index partitions on <code>triggerBaseType</code> rather than on the sort key because the upload dispatcher looks
+a type up by exact match: a suffixed value would place each additional trigger in its own partition, and
+that trigger would sit in the table without ever firing.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-executions-storage-table-v2">Workflow Executions Storage Table (V2)<a href="#workflow-executions-storage-table-v2" class="hash-link" aria-label="Direct link to Workflow Executions Storage Table (V2)" title="Direct link to Workflow Executions Storage Table (V2)" translate="no">​</a></h3>
+<p>Stores the main workflow execution record. Executions are workflow-keyed; asset and database linkage lives in the workflow/pipeline input tables.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>Type</th><th>Key</th></tr></thead><tbody><tr><td><code>workflowExecutionId</code></td><td>String</td><td>Partition Key</td></tr><tr><td><code>workflowDatabaseId:workflowId</code></td><td>String</td><td>Sort Key</td></tr></tbody></table>
+<p><strong>Global Secondary Indexes:</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th><th>Purpose</th></tr></thead><tbody><tr><td><code>WorkflowExecutionsByWorkflowGSI</code></td><td><code>workflowDatabaseId:workflowId</code></td><td><code>executionStartDate</code></td><td>ALL</td><td>List a workflow&#x27;s executions newest-first</td></tr><tr><td><code>WorkflowExecutionsByGroupGSI</code></td><td><code>executionGroupId</code></td><td><code>executionStartDate</code></td><td>ALL</td><td>Enumerate a group&#x27;s executions (sparse; abort-by-group)</td></tr><tr><td><code>WorkflowExecutionsByDateGSI</code></td><td><code>allListPartition</code></td><td><code>executionStartDate</code></td><td>ALL</td><td>Global executions list as a newest-first query</td></tr></tbody></table>
+<p>The <code>allListPartition</code> attribute holds the constant value <code>execution</code> on every row, so the global executions list resolves as a single newest-first query bounded by an <code>executionStartDate</code> key condition (default 90-day recency window) rather than an unordered scan that could drop recent executions off the first page. <code>WorkflowExecutionsByGroupGSI</code> is sparse — only grouped executions carry <code>executionGroupId</code>.</p>
+<p>The per-pipeline and per-input execution detail records live in supporting tables (<code>PipelineExecutionsStorageTable</code>, <code>PipelineExecutionInput*</code>/<code>Output*StorageTable</code>, <code>PipelineExecutionLogsStorageTable</code>, <code>WorkflowExecutionInputsStorageTable</code>, <code>WorkflowExecutionConfigurationStorageTable</code>), all keyed by <code>pipelineExecutionId</code> or <code>workflowExecutionId</code>. See <a class="" href="/visual-asset-management-system/release-2.6.0/architecture/aws-resources#workflow-execution-tables-v2-data-model">AWS Resources Inventory</a> for the full table and index list.</p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="what-an-execution-stores">What an execution stores<a href="#what-an-execution-stores" class="hash-link" aria-label="Direct link to What an execution stores" title="Direct link to What an execution stores" translate="no">​</a></h4>
+<p>An execution is a snapshot as much as a status record: templates, tag schemas and pipeline configuration
+can all change or be archived after a run finishes, so each run records what it was actually built from
+rather than pointing at definitions that may since have moved.</p>
+<p><strong>Main row</strong> (<code>WorkflowExecutionsStorageTableV2</code>) — identity and status only: <code>executionStatus</code>,
+<code>executionStartDate</code> / <code>executionStopDate</code>, <code>triggerType</code>, <code>triggeredByUserId</code>, <code>executionGroupId</code>,
+<code>executionError</code>, the full <code>executionLog</code>, the Step Functions ARNs, and <code>lastSfnSyncCheckDate</code> (which
+bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+configuration fields — those live on the configuration rows below, so a status list never pays to read
+them.</p>
+<p><strong>Workflow configuration row</strong> (<code>WorkflowExecutionConfigurationStorageTable</code>, <code>recordType</code> =
+<code>configuration</code>) — the run&#x27;s workflow-level inputs:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>What it records</th></tr></thead><tbody><tr><td><code>specifiedPipelinesSnapshot</code></td><td>The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history</td></tr><tr><td><code>inputMetadata</code> / <code>inputMetadataTruncated</code></td><td>The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)</td></tr><tr><td><code>outputLocationType</code>, <code>outputAssetId</code>, <code>outputDatabaseId</code></td><td>Where the run wrote: <code>asset</code> with a destination, or <code>none</code> for a results-only run</td></tr><tr><td><code>outputFileBaseExecutionPathExtension</code></td><td>The <strong>resolved</strong> output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags</td></tr><tr><td><code>inputMetadataAssetId</code> / <code>inputMetadataDatabaseId</code> / <code>inputMetadataFileS3Key</code></td><td>Provenance of the metadata source. <code>inputMetadataDatabaseId</code> is the single database the caller <strong>named</strong>, populated only for a run with no input files</td></tr><tr><td><code>metadataSourceDatabases</code> / <code>metadataSourceAssets</code></td><td>Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection</td></tr><tr><td><code>outputDatabaseId:outputAssetId</code></td><td>Composite index key backing the by-output-asset GSI below. Written only when the run targets an asset</td></tr></tbody></table>
+<p>This row also carries the index that answers &quot;which executions wrote to this asset?&quot;:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>GSI Name</th><th>Partition Key</th><th>Sort Key</th><th>Projection</th><th>Purpose</th></tr></thead><tbody><tr><td><code>WorkflowExecConfigByOutputAssetGSI</code></td><td><code>outputDatabaseId:outputAssetId</code></td><td><code>executionStartDate</code></td><td>ALL</td><td>List executions whose <strong>output</strong> target was a given asset</td></tr></tbody></table>
+<p>An asset&#x27;s execution history is the union of two queries: the executions that consumed the asset as an
+input (via <code>WorkflowExecutionInputsStorageTable</code>) and the executions that wrote to it as an output (via
+this GSI). Without the second, a run that produced a file in an asset without reading anything from it —
+the normal case for a conversion writing into a different asset — would not appear in that asset&#x27;s history.</p>
+<p>The GSI is <strong>sparse</strong>: the <code>outputDatabaseId:outputAssetId</code> attribute is written only when
+<code>outputLocationType</code> is <code>asset</code> and both ids are present, so results-only runs stay out of the index
+entirely rather than crowding it. Because a DynamoDB item missing the partition attribute is absent from
+the index altogether, every path that writes a configuration row — including data migration — has to set
+the attribute, or those executions silently vanish from the by-output-asset listing.</p>
+<p><strong>Per-pipeline configuration row</strong> (<code>PipelineExecutionInputConfigurationStorageTable</code>, <code>recordType</code> =
+<code>configuration</code>) — one per pipeline step, recording the settings and configuration that step ran under:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>What it records</th></tr></thead><tbody><tr><td><code>inputConfiguration</code> / <code>inputConfigurationTruncated</code></td><td>The final rendered configuration body actually sent to the pipeline. The complete body is the per-execution S3 file at <code>inputConfigurationFileS3Key</code>; the inline copy is truncated to fit the item</td></tr><tr><td><code>configFormat</code></td><td>Format of that body (<code>json</code>, <code>yaml</code>, <code>openjd</code>, <code>xml</code>, <code>raw</code>), so a viewer highlights it correctly</td></tr><tr><td><code>templateId</code>, <code>templateSchemaVersion</code>, <code>tagSchemaVersion</code></td><td>The template and schema versions resolved at run time — the run stays readable after the template changes or is archived</td></tr><tr><td><code>templateTags</code></td><td>The resolved dynamic tag values passed (for example a prompt entered on the execute screen)</td></tr><tr><td><code>customTemplateOverrideUsed</code> / <code>customTemplateOverride</code></td><td>Whether a caller supplied a one-off configuration body, and the RAW pre-render body when they did — a template-less override run has no <code>templateId</code> to re-resolve, so a re-run needs this to reproduce it</td></tr><tr><td><code>effectiveSystemConfig</code></td><td><strong>The systemConfig this step actually ran under</strong>: the pipeline&#x27;s own <code>systemConfig</code> merged with the chosen template&#x27;s <code>overrides</code>. Only knowable at execute time, because the template is chosen per run</td></tr><tr><td><code>templateOverrides</code></td><td>Just the keys that template overrode, so a reader can see <em>why</em> the effective config differs from the pipeline&#x27;s own (for example a template raising <code>inputFileArity</code> from <code>none</code> to <code>one</code>)</td></tr></tbody></table>
+<p><code>effectiveSystemConfig</code> is what makes a finished execution self-describing: without it the stored run
+names its template but not the <code>inputFileArity</code> / <code>assetScope</code> / <code>metadataInputs</code> / <code>inputFileFilters</code>
+that were enforced. Both fields are absent on runs recorded before they were captured, so readers treat
+a missing value as &quot;not recorded&quot; rather than as empty settings.</p>
+<p><strong>Input and output rows</strong> — the two input tables record the same selected files at different scopes, and
+only one of them pins a version:</p>
+<ul>
+<li class=""><code>WorkflowExecutionInputsStorageTable</code> is the run-wide, asset-scoped source of truth. Each row carries
+the locator (<code>databaseId</code>, <code>assetId</code>, <code>inputAssetFileKey</code>) plus <code>s3Bucket</code> and <code>assetRootS3Key</code> — the
+bucket and bucket-relative asset-root prefix of <em>that file&#x27;s own</em> asset, stored per file because a
+single run can read files from several assets in different buckets — and the concrete S3 <code>versionId</code>
+the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
+version is what makes the history show the exact bytes used rather than the time-relative &quot;latest&quot;.</li>
+<li class=""><code>PipelineExecutionInputFilesStorageTable</code> narrows the same selection to one pipeline step. Its rows
+carry only the <code>databaseId</code> / <code>assetId</code> / <code>inputAssetFileKey</code> locator and the owning
+<code>workflowExecutionId</code>; there is no <code>versionId</code> attribute, because the version for a given file is
+already pinned once per run on the workflow-inputs row.</li>
+</ul>
+<p><code>PipelineExecutionOutputFilesStorageTable</code> records each produced file with its <code>fileType</code> (<code>file</code> or
+<code>preview</code>), <code>relativeFilePath</code>, <code>s3Bucket</code>, <code>s3Key</code>, <code>s3VersionId</code>, size and content type; <code>Output*Metadata</code>
+and <code>Output*Results</code> records carry metadata written back to the asset and results text from a results-only
+run. <code>PipelineExecutionLogsStorageTable</code> holds the per-step result and error logs.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="authorization-tables">Authorization Tables<a href="#authorization-tables" class="hash-link" aria-label="Direct link to Authorization Tables" title="Direct link to Authorization Tables" translate="no">​</a></h3>
 <h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="constraints-storage-table">Constraints Storage Table<a href="#constraints-storage-table" class="hash-link" aria-label="Direct link to Constraints Storage Table" title="Direct link to Constraints Storage Table" translate="no">​</a></h4>
 
@@ -937,14 +1339,30 @@
 <table><thead><tr><th>Output Type</th><th>Key Pattern</th><th>Example</th></tr></thead><tbody><tr><td>Preview file</td><td><code>{assetId}/{relative_path}/{filename}.previewFile.{ext}</code></td><td><code>xd130a6d.../test/pump.e57.previewFile.gif</code></td></tr><tr><td>Asset preview</td><td><code>{assetId}/preview.{ext}</code></td><td><code>xd130a6d.../preview.jpg</code></td></tr><tr><td>Metadata output</td><td><code>{assetId}/{relative_path}/metadata.json</code></td><td><code>xd130a6d.../test/metadata.json</code></td></tr></tbody></table>
 <div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Preserving Relative Paths</div><div class="admonitionContent_BuS1"><p>When pipelines write output files adjacent to input files, the relative subdirectory path within the asset must be preserved. The process-output step expects outputs at the same relative location as the input file.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="auxiliary-bucket">Auxiliary Bucket<a href="#auxiliary-bucket" class="hash-link" aria-label="Direct link to Auxiliary Bucket" title="Direct link to Auxiliary Bucket" translate="no">​</a></h3>
-<p>The auxiliary bucket stores non-versioned working files and special viewer data:</p>
-<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">{assetId}/{viewer_type}/{generated_files}</span><br></div></code></pre></div></div>
+<p>The auxiliary bucket stores non-versioned working files and viewer data. It uses two layouts, one keyed
+by the input file that the data was derived from and one keyed by the execution that produced it:</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">{databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}</span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">pipelines/{pipelineName}/{executionId}/{working_files}</span><br></div></code></pre></div></div>
+<p>Where:</p>
+<ul>
+<li class=""><code>databaseId</code> scopes every derived object to the database that owns the asset, so a read is confined to
+one database&#x27;s key space</li>
+<li class=""><code>assetFileKey</code> is the <strong>full asset-bucket key</strong> of the input file (asset root location key plus the
+relative file path), not just the <code>assetId</code> — a bucket configured with a custom <code>baseAssetsPrefix</code>
+keeps that prefix in the auxiliary key</li>
+<li class=""><code>preview</code> is the reserved subfolder for viewer data; a pipeline that writes viewer data appends its own
+subfolder (for example <code>PotreeViewer</code>) so several viewers can coexist for one file</li>
+<li class=""><code>pipelineName</code> / <code>executionId</code> scope temporary working files to a single run, so concurrent runs of the
+same pipeline cannot collide</li>
+</ul>
 <p>Common uses:</p>
 <ul>
 <li class="">Potree octree data for point cloud visualization</li>
 <li class="">Temporary pipeline processing files</li>
 <li class="">Pipeline intermediate outputs</li>
 </ul>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data
+location, and the auxiliary objects for an asset are found by listing the <code>\{databaseId\}/\{assetRootKey\}/</code>
+prefix rather than a bare <code>\{assetId\}/</code> prefix.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="web-app-bucket">Web App Bucket<a href="#web-app-bucket" class="hash-link" aria-label="Direct link to Web App Bucket" title="Direct link to Web App Bucket" translate="no">​</a></h3>
 <p>Stores the built React frontend static assets. Served as an origin for Amazon CloudFront or Application Load Balancer.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="artefacts-bucket">Artefacts Bucket<a href="#artefacts-bucket" class="hash-link" aria-label="Direct link to Artefacts Bucket" title="Direct link to Artefacts Bucket" translate="no">​</a></h3>
@@ -1258,6 +1676,6 @@
 <li class=""><a class="" href="/visual-asset-management-system/release-2.6.0/architecture/overview">Architecture Overview</a> -- High-level system design</li>
 <li class=""><a class="" href="/visual-asset-management-system/release-2.6.0/architecture/aws-resources">AWS Resources</a> -- Complete resource inventory</li>
 <li class=""><a class="" href="/visual-asset-management-system/release-2.6.0/architecture/security">Security Architecture</a> -- Encryption, authorization, and compliance</li>
-</ul></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/architecture/networking"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Network Architecture</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/deployment/prerequisites"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Prerequisites</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#amazon-dynamodb-table-schemas" class="table-of-contents__link toc-highlight">Amazon DynamoDB Table Schemas</a><ul><li><a href="#asset-storage-table" class="table-of-contents__link toc-highlight">Asset Storage Table</a></li><li><a href="#database-storage-table" class="table-of-contents__link toc-highlight">Database Storage Table</a></li><li><a href="#asset-versions-storage-table-v2" class="table-of-contents__link toc-highlight">Asset Versions Storage Table (V2)</a></li><li><a href="#asset-file-versions-storage-table-v2" class="table-of-contents__link toc-highlight">Asset File Versions Storage Table (V2)</a></li><li><a href="#asset-file-metadata-versions-storage-table" class="table-of-contents__link toc-highlight">Asset File Metadata Versions Storage Table</a></li><li><a href="#asset-file-version-history-storage-table" class="table-of-contents__link toc-highlight">Asset File Version History Storage Table</a></li><li><a href="#asset-history-storage-table" class="table-of-contents__link toc-highlight">Asset History Storage Table</a></li><li><a href="#sync-tracking-outbound-storage-table" class="table-of-contents__link toc-highlight">Sync Tracking Outbound Storage Table</a></li><li><a href="#asset-uploads-storage-table" class="table-of-contents__link toc-highlight">Asset Uploads Storage Table</a></li><li><a href="#database-metadata-storage-table-v2" class="table-of-contents__link toc-highlight">Database Metadata Storage Table (V2)</a></li><li><a href="#asset-file-metadata-storage-table-v2" class="table-of-contents__link toc-highlight">Asset File Metadata Storage Table (V2)</a></li><li><a href="#file-attribute-storage-table-v2" class="table-of-contents__link toc-highlight">File Attribute Storage Table (V2)</a></li><li><a href="#metadata-schema-storage-table-v2" class="table-of-contents__link toc-highlight">Metadata Schema Storage Table (V2)</a></li><li><a href="#asset-links-storage-table-v2" class="table-of-contents__link toc-highlight">Asset Links Storage Table (V2)</a></li><li><a href="#asset-links-metadata-storage-table" class="table-of-contents__link toc-highlight">Asset Links Metadata Storage Table</a></li><li><a href="#pipeline-storage-table" class="table-of-contents__link toc-highlight">Pipeline Storage Table</a></li><li><a href="#workflow-storage-table" class="table-of-contents__link toc-highlight">Workflow Storage Table</a></li><li><a href="#workflow-executions-storage-table" class="table-of-contents__link toc-highlight">Workflow Executions Storage Table</a></li><li><a href="#authorization-tables" class="table-of-contents__link toc-highlight">Authorization Tables</a></li><li><a href="#classification-tables" class="table-of-contents__link toc-highlight">Classification Tables</a></li><li><a href="#configuration-tables" class="table-of-contents__link toc-highlight">Configuration Tables</a></li></ul></li><li><a href="#amazon-s3-bucket-organization" class="table-of-contents__link toc-highlight">Amazon S3 Bucket Organization</a><ul><li><a href="#asset-buckets" class="table-of-contents__link toc-highlight">Asset Buckets</a></li><li><a href="#auxiliary-bucket" class="table-of-contents__link toc-highlight">Auxiliary Bucket</a></li><li><a href="#web-app-bucket" class="table-of-contents__link toc-highlight">Web App Bucket</a></li><li><a href="#artefacts-bucket" class="table-of-contents__link toc-highlight">Artefacts Bucket</a></li><li><a href="#access-logs-bucket" class="table-of-contents__link toc-highlight">Access Logs Bucket</a></li></ul></li><li><a href="#amazon-opensearch-index-schemas" class="table-of-contents__link toc-highlight">Amazon OpenSearch Index Schemas</a><ul><li><a href="#dynamic-field-naming-convention" class="table-of-contents__link toc-highlight">Dynamic Field Naming Convention</a></li><li><a href="#asset-index-schema" class="table-of-contents__link toc-highlight">Asset Index Schema</a></li><li><a href="#file-index-schema" class="table-of-contents__link toc-highlight">File Index Schema</a></li><li><a href="#dynamic-templates" class="table-of-contents__link toc-highlight">Dynamic Templates</a></li><li><a href="#excluded-fields" class="table-of-contents__link toc-highlight">Excluded Fields</a></li></ul></li><li><a href="#archived-data-pattern" class="table-of-contents__link toc-highlight">Archived Data Pattern</a></li><li><a href="#versioning-data-model" class="table-of-contents__link toc-highlight">Versioning Data Model</a><ul><li><a href="#version-lifecycle" class="table-of-contents__link toc-highlight">Version Lifecycle</a></li><li><a href="#metadata-version-snapshots" class="table-of-contents__link toc-highlight">Metadata Version Snapshots</a></li></ul></li><li><a href="#next-steps" class="table-of-contents__link toc-highlight">Next Steps</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+</ul></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/architecture/networking"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Network Architecture</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/deployment/prerequisites"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Prerequisites</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#amazon-dynamodb-table-schemas" class="table-of-contents__link toc-highlight">Amazon DynamoDB Table Schemas</a><ul><li><a href="#asset-storage-table" class="table-of-contents__link toc-highlight">Asset Storage Table</a></li><li><a href="#database-storage-table" class="table-of-contents__link toc-highlight">Database Storage Table</a></li><li><a href="#asset-versions-storage-table-v2" class="table-of-contents__link toc-highlight">Asset Versions Storage Table (V2)</a></li><li><a href="#asset-file-versions-storage-table-v2" class="table-of-contents__link toc-highlight">Asset File Versions Storage Table (V2)</a></li><li><a href="#asset-file-metadata-versions-storage-table" class="table-of-contents__link toc-highlight">Asset File Metadata Versions Storage Table</a></li><li><a href="#asset-file-version-history-storage-table" class="table-of-contents__link toc-highlight">Asset File Version History Storage Table</a></li><li><a href="#asset-history-storage-table" class="table-of-contents__link toc-highlight">Asset History Storage Table</a></li><li><a href="#sync-tracking-outbound-storage-table" class="table-of-contents__link toc-highlight">Sync Tracking Outbound Storage Table</a></li><li><a href="#asset-uploads-storage-table" class="table-of-contents__link toc-highlight">Asset Uploads Storage Table</a></li><li><a href="#database-metadata-storage-table-v2" class="table-of-contents__link toc-highlight">Database Metadata Storage Table (V2)</a></li><li><a href="#asset-file-metadata-storage-table-v2" class="table-of-contents__link toc-highlight">Asset File Metadata Storage Table (V2)</a></li><li><a href="#file-attribute-storage-table-v2" class="table-of-contents__link toc-highlight">File Attribute Storage Table (V2)</a></li><li><a href="#metadata-schema-storage-table-v2" class="table-of-contents__link toc-highlight">Metadata Schema Storage Table (V2)</a></li><li><a href="#asset-links-storage-table-v2" class="table-of-contents__link toc-highlight">Asset Links Storage Table (V2)</a></li><li><a href="#asset-links-metadata-storage-table" class="table-of-contents__link toc-highlight">Asset Links Metadata Storage Table</a></li><li><a href="#pipeline-storage-table-legacy" class="table-of-contents__link toc-highlight">Pipeline Storage Table (legacy)</a></li><li><a href="#workflow-storage-table-legacy" class="table-of-contents__link toc-highlight">Workflow Storage Table (legacy)</a></li><li><a href="#workflow-executions-storage-table-legacy" class="table-of-contents__link toc-highlight">Workflow Executions Storage Table (legacy)</a></li><li><a href="#pipeline-storage-table-v2" class="table-of-contents__link toc-highlight">Pipeline Storage Table (V2)</a></li><li><a href="#workflow-storage-table-v2" class="table-of-contents__link toc-highlight">Workflow Storage Table (V2)</a></li><li><a href="#workflow-triggers-storage-table" class="table-of-contents__link toc-highlight">Workflow Triggers Storage Table</a></li><li><a href="#workflow-executions-storage-table-v2" class="table-of-contents__link toc-highlight">Workflow Executions Storage Table (V2)</a></li><li><a href="#authorization-tables" class="table-of-contents__link toc-highlight">Authorization Tables</a></li><li><a href="#classification-tables" class="table-of-contents__link toc-highlight">Classification Tables</a></li><li><a href="#configuration-tables" class="table-of-contents__link toc-highlight">Configuration Tables</a></li></ul></li><li><a href="#amazon-s3-bucket-organization" class="table-of-contents__link toc-highlight">Amazon S3 Bucket Organization</a><ul><li><a href="#asset-buckets" class="table-of-contents__link toc-highlight">Asset Buckets</a></li><li><a href="#auxiliary-bucket" class="table-of-contents__link toc-highlight">Auxiliary Bucket</a></li><li><a href="#web-app-bucket" class="table-of-contents__link toc-highlight">Web App Bucket</a></li><li><a href="#artefacts-bucket" class="table-of-contents__link toc-highlight">Artefacts Bucket</a></li><li><a href="#access-logs-bucket" class="table-of-contents__link toc-highlight">Access Logs Bucket</a></li></ul></li><li><a href="#amazon-opensearch-index-schemas" class="table-of-contents__link toc-highlight">Amazon OpenSearch Index Schemas</a><ul><li><a href="#dynamic-field-naming-convention" class="table-of-contents__link toc-highlight">Dynamic Field Naming Convention</a></li><li><a href="#asset-index-schema" class="table-of-contents__link toc-highlight">Asset Index Schema</a></li><li><a href="#file-index-schema" class="table-of-contents__link toc-highlight">File Index Schema</a></li><li><a href="#dynamic-templates" class="table-of-contents__link toc-highlight">Dynamic Templates</a></li><li><a href="#excluded-fields" class="table-of-contents__link toc-highlight">Excluded Fields</a></li></ul></li><li><a href="#archived-data-pattern" class="table-of-contents__link toc-highlight">Archived Data Pattern</a></li><li><a href="#versioning-data-model" class="table-of-contents__link toc-highlight">Versioning Data Model</a><ul><li><a href="#version-lifecycle" class="table-of-contents__link toc-highlight">Version Lifecycle</a></li><li><a href="#metadata-version-snapshots" class="table-of-contents__link toc-highlight">Metadata Version Snapshots</a></li></ul></li><li><a href="#next-steps" class="table-of-contents__link toc-highlight">Next Steps</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
 </body>
 </html>

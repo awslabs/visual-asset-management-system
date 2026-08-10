@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-developer/workflow-execution-data-model-handoff" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.2">
+<title data-rh="true">Workflow Execution Data Model | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/developer/workflow-execution-data-model-handoff"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Workflow Execution Data Model | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="The storage data model behind workflow executions, which records populate when, and the conventions a new read or write path must follow."><meta data-rh="true" property="og:description" content="The storage data model behind workflow executions, which records populate when, and the conventions a new read or write path must follow."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/developer/workflow-execution-data-model-handoff"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/developer/workflow-execution-data-model-handoff" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/developer/workflow-execution-data-model-handoff" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Workflow Execution Data Model","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/developer/workflow-execution-data-model-handoff"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.38810f5f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}(),document.documentElement.setAttribute("data-announcement-bar-initially-dismissed",function(){try{return"true"===localStorage.getItem("docusaurus.announcement.dismiss")}catch(t){}return!1}())</script><div id="__docusaurus"><link rel="preload" as="image" href="/visual-asset-management-system/release-2.6.0/img/logo_dark.png"><link rel="preload" as="image" href="/visual-asset-management-system/release-2.6.0/img/logo.png"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><div class="theme-announcement-bar announcementBar_mb4j" style="background-color:#232f3e;color:#ffffff" role="banner"><div class="announcementBarPlaceholder_vyr4"></div><div class="content_knG7 announcementBarContent_xLdY">⭐ If you like VAMS, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/awslabs/visual-asset-management-system">GitHub</a>! ⭐</div><button type="button" aria-label="Close" class="clean-btn close closeButton_CVFx announcementBarClose_gvF7"><svg viewBox="0 0 15 15" width="14" height="14"><g stroke="currentColor" stroke-width="3.1"><path d="M.75.75l13.5 13.5M14.25.75L.75 14.25"></path></g></svg></button></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/visual-asset-management-system/release-2.6.0/"><div class="navbar__logo"><img src="/visual-asset-management-system/release-2.6.0/img/logo_dark.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/visual-asset-management-system/release-2.6.0/img/logo.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate"></b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/visual-asset-management-system/release-2.6.0/">Documentation</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">AWS Solutions<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG menuWithAnnouncementBar_GW3s"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/visual-asset-management-system/release-2.6.0/"><span class="linkLabel_WmDU">Visual Asset Management System (VAMS)</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/visual-asset-management-system/release-2.6.0/overview/solution-overview"><span class="categoryLinkLabel_W154">Overview</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/overview/solution-overview"><span class="linkLabel_WmDU">Solution Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/overview/benefits"><span class="linkLabel_WmDU">Benefits</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/overview/use-cases"><span class="linkLabel_WmDU">Use Cases</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/overview/features"><span class="linkLabel_WmDU">Features</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/overview/costs"><span class="linkLabel_WmDU">Cost</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.6.0/concepts/overview"><span class="categoryLinkLabel_W154">Core Concepts</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.6.0/architecture/overview"><span class="categoryLinkLabel_W154">Architecture</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.6.0/deployment/prerequisites"><span class="categoryLinkLabel_W154">Deployment</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started"><span class="categoryLinkLabel_W154">User Guide</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/visual-asset-management-system/release-2.6.0/developer/setup"><span class="categoryLinkLabel_W154">Developer Guide</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/setup"><span class="linkLabel_WmDU">Local Development Environment Setup</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/agentic-development"><span class="linkLabel_WmDU">Agentic Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/backend"><span class="linkLabel_WmDU">Backend Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/frontend"><span class="linkLabel_WmDU">Frontend Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/cdk"><span class="linkLabel_WmDU">CDK Infrastructure Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/opensearch"><span class="linkLabel_WmDU">OpenSearch</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/viewer-plugins"><span class="linkLabel_WmDU">Viewer Plugin Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/audit-logging"><span class="linkLabel_WmDU">Audit Logging</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/security"><span class="linkLabel_WmDU">Security: Developer Reference</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/permissions"><span class="linkLabel_WmDU">Permissions: Developer Reference</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/workflow-execution-data-model-handoff"><span class="linkLabel_WmDU">Workflow Execution Data Model</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/data-syncing/overview"><span class="categoryLinkLabel_W154">Data Syncing</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/garnet-framework"><span class="categoryLinkLabel_W154">Addons</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/pipelines/overview"><span class="categoryLinkLabel_W154">Pipelines</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/cli/getting-started"><span class="categoryLinkLabel_W154">CLI Reference</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/api/overview"><span class="categoryLinkLabel_W154">API Reference</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/utilities/overview"><span class="categoryLinkLabel_W154">Utilities</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/developer/external-integrations/overview"><span class="categoryLinkLabel_W154">External Tool Integrations</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/release-2.6.0/troubleshooting/common-issues"><span class="categoryLinkLabel_W154">Troubleshooting</span></a></div></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/release-2.6.0/additional/quotas"><span class="categoryLinkLabel_W154">Additional</span></a></div></li></ul></nav><button type="button" title="Collapse sidebar" aria-label="Collapse sidebar" class="button button--secondary button--outline collapseSidebarButton_PEFL"><svg width="20" height="20" aria-hidden="true" class="collapseSidebarButtonIcon_kv0_"><g fill="#7a7a7a"><path d="M9.992 10.023c0 .2-.062.399-.172.547l-4.996 7.492a.982.982 0 01-.828.454H1c-.55 0-1-.453-1-1 0-.2.059-.403.168-.551l4.629-6.942L.168 3.078A.939.939 0 010 2.528c0-.548.45-.997 1-.997h2.996c.352 0 .649.18.828.45L9.82 9.472c.11.148.172.347.172.55zm0 0"></path><path d="M19.98 10.023c0 .2-.058.399-.168.547l-4.996 7.492a.987.987 0 01-.828.454h-3c-.547 0-.996-.453-.996-1 0-.2.059-.403.168-.551l4.625-6.942-4.625-6.945a.939.939 0 01-.168-.55 1 1 0 01.996-.997h3c.348 0 .649.18.828.45l4.996 7.492c.11.148.168.347.168.55zm0 0"></path></g></svg></button></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/visual-asset-management-system/release-2.6.0/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Developer Guide</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Workflow Execution Data Model</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Workflow Execution Data Model</h1></header>
+<p>A workflow execution is stored across a main record and ten supporting Amazon DynamoDB tables. This page
+is the developer-level reference for that layout: the key and index of each table, which code path writes
+each record, and the conventions a new read or write path has to honour. For the user-facing description
+of what an execution contains, see <a class="" href="/visual-asset-management-system/release-2.6.0/architecture/data-model#what-an-execution-stores">Data Model</a>;
+for the request and response shapes, see the <a class="" href="/visual-asset-management-system/release-2.6.0/api/workflows">Workflows API reference</a>.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="tables">Tables<a href="#tables" class="hash-link" aria-label="Direct link to Tables" title="Direct link to Tables" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Table</th><th>PK</th><th>SK</th><th>Indexes</th></tr></thead><tbody><tr><td><code>WorkflowExecutionsStorageTableV2</code></td><td><code>workflowExecutionId</code></td><td><code>workflowDatabaseId:workflowId</code></td><td><code>WorkflowExecutionsByWorkflowGSI</code> (PK <code>workflowDatabaseId:workflowId</code>, SK <code>executionStartDate</code>); <code>WorkflowExecutionsByGroupGSI</code> (PK <code>executionGroupId</code>, SK <code>executionStartDate</code>); <code>WorkflowExecutionsByDateGSI</code> (PK <code>allListPartition</code>, SK <code>executionStartDate</code> — global newest-first list)</td></tr><tr><td><code>PipelineExecutionsStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>workflowExecutionId</code></td><td><code>PipelineExecByWorkflowExecGSI</code> (PK <code>workflowExecutionId</code>, SK <code>pipelineDatabaseId:pipelineId</code>); <code>PipelineExecChainGSI</code> (PK <code>workflowExecutionId</code>, SK <code>from_pipeline_execution_id</code>); <code>PipelineExecEndStateGSI</code> (PK <code>workflowExecutionId</code>, SK <code>endStatePipeline</code>)</td></tr><tr><td><code>PipelineExecutionInputFilesStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>databaseId:assetId:inputAssetFileKey</code></td><td><code>InputFilesByAssetGSI</code> (PK <code>databaseId:assetId</code>, SK <code>pipelineExecutionId</code>)</td></tr><tr><td><code>PipelineExecutionInputMetadataStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>databaseId:assetId:filePath</code></td><td>—</td></tr><tr><td><code>PipelineExecutionInputConfigurationStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>recordType</code> (<code>configuration</code>)</td><td>—</td></tr><tr><td><code>PipelineExecutionOutputFilesStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>fileType:relativeFilePath</code></td><td>—</td></tr><tr><td><code>PipelineExecutionOutputMetadataStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>targetFilePath:metadataKey</code></td><td>—</td></tr><tr><td><code>PipelineExecutionOutputResultsStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>relativeFilePath</code></td><td>—</td></tr><tr><td><code>PipelineExecutionLogsStorageTable</code></td><td><code>pipelineExecutionId</code></td><td><code>logType</code> (<code>summary</code>)</td><td>—</td></tr><tr><td><code>WorkflowExecutionInputsStorageTable</code></td><td><code>workflowExecutionId</code></td><td><code>databaseId:assetId:inputAssetFileKey</code></td><td><code>WorkflowExecInputsByAssetGSI</code> (PK <code>databaseId:assetId</code>, SK <code>executionStartDate</code>)</td></tr><tr><td><code>WorkflowExecutionConfigurationStorageTable</code></td><td><code>workflowExecutionId</code></td><td><code>recordType</code> (<code>configuration</code>)</td><td><code>WorkflowExecConfigByOutputAssetGSI</code> (PK <code>outputDatabaseId:outputAssetId</code>, SK <code>executionStartDate</code>) — sparse: written only for an asset-targeted run with a resolved destination</td></tr></tbody></table>
+<p>Table names are never hardcoded. Resolve them through <code>common.resourceNames.get_table_name</code> with the
+matching <code>ResourceKeys</code> constant, at module level in the handler.</p>
+<p>The <code>WorkflowExecutionsStorageTable</code> (without the <code>V2</code> suffix) is a separate, earlier table kept intact as
+the read source for the data migration. No handler reads it.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="key-conventions">Key conventions<a href="#key-conventions" class="hash-link" aria-label="Direct link to Key conventions" title="Direct link to Key conventions" translate="no">​</a></h2>
+<ul>
+<li class=""><strong><code>workflowExecutionId</code> is a VAMS GUID</strong> passed to AWS Step Functions as the execution name, so
+<code>$$.Execution.Name</code> equals the execution id and the state machine composes the execution&#x27;s S3 output
+prefixes from it directly.</li>
+<li class=""><strong>Executions are workflow-keyed.</strong> Asset and database linkage lives in the input and configuration
+rows, never on the main row. An asset&#x27;s execution history is the union of two queries:
+<code>WorkflowExecInputsByAssetGSI</code> for executions that <strong>read</strong> the asset, and
+<code>WorkflowExecConfigByOutputAssetGSI</code> for executions that <strong>wrote</strong> to it, merged so an execution that
+did both appears once. The output direction needs its own index because a results-only run, or a
+pipeline whose <code>inputFileArity</code> is <code>none</code>, writes no input rows at all — its output target is the only
+association it has with an asset.</li>
+<li class=""><strong>Composite keys are plain colon-joined values</strong> (<code>databaseId:assetId</code>,
+<code>workflowDatabaseId:workflowId</code>, <code>databaseId:assetId:inputAssetFileKey</code>), built by the helpers in
+<code>common/workflows/executionRecords.py</code>. All dates are ISO-8601 UTC.</li>
+<li class=""><strong><code>triggeredByUserId</code> and <code>triggerType</code></strong> are recorded on the main row. <code>triggerType</code> is stored as
+<code>Manual</code> or <code>File-Upload</code>; the execute request accepts the lowercase <code>manual</code> / <code>fileUpload</code> forms and
+the handler maps them. A trigger-launched run is attributed to <code>SYSTEM_USER</code>, because a user may
+upload a file without holding permission to run the workflow the upload triggers.</li>
+<li class=""><strong>Every write path stamps the global-list partition.</strong> <code>allListPartition</code> carries the constant value
+<code>execution</code> on every main row and is the partition key of <code>WorkflowExecutionsByDateGSI</code>, which backs the
+global executions list as one newest-first query rather than a scan. Amazon DynamoDB omits an item that
+is missing a GSI partition attribute, so a write path — including a migration or backfill — that
+forgets the attribute produces an execution absent from the global list with no error at write time.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="sparse-indexes-and-empty-string-keys">Sparse indexes and empty string keys<a href="#sparse-indexes-and-empty-string-keys" class="hash-link" aria-label="Direct link to Sparse indexes and empty string keys" title="Direct link to Sparse indexes and empty string keys" translate="no">​</a></h3>
+<p>Three attributes are deliberately written only when they have a value, because Amazon DynamoDB rejects an
+empty string for an indexed key attribute and omits an item missing one:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Attribute</th><th>Index</th><th>Omitted when</th></tr></thead><tbody><tr><td><code>executionGroupId</code></td><td><code>WorkflowExecutionsByGroupGSI</code></td><td>The execution was not launched as part of a group</td></tr><tr><td><code>from_pipeline_execution_id</code></td><td><code>PipelineExecChainGSI</code></td><td>The pipeline is the first step, so it chains from nothing</td></tr><tr><td><code>outputDatabaseId:outputAssetId</code></td><td><code>WorkflowExecConfigByOutputAssetGSI</code></td><td>The run is results-only, with no asset destination</td></tr></tbody></table>
+<p>A path that walks the pipeline chain treats the absence of a predecessor as &quot;this is the root&quot; rather than
+expecting a root entry in <code>PipelineExecChainGSI</code>.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="status-tracking">Status tracking<a href="#status-tracking" class="hash-link" aria-label="Direct link to Status tracking" title="Direct link to Status tracking" translate="no">​</a></h2>
+<p>The main row carries <code>executionStopDate</code> and <code>lastSfnSyncCheckDate</code>, and the end-state
+<code>processWorkflowExecutionOutput</code> Lambda function writes the stop date and terminal status directly when the
+final pipeline completes — so a normal run reaches a terminal state in the table without any polling.
+<code>executionService</code> calls the AWS Step Functions <code>DescribeExecution</code> API only when the row has <strong>no</strong> stop
+date <strong>and</strong> its <code>lastSfnSyncCheckDate</code> is older than <code>SFN_SYNC_MIN_INTERVAL_SECONDS</code> (30 seconds); each
+poll re-stamps <code>lastSfnSyncCheckDate</code>. This keeps direct Step Functions calls off the common path while
+still detecting an execution cancelled or aborted directly in Step Functions, outside VAMS.</p>
+<p>Pipeline rows start at <code>NEW</code> (queued), advance to <code>RUNNING</code> when the step begins, and end at a terminal
+status. <code>TERMINAL_STATUSES</code> is <code>SUCCEEDED</code>, <code>FAILED</code>, <code>ABORTED</code>, <code>TIMED_OUT</code>; a reconcile or an abort leaves
+a row that already reached one of those untouched.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="executionlog-compared-with-executionerror"><code>executionLog</code> compared with <code>executionError</code><a href="#executionlog-compared-with-executionerror" class="hash-link" aria-label="Direct link to executionlog-compared-with-executionerror" title="Direct link to executionlog-compared-with-executionerror" translate="no">​</a></h3>
+<p>The main row captures the full CloudWatch log for the run in <code>executionLog</code> on <strong>every</strong> terminal
+completion, success or failure — the end-state Lambda function writes it on the normal path, and an
+<code>executionService</code> poll writes it for any terminal status it reconciles out of band. <code>executionError</code> holds
+only the specific failure message (the Step Functions error and cause) and is set only for a non-<code>SUCCEEDED</code>
+terminal status.</p>
+<p><code>executionError</code> is the broadly visible message. Full log retrieval is scoped to a separate, narrower
+route (<code>GET /workflows/executions/\{executionId\}/logs</code>), which the shipped Database User and read-only
+permission templates deny; both fields are passed through log redaction before they leave the handler.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="which-record-populates-when">Which record populates when<a href="#which-record-populates-when" class="hash-link" aria-label="Direct link to Which record populates when" title="Direct link to Which record populates when" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Record</th><th>Written by</th></tr></thead><tbody><tr><td>Main execution row</td><td><code>executeWorkflow</code> at launch; status, stop date, log and error reconciled by the end-state Lambda function or a poll</td></tr><tr><td>Workflow inputs and workflow configuration</td><td><code>executeWorkflow</code> at launch</td></tr><tr><td><code>PipelineExecutions</code> (one row per step)</td><td><code>executeWorkflow</code> at launch (paths, execution type, chain link, end-state flag); each step&#x27;s start/stop date and status by the interim tracking Lambda function; registered sub-processes and log locations by <code>registerPipelineExecution</code></td></tr><tr><td>Per-step <code>InputConfiguration</code> and <code>InputMetadata</code></td><td><code>executeWorkflow</code> at launch, one row set per step, narrowed to that step&#x27;s own effective <code>metadataInputs</code> gate and to its own input entities</td></tr><tr><td><code>OutputFiles</code></td><td>The interim tracking Lambda function for each intermediate step, by diffing the shared output folder against the versions already recorded; <code>processWorkflowExecutionOutput</code> for the end-state step</td></tr><tr><td><code>OutputMetadata</code>, <code>OutputResults</code>, <code>Logs</code></td><td><code>processWorkflowExecutionOutput</code> at completion; <code>handleExecutionError</code> writes a log row on failure</td></tr><tr><td><code>PipelineExecutionInputFiles</code></td><td>Not written at run time — see below</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>warning</div><div class="admonitionContent_BuS1"><mdxadmonitiontitle><code>PipelineExecutionInputFiles</code> has no run-time writer</mdxadmonitiontitle><p><code>build_pipeline_input_file_record</code> exists and the data migration populates the table for migrated
+executions, but no VAMS run-time path writes it: an execution launched through <code>executeWorkflow</code> records
+its input files once, on <code>WorkflowExecutionInputsStorageTable</code>. The execution-details response reads that
+table, and <code>executionService</code> touches the per-pipeline table only to delete its rows on a permanent delete.
+A read path built against it returns zero rows for any execution launched by VAMS.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="the-two-input-tables-are-not-interchangeable">The two input tables are not interchangeable<a href="#the-two-input-tables-are-not-interchangeable" class="hash-link" aria-label="Direct link to The two input tables are not interchangeable" title="Direct link to The two input tables are not interchangeable" translate="no">​</a></h3>
+<p>Both tables key the same selected files, but only one pins a version.
+<code>WorkflowExecutionInputsStorageTable</code> rows carry <code>s3Bucket</code> and <code>assetRootS3Key</code> — the bucket and
+bucket-relative asset-root prefix of that file&#x27;s own asset, stored per file because one run can read files
+from several assets in different buckets — plus the concrete S3 <code>versionId</code> the run read, empty for a folder
+or whole-asset selection that has no single version. <code>PipelineExecutionInputFilesStorageTable</code> rows carry
+only the <code>databaseId</code> / <code>assetId</code> / <code>inputAssetFileKey</code> locator and the owning <code>workflowExecutionId</code>; there
+is no <code>versionId</code> attribute on that table.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="credential-vending-fields">Credential-vending fields<a href="#credential-vending-fields" class="hash-link" aria-label="Direct link to Credential-vending fields" title="Direct link to Credential-vending fields" translate="no">​</a></h2>
+<p><code>PipelineExecutionsStorageTable</code> carries <code>vendedRoleArn</code>, <code>s3ReadOnlyScopes</code>, <code>s3ReadWriteScopes</code> and
+<code>credentialVendingState</code>. <code>credentialVendingState</code> is <code>notVended</code> on every row: the fields reserve the
+shape for scoped AWS STS credential delivery to pipeline containers, and no VAMS component populates them.
+Treat them as reserved rather than as a data source.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="sub-process-registration">Sub-process registration<a href="#sub-process-registration" class="hash-link" aria-label="Direct link to Sub-process registration" title="Direct link to Sub-process registration" translate="no">​</a></h2>
+<p>A pipeline step may report the lower-level resources it created — its Step Functions sub-execution and its
+CloudWatch log locations — by putting an event on the orchestration event bus under the source prefix
+<code>\{eventSourcePrefix\}.execution.\{executionId\}.pipeline.\{pipelineExecutionId\}</code> with the detail type
+<code>pipeline.execution.register</code>. A standing Amazon EventBridge rule routes the event to
+<code>registerPipelineExecution</code>, which appends the reported resources to the targeted pipeline row&#x27;s
+<code>registeredSubExecutions</code> and <code>registeredLogs</code> lists.</p>
+<p>Registration is optional and additive — it does not replace the task-token callback a pipeline already
+uses — but it is what makes two capabilities work:</p>
+<ul>
+<li class=""><strong>Abort reaches inside a pipeline.</strong> <code>abort_execution</code> stops each still-running step&#x27;s registered
+sub-processes before stopping the outer state machine. Each entry is typed by <code>resourceType</code>; Step
+Functions executions are stopped, and any other type is registered but returns a non-fatal warning so
+the caller knows the sub-process was left running.</li>
+<li class=""><strong>Full-mode log retrieval finds the right log group.</strong> Each <code>registeredLogs</code> entry carries
+<code>logGroupArn</code>, <code>logGroupName</code>, <code>logStreamName</code> and <code>logStreamPrefix</code>, so a full-mode log read pulls from
+the pipeline&#x27;s own CloudWatch location rather than only the workflow log group.</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="adding-a-read-or-write-path">Adding a read or write path<a href="#adding-a-read-or-write-path" class="hash-link" aria-label="Direct link to Adding a read or write path" title="Direct link to Adding a read or write path" translate="no">​</a></h2>
+<ol>
+<li class="">Resolve the table name with <code>get_table_name(ResourceKeys.*)</code> at module level. Never hardcode it.</li>
+<li class="">Build the record with the matching <code>build_*_record</code> helper in
+<code>common/workflows/executionRecords.py</code>, so composite keys, sparse-key omission and the item byte
+budgets stay in one place. Items over the 400 KB Amazon DynamoDB limit are truncated by the helper,
+which sets the matching <code>*Truncated</code> flag and leaves the complete body in Amazon S3.</li>
+<li class="">Enforce both authorization tiers. Execution reads and aborts authorize through
+<code>authorize_execution_access</code>, which requires <code>GET</code> on the workflow, the matching action on every asset
+the run read (or wrote to, for a run with no inputs), and <code>GET</code> on every database the run captured
+metadata from.</li>
+<li class="">Never return a partially populated collection without flagging it. Every response that bounds a
+collection names what it dropped in <code>truncatedCollections</code> so the caller can page the remainder through
+<code>GET /workflows/executions/\{executionId\}/details/metadata</code>.</li>
+</ol></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/developer/permissions"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Permissions: Developer Reference</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/developer/data-syncing/overview"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Data Syncing Overview</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#tables" class="table-of-contents__link toc-highlight">Tables</a></li><li><a href="#key-conventions" class="table-of-contents__link toc-highlight">Key conventions</a><ul><li><a href="#sparse-indexes-and-empty-string-keys" class="table-of-contents__link toc-highlight">Sparse indexes and empty string keys</a></li></ul></li><li><a href="#status-tracking" class="table-of-contents__link toc-highlight">Status tracking</a><ul><li><a href="#executionlog-compared-with-executionerror" class="table-of-contents__link toc-highlight"><code>executionLog</code> compared with <code>executionError</code></a></li></ul></li><li><a href="#which-record-populates-when" class="table-of-contents__link toc-highlight">Which record populates when</a><ul><li><a href="#the-two-input-tables-are-not-interchangeable" class="table-of-contents__link toc-highlight">The two input tables are not interchangeable</a></li></ul></li><li><a href="#credential-vending-fields" class="table-of-contents__link toc-highlight">Credential-vending fields</a></li><li><a href="#sub-process-registration" class="table-of-contents__link toc-highlight">Sub-process registration</a></li><li><a href="#adding-a-read-or-write-path" class="table-of-contents__link toc-highlight">Adding a read or write path</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+</body>
+</html>

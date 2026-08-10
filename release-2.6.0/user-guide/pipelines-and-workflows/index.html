@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Pipelines and Workflows | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/pipelines-and-workflows"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Pipelines and Workflows | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="Pipelines and workflows automate asset processing in VAMS. A pipeline defines a single processing step (such as converting a file format, extracting metadata, or generating preview thumbnails), while a workflow chains one or more pipelines together in sequence and can be triggered automatically on file upload."><meta data-rh="true" property="og:description" content="Pipelines and workflows automate asset processing in VAMS. A pipeline defines a single processing step (such as converting a file format, extracting metadata, or generating preview thumbnails), while a workflow chains one or more pipelines together in sequence and can be triggered automatically on file upload."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/pipelines-and-workflows"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/pipelines-and-workflows" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/pipelines-and-workflows" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Pipelines and Workflows","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/user-guide/pipelines-and-workflows"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.13c32ab4.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.62133664.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.38810f5f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -37,10 +37,15 @@
 
 
 
-<table><thead><tr><th>Execution type</th><th>Description</th></tr></thead><tbody><tr><td><strong>Lambda</strong></td><td>Invokes an AWS Lambda function directly. Supports both synchronous execution and callback mode. If no Lambda function name is provided, VAMS deploys a template function on your behalf.</td></tr><tr><td><strong>SQS</strong></td><td>Sends a message to an Amazon SQS queue. The downstream consumer processes the message asynchronously.</td></tr><tr><td><strong>EventBridge</strong></td><td>Publishes an event to an Amazon EventBridge event bus. The downstream consumer processes the event asynchronously.</td></tr></tbody></table>
+
+
+
+
+<table><thead><tr><th>Execution type</th><th>Description</th></tr></thead><tbody><tr><td><strong>Lambda</strong></td><td>Invokes an AWS Lambda function directly. Supports both synchronous execution and callback mode.</td></tr><tr><td><strong>SQS</strong></td><td>Sends a message to an Amazon SQS queue. The downstream consumer processes the message asynchronously.</td></tr><tr><td><strong>EventBridge</strong></td><td>Publishes an event to an Amazon EventBridge event bus. The downstream consumer processes the event asynchronously.</td></tr><tr><td><strong>DeadlineCloud</strong></td><td>Submits a job to an AWS Deadline Cloud queue for render-farm and batch processing. Asynchronous, and always reports completion through a callback.</td></tr></tbody></table>
+<p><code>DeadlineCloud</code> is selectable only when the deployment enables that execution type.</p>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>SQS and EventBridge pipelines without callback mode enabled operate as fire-and-forget integrations. They push data to the downstream service but do not return output files, preview images, or metadata back to VAMS.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflows">Workflows<a href="#workflows" class="hash-link" aria-label="Direct link to Workflows" title="Direct link to Workflows" translate="no">​</a></h3>
-<p>A workflow orchestrates one or more pipeline steps in sequence using AWS Step Functions. When a workflow executes, it runs each pipeline step in order, passing the output context from one step to the next.</p>
+<p>A workflow runs one or more pipeline steps in sequence. When a workflow executes, it runs each pipeline step in order, passing the output of one step on to the next.</p>
 <p>Workflows can be:</p>
 <ul>
 <li class=""><strong>Database-specific</strong> -- Scoped to a particular database, using pipelines from that database.</li>
@@ -50,16 +55,17 @@
 <ol>
 <li class="">Navigate to <strong>Pipelines</strong> from the left navigation menu.</li>
 <li class="">Select a database from the database selector, or view all pipelines across databases.</li>
-<li class="">The pipeline list displays all pipelines you have permission to access, showing the pipeline name, database, type, execution type, description, and associated actions.</li>
+<li class="">The pipeline list displays all pipelines you have permission to access, showing the pipeline name and id, its owning database, execution type, status, and template count. The list can be grouped by category or by database, filtered by execution type, status and database, and archived pipelines can be included.</li>
 </ol>
-<p><img decoding="async" loading="lazy" alt="Pipelines page showing registered pipelines with properties" src="/visual-asset-management-system/release-2.6.0/assets/images/pipelines_page_20260323_v2.5-d1851ca191a08fd10302495776740a1f.png" width="3819" height="1215" class="img_ev3q"></p>
-<p>To view details of a specific pipeline, click its name in the list. The detail view shows the full pipeline configuration including execution settings and input parameters.</p>
+<p><img decoding="async" loading="lazy" alt="Pipelines page showing registered pipelines with properties" src="/visual-asset-management-system/release-2.6.0/assets/images/pipelines_page_20260803_v2.6-c241d0d41c64df570267d7a9316b38d7.png" width="2559" height="1249" class="img_ev3q"></p>
+<p>Each entry&#x27;s <strong>⋮</strong> actions menu holds what you can do with that pipeline: <strong>Edit</strong> opens its form, where its
+execution settings and the admin settings that govern how it may be run are shown; <strong>Templates</strong> opens its
+configuration templates as a separate list; <strong>Archive</strong> withdraws it from use. Only the actions your
+permissions allow appear in the menu, so a read-only user sees <strong>Templates</strong> alone.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="creating-a-custom-pipeline">Creating a custom pipeline<a href="#creating-a-custom-pipeline" class="hash-link" aria-label="Direct link to Creating a custom pipeline" title="Direct link to Creating a custom pipeline" translate="no">​</a></h2>
-<p>To create a new pipeline:</p>
-<ol>
-<li class="">Navigate to <strong>Pipelines</strong> and click <strong>Create Pipeline</strong>.</li>
-<li class="">Fill in the pipeline configuration form:</li>
-</ol>
+<p>Navigate to <strong>Pipelines</strong> and click <strong>Create Pipeline</strong>. The form is a three-step wizard — <strong>Basic</strong>, <strong>Execution</strong>, then <strong>Settings</strong> — and the pipeline is created when you finish the last step.</p>
+<p><img decoding="async" loading="lazy" alt="Pipeline wizard showing the Basic step and the three-step progress indicator" src="/visual-asset-management-system/release-2.6.0/assets/images/pipeline_wizard_20260803_v2.6-a19af2a7f84accac741d0a92e86eb22a.png" width="2559" height="1249" class="img_ev3q"></p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="basic">Basic<a href="#basic" class="hash-link" aria-label="Direct link to Basic" title="Direct link to Basic" translate="no">​</a></h3>
 
 
 
@@ -90,6 +96,10 @@
 
 
 
+<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Pipeline ID</strong></td><td>--</td><td>Shown when editing an existing pipeline; it is generated on creation and cannot be changed.</td></tr><tr><td><strong>Pipeline Name</strong></td><td>Yes</td><td>Display name for the pipeline, up to 256 characters.</td></tr><tr><td><strong>Category</strong></td><td>No</td><td>Free-text grouping used to organize and filter the pipeline lists (for example, <code>Conversion</code>, <code>3D Reconstruction</code>).</td></tr><tr><td><strong>Description</strong></td><td>No</td><td>What the pipeline does.</td></tr></tbody></table>
+<p>The owning database is the one you are creating within — pipelines created from a database&#x27;s page belong to that database, and those created as <code>GLOBAL</code> are available to workflows in any database. See <a href="#global-vs-database-specific" class="">GLOBAL vs. database-specific</a>.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution">Execution<a href="#execution" class="hash-link" aria-label="Direct link to Execution" title="Direct link to Execution" translate="no">​</a></h3>
+<p><strong>Execution Type</strong> selects how VAMS hands work to the pipeline, and determines which fields follow:</p>
 
 
 
@@ -115,6 +125,9 @@
 
 
 
+<table><thead><tr><th>Execution type</th><th>Fields</th></tr></thead><tbody><tr><td><strong>Lambda</strong></td><td><strong>Lambda Resource ID</strong> — the function VAMS invokes, by ARN or name. Leave it blank to have VAMS create a new function for the pipeline.</td></tr><tr><td><strong>SQS</strong></td><td><strong>Queue URL</strong> — the full Amazon SQS queue URL. Required.</td></tr><tr><td><strong>EventBridge</strong></td><td><strong>Event Bus ARN</strong>, <strong>Source</strong>, and <strong>Detail Type</strong> — all three required.</td></tr><tr><td><strong>DeadlineCloud</strong></td><td><strong>Farm ID</strong> and <strong>Queue ID</strong> (required), <strong>Job Template</strong> (required), plus <strong>Storage Profile ID</strong>, <strong>Priority</strong>, <strong>Max Retries Per Task</strong>, <strong>Max Failed Tasks Count</strong>, and <strong>Template Type</strong> (<code>JSON</code> or <code>YAML</code>).</td></tr></tbody></table>
+<p><code>DeadlineCloud</code> is available only when the deployment enables it; the fields are shown but disabled otherwise.</p>
+<p>The remaining execution fields apply to any type:</p>
 
 
 
@@ -125,10 +138,6 @@
 
 
 
-<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Pipeline Name</strong></td><td>Yes</td><td>Unique identifier. 4-64 characters, letters, numbers, hyphens, and underscores only.</td></tr><tr><td><strong>Database</strong></td><td>Yes</td><td>The database this pipeline belongs to. Select <strong>GLOBAL</strong> for cross-database pipelines.</td></tr><tr><td><strong>Pipeline Type</strong></td><td>Yes</td><td>Classification of what the pipeline does (for example, conversion, metadata extraction).</td></tr><tr><td><strong>Execution Type</strong></td><td>Yes</td><td><strong>Lambda</strong>, <strong>SQS</strong>, or <strong>EventBridge</strong>. Determines the integration method.</td></tr><tr><td><strong>Wait for Callback</strong></td><td>Yes</td><td>When enabled, VAMS waits for the downstream service to call back with results using an AWS Step Functions Task Token.</td></tr><tr><td><strong>Task Timeout</strong></td><td>Conditional</td><td>Required when callback is enabled. Maximum seconds the task can run (up to 604,800 seconds / 1 week).</td></tr><tr><td><strong>Task Heartbeat Timeout</strong></td><td>No</td><td>Optional. When set, the downstream service must send periodic heartbeats within this interval. Must be less than Task Timeout.</td></tr><tr><td><strong>Description</strong></td><td>Yes</td><td>4-256 character description of the pipeline&#x27;s purpose.</td></tr><tr><td><strong>Asset Type</strong></td><td>Yes</td><td>The asset type this pipeline is designed for (for example, <code>.all</code> for any asset type, <code>.jpg</code> for JPEG-specific processing).</td></tr><tr><td><strong>Output Type</strong></td><td>Yes</td><td>The output type produced by the pipeline (for example, <code>.all</code>, <code>.glb</code>).</td></tr><tr><td><strong>Input Parameters</strong></td><td>No</td><td>Optional parameters passed to the pipeline at execution time.</td></tr></tbody></table>
-<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-type-specific-fields">Execution-type-specific fields<a href="#execution-type-specific-fields" class="hash-link" aria-label="Direct link to Execution-type-specific fields" title="Direct link to Execution-type-specific fields" translate="no">​</a></h3>
-<p>Depending on the selected execution type, additional fields appear:</p>
-<p><strong>Lambda execution type:</strong></p>
 
 
 
@@ -144,8 +153,9 @@
 
 
 
-<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Lambda Function Name</strong></td><td>No</td><td>The name of an existing AWS Lambda function. If omitted, VAMS creates a template function.</td></tr></tbody></table>
-<p><strong>SQS execution type:</strong></p>
+<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Wait For Callback</strong></td><td>Yes</td><td>When enabled, VAMS waits for the pipeline to report completion instead of treating the invocation itself as the result. Locked on for <code>DeadlineCloud</code>; <code>SQS</code> and <code>EventBridge</code> are asynchronous, so without it the step is fire-and-forget.</td></tr><tr><td><strong>Task Timeout (seconds)</strong></td><td>No</td><td>With callback enabled, how long the step may run before it is failed, from 1 to 604,800 seconds (one week). Leave it blank to accept the 24-hour default.</td></tr><tr><td><strong>Task Heartbeat Timeout (seconds)</strong></td><td>No</td><td>With callback enabled, the interval within which the pipeline must report a heartbeat, in the same range. Leave it blank for a pipeline that reports no heartbeat. Set it below the task timeout — a larger value never takes effect, because the task times out first.</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="settings">Settings<a href="#settings" class="hash-link" aria-label="Direct link to Settings" title="Direct link to Settings" translate="no">​</a></h3>
+<p>These are the admin controls that govern how the pipeline may be run — the contract the execute form and the file-upload triggers are checked against:</p>
 
 
 
@@ -161,8 +171,6 @@
 
 
 
-<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>SQS Queue URL</strong></td><td>Yes</td><td>The full URL of the Amazon SQS queue (for example, <code>https://sqs.us-east-1.amazonaws.com/123456789012/my-queue</code>).</td></tr></tbody></table>
-<p><strong>EventBridge execution type:</strong></p>
 
 
 
@@ -185,30 +193,62 @@
 
 
 
-
-
-
-<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>EventBridge Bus ARN</strong></td><td>No</td><td>The ARN of the event bus. Leave empty to use the default event bus.</td></tr><tr><td><strong>EventBridge Source</strong></td><td>No</td><td>The event source string. Defaults to <code>vams.pipeline</code>.</td></tr><tr><td><strong>EventBridge Detail Type</strong></td><td>No</td><td>The event detail type. Defaults to the pipeline ID.</td></tr></tbody></table>
-<ol start="3">
-<li class="">Click <strong>Create Pipeline</strong> to save.</li>
-</ol>
-<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>warning</div><div class="admonitionContent_BuS1"><p>A pipeline cannot be deleted if it is currently used by any workflow. You must remove the pipeline from all workflows before deleting it.</p></div></div>
+<table><thead><tr><th>Setting</th><th>Description</th></tr></thead><tbody><tr><td><strong>Input file count</strong></td><td><code>None</code> (a results-only or generate-from-nothing pipeline), <code>One file</code>, or <code>Multiple files</code>.</td></tr><tr><td><strong>Asset selection rules</strong></td><td><strong>Asset span</strong> — whether an execution&#x27;s input files may come from more than one asset — plus whether a whole asset or a folder may be selected.</td></tr><tr><td><strong>Input file filters — allow/exclude</strong></td><td>The file patterns the pipeline accepts, as extensions (<code>*.glb</code>), file names, paths, or wildcards. An empty allow list means any file; the exclude list is applied last and may not match everything. Hidden for a pipeline that takes no input files.</td></tr><tr><td><strong>Metadata provided to the pipeline</strong></td><td>Which metadata the pipeline is given: database metadata, asset metadata, per-file metadata, and file attributes. See <a href="#metadata-inputs" class="">Metadata inputs</a>.</td></tr><tr><td><strong>Require template</strong></td><td>When on, every execution of this pipeline must use one of its configuration templates.</td></tr><tr><td><strong>Allow custom template override</strong></td><td>When on, whoever runs the pipeline may supply a one-off configuration body in place of a saved template.</td></tr><tr><td><strong>Aux Preview Pipeline Suffix</strong></td><td>A viewer-specific subfolder (for example <code>-preview</code>, <code>/PotreeViewer</code>) appended to the pipeline&#x27;s auxiliary preview path, so a pipeline producing viewer data writes it where the matching viewer reads it. Leave empty unless the pipeline produces viewer-specific auxiliary output.</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Choosing an input file count when templates differ</div><div class="admonitionContent_BuS1"><p>When one pipeline supports several modes that consume different inputs, set the input file count to the <strong>lowest</strong> value any of its templates needs and let each template raise it. The execute form then asks for a file only when the chosen template actually consumes one. See <a class="" href="/visual-asset-management-system/release-2.6.0/pipelines/custom-pipelines#pipelinejson">Building custom pipelines</a>.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="archiving-a-pipeline">Archiving a pipeline<a href="#archiving-a-pipeline" class="hash-link" aria-label="Direct link to Archiving a pipeline" title="Direct link to Archiving a pipeline" translate="no">​</a></h3>
+<p><strong>Archive</strong> in a pipeline&#x27;s actions menu withdraws it from use: it is disabled, it stops appearing in the
+lists unless <strong>Include Archived</strong> is selected, and it cannot be chosen for a new workflow step. The pipeline
+record is kept, so archiving is reversible — an archived pipeline is restored with
+<a class="" href="/visual-asset-management-system/release-2.6.0/cli/commands/pipelines"><code>vamscli pipeline unarchive</code></a>.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Check which workflows use a pipeline before archiving it</div><div class="admonitionContent_BuS1"><p>Archiving succeeds even while workflows still reference the pipeline, and those workflows keep their
+definitions. Their next execution is then rejected, because one of their steps points at a disabled,
+archived pipeline. Remove the pipeline from every workflow that uses it first.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="updating-a-pipeline">Updating a pipeline<a href="#updating-a-pipeline" class="hash-link" aria-label="Direct link to Updating a pipeline" title="Direct link to Updating a pipeline" translate="no">​</a></h3>
-<p>When you update an existing pipeline, VAMS prompts you to choose whether to also update all workflows that reference this pipeline. This ensures workflow definitions stay in sync with pipeline changes.</p>
+<p>Editing a pipeline updates the pipeline itself. The workflows that reference it keep running against the
+execution configuration they were last saved with, so after changing where a pipeline sends its work — its
+execution type, its target function, queue, event bus or farm, or its callback and timeout settings — open
+each workflow that uses it and save it again to bring it up to date. Saving such a change reports a warning
+naming the workflows that reference the pipeline, so you know which ones to revisit.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="viewing-available-workflows">Viewing available workflows<a href="#viewing-available-workflows" class="hash-link" aria-label="Direct link to Viewing available workflows" title="Direct link to Viewing available workflows" translate="no">​</a></h2>
 <ol>
 <li class="">Navigate to <strong>Workflows</strong> from the left navigation menu.</li>
 <li class="">Select a database or view all workflows across databases.</li>
-<li class="">The workflow list displays workflow names, databases, descriptions, and associated actions.</li>
+<li class="">The workflow list displays each workflow&#x27;s name and id, its database, category, and how many pipelines, executions and triggers it has — with the number of enabled triggers called out when some are switched off. The list can be filtered by status, by whether the workflow has an enabled trigger, and by database.</li>
 </ol>
-<p><img decoding="async" loading="lazy" alt="Workflows page showing available workflows" src="/visual-asset-management-system/release-2.6.0/assets/images/workflows_page_20260323_v2.5-ae9a78a79cedbbe00523e1979b6c1485.png" width="3816" height="1394" class="img_ev3q"></p>
+<p><img decoding="async" loading="lazy" alt="Workflows page showing available workflows" src="/visual-asset-management-system/release-2.6.0/assets/images/workflows_page_20260803_v2.6-7492749581f1421de1535896bc49d218.png" width="2559" height="1249" class="img_ev3q"></p>
+<p>Each entry&#x27;s <strong>⋮</strong> actions menu holds <strong>Edit</strong>, <strong>Execute</strong>, <strong>View Executions</strong>, and <strong>Archive</strong>, limited to the actions your permissions allow.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="creating-a-workflow">Creating a workflow<a href="#creating-a-workflow" class="hash-link" aria-label="Direct link to Creating a workflow" title="Direct link to Creating a workflow" translate="no">​</a></h2>
-<ol>
-<li class="">Navigate to <strong>Workflows</strong> and click <strong>Create Workflow</strong>.</li>
-<li class="">If you are not already viewing a specific database, select the database for this workflow from the database selector. Select <strong>GLOBAL</strong> for a cross-database workflow.</li>
-<li class="">The workflow editor opens with a visual editor on the left and a configuration panel on the right.</li>
-</ol>
-<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-details-tab">Workflow details tab<a href="#workflow-details-tab" class="hash-link" aria-label="Direct link to Workflow details tab" title="Direct link to Workflow details tab" translate="no">​</a></h3>
+<p>Navigate to <strong>Workflows</strong> and click <strong>Create Workflow</strong>. If you are not already viewing a specific database, select the database for this workflow, or <strong>GLOBAL</strong> for a cross-database workflow.</p>
+<p>The editor is a step-by-step wizard: <strong>Basic information</strong>, <strong>Execution settings</strong>, <strong>Pipelines</strong>, then <strong>Review</strong>. Editing an existing workflow adds a <strong>Triggers (optional)</strong> step — triggers are attached to a saved workflow, so they cannot be set while creating one.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="basic-information">Basic information<a href="#basic-information" class="hash-link" aria-label="Direct link to Basic information" title="Direct link to Basic information" translate="no">​</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Workflow Name</strong></td><td>Yes</td><td>Display name for the workflow.</td></tr><tr><td><strong>Category</strong></td><td>No</td><td>Free-text grouping used to organize and filter the workflow lists.</td></tr><tr><td><strong>Description</strong></td><td>No</td><td>What the workflow does.</td></tr></tbody></table>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-settings">Execution settings<a href="#execution-settings" class="hash-link" aria-label="Direct link to Execution settings" title="Direct link to Execution settings" translate="no">​</a></h3>
+<p>The workflow&#x27;s own gate. Every execution is checked against these before any pipeline is considered:</p>
 
 
 
@@ -239,31 +279,192 @@
 
 
 
-<table><thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><strong>Workflow Name</strong></td><td>Yes</td><td>Unique identifier. 4-64 characters, letters, numbers, hyphens, and underscores only. No spaces.</td></tr><tr><td><strong>Description</strong></td><td>Yes</td><td>4-256 character description of the workflow&#x27;s purpose.</td></tr><tr><td><strong>Auto-Trigger - File Upload</strong></td><td>No</td><td>When enabled, the workflow runs automatically when files matching the specified extensions are uploaded to any asset in the database.</td></tr><tr><td><strong>File Extensions</strong></td><td>Conditional</td><td>Required when auto-trigger is enabled. Comma-delimited list of file extensions to trigger on (for example, <code>jpg,png,pdf</code>). Use <code>.all</code> to trigger on all file uploads.</td></tr></tbody></table>
-<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>tip</div><div class="admonitionContent_BuS1"><p>Auto-trigger is a powerful feature for automating processing. For example, you can set up a workflow that automatically generates preview thumbnails and extracts metadata whenever a <code>.e57</code> point cloud file is uploaded.</p></div></div>
-<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipelines-tab">Pipelines tab<a href="#pipelines-tab" class="hash-link" aria-label="Direct link to Pipelines tab" title="Direct link to Pipelines tab" translate="no">​</a></h3>
-<ol>
-<li class="">Click <strong>[+ Pipeline]</strong> on the visual workflow editor to add a pipeline step.</li>
-<li class="">Select a pipeline from the dropdown for each step. Available pipelines include those from the workflow&#x27;s database and all GLOBAL pipelines.</li>
-<li class="">Pipeline steps execute in the order they are listed.</li>
-<li class="">To add additional steps, click <strong>[+ Pipeline]</strong> again on the workflow editor.</li>
-</ol>
-<p>You can also click <strong>Create Pipeline</strong> at the bottom of the pipelines tab to create a new pipeline inline without leaving the workflow editor.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Setting</th><th>Description</th></tr></thead><tbody><tr><td><strong>Input file count</strong></td><td><code>None</code>, <code>One file</code>, or <code>Multiple files</code>.</td></tr><tr><td><strong>Asset selection rules</strong></td><td>The asset span, and whether a whole asset or a folder may be selected.</td></tr><tr><td><strong>Input file filters — allow/exclude</strong></td><td>The file patterns the workflow admits. Hidden when the workflow takes no input files.</td></tr><tr><td><strong>Metadata provided to pipelines</strong></td><td>Database metadata, asset metadata, file metadata, and file attributes.</td></tr><tr><td><strong>Output destination</strong></td><td><strong>Write to an asset</strong>, or <strong>Results only</strong> for a workflow that records results text and logs and writes no asset output.</td></tr><tr><td><strong>Allow choosing the output asset</strong></td><td>Whether whoever runs the workflow may send output to a different asset and set an output path prefix. Offered for an asset destination.</td></tr><tr><td><strong>Default output path prefix</strong></td><td>The prefix an execution is pre-filled with. It supports tags resolved per run, so <code>/\{\{executionId\}\}/</code> gives every run its own folder. Leave it blank to add no prefix.</td></tr><tr><td><strong>Allow workflow trigger chaining</strong></td><td>Whether a file written by another workflow may fire this workflow&#x27;s triggers. A workflow never fires on output it wrote itself, so it cannot loop on its own files.</td></tr><tr><td><strong>Concurrency restriction</strong></td><td><code>None</code>, <code>One per asset</code>, or <code>One per input file</code> — whether a new execution waits while a conflicting one is still running.</td></tr></tbody></table>
+<p>These are <strong>authored, not inherited</strong> from the workflow&#x27;s pipelines. Set the input file count to the <strong>highest</strong> value any pipeline and template combination in the workflow can require — a lower value rejects a selection a template would have accepted. The input file filters are applied <strong>before</strong> the pipelines&#x27; own, so a filter here that excludes a type one of its pipelines needs makes that pipeline unsatisfiable; the <a href="#saving-the-workflow" class="">Validation</a> panel warns when that happens.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Chained triggering can run in a loop</div><div class="admonitionContent_BuS1"><p>Two workflows that each write a file the other accepts trigger each other indefinitely. Check the input file filters of every workflow in the chain before turning chaining on.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="triggers-optional">Triggers (optional)<a href="#triggers-optional" class="hash-link" aria-label="Direct link to Triggers (optional)" title="Direct link to Triggers (optional)" translate="no">​</a></h3>
+<p>A <strong>file upload trigger</strong> runs the workflow automatically when a matching file is uploaded to an asset in its database. Triggers are managed separately from the workflow&#x27;s own details, and each trigger has its own allow and exclude filters rather than a single extension list:</p>
+<ul>
+<li class=""><strong>Allow filters</strong> name the file patterns that fire the trigger. Leaving the list empty means any uploaded file fires it.</li>
+<li class=""><strong>Exclude filters</strong> are applied after the allow list and remove matches from it. Because exclude runs last, a pattern that matches everything is rejected — it would suppress every upload.</li>
+<li class=""><strong>Default template IDs (per pipeline)</strong> pick the template each pipeline step uses on an automatic run, since no one is present to choose one. <code>None (choose at run time)</code> leaves it to the pipeline&#x27;s own default.</li>
+</ul>
+<p>A workflow can carry <strong>more than one trigger of the same kind</strong>, so the same workflow can react differently to different uploads — for example converting <code>.e57</code> uploads with one template and <code>.las</code> uploads with another. Each trigger has its own filters and its own default templates, and an upload runs the workflow once for every trigger whose filters match it.</p>
+<p>The <strong>Trigger name</strong> field is what separates them. Leave it empty for the workflow&#x27;s first trigger of a kind; give a name (letters, numbers, hyphens and underscores) to add another. A name cannot be changed once the trigger is saved, because it identifies the trigger. Two conditions are refused:</p>
+<ul>
+<li class="">A workflow whose <strong>concurrency restriction</strong> is per-asset supports only one trigger of a kind, since several would compete for the same asset.</li>
+<li class="">Two triggers of a kind cannot use the <strong>same default templates</strong>. The templates are what distinguish them, so the same set twice describes the same trigger — including two that both choose no template.</li>
+</ul>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>tip</div><div class="admonitionContent_BuS1"><p>Triggers are how processing chains together. A workflow that generates preview thumbnails or extracts metadata can be set to fire on <code>.e57</code> point cloud uploads, so the work happens on ingest with no one starting it.</p><p>For a trigger to fire on files that <strong>another workflow produced</strong>, that workflow must also permit trigger chaining. A workflow never fires on output it wrote itself, so it cannot loop on its own files.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipelines-1">Pipelines<a href="#pipelines-1" class="hash-link" aria-label="Direct link to Pipelines" title="Direct link to Pipelines" translate="no">​</a></h3>
+<p>Click <strong>Add Pipeline</strong> to add a step, then choose its pipeline. The available pipelines are those in the workflow&#x27;s own database plus all GLOBAL pipelines.</p>
+<p>The steps form an ordered list and execute top to bottom. Drag a step by its handle to reorder it, or use <strong>Remove</strong> to drop it. Each step may also set:</p>
+<ul>
+<li class="">A <strong>Default Template</strong>, used when an execution does not name one for that step — which is what an automatic trigger run relies on.</li>
+<li class="">A <strong>Job Name</strong>, a label of 3–63 letters, numbers, hyphens and underscores. Leave it blank unless the pipeline&#x27;s own id would not identify the step. See <a class="" href="/visual-asset-management-system/release-2.6.0/concepts/pipelines-and-workflows#job-names">Job names</a>.</li>
+</ul>
+<p>Once at least one step is present, a diagram of the resulting workflow appears below the list. It is a preview of the order you have built, not an editor.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Each pipeline may appear only once</div><div class="admonitionContent_BuS1"><p>A workflow cannot use the same pipeline for two steps — the second reference overwrites the first step&#x27;s configuration and both run identically. A pipeline another step already uses is offered as <strong>(already in this workflow)</strong> and cannot be chosen again. When one model needs two modes in a workflow, use two pipelines. See <a class="" href="/visual-asset-management-system/release-2.6.0/concepts/pipelines-and-workflows#specified-pipelines">Specified pipelines</a>.</p></div></div>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Each step needs its own job name</div><div class="admonitionContent_BuS1"><p>Two steps that carry the same job name are named identically in the run&#x27;s step list and logs, leaving no way to tell them apart. The form reports a repeated name beside the field.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="saving-the-workflow">Saving the workflow<a href="#saving-the-workflow" class="hash-link" aria-label="Direct link to Saving the workflow" title="Direct link to Saving the workflow" translate="no">​</a></h3>
-<p>Click <strong>Save</strong> to persist the workflow. The workflow definition is stored and an AWS Step Functions state machine is created or updated.</p>
-<p><img decoding="async" loading="lazy" alt="Workflow editor with pipeline steps configured and visual graph" src="/visual-asset-management-system/release-2.6.0/assets/images/workflow_editor_20260323_v2.5-07e88b92a38dc2bd50d522f195678087.png" width="3376" height="1397" class="img_ev3q"></p>
+<p>The final <strong>Review</strong> step summarizes the workflow before it is written. Confirm from there — <strong>Save</strong> — and the workflow is stored and made runnable.</p>
+<p>A <strong>Validation</strong> panel reports what it found before and after saving, split by consequence:</p>
+<ul>
+<li class="">
+<p><strong>Errors</strong> block the save — for example, a workflow with no pipeline steps.</p>
+</li>
+<li class="">
+<p><strong>Warnings</strong> do not block it. They flag a workflow that is saveable but may not be able to run as
+intended, most often because the workflow&#x27;s own settings starve one of its pipelines:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Warning</th><th>Cause</th></tr></thead><tbody><tr><td>A pipeline&#x27;s accepted file types do not overlap what the workflow allows</td><td>The workflow&#x27;s <strong>allow</strong> list admits nothing the pipeline can process, so no selection can ever satisfy it.</td></tr><tr><td>The workflow excludes a type the pipeline accepts</td><td>The allow lists may overlap perfectly and the <strong>exclude</strong> list still removes the file afterwards, because exclude is applied second. The warning names what is left, if anything.</td></tr><tr><td>A pipeline uses metadata the workflow has turned off</td><td>The pipeline will run without that metadata rather than fail.</td></tr></tbody></table>
+<p>Warnings are worth resolving before anyone tries to run the workflow: a mismatch here becomes a
+rejected execution later, when the reason is less obvious.</p>
+</li>
+</ul>
+<p><img decoding="async" loading="lazy" alt="Workflow editor with pipeline steps configured and visual graph" src="/visual-asset-management-system/release-2.6.0/assets/images/workflow_editor_20260803_v2.6-cfb1d2b1e998f2a8e21d7cecef2f4feb.png" width="2559" height="1249" class="img_ev3q"></p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="executing-workflows">Executing workflows<a href="#executing-workflows" class="hash-link" aria-label="Direct link to Executing workflows" title="Direct link to Executing workflows" translate="no">​</a></h2>
-<p><img decoding="async" loading="lazy" alt="Workflow executions tab showing execution history on asset detail page" src="/visual-asset-management-system/release-2.6.0/assets/images/view_asset_workflow_executions_tab_20260323_v2.5-fc3a06c5d758dbcb9d75cdf5811be1ae.png" width="3365" height="1238" class="img_ev3q"></p>
+<p><img decoding="async" loading="lazy" alt="Workflow executions tab showing execution history on asset detail page" src="/visual-asset-management-system/release-2.6.0/assets/images/view_asset_workflow_executions_tab_20260803_v2.6-29b98fd013f4520150d21b192ed91821.png" width="2559" height="1249" class="img_ev3q"></p>
 <p>Workflows can be executed in two ways:</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="manual-execution">Manual execution<a href="#manual-execution" class="hash-link" aria-label="Direct link to Manual execution" title="Direct link to Manual execution" translate="no">​</a></h3>
-<ol>
-<li class="">Navigate to an asset&#x27;s detail page.</li>
-<li class="">Select the files you want to process.</li>
-<li class="">Choose the workflow to execute.</li>
-<li class="">The workflow runs asynchronously, processing the selected files through each pipeline step in sequence.</li>
-</ol>
+<p>Start an execution from an asset&#x27;s <strong>Automation</strong> menu (in the file manager toolbar, beside <strong>Export</strong>),
+or from the <strong>Execute</strong> action on a workflow. Either opens the same wizard, which has one stage per
+decision to make: <strong>Input</strong>, then one stage for each pipeline in the workflow, then <strong>Review</strong>.</p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="input">Input<a href="#input" class="hash-link" aria-label="Direct link to Input" title="Direct link to Input" translate="no">​</a></h4>
+<p>Choose the files to process, and the output target when the workflow allows it to be overridden.</p>
+<p>Files are chosen through a cascading picker — <strong>Database → Asset → File</strong> — that searches as you type, so
+an asset holding thousands of files does not have to be listed to find one. Launching from an asset
+pre-fills that asset, and you can still switch to a different one.</p>
+<p>Only files the workflow accepts are offered. When its filters hide some of an asset&#x27;s files, the picker
+says how many were hidden, so a file that is missing from the list reads as &quot;this workflow does not take
+that type&quot; rather than &quot;it is not there&quot;. The stage also shows the file types the workflow and its
+pipelines require, so you can see what is being asked for before selecting anything.</p>
+<p>What you can select depends on the workflow&#x27;s configuration:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Workflow accepts</th><th>The Input stage offers</th></tr></thead><tbody><tr><td>One file</td><td>A single picker. <strong>Whole asset (all files)</strong> appears as an option only when the workflow permits a whole-asset input.</td></tr><tr><td>Multiple files</td><td>A list you add rows to and remove rows from. Each row has its own database and asset picker, so one execution can combine files from several assets — or several files from one asset.</td></tr><tr><td>No files</td><td>No file picker. The run takes its identity from the output target instead, and a <strong>Metadata Sources</strong> section appears when its pipelines read asset or database metadata.</td></tr></tbody></table>
+<p>Each selected file may optionally pin a <strong>file version</strong>. The list holds that file&#x27;s own stored versions,
+newest first; the default, <strong>Latest</strong>, reads whichever version is current when the execution starts rather
+than the one that was current while you filled in the form. Pin a version to reproduce an earlier run
+against exactly the input it used. A whole-asset or folder selection spans many files, so it has no single
+version to pin and the option does not appear.</p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="running-a-workflow-with-no-input-files">Running a workflow with no input files<a href="#running-a-workflow-with-no-input-files" class="hash-link" aria-label="Direct link to Running a workflow with no input files" title="Direct link to Running a workflow with no input files" translate="no">​</a></h4>
+<p>A workflow that takes <strong>no files</strong> — one whose pipelines generate their output rather than transform an
+input, for example a text-to-3D or text-to-video pipeline — has nothing to choose in a file picker. What it
+can still be given is metadata, and that is what the <strong>Metadata Sources</strong> section of the Input stage is for.
+It appears only when the workflow and its pipelines actually read asset or database metadata, and offers:</p>
+<ul>
+<li class=""><strong>Metadata source database (optional)</strong> — the one database whose own metadata is read and handed to the
+steps. One database at a time; an all-databases selection has no metadata to read, so only a specific
+database can be named.</li>
+<li class=""><strong>Metadata source asset (optional)</strong> — an asset whose asset-level metadata is read. Choose it through a
+<strong>Database → Asset</strong> picker that searches as you type. <strong>Add Metadata Source Asset</strong> adds another when
+the workflow permits input from more than one asset; a single-asset workflow offers one slot.</li>
+</ul>
+<p>Everything in this section is optional, and the workflow runs whether or not you select any of it. A
+metadata source is <strong>not</strong> an input file: nothing is read from the asset&#x27;s files, no file version is
+involved, and the selection does not decide where output is written.</p>
+<p>Because there is no input file to infer a destination from, a workflow of this kind that writes to an asset
+needs its <strong>Output Target</strong> named explicitly — choose the output database and asset in the same stage. Such a
+workflow therefore has to permit choosing the output asset. A results-only workflow writes no asset output,
+so it asks for neither.</p>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>When to name a source</div><div class="admonitionContent_BuS1"><p>Name one when a pipeline is meant to work from a particular asset&#x27;s or database&#x27;s stored metadata — a
+prompt, a model setting, or a description held there. When nothing is named, the launch reports a warning
+for each pipeline that reads metadata it was given no source for, and that pipeline runs without it.</p></div></div>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-stages">Pipeline stages<a href="#pipeline-stages" class="hash-link" aria-label="Direct link to Pipeline stages" title="Direct link to Pipeline stages" translate="no">​</a></h4>
+<p>One stage per pipeline in the workflow. Choose the configuration template for that step, and fill in any
+values the template asks for. The rendered configuration is collapsed by default — expand it to review or,
+where the pipeline allows it, override the exact configuration that will be sent.</p>
+<h4 class="anchor anchorTargetStickyNavbar_Vzrq" id="review">Review<a href="#review" class="hash-link" aria-label="Direct link to Review" title="Direct link to Review" translate="no">​</a></h4>
+<p>A summary of everything the run will use: the input files and pinned versions, the output target and path
+prefix, and each step&#x27;s template and values. Launching from here starts the execution.</p>
+<p>The workflow then runs asynchronously, processing the selected files through each pipeline step in
+sequence.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="metadata-inputs">Metadata inputs<a href="#metadata-inputs" class="hash-link" aria-label="Direct link to Metadata inputs" title="Direct link to Metadata inputs" translate="no">​</a></h3>
+<p>Besides the files it processes, an execution collects the stored metadata its pipelines asked for and
+hands it to each step. Four kinds are collected independently, each switched on or off by the workflow&#x27;s
+and the pipeline&#x27;s <strong>Metadata provided</strong> settings: each database&#x27;s own metadata, each asset&#x27;s own metadata,
+each input file&#x27;s metadata, and each input file&#x27;s attributes. A kind reaches a pipeline only when the
+workflow and that pipeline both have it on.</p>
+<p>Which entities a run collects from follows from what it processes: every asset the selected files belong
+to, every asset named as a metadata source, and every database those assets live in. A run that takes no
+input files has nothing to derive from, so it collects the one database and the assets named as its
+metadata sources — see <a href="#running-a-workflow-with-no-input-files" class="">Running a workflow with no input files</a>.</p>
+<p>Naming a metadata source is always optional. Nothing requires a source to be chosen, and a run launches
+without one. A pipeline that genuinely needs particular metadata checks for it and reports the failure on
+its own step, so a missing source shows up as that step failing rather than as a rejected launch.</p>
+<p>Database metadata is read-only: it is given to a pipeline as input, and no pipeline writes metadata back
+to a database. Pipeline metadata write-back applies to assets and files.</p>
+<p>The metadata collected for each entity is capped on its own rather than against a shared total: at most
+1,000 metadata entries and 300 KB for each database, each asset, each file&#x27;s metadata, and each file&#x27;s
+attributes. A run over three databases holding five assets and ten files therefore collects up to 1,000
+entries for each of the three databases, up to 1,000 for each of the five assets, and up to 1,000 for
+each of the ten files. Entries are kept in key order, so the same entity yields the same set each time
+it is read. Nothing is dropped silently — when an entity is capped, the launch reports a warning naming
+it, and the same happens when a source database&#x27;s metadata cannot be read. A single run reads at most
+1,000 input files and 1,000 metadata-source assets.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="automatic-execution">Automatic execution<a href="#automatic-execution" class="hash-link" aria-label="Direct link to Automatic execution" title="Direct link to Automatic execution" translate="no">​</a></h3>
-<p>When a workflow has auto-trigger enabled, it runs automatically whenever a file matching the configured extensions is uploaded to an asset within the workflow&#x27;s database. The uploaded file is passed as the input to the workflow.</p>
+<p>A workflow runs automatically when one of its <strong>triggers</strong> matches. A file upload trigger fires when a file
+matching its allow filters — and not removed by its exclude filters — is uploaded to an asset in the
+workflow&#x27;s database, and the uploaded file becomes the workflow&#x27;s input. A workflow may carry several
+triggers, and an upload runs the workflow once for every trigger it matches.</p>
+<p>Triggers are set on a saved workflow, in the <strong>Triggers (optional)</strong> step that appears when editing it. Each
+trigger carries its own filters and its own default template per pipeline step, since no one is present to
+choose a template on an automatic run. See <a href="#triggers-optional" class="">Triggers (optional)</a>.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="monitoring-execution">Monitoring execution<a href="#monitoring-execution" class="hash-link" aria-label="Direct link to Monitoring execution" title="Direct link to Monitoring execution" translate="no">​</a></h3>
 <p>Execution progress can be monitored from the <strong>Executions</strong> page or from the asset detail page. Each execution shows:</p>
 <ul>
@@ -272,7 +473,70 @@
 <li class="">Start and end timestamps</li>
 <li class="">Error details for failed executions</li>
 </ul>
+<p>The <strong>Executions</strong> page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow and every asset it read — each selected file&#x27;s asset plus each asset named as a metadata source — or, for a run that read nothing, the asset it wrote to. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.</p>
+<p><img decoding="async" loading="lazy" alt="Executions page listing workflow executions with status, trigger, and output columns" src="/visual-asset-management-system/release-2.6.0/assets/images/executions_page_20260803_v2.6-182d9194c86b056ba12345c3e1885943.png" width="2559" height="1249" class="img_ev3q"></p>
 <div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>Workflow execution is asynchronous. Results (output files, previews, metadata) appear on the asset after all pipeline steps complete. Changes may take a few minutes to propagate through the system, including search results.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-details">Execution details<a href="#execution-details" class="hash-link" aria-label="Direct link to Execution details" title="Direct link to Execution details" translate="no">​</a></h3>
+<p>Selecting an execution opens its detail view. The header states the run&#x27;s identity and outcome — status,
+workflow, trigger, start and stop times and duration — together with where it wrote: the <strong>Output Type</strong>
+(an asset, or <strong>Results only</strong> for a run that writes no files), the destination database and asset, and the
+<strong>Output Path Prefix</strong> the run wrote beneath. Knowing the prefix is what lets you find a particular run&#x27;s
+output in the asset when several runs have written to the same place.</p>
+<p>The tabs below it break the run down:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Tab</th><th>What it shows</th></tr></thead><tbody><tr><td><strong>Inputs</strong></td><td>Each selected input file with the exact file version the run read, then the metadata gathered and passed to the pipelines in two blocks — each involved database&#x27;s own metadata, then the asset and file metadata</td></tr><tr><td><strong>Pipelines</strong></td><td>One entry per pipeline step: its status and timings, the template it used, the tag values supplied, and the final configuration actually delivered to it</td></tr><tr><td><strong>Outputs</strong></td><td>Where the run wrote, then everything it produced: output <strong>files</strong> with their version and size, <strong>preview</strong> files, <strong>metadata</strong> written back to the asset, and any <strong>results</strong> text returned</td></tr><tr><td><strong>Settings</strong></td><td>The settings the run was governed by — the workflow&#x27;s own settings, and per step the settings that step ran under</td></tr><tr><td><strong>Logs</strong></td><td>The execution log, selectable per step. Available to users whose permissions allow reading logs</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Outputs lists asset files only</div><div class="admonitionContent_BuS1"><p>A pipeline may also write working files and certain viewer data — point-cloud viewer tiles, some preview
+files — to a scratch location rather than onto the asset. Those files are not asset outputs, so they do not
+appear on this tab even though the run produced them. A pipeline that wrote <em>only</em> there shows no outputs
+here despite having succeeded.</p></div></div>
+<p>The <strong>Logs</strong> tab can be scoped to the whole execution or to a single pipeline step. Beyond the log the
+step&#x27;s own process wrote, a step&#x27;s logs include the log of the resource VAMS invoked for it. That is usually
+where the reason for a launch that failed before the pipeline started is recorded. Steps invoked through a
+queue, an event bus, or Deadline Cloud have no such log, so nothing extra is shown for them. If a log could
+not be read, the tab says which one rather than silently returning less.</p>
+<p><strong>Stored</strong> logs are captured as a run finishes, which can be before the logging service has finished
+ingesting the run&#x27;s events, so a stored log is often empty even for a run that succeeded. Switching
+<strong>Source</strong> to <strong>Live</strong> reads the events directly, and is the setting to use when a stored log looks empty.</p>
+<p>A run is recorded as a <strong>snapshot</strong>, not as a set of pointers. Templates, tag schemas and pipeline
+settings can all be edited or archived after a run finishes, so the execution stores the template
+version, the tag values, the rendered configuration and the settings in force at the time. An execution
+from months ago therefore still explains itself even if the definitions behind it have since changed.</p>
+<p>The <strong>Settings</strong> tab is where that matters most. A pipeline&#x27;s own settings can be adjusted by the
+template chosen for a particular run — a template may change how many input files are accepted, which
+files are eligible, what metadata is provided, or which asset selections are allowed. The tab shows the
+resulting settings for each step and, where a template changed something, which values it overrode. That
+is how to answer &quot;why did this run accept these inputs?&quot; after the fact.</p>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>note</div><div class="admonitionContent_BuS1"><p>The workflow-level settings shown are read live from the workflow, so they reflect the workflow as it
+stands <strong>now</strong>. The per-step settings are the recorded snapshot from the run itself. Where a workflow has
+been edited since, the two can legitimately differ — the tab labels which is which.</p></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="global-vs-database-specific">GLOBAL vs. database-specific<a href="#global-vs-database-specific" class="hash-link" aria-label="Direct link to GLOBAL vs. database-specific" title="Direct link to GLOBAL vs. database-specific" translate="no">​</a></h2>
 
 
@@ -310,6 +574,6 @@
 <p>For detailed pipeline documentation, see the <a class="" href="/visual-asset-management-system/release-2.6.0/pipelines/overview">Pipelines overview</a>, <a class="" href="/visual-asset-management-system/release-2.6.0/deployment/configuration-reference">deployment configuration reference</a>, and <a class="" href="/visual-asset-management-system/release-2.6.0/pipelines/custom-pipelines">custom pipelines guide</a>.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="permissions">Permissions<a href="#permissions" class="hash-link" aria-label="Direct link to Permissions" title="Direct link to Permissions" translate="no">​</a></h2>
 <p>Access to pipelines and workflows is controlled by the VAMS permission system. Users need appropriate constraints on the <code>pipeline</code> and <code>workflow</code> object types to view, create, edit, or delete pipelines and workflows. For details, see <a class="" href="/visual-asset-management-system/release-2.6.0/user-guide/permissions">Permissions</a>.</p>
-<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>CLI alternative</div><div class="admonitionContent_BuS1"><p>Workflow operations can also be performed via the command line. See <a class="" href="/visual-asset-management-system/release-2.6.0/cli/commands/workflows">CLI Workflow Commands</a>.</p></div></div></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/user-guide/metadata-management"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Metadata Management</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/user-guide/permissions"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Permissions</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#concepts" class="table-of-contents__link toc-highlight">Concepts</a><ul><li><a href="#pipelines" class="table-of-contents__link toc-highlight">Pipelines</a></li><li><a href="#workflows" class="table-of-contents__link toc-highlight">Workflows</a></li></ul></li><li><a href="#viewing-available-pipelines" class="table-of-contents__link toc-highlight">Viewing available pipelines</a></li><li><a href="#creating-a-custom-pipeline" class="table-of-contents__link toc-highlight">Creating a custom pipeline</a><ul><li><a href="#execution-type-specific-fields" class="table-of-contents__link toc-highlight">Execution-type-specific fields</a></li><li><a href="#updating-a-pipeline" class="table-of-contents__link toc-highlight">Updating a pipeline</a></li></ul></li><li><a href="#viewing-available-workflows" class="table-of-contents__link toc-highlight">Viewing available workflows</a></li><li><a href="#creating-a-workflow" class="table-of-contents__link toc-highlight">Creating a workflow</a><ul><li><a href="#workflow-details-tab" class="table-of-contents__link toc-highlight">Workflow details tab</a></li><li><a href="#pipelines-tab" class="table-of-contents__link toc-highlight">Pipelines tab</a></li><li><a href="#saving-the-workflow" class="table-of-contents__link toc-highlight">Saving the workflow</a></li></ul></li><li><a href="#executing-workflows" class="table-of-contents__link toc-highlight">Executing workflows</a><ul><li><a href="#manual-execution" class="table-of-contents__link toc-highlight">Manual execution</a></li><li><a href="#automatic-execution" class="table-of-contents__link toc-highlight">Automatic execution</a></li><li><a href="#monitoring-execution" class="table-of-contents__link toc-highlight">Monitoring execution</a></li></ul></li><li><a href="#global-vs-database-specific" class="table-of-contents__link toc-highlight">GLOBAL vs. database-specific</a></li><li><a href="#built-in-pipelines" class="table-of-contents__link toc-highlight">Built-in pipelines</a></li><li><a href="#permissions" class="table-of-contents__link toc-highlight">Permissions</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>CLI alternative</div><div class="admonitionContent_BuS1"><p>Workflow operations can also be performed via the command line. See <a class="" href="/visual-asset-management-system/release-2.6.0/cli/commands/workflows">CLI Workflow Commands</a>.</p></div></div></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/release-2.6.0/user-guide/metadata-management"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Metadata Management</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/release-2.6.0/user-guide/permissions"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Permissions</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#concepts" class="table-of-contents__link toc-highlight">Concepts</a><ul><li><a href="#pipelines" class="table-of-contents__link toc-highlight">Pipelines</a></li><li><a href="#workflows" class="table-of-contents__link toc-highlight">Workflows</a></li></ul></li><li><a href="#viewing-available-pipelines" class="table-of-contents__link toc-highlight">Viewing available pipelines</a></li><li><a href="#creating-a-custom-pipeline" class="table-of-contents__link toc-highlight">Creating a custom pipeline</a><ul><li><a href="#basic" class="table-of-contents__link toc-highlight">Basic</a></li><li><a href="#execution" class="table-of-contents__link toc-highlight">Execution</a></li><li><a href="#settings" class="table-of-contents__link toc-highlight">Settings</a></li><li><a href="#archiving-a-pipeline" class="table-of-contents__link toc-highlight">Archiving a pipeline</a></li><li><a href="#updating-a-pipeline" class="table-of-contents__link toc-highlight">Updating a pipeline</a></li></ul></li><li><a href="#viewing-available-workflows" class="table-of-contents__link toc-highlight">Viewing available workflows</a></li><li><a href="#creating-a-workflow" class="table-of-contents__link toc-highlight">Creating a workflow</a><ul><li><a href="#basic-information" class="table-of-contents__link toc-highlight">Basic information</a></li><li><a href="#execution-settings" class="table-of-contents__link toc-highlight">Execution settings</a></li><li><a href="#triggers-optional" class="table-of-contents__link toc-highlight">Triggers (optional)</a></li><li><a href="#pipelines-1" class="table-of-contents__link toc-highlight">Pipelines</a></li><li><a href="#saving-the-workflow" class="table-of-contents__link toc-highlight">Saving the workflow</a></li></ul></li><li><a href="#executing-workflows" class="table-of-contents__link toc-highlight">Executing workflows</a><ul><li><a href="#manual-execution" class="table-of-contents__link toc-highlight">Manual execution</a></li><li><a href="#metadata-inputs" class="table-of-contents__link toc-highlight">Metadata inputs</a></li><li><a href="#automatic-execution" class="table-of-contents__link toc-highlight">Automatic execution</a></li><li><a href="#monitoring-execution" class="table-of-contents__link toc-highlight">Monitoring execution</a></li><li><a href="#execution-details" class="table-of-contents__link toc-highlight">Execution details</a></li></ul></li><li><a href="#global-vs-database-specific" class="table-of-contents__link toc-highlight">GLOBAL vs. database-specific</a></li><li><a href="#built-in-pipelines" class="table-of-contents__link toc-highlight">Built-in pipelines</a></li><li><a href="#permissions" class="table-of-contents__link toc-highlight">Permissions</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/release-2.6.0/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
 </body>
 </html>

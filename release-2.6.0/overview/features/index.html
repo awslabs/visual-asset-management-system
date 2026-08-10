@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Features | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/overview/features"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Features | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page provides a comprehensive catalog of Visual Asset Management System (VAMS) features, organized by component. VAMS includes capabilities spanning the web interface, REST API, command line interface, backend services, processing pipelines, and infrastructure."><meta data-rh="true" property="og:description" content="This page provides a comprehensive catalog of Visual Asset Management System (VAMS) features, organized by component. VAMS includes capabilities spanning the web interface, REST API, command line interface, backend services, processing pipelines, and infrastructure."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.0/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/overview/features"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/overview/features" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.0/overview/features" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Features","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.0/overview/features"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.0/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.13c32ab4.js" defer="defer"></script>
-<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.62133664.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/runtime~main.38810f5f.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.0/assets/js/main.7322c7d7.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -55,7 +55,7 @@
 <li class=""><strong>API key management</strong> -- Create, update, and delete API keys with user ID impersonation for application-to-application integration</li>
 <li class=""><strong>Role management</strong> -- Create and manage roles with two-tier permission constraints</li>
 <li class=""><strong>Permission constraint management</strong> -- Define, import, and manage ABAC/RBAC constraints with bulk JSON template import</li>
-<li class=""><strong>Pipeline management</strong> -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge)</li>
+<li class=""><strong>Pipeline management</strong> -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge, DeadlineCloud)</li>
 <li class=""><strong>Workflow management</strong> -- Design multi-step processing workflows with pipeline chaining</li>
 <li class=""><strong>Metadata schema management</strong> -- Define and manage metadata schemas for assets, files, databases, and asset links</li>
 </ul>
@@ -327,7 +327,7 @@
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-features">Pipeline Features<a href="#pipeline-features" class="hash-link" aria-label="Direct link to Pipeline Features" title="Direct link to Pipeline Features" translate="no">​</a></h2>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="execution-types">Execution Types<a href="#execution-types" class="hash-link" aria-label="Direct link to Execution Types" title="Direct link to Execution Types" translate="no">​</a></h3>
-<p>Pipelines support three execution types for integration with different processing backends:</p>
+<p>Pipelines support four execution types for integration with different processing backends:</p>
 
 
 
@@ -357,9 +357,16 @@
 
 
 
-<table><thead><tr><th>Execution Type</th><th>Invocation</th><th>Callback Support</th><th>Use Case</th></tr></thead><tbody><tr><td><strong>Lambda</strong></td><td>Synchronous or asynchronous AWS Lambda invocation</td><td>Yes (native)</td><td>Lightweight processing tasks</td></tr><tr><td><strong>SQS</strong></td><td>Asynchronous message to an Amazon SQS queue</td><td>Optional (via AWS Step Functions Task Tokens)</td><td>External processing system integration</td></tr><tr><td><strong>EventBridge</strong></td><td>Asynchronous event to an Amazon EventBridge bus</td><td>Optional (via AWS Step Functions Task Tokens)</td><td>Event-driven architecture integration</td></tr></tbody></table>
+
+
+
+
+
+
+<table><thead><tr><th>Execution Type</th><th>Invocation</th><th>Callback Support</th><th>Use Case</th></tr></thead><tbody><tr><td><strong>Lambda</strong></td><td>Synchronous or asynchronous AWS Lambda invocation</td><td>Yes (native)</td><td>Lightweight processing tasks</td></tr><tr><td><strong>SQS</strong></td><td>Asynchronous message to an Amazon SQS queue</td><td>Optional (via AWS Step Functions Task Tokens)</td><td>External processing system integration</td></tr><tr><td><strong>EventBridge</strong></td><td>Asynchronous event to an Amazon EventBridge bus</td><td>Optional (via AWS Step Functions Task Tokens)</td><td>Event-driven architecture integration</td></tr><tr><td><strong>DeadlineCloud</strong></td><td>Asynchronous job submission to an AWS Deadline Cloud queue</td><td>Required (via AWS Step Functions Task Tokens)</td><td>Render farm and batch job submission</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Deadline Cloud availability</div><div class="admonitionContent_BuS1"><p>The Deadline Cloud execution type requires <code>app.pipelines.deadlineCloudExecutionTypeEnabled</code> and deploys only in the commercial AWS partition. It is unavailable in AWS GovCloud and AWS European Sovereign Cloud deployments.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="built-in-pipelines">Built-In Pipelines<a href="#built-in-pipelines" class="hash-link" aria-label="Direct link to Built-In Pipelines" title="Direct link to Built-In Pipelines" translate="no">​</a></h3>
-<p>VAMS includes fourteen built-in processing pipelines, each deployable through configuration flags:</p>
+<p>VAMS includes twenty-four built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.</p>
 
 
 
@@ -455,13 +462,74 @@
 
 
 
-<table><thead><tr><th>Pipeline</th><th>Config Flag</th><th>Description</th><th>Default</th></tr></thead><tbody><tr><td>3D Conversion Basic</td><td><code>useConversion3dBasic</code></td><td>Format conversion using Trimesh and Blender</td><td>Enabled</td></tr><tr><td>CAD/Mesh Metadata Extraction</td><td><code>useConversionCadMeshMetadataExtraction</code></td><td>Geometric metadata extraction using CADQuery</td><td>Disabled</td></tr><tr><td>Coordinate Transform</td><td><code>useConversionCoordinateTransform</code></td><td>Point cloud coordinate reference system reprojection using PDAL and pyproj</td><td>Disabled</td></tr><tr><td>Point Cloud Potree Viewer</td><td><code>usePreviewPcPotreeViewer</code></td><td>Potree octree generation for browser streaming</td><td>Disabled</td></tr><tr><td>Gaussian Splat Toolbox</td><td><code>useSplatToolbox</code></td><td>3D Gaussian splat generation from media files</td><td>Disabled</td></tr><tr><td>GenAI Metadata 3D Labeling</td><td><code>useGenAiMetadata3dLabeling</code></td><td>AI-powered metadata labeling via Amazon Bedrock</td><td>Disabled</td></tr><tr><td>3D Preview Thumbnail</td><td><code>usePreview3dThumbnail</code></td><td>Animated GIF or static image preview generation</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Predict</td><td><code>useNvidiaCosmos.modelsPredict</code></td><td>GPU-accelerated video generation from text or image/video using NVIDIA Cosmos-Predict1 (v1) and Cosmos-Predict2.5 (v2.5) world foundation models with 7B (v1), 2B, and 14B (v2.5) model sizes</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Reason</td><td><code>useNvidiaCosmos.modelsReason</code></td><td>Vision Language Model for video/image analysis generating text-based captions, descriptions, and reasoning with Cosmos-Reason2 (2B, 8B) models</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Transfer</td><td><code>useNvidiaCosmos.modelsTransfer</code></td><td>Video transformation with control signal conditioning using Cosmos-Transfer2.5-2B for style transfer and content transformation</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos 3</td><td><code>useNvidiaCosmos3</code></td><td>Omnimodal world-model generation using Cosmos3-Nano (16B) and Cosmos3-Super (64B) models for text2image, text2video, and image2video</td><td>Disabled</td></tr><tr><td>RapidPipeline (ECS/EKS)</td><td><code>useRapidPipeline</code></td><td>Licensed spatial data optimization</td><td>Disabled</td></tr><tr><td>VNTANA ModelOps</td><td><code>useModelOps</code></td><td>Licensed ModelOps optimization</td><td>Disabled</td></tr><tr><td>NVIDIA Isaac Lab Training</td><td><code>useIsaacLabTraining</code></td><td>Reinforcement learning training and evaluation</td><td>Disabled</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Pipeline</th><th>Config Flag</th><th>Description</th><th>Default</th></tr></thead><tbody><tr><td>3D Basic Conversion</td><td><code>useConversion3dBasic</code></td><td>Format conversion between 3D mesh formats using Trimesh</td><td>Enabled</td></tr><tr><td>CAD/Mesh Metadata Extraction</td><td><code>useConversionCadMeshMetadataExtraction</code></td><td>File-level geometric metadata extraction using Trimesh and CADQuery</td><td>Disabled</td></tr><tr><td>Coordinate Transform</td><td><code>useConversionCoordinateTransform</code></td><td>Point cloud coordinate reference system reprojection using PDAL and pyproj</td><td>Disabled</td></tr><tr><td>Point Cloud Potree Viewer</td><td><code>usePreviewPcPotreeViewer</code></td><td>Potree octree generation for browser streaming</td><td>Disabled</td></tr><tr><td>3D Preview Thumbnail</td><td><code>usePreview3dThumbnail</code></td><td>Animated GIF or static image preview generation</td><td>Disabled</td></tr><tr><td>3D Gaussian Splat Toolbox</td><td><code>useSplatToolbox</code></td><td>3D Gaussian splat generation from images and video</td><td>Disabled</td></tr><tr><td>GenAI 3D Metadata Labeling</td><td><code>useGenAiMetadata3dLabeling</code></td><td>AI-powered asset metadata labeling via Amazon Bedrock</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Text-to-World 2B v2</td><td><code>useNvidiaCosmos.modelsPredict.text2world2B_v2</code></td><td>Video generation from text prompts using Cosmos-Predict2.5 2B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Text-to-World 14B v2</td><td><code>useNvidiaCosmos.modelsPredict.text2world14B_v2</code></td><td>High-quality video generation from text prompts using Cosmos-Predict2.5 14B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Video-to-World 2B v2</td><td><code>useNvidiaCosmos.modelsPredict.video2world2B_v2</code></td><td>Video generation from video and text input using Cosmos-Predict2.5 2B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Video-to-World 14B v2</td><td><code>useNvidiaCosmos.modelsPredict.video2world14B_v2</code></td><td>High-quality video generation from video and text input using Cosmos-Predict2.5 14B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Reason 2B</td><td><code>useNvidiaCosmos.modelsReason.reason2B</code></td><td>Vision Language Model for video and image analysis and captioning using Cosmos-Reason2 2B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Reason 8B</td><td><code>useNvidiaCosmos.modelsReason.reason8B</code></td><td>Vision Language Model for video and image analysis and reasoning using Cosmos-Reason2 8B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos Transfer 2B</td><td><code>useNvidiaCosmos.modelsTransfer.transfer2B</code></td><td>Style and content transfer with control signal conditioning using Cosmos-Transfer2.5 2B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos 3 Nano (16B)</td><td><code>useNvidiaCosmos3.modelsOmni.nano16B</code></td><td>Omnimodal world-model generation using Cosmos3-Nano 16B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos 3 Super (64B)</td><td><code>useNvidiaCosmos3.modelsOmni.super64B</code></td><td>Omnimodal world-model generation using Cosmos3-Super 64B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos 3 Super Text2Image (64B)</td><td><code>useNvidiaCosmos3.modelsOmni.superText2Image64B</code></td><td>Image generation from text prompts using Cosmos3-Super 64B</td><td>Disabled</td></tr><tr><td>NVIDIA Cosmos 3 Super Image2Video (64B)</td><td><code>useNvidiaCosmos3.modelsOmni.superImage2Video64B</code></td><td>Video generation from an image and text prompt using Cosmos3-Super 64B</td><td>Disabled</td></tr><tr><td>NVIDIA Gr00t N1.5 3B Fine-Tuning</td><td><code>useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B</code></td><td>Fine-tuning of the GR00T-N1.5-3B embodied AI model on LeRobot robot manipulation datasets, with LoRA or full fine-tuning</td><td>Disabled</td></tr><tr><td>Isaac Lab RL Training</td><td><code>useIsaacLabTraining</code></td><td>Reinforcement learning policy training using NVIDIA Isaac Lab</td><td>Disabled</td></tr><tr><td>Isaac Lab RL Evaluation</td><td><code>useIsaacLabTraining</code></td><td>Evaluation of trained reinforcement learning policies using NVIDIA Isaac Lab</td><td>Disabled</td></tr><tr><td>RapidPipeline 3D Processor</td><td><code>useRapidPipeline.useEcs</code></td><td>Licensed 3D model optimization and conversion on Amazon ECS</td><td>Disabled</td></tr><tr><td>RapidPipeline (EKS)</td><td><code>useRapidPipeline.useEks</code></td><td>Licensed 3D model optimization and conversion on Amazon EKS</td><td>Disabled</td></tr><tr><td>VNTANA ModelOps 3D Optimization</td><td><code>useModelOps</code></td><td>Licensed 3D model optimization and conversion using the VNTANA engine</td><td>Disabled</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Model variant flags</div><div class="admonitionContent_BuS1"><p>A model variant flag takes effect only when its family flag is also enabled: <code>useNvidiaCosmos.enabled</code> for the Cosmos Predict, Reason, and Transfer variants, <code>useNvidiaCosmos3.enabled</code> for the Cosmos 3 variants, and <code>useNvidiaGr00t.enabled</code> for the Gr00t variant.</p></div></div>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-capabilities">Pipeline Capabilities<a href="#pipeline-capabilities" class="hash-link" aria-label="Direct link to Pipeline Capabilities" title="Direct link to Pipeline Capabilities" translate="no">​</a></h3>
 <ul>
 <li class=""><strong>Auto-registration</strong> -- Pipelines can auto-register with VAMS on deployment via CDK custom resources</li>
 <li class=""><strong>Auto-trigger on upload</strong> -- Configurable automatic pipeline execution when new files are uploaded</li>
 <li class=""><strong>Workflow chaining</strong> -- Chain multiple pipelines into multi-step workflows orchestrated by AWS Step Functions</li>
-<li class=""><strong>Custom pipeline support</strong> -- Register custom pipelines using Lambda, SQS, or EventBridge execution types</li>
+<li class=""><strong>Custom pipeline support</strong> -- Register custom pipelines using the Lambda, SQS, EventBridge, or DeadlineCloud execution types</li>
 </ul>
 <div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>VPC Requirement</div><div class="admonitionContent_BuS1"><p>Pipelines that use AWS Batch Fargate containers require <code>useGlobalVpc.enabled</code> to be set to <code>true</code>. VPC endpoints for AWS Batch, Amazon ECR, and Amazon ECR Docker are automatically created when pipelines are enabled.</p></div></div>
 <hr>
