@@ -574,12 +574,30 @@ export function buildWorkflowTriggerDispatchFunction(
         },
     });
     uploadRule.addTarget(new eventsTargets.SqsQueue(dispatchQueue));
-    fun.addEventSource(
-        new eventsources.SqsEventSource(dispatchQueue, {
-            batchSize: 10,
-            maxBatchingWindow: Duration.seconds(3),
-        })
-    );
+
+    // Setup event source mapping for the dispatch buffer with GovCloud support
+    dispatchQueue.grantConsumeMessages(fun);
+    if (config.app.govCloud.enabled) {
+        const esmDispatch = new lambda.EventSourceMapping(
+            scope,
+            "WorkflowTriggerDispatchSqsEventSource",
+            {
+                eventSourceArn: dispatchQueue.queueArn,
+                target: fun,
+                batchSize: 10,
+                maxBatchingWindow: Duration.seconds(3),
+            }
+        );
+        const cfnEsmDispatch = esmDispatch.node.defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmDispatch.addPropertyDeletionOverride("Tags");
+    } else {
+        fun.addEventSource(
+            new eventsources.SqsEventSource(dispatchQueue, {
+                batchSize: 10,
+                maxBatchingWindow: Duration.seconds(3),
+            })
+        );
+    }
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
