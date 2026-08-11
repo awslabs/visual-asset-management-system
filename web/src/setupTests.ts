@@ -15,6 +15,14 @@ if (typeof (globalThis as any).ResizeObserver === "undefined") {
     };
 }
 
+// jsdom does not expose TextEncoder/TextDecoder, which react-router reads at module scope.
+// Without these, any suite importing react-router-dom fails on import.
+if (typeof (globalThis as any).TextEncoder === "undefined") {
+    const { TextEncoder, TextDecoder } = require("util");
+    (globalThis as any).TextEncoder = TextEncoder;
+    (globalThis as any).TextDecoder = TextDecoder;
+}
+
 jest.mock("maplibre-gl/dist/maplibre-gl", () => ({
     GeolocateControl: jest.fn(),
     Map: jest.fn(() => ({

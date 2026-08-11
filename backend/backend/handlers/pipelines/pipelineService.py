@@ -564,6 +564,8 @@ def create_pipeline(database_id, request, username, claims_and_roles, event=None
     # A GLOBAL pipeline is created for every database in the deployment, so it additionally requires
     # pipeline management permission on the GLOBAL scope.
     if _global_scope_denied(claims_and_roles, record):
+        # Log line, not a query: VAMS stores pipelines in DynamoDB and issues no SQL anywhere.
+        # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
         logger.info(f"Create of GLOBAL pipeline {pipeline_id} denied: no GLOBAL pipeline management")
         return authorization_error()
 
@@ -810,6 +812,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # The pipeline is created under the path-scoped database; a body databaseId naming a
             # different one is rejected rather than silently ignored.
             if request.databaseId != database_id:
+                # Log line, not a query: VAMS stores pipelines in DynamoDB and issues no SQL anywhere.
+                # nosemgrep: python.django.security.injection.tainted-sql-string.tainted-sql-string
                 logger.info(f"Create body databaseId {request.databaseId} does not match the path "
                             f"database {database_id}")
                 return validation_error(body={
