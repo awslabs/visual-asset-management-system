@@ -40,7 +40,7 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled                                             |
 | `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                         | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
-| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled                                             |
+| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter.
@@ -153,5 +153,6 @@ Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (W
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
 -   Three.js CAD-format loaders
+-   ThatOpen IFC BIM Viewer (web-ifc)
 
 These viewers are gated at runtime via `featuresEnabledRestriction` in `viewerConfig.json` and by the CDK CSP configuration (`allowUnsafeEvalFeatures` in the config). When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.

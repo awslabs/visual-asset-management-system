@@ -289,11 +289,25 @@ def my_feature_command(ctx, ...):
 -   Active profile tracked in `active_profile.json`
 -   Profile name validation: 3-50 chars, `[a-zA-Z0-9_-]`, reserved names: `help`, `version`, `list`
 
+**Profile resolution order**: an explicit `--profile` wins; otherwise the profile recorded in
+`active_profile.json` by `profile switch` is used; only when no marker exists does the default profile
+apply. `read_active_profile_name()` (module level in `utils/profile.py`) performs that lookup — it is
+module level because a caller has to resolve the name _before_ it can construct a `ProfileManager`,
+and it is best-effort (any read failure degrades to the default) because it runs on every invocation.
+
 **Rules**:
 
 1. Always obtain `ProfileManager` via `get_profile_manager_from_context(ctx)` in commands
 2. Never hardcode profile paths -- use `ProfileManager` methods
-3. The default profile name is `"default"` (constant `DEFAULT_PROFILE_NAME`)
+3. The default profile name is `"default"` (constant `DEFAULT_PROFILE_NAME`), and it is a **last**
+   resort, not the no-flag default. Never fall back to it directly when resolving which profile to
+   use — call `read_active_profile_name()`. Never give the global `--profile` option a Click
+   `default=`, either: a default makes Click pass that name even when the flag is absent, so the
+   callback cannot distinguish "omitted" from "explicitly asked for the default profile", and
+   `profile switch` silently becomes a no-op for every command. Guarded by
+   `tests/test_active_profile_resolution.py`.
+4. A bare `ProfileManager()` / `APIClient(url)` targets the **default** profile. Pass the resolved
+   profile (`ProfileManager(read_active_profile_name())`) when no manager is supplied.
 
 ### 7. Constants and Endpoints
 
@@ -766,7 +780,7 @@ class InvalidMyDomainDataError(MyDomainError): ...
 Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 1. Use `print()` / bare `click.echo()` in commands with `--json-output` — pollutes JSON output. Use `output_status/result/error` (Rule 4).
-2. Construct `ProfileManager()` directly in commands — ignores `--profile`. Use `get_profile_manager_from_context(ctx)` (Rule 6).
+2. Construct `ProfileManager()` directly in commands — ignores `--profile` **and** the active profile, so the command silently runs against the default profile's deployment. Use `get_profile_manager_from_context(ctx)` (Rule 6).
 3. Catch `GlobalInfrastructureError` in commands — must propagate to the global handler (Rule 1).
 4. Hardcode API endpoints in commands or `api_client` — define a format-string constant in `constants.py` (Rule 7).
 5. Make raw `requests` calls — always route through `APIClient` (Rule 3).

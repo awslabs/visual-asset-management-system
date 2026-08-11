@@ -1523,6 +1523,10 @@ LOG_MODE_FULL = "full"
 # Upper bound on CloudWatch events returned by a single full-search logs call.
 MAX_LOG_EVENTS_PER_CALL = 1000
 
+# Slack subtracted from an execution's recorded start when bounding a live log search, covering clock
+# skew between the recorded start and the first emitted event.
+LOG_SEARCH_WINDOW_MARGIN_MS = 5 * 60 * 1000
+
 # Upper bound on registered sub-process logs / sub-executions read per logs request. A pipeline may
 # register an unbounded number of these; each read is a CloudWatch/SFN API call, so a single logs GET
 # must not fan out without limit. Excess entries are skipped and flagged in the response warnings.
@@ -2912,14 +2916,38 @@ def _reconcile_main_status(execution_id, main_item):
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
 
 
-def _full_log_search(log_group_arn, filter_terms, query_params):
+def _log_search_window_start(main_item):
+    """Epoch-ms lower bound for a live log search: the execution's own start, less a small margin.
+
+    The margin covers clock skew between the recorded start and the first emitted event. Returns None
+    when the row carries no parseable start date, which leaves the search unbounded (the prior
+    behavior) rather than guessing a window."""
+    raw = (main_item or {}).get('executionStartDate', '') or ''
+    if not raw:
+        return None
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return int(parsed.timestamp() * 1000) - LOG_SEARCH_WINDOW_MARGIN_MS
+
+
+def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None):
     """Live CloudWatch FilterLogEvents search within the shared workflow log group.
 
     filter_terms is the list of REQUIRED literal terms the search is scoped to (e.g. the
     execution id, and -- for a pipeline-scoped search -- the pipeline execution id). Every
     term is AND-ed into the filter pattern so results are restricted to exactly that
     execution (and pipeline, when given) and nothing else. An optional caller filterPattern
-    is appended as an additional term. Returns {events, nextToken}."""
+    is appended as an additional term. Returns {events, nextToken}.
+
+    default_start_time (epoch ms) bounds the search when the caller supplies no startTime. The
+    workflow log group is SHARED by every state machine and retained for ten years, and
+    FilterLogEvents spends a bounded scan budget across streams in the group: on a group holding
+    older streams, an unbounded search returns those streams' events and reports nothing for a run
+    that finished seconds ago, even though the events are present (verified against a group where a
+    stream-scoped query returned 12 events and the same unbounded group-wide query returned 0).
+    Anchoring on the execution's own start makes the search look where its events actually are."""
     if not log_group_arn:
         return {"events": [], "nextToken": None}
     parts = log_group_arn.split(":log-group:")
@@ -2950,6 +2978,9 @@ def _full_log_search(log_group_arn, filter_terms, query_params):
         kwargs['filterPattern'] = filter_pattern
     if query_params.get('startTime'):
         kwargs['startTime'] = int(query_params['startTime'])
+    elif default_start_time:
+        # Caller's explicit startTime always wins; this only fills the unbounded case.
+        kwargs['startTime'] = int(default_start_time)
     if query_params.get('endTime'):
         kwargs['endTime'] = int(query_params['endTime'])
     if query_params.get('nextToken'):
@@ -3015,7 +3046,7 @@ def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
 
 
 def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
-                                 scope_terms=None):
+                                 scope_terms=None, default_start_time=None):
     """Best-effort fetch of events from a registered sub-process log location. Returns
     (ok, events) on success or (False, reason) on a real failure (e.g. AccessDenied), never
     raising; the caller surfaces a failure as a warning.
@@ -3045,6 +3076,10 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
         kwargs['filterPattern'] = filter_pattern
     if query_params.get('startTime'):
         kwargs['startTime'] = int(query_params['startTime'])
+    elif default_start_time:
+        # Same reason as _full_log_search: a registered group (e.g. a shared Lambda log group) can
+        # hold far older streams, and an unbounded search spends its scan budget there.
+        kwargs['startTime'] = int(default_start_time)
     if query_params.get('endTime'):
         kwargs['endTime'] = int(query_params['endTime'])
     try:
@@ -3217,7 +3252,8 @@ def get_execution_logs(event, execution_id, query_params):
             if not result_log and not error_log:
                 live = _full_log_search(
                     main_item.get('executionLogGroupArn', ''),
-                    [execution_id, pipeline_execution_id], query_params)
+                    [execution_id, pipeline_execution_id], query_params,
+                    default_start_time=_log_search_window_start(main_item))
                 if live["events"]:
                     result_log = "\n".join(e.get('message', '') for e in live["events"])
                     logs_source = "live"
@@ -3238,7 +3274,8 @@ def get_execution_logs(event, execution_id, query_params):
         logs_source = "stored"
         if not execution_log:
             live = _full_log_search(
-                main_item.get('executionLogGroupArn', ''), [execution_id], query_params)
+                main_item.get('executionLogGroupArn', ''), [execution_id], query_params,
+                default_start_time=_log_search_window_start(main_item))
             if live["events"]:
                 execution_log = "\n".join(e.get('message', '') for e in live["events"])
                 logs_source = "live"
@@ -3257,10 +3294,13 @@ def get_execution_logs(event, execution_id, query_params):
 
     # mode == full: live CloudWatch search, strictly scoped to this execution (and pipeline).
     log_group_arn = main_item.get('executionLogGroupArn', '')
+    # Lower bound shared by every live read below, so none of them scans unbounded history.
+    window_start = _log_search_window_start(main_item)
     scope_terms = [execution_id]
     if pipeline_execution_id:
         scope_terms.append(pipeline_execution_id)
-    search = _full_log_search(log_group_arn, scope_terms, query_params)
+    search = _full_log_search(log_group_arn, scope_terms, query_params,
+                              default_start_time=_log_search_window_start(main_item))
 
     # When scoped to a pipeline, also pull from any sub-process logs that pipeline registered
     # (best-effort; a failure on any registered log is surfaced as a non-fatal warning).
@@ -3279,7 +3319,8 @@ def get_execution_logs(event, execution_id, query_params):
         if invocation_log_arn:
             read_log_group_arns.add(invocation_log_arn)
             ok, events_or_err = _fetch_registered_log_events(
-                invocation_log_arn, "", query_params, scope_terms=scope_terms)
+                invocation_log_arn, "", query_params, scope_terms=scope_terms,
+                default_start_time=window_start)
             if ok:
                 sub_process_events.extend(events_or_err)
             else:
@@ -3302,7 +3343,7 @@ def get_execution_logs(event, execution_id, query_params):
             read_log_group_arns.add(log_arn)
             ok, events_or_err = _fetch_registered_log_events(
                 log_arn, stream, query_params, log_stream_prefix=stream_prefix,
-                scope_terms=scope_terms)
+                scope_terms=scope_terms, default_start_time=window_start)
             if ok:
                 sub_process_events.extend(events_or_err)
             else:
@@ -3330,7 +3371,8 @@ def get_execution_logs(event, execution_id, query_params):
                 # The nested state machine's log group is shared across all of its executions; scope
                 # the read to this execution (and pipeline) so only this run's events are returned.
                 ok, events_or_err = _fetch_registered_log_events(
-                    resolved_arn, "", query_params, scope_terms=scope_terms)
+                    resolved_arn, "", query_params, scope_terms=scope_terms,
+                    default_start_time=window_start)
                 if ok:
                     sub_process_events.extend(events_or_err)
                 else:

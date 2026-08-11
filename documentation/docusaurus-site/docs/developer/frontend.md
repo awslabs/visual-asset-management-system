@@ -602,7 +602,7 @@ Browsers ignore `'unsafe-inline'` whenever any hash or nonce source is also pres
 
 ### `app.webUi.allowUnsafeEvalFeatures`
 
-Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
+Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
 
 ### Add-on origins
 

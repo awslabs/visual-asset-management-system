@@ -339,12 +339,10 @@ class TestOutputBuilders:
         assert cfg["pipelineExecutionId"] == "P1"
         assert cfg["recordType"] == "configuration"
         assert cfg["inputConfigurationTruncated"] is False
-        assert cfg["inputPortMappings"] == {}
 
     def test_workflow_configuration_record(self):
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration='{"s":1}',
-            input_metadata='{"VAMS":{}}', specified_pipelines_snapshot=[{"name": "p"}],
+            workflow_execution_id="E1", input_metadata='{"VAMS":{}}', specified_pipelines_snapshot=[{"name": "p"}],
         )
         assert rec["workflowExecutionId"] == "E1"
         assert rec["recordType"] == "configuration"
@@ -354,7 +352,7 @@ class TestOutputBuilders:
 
     def test_workflow_configuration_record_carries_path_extension(self):
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            workflow_execution_id="E1", input_metadata="",
             specified_pipelines_snapshot=[],
             output_file_base_execution_path_extension="/exec-2026/",
         )
@@ -415,7 +413,7 @@ class TestOutputBuilders:
         # cannot include runs that only WROTE to the asset — and a results-only or arity-'none'
         # pipeline has no input rows at all, so the output target is its only association.
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            workflow_execution_id="E1", input_metadata="",
             specified_pipelines_snapshot=[], output_location_type="asset",
             output_asset_id="a1", output_database_id="db1",
             execution_start_date="2026-08-02T00:00:00Z",
@@ -428,7 +426,7 @@ class TestOutputBuilders:
         # an empty partition would collect every such run into one hot key and surface them on an
         # unrelated asset's history.
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            workflow_execution_id="E1", input_metadata="",
             specified_pipelines_snapshot=[], output_location_type="none",
         )
         assert "outputDatabaseId:outputAssetId" not in rec
@@ -437,7 +435,7 @@ class TestOutputBuilders:
         # 'asset' with no ids resolved yet must not produce a partial key like "db1:" or ":a1".
         for kwargs in ({"output_asset_id": "a1"}, {"output_database_id": "db1"}, {}):
             rec = er.build_workflow_configuration_record(
-                workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+                workflow_execution_id="E1", input_metadata="",
                 specified_pipelines_snapshot=[], output_location_type="asset", **kwargs)
             assert "outputDatabaseId:outputAssetId" not in rec, kwargs
 
@@ -450,7 +448,7 @@ class TestOutputBuilders:
         # An omitted start date must still be sortable rather than empty, or the row would land at the
         # bottom of every newest-first listing.
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="", input_metadata="",
+            workflow_execution_id="E1", input_metadata="",
             specified_pipelines_snapshot=[])
         assert rec["executionStartDate"]
 

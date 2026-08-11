@@ -1931,7 +1931,7 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
     #    metadata-source selection.
     wf_cfg_table = dynamodb.Table(workflow_execution_configuration_table)
     wf_cfg_table.put_item(Item=er.build_workflow_configuration_record(
-        workflow_execution_id=execution_id, workflow_configuration="",
+        workflow_execution_id=execution_id,
         input_metadata=json.dumps(metadata_envelope),
         specified_pipelines_snapshot=workflow.get("specifiedPipelines", []),
         output_location_type=output_location_type, output_asset_id=output_asset_id,
@@ -2004,8 +2004,11 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                 from_pipeline_execution_id=prev_id,
                 orchestration_bus_event_prefix=event_prefix)
             # First pipeline starts immediately; the rest stay NEW until the interim lambda advances it.
+            # Its start date is stamped here for the same reason: the interim lambda stamps a step as it
+            # advances INTO it, which never happens for step 1, so it would otherwise report no duration.
             if idx == 0:
                 pexec_record["executionStatus"] = "RUNNING"
+                pexec_record["executionStartDate"] = start_date
             pexec_table.put_item(Item=pexec_record)
 
             # Config snapshot: what the run was built from (traceable + re-runnable).

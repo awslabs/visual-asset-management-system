@@ -235,6 +235,28 @@ def requires_setup_and_auth(func):  # VIOLATION - use existing decorator
 def get_profile_manager_from_context(ctx):  # VIOLATION - use existing helper
     pass
 
+# ❌ INCORRECT - Don't fall back to the default profile when resolving which profile to use
+profile_manager = ProfileManager(DEFAULT_PROFILE_NAME)  # VIOLATION - ignores `profile switch`
+```
+
+### Profile Resolution
+
+An explicit `--profile` wins; otherwise the profile recorded in `active_profile.json` by
+`vamscli profile switch` is used; the default profile applies only when no marker exists.
+`read_active_profile_name()` (module level in `utils/profile.py`) performs that lookup.
+
+Never resolve a profile by falling back to `DEFAULT_PROFILE_NAME`, and never give the global
+`--profile` option a Click `default=`. A Click default makes Click pass that name even when the flag
+is absent, so the callback cannot tell "omitted" from "explicitly asked for the default profile" —
+`profile switch` then silently becomes a no-op and every command runs against whatever deployment the
+default profile points at, while still reporting success. A bare `ProfileManager()` or
+`APIClient(url)` has the same effect. Guarded by `tests/test_active_profile_resolution.py`.
+
+```python
+# ✅ CORRECT
+from ..utils.profile import read_active_profile_name
+profile_manager = ProfileManager(read_active_profile_name())
+
 # ✅ CORRECT - Include comprehensive help
 @click.command()
 def my_command():
