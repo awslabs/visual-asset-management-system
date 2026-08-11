@@ -505,7 +505,7 @@ Consumed by the static web hosting stack `infra/lib/nestedStacks/staticWebApp/st
 | Field                                 | Type    | Default | Description                                                                                                                                                                                                          |
 | ------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                   |
-| `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (for example, Needle USD WASM viewer, ThreeJS CAD viewer). Consult your security team before enabling. |
+| `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and the Three.js CAD formats). Consult your security team before enabling. |
 
 ## Metadata schema (`app.metadataSchema`)
 

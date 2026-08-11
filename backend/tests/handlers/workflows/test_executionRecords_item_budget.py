@@ -169,14 +169,13 @@ class TestInputMetadataItemBudget:
 
 @pytest.mark.unit
 class TestWorkflowConfigurationItemBudget:
-    """The step snapshot and the two metadata-source lists share the row's budget with its two text
-    bodies, and the source lists have first claim because the read paths gate on them."""
+    """The step snapshot and the two metadata-source lists share the row's budget with the
+    inputMetadata body, and the source lists have first claim because the read paths gate on them."""
 
     def test_many_sources_over_a_full_envelope_fit_one_item(self):
         sources = [{"databaseId": "d" * 20, "assetId": "a" * 20} for _ in range(300)]
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="c" * 100 * 1024,
-            input_metadata="m" * 400 * 1024, specified_pipelines_snapshot=[{"name": "p"}] * 20,
+            workflow_execution_id="E1", input_metadata="m" * 400 * 1024, specified_pipelines_snapshot=[{"name": "p"}] * 20,
             metadata_source_assets=sources)
         assert item_bytes(rec) <= er.MAX_ITEM_BYTES
         # The sources are the run's authorization subjects, so they survive whole and the envelope
@@ -188,8 +187,7 @@ class TestWorkflowConfigurationItemBudget:
     def test_the_request_maximum_source_selection_fits(self):
         sources = [{"databaseId": "d" * 20, "assetId": "a" * 20} for _ in range(1000)]
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="c" * 20000,
-            input_metadata="m" * 400 * 1024,
+            workflow_execution_id="E1", input_metadata="m" * 400 * 1024,
             specified_pipelines_snapshot=[{"name": "p", "pipelineId": "x" * 63}] * 100,
             metadata_source_assets=sources)
         assert item_bytes(rec) <= er.MAX_ITEM_BYTES
@@ -199,8 +197,7 @@ class TestWorkflowConfigurationItemBudget:
     def test_an_unbounded_snapshot_and_source_list_are_bounded_and_flagged(self):
         sources = [{"databaseId": "d" * 256, "assetId": "a" * 256} for _ in range(1000)]
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration="c" * 400 * 1024,
-            input_metadata="m" * 400 * 1024,
+            workflow_execution_id="E1", input_metadata="m" * 400 * 1024,
             specified_pipelines_snapshot=[{"name": "p" * 1000}] * 100,
             metadata_source_assets=sources,
             metadata_source_databases=["db" * 100] * 500)
@@ -210,8 +207,7 @@ class TestWorkflowConfigurationItemBudget:
 
     def test_an_ordinary_row_keeps_its_collections_whole(self):
         rec = er.build_workflow_configuration_record(
-            workflow_execution_id="E1", workflow_configuration='{"s":1}',
-            input_metadata='{"VAMS":{}}', specified_pipelines_snapshot=[{"name": "p"}],
+            workflow_execution_id="E1", input_metadata='{"VAMS":{}}', specified_pipelines_snapshot=[{"name": "p"}],
             metadata_source_assets=[{"databaseId": "db1", "assetId": "a1"}],
             metadata_source_databases=["db1", ""])
         assert rec["specifiedPipelinesSnapshot"] == [{"name": "p"}]

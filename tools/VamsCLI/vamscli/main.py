@@ -62,11 +62,14 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
     if '--version' in sys.argv or ctx.info_name == 'version':
         return value
     
-    # Get profile name from context if available
+    # Requested profile, else the active one (never a blind fall back to the default).
     profile_name = DEFAULT_PROFILE_NAME
-    if ctx.obj and 'profile_name' in ctx.obj:
+    if ctx.obj and ctx.obj.get('profile_name'):
         profile_name = ctx.obj['profile_name']
-    
+    else:
+        from .utils.profile import read_active_profile_name
+        profile_name = read_active_profile_name()
+
     profile_manager = ProfileManager(profile_name)
     if not profile_manager.has_config():
         raise SetupRequiredError(
@@ -77,10 +80,17 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
 
 
 def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Optional[str]) -> Optional[str]:
-    """Handle global profile option."""
+    """Handle global profile option.
+
+    With no --profile, the profile `profile switch` selected is used. Defaulting to the literal
+    default profile here made `profile switch` a no-op for every command: the default name was
+    written into the context as though the caller had asked for it, so commands ran against
+    whichever deployment `default` pointed at while reporting success.
+    """
     if value is None:
-        value = DEFAULT_PROFILE_NAME
-    
+        from .utils.profile import read_active_profile_name
+        value = read_active_profile_name()
+
     # Validate profile name
     from .constants import validate_profile_name
     if not validate_profile_name(value):
@@ -100,11 +110,15 @@ def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Opt
 @click.group(invoke_without_command=True)
 @click.option('--version', is_flag=True, help='Show version information')
 @click.option('--verbose', is_flag=True, help='Enable verbose output with detailed error information, API requests/responses, and timing')
-@click.option('--profile', 
-              default=DEFAULT_PROFILE_NAME,
+@click.option('--profile',
+              # No Click default: the callback resolves an omitted --profile to the ACTIVE profile.
+              # Declaring a default here made Click pass 'default' rather than None, so the callback
+              # could not tell "not supplied" from "explicitly asked for the default profile" and
+              # `profile switch` was ignored by every command.
+              default=None,
               callback=handle_profile_option,
               expose_value=False,
-              help=f'Profile name to use (default: {DEFAULT_PROFILE_NAME})')
+              help='Profile name to use (default: the active profile set by `profile switch`)')
 @click.option('--setup-check', is_flag=True, hidden=True, callback=check_setup_required, expose_value=False, is_eager=False)
 @click.pass_context
 @handle_global_exceptions()

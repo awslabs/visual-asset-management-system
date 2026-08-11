@@ -239,7 +239,7 @@ WASM-based viewers require Cross-Origin Isolation headers (`Cross-Origin-Opener-
 -   **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
 -   **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
 
-For the Needle USD Viewer, the SuperSplat Editor, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
+For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
 
 ### Safari Limitations for WASM Viewers
 

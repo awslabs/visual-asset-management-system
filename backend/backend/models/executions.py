@@ -124,7 +124,6 @@ class PipelineExecutionInputConfigurationRecord(BaseModel, extra='ignore'):
     inputConfiguration: Optional[str] = ""
     inputConfigurationTruncated: Optional[bool] = False
     inputConfigurationFileS3Key: Optional[str] = ""
-    inputPortMappings: Optional[Dict[str, Any]] = {}
     # Config snapshot (Phase 2): the template/tag-schema versions, resolved tags, and whether a
     # caller-supplied override body was used — so a run is traceable after templates later change.
     templateId: Optional[str] = ""
@@ -193,8 +192,6 @@ class WorkflowExecutionConfigurationRecord(BaseModel, extra='ignore'):
     """WorkflowExecutionConfigurationStorageTable row."""
     workflowExecutionId: str
     recordType: str = "configuration"
-    workflowConfiguration: Optional[str] = ""
-    workflowConfigurationTruncated: Optional[bool] = False
     inputMetadata: Optional[str] = ""
     inputMetadataTruncated: Optional[bool] = False
     specifiedPipelinesSnapshot: Optional[List[Dict[str, Any]]] = []
@@ -209,7 +206,6 @@ class WorkflowExecutionConfigurationRecord(BaseModel, extra='ignore'):
     # purely as metadata sources (never input files), so a re-run reconstructs the same selection.
     # metadataSourceDatabases is every databaseId the run actually captured database metadata from,
     # which for a run with input files is derived from those files' assets rather than named.
-    inputMetadataAssetId: Optional[str] = ""
     inputMetadataDatabaseId: Optional[str] = ""
     inputMetadataFileS3Key: Optional[str] = ""
     metadataSourceAssets: Optional[List[Dict[str, Any]]] = []

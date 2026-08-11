@@ -983,7 +983,6 @@ def build_input_configuration_record(
         "inputConfiguration": content,
         "inputConfigurationTruncated": truncated,
         "inputConfigurationFileS3Key": input_configuration_file_s3_key or "",
-        "inputPortMappings": {},
         # Config snapshot: what the run was built from.
         "templateId": template_id or "",
         "templateSchemaVersion": template_schema_version or "",
@@ -1078,10 +1077,10 @@ def output_asset_partition_key(output_database_id, output_asset_id):
 
 
 def build_workflow_configuration_record(
-    workflow_execution_id, workflow_configuration, input_metadata, specified_pipelines_snapshot,
+    workflow_execution_id, input_metadata, specified_pipelines_snapshot,
     output_location_type="asset", output_asset_id="", output_database_id="",
     output_file_base_execution_path_extension="/",
-    input_metadata_asset_id="", input_metadata_database_id="",
+    input_metadata_database_id="",
     input_metadata_file_s3_key="",
     execution_start_date="",
     metadata_source_assets=None, metadata_source_databases=None,
@@ -1097,10 +1096,10 @@ def build_workflow_configuration_record(
     re-emitting them as inputFiles on a re-run would violate an arity-'none' workflow's own
     no-input-files rule.
 
-    The step snapshot and the two source lists are variable-size fields on the same item as the two
-    text bodies, so they take a bounded share of the one 400 KB budget first (each flagged when
-    trimmed) and the bodies share what is left — the inputMetadata body is also written to S3 in full,
-    while overflowing the item would lose the whole run after the state machine has started.
+    The step snapshot and the two source lists are variable-size fields on the same item as the
+    inputMetadata body, so they take a bounded share of the one 400 KB budget first (each flagged when
+    trimmed) and the body takes what is left — inputMetadata is also written to S3 in full, while
+    overflowing the item would lose the whole run after the state machine has started.
 
     The source lists have first claim on that share, and the step snapshot only what they leave: the
     read paths gate an execution on the entities it names here, so an entry dropped from a source list
@@ -1115,15 +1114,12 @@ def build_workflow_configuration_record(
         to_dynamodb_numerics(specified_pipelines_snapshot or []),
         remaining_budget([source_assets, source_databases],
                          total_limit=MAX_ITEM_COLLECTION_BYTES))
-    ((config_content, config_truncated),
-     (metadata_content, metadata_truncated)) = truncate_text_budget(
-        [workflow_configuration or "", input_metadata or ""],
+    ((metadata_content, metadata_truncated),) = truncate_text_budget(
+        [input_metadata or ""],
         total_limit=remaining_budget([pipelines_snapshot, source_assets, source_databases]))
     record = {
         "workflowExecutionId": workflow_execution_id,  # PK
         "recordType": "configuration",  # SK
-        "workflowConfiguration": config_content,
-        "workflowConfigurationTruncated": config_truncated,
         "inputMetadata": metadata_content,
         "inputMetadataTruncated": metadata_truncated,
         "specifiedPipelinesSnapshot": pipelines_snapshot,
@@ -1139,7 +1135,6 @@ def build_workflow_configuration_record(
         # and ordered by recency exactly like the by-input-asset one.
         "executionStartDate": execution_start_date or iso_now(),
         # Input-metadata source (recording only).
-        "inputMetadataAssetId": input_metadata_asset_id or "",
         "inputMetadataDatabaseId": input_metadata_database_id or "",
         "inputMetadataFileS3Key": input_metadata_file_s3_key or "",
         # Metadata-source assets, in selection order. A re-run rebuilds the same sources from these.

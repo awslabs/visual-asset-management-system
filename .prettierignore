@@ -13,5 +13,11 @@ web/customInstalls/*/source
 web/customInstalls/*/dist
 web/public/potree_libs
 web/public/viewers
+web/test-results
+web/playwright-report
+docs
+.plans
+web/e2e/.auth
+web/e2e/.report
 *.yaml
 *.patch

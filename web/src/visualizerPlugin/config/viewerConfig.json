@@ -397,6 +397,7 @@
             ],
             "loadStrategy": "lazy",
             "category": "3d",
+            "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
             "enabled": true
         },
         {

@@ -59,7 +59,7 @@ from .exceptions import (
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
 )
-from .profile import ProfileManager
+from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
 
 
@@ -68,7 +68,9 @@ class APIClient:
     
     def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
         self.base_url = base_url.rstrip('/')
-        self.profile_manager = profile_manager or ProfileManager()
+        # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
+        # constructed without one would read another deployment's credentials.
+        self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
         self.session.timeout = DEFAULT_TIMEOUT
         

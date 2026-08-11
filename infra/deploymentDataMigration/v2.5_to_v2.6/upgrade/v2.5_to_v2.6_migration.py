@@ -506,6 +506,23 @@ def to_iso(us_date: str) -> str:
         return us_date
 
 
+def workflow_date_to_iso(stored_date: str) -> str:
+    """Convert a V1 workflow/pipeline record's dateCreated to ISO-8601 UTC, or "" when unparseable.
+
+    Those records store a display-formatted date, quoted, e.g. `"March 24 2026 - 14:41:39"` — a
+    different format from the execution rows' `to_iso` input, so it needs its own parse."""
+    if not stored_date:
+        return ""
+    cleaned = stored_date.strip().strip('"').strip()
+    for fmt in ("%B %d %Y - %H:%M:%S", "%b %d %Y - %H:%M:%S"):
+        try:
+            return (datetime.strptime(cleaned, fmt)
+                    .replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        except (ValueError, TypeError):
+            continue
+    return ""
+
+
 def scan_all_items(dynamodb_client, table_name: str, limit: int = None,
                    projection: str = None) -> List[Dict]:
     """All items in a table, paged to exhaustion. ``projection`` is an optional comma-separated
@@ -554,6 +571,24 @@ def iter_all_items(dynamodb_client, table_name: str, limit: int = None,
     except ClientError as e:
         logger.error(f"Error scanning table {table_name}: {e}")
         raise
+
+
+def build_workflow_created_date_cache(dynamodb_client, workflow_table_name: str) -> Dict[str, str]:
+    """Map workflowId -> its V1 dateCreated as ISO-8601 UTC (absent when unparseable).
+
+    Used to date an execution whose own startDate is empty. An execution cannot predate the workflow
+    it ran, so the workflow's creation is a sound lower bound and keeps such rows in the date-ordered
+    indexes instead of dropping them out of every listing."""
+    cache: Dict[str, str] = {}
+    for item in iter_all_items(dynamodb_client, workflow_table_name):
+        workflow_id = item.get('workflowId', {}).get('S', '')
+        if not workflow_id:
+            continue
+        created = workflow_date_to_iso(item.get('dateCreated', {}).get('S', ''))
+        if created:
+            cache[workflow_id] = created
+    logger.info(f"Cached creation dates for {len(cache)} workflows")
+    return cache
 
 
 def build_workflow_pipeline_cache(dynamodb_client, workflow_table_name: str) -> Dict[str, List[Dict]]:
@@ -729,6 +764,7 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
     buckets_table = cfg.get('s3_asset_buckets_storage_table_name')
 
     pipeline_cache = build_workflow_pipeline_cache(dynamodb_client, workflow_table)
+    workflow_created_dates = build_workflow_created_date_cache(dynamodb_client, workflow_table)
     asset_locations: Dict[Tuple[str, str], Dict[str, str]] = {}
     if asset_table and buckets_table:
         asset_locations = build_asset_location_lookup(
@@ -743,6 +779,7 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
     legacy_rows = iter_all_items(dynamodb_client, legacy_table, limit)
 
     counts = {"main": 0, "inputs": 0, "pexec": 0, "pin_files": 0, "no_start_date": 0,
+              "estimated_start_date": 0,
               "unresolved_status": 0, "wf_config": 0, "pexec_config": 0, "errors": 0}
     migration_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -782,12 +819,24 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             stop_date = start_date or migration_now
 
         # executionStartDate is the sort key of the by-workflow, by-group and by-date execution GSIs
-        # and of the by-asset inputs GSI; DynamoDB rejects an empty string for an indexed key
-        # attribute. A legacy row keeps startDate == "" until a listing refreshed it after the run
-        # stopped, so the attribute is set only when a date is available (sparse — a dateless
-        # execution stays out of the date-ordered indexes but its rows still write and read by id).
+        # and of the by-asset inputs GSI, and DynamoDB rejects an empty string for an indexed key
+        # attribute — so a row without one is invisible to every date-ordered listing.
+        #
+        # A legacy row keeps startDate == "" when the run never started: every such row observed is
+        # executionStatus NEW, while every row that actually ran carries a real date. Its own start
+        # instant therefore exists nowhere (the V1 state machines and their SFN history are long
+        # gone), so it is dated from the workflow it referenced — which it cannot predate. The row
+        # carries startDateEstimated=true so a reader is never misled into treating the derived value
+        # as a recorded one. Only when even that is unavailable does the attribute stay unset.
+        start_date_estimated = False
         if not start_date:
-            counts["no_start_date"] += 1
+            derived = workflow_created_dates.get(workflow_id, '')
+            if derived:
+                start_date = derived
+                start_date_estimated = True
+                counts["estimated_start_date"] += 1
+            else:
+                counts["no_start_date"] += 1
 
         # 1) V2 main row. PK attribute is 'workflowExecutionId' (matches the WorkflowExecutionsStorageTableV2
         # hash key + build_workflow_execution_record); SK is 'workflowDatabaseId:workflowId'.
@@ -817,6 +866,9 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
         }
         if start_date:
             main_row['executionStartDate'] = s(start_date)
+            if start_date_estimated:
+                # Marks the date as DERIVED (from the workflow's creation), not recorded by the run.
+                main_row['startDateEstimated'] = {'BOOL': True}
         main_batch.append(main_row)
 
         # 2) WorkflowExecutionInputs row. s3Bucket + assetRootS3Key locate the input file's own asset
@@ -840,6 +892,8 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
         }
         if start_date:
             inputs_row['executionStartDate'] = s(start_date)
+            if start_date_estimated:
+                inputs_row['startDateEstimated'] = {'BOOL': True}
         inputs_batch.append(inputs_row)
 
         # 3) PipelineExecutions stubs (one per pipeline; DELETED fallback)
@@ -909,7 +963,6 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
                     'inputConfiguration': s(''),
                     'inputConfigurationTruncated': bool_(False),
                     'inputConfigurationFileS3Key': s(''),
-                    'inputPortMappings': m({}),
                     'templateId': s(default_template_id),
                     'templateSchemaVersion': s(''),
                     'tagSchemaVersion': s(''),
@@ -928,8 +981,6 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
             wf_config_batch.append({
                 'workflowExecutionId': s(execution_id),
                 'recordType': s('configuration'),
-                'workflowConfiguration': s(''),
-                'workflowConfigurationTruncated': bool_(False),
                 'inputMetadata': s(''),
                 'inputMetadataTruncated': bool_(False),
                 'specifiedPipelinesSnapshot': {'L': []},
@@ -942,7 +993,6 @@ def migrate_workflow_executions(dynamodb_client, cfg, dry_run: bool, limit: int)
                 # appear in its own output asset's history.
                 'outputDatabaseId:outputAssetId': s(f"{database_id}:{asset_id}"),
                 'outputFileBaseExecutionPathExtension': s('/'),
-                'inputMetadataAssetId': s(''),
                 'inputMetadataDatabaseId': s(''),
                 'inputMetadataFileS3Key': s(''),
                 'migratedRecord': bool_(True),
@@ -1088,8 +1138,12 @@ def run_workflow_executions_step(config: dict, args) -> int:
     logger.info(f"  First-pipeline input rows: {counts['pin_files']}")
     logger.info(f"  Workflow config rows:      {counts['wf_config']}")
     logger.info(f"  Pipeline config rows:      {counts['pexec_config']}")
+    logger.info(f"  Start date estimated:      {counts['estimated_start_date']} "
+                f"(no recorded start; dated from the workflow's creation, flagged "
+                f"startDateEstimated=true)")
     logger.info(f"  Without a start date:      {counts['no_start_date']} "
-                f"(omitted from the date-ordered execution indexes)")
+                f"(no recorded start and no workflow date to derive one from -- these remain "
+                f"omitted from the date-ordered execution indexes)")
     logger.info(f"  Recorded as TIMED_OUT:     {counts['unresolved_status']} "
                 f"(no terminal status/stop date in V1)")
     logger.info(f"  Errors:                    {counts['errors']}")
