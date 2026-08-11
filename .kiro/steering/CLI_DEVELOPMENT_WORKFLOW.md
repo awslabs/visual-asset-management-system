@@ -114,7 +114,22 @@ Industry has nested sub-command groups:
 -   [ ] **Write Unit Tests**: Create tests in `tests/` directory
 -   [ ] **Test Success Cases**: Test normal operation flows
 -   [ ] **Test Error Cases**: Test all error scenarios
--   [ ] **Test CLI Interface**: Use `CliRunner` for command testing
+-   [ ] **Test CLI Interface**: Use `CliRunner` for command testing. `CliRunner` bypasses `main()`, so
+        behavior implemented there (the `standalone_mode=False` call and its `UsageError` /
+        `ClickException` → JSON handling) can only be covered by spawning `python -m vamscli.main`
+        as a subprocess — and such a test MUST supply its own config home. The subprocess has no
+        pytest loaded, so `check_setup_required`'s `if 'pytest' in sys.modules` escape hatch does not
+        apply and the setup gate is live: with a real profile on the developer's machine the test
+        reaches the behavior under test, while on a clean checkout or in CI the gate fires first and
+        every case sees a `SetupRequired` payload instead (no `error_type` key, no `Usage:` text).
+        Point `HOME`, `USERPROFILE` and `APPDATA` at a `tmp_path` containing one
+        `profiles/default/config.json` (see the `cli_env` fixture in
+        `tests/test_json_output_purity.py`) and assert `"Setup Required" not in output` as a control,
+        so a fixture that stops satisfying the gate fails loudly rather than testing the wrong error.
+        When reproducing such a CI failure locally, do not simply blank `HOME`: that also hides
+        `~/.aws` (botocore then raises `ProfileNotFound` for the shell's `AWS_PROFILE`) and, on
+        Windows, leaves the temp `APPDATA` without `vamscli/logs` (the rotating file handler raises
+        `FileNotFoundError`). Both are artifacts of the simulation, not defects.
 -   [ ] **Run All Tests**: Ensure `pytest` passes
 
 #### **Step 7: Documentation**
