@@ -187,8 +187,11 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     mesh = trimesh.load(temp_file)
 
     # Export mesh to output format
+    # NOTE: supported_formats (and therefore output_filetype) carry a leading dot, e.g. ".stl",
+    # but trimesh's exporter registry is keyed without it ("stl"). Passing the dotted form raises
+    # ValueError("%s exporter not available!", ".stl") and fails every conversion, so strip it here.
     output_file = os.path.join('/tmp', f'output{output_filetype}')
-    mesh.export(output_file, file_type=output_filetype)
+    mesh.export(output_file, file_type=output_filetype.lstrip('.'))
 
     # Upload output file to S3. The converted file keeps the input file's subdirectory within the
     # asset so the write-back step places it beside the input rather than at the asset root.
