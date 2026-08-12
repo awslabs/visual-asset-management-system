@@ -324,22 +324,34 @@ yarn install
 
 #### Keep the platform-specific native bindings in `optionalDependencies`
 
-`vite build` loads **rolldown's** native binding, and `vite.config.ts` imports **esbuild** in the `jsxInJs` plugin, so both need a compiled binary for the machine running the build. npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on Linux does **not** add the missing one — so a lockfile written on Windows breaks the Linux CI build with:
+`vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (the bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (the CSS minifier used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)), and a later `npm install` on Linux does **not** add the missing one — so a lockfile written on Windows breaks the Linux CI build with one of:
 
 ```
 Error: Cannot find native binding.
   cause: Cannot find module '@rolldown/binding-linux-x64-gnu'
+
+[plugin vite:css-post] [lightningcss minify] Cannot find module '../lightningcss.linux-x64-gnu.node'
 ```
 
-`web/package.json` declares the other platforms explicitly (`@rolldown/binding-{linux-x64-gnu,darwin-arm64,darwin-x64}` and `@esbuild/{linux-x64,darwin-arm64,darwin-x64}`). Each carries its own `os`/`cpu` constraints, so a developer only installs their own platform's binary.
+`web/package.json` declares the other platforms explicitly — `@rolldown/binding-{linux-x64-gnu,darwin-arm64,darwin-x64}`, `@esbuild/{linux-x64,darwin-arm64,darwin-x64}`, and `lightningcss-{linux-x64-gnu,darwin-arm64,darwin-x64}`. Each carries its own `os`/`cpu` constraints, so a developer only installs their own platform's binary.
 
-**The versions are coupled to `vite`/`esbuild` and no test catches drift.** When bumping `vite`, `rolldown`, or `esbuild`: read the resolved versions with `npm ls rolldown esbuild`, re-pin every entry, run `npm install`, then confirm all platforms are still recorded —
+**The versions are coupled to `vite`/`esbuild`/`lightningcss` and no test catches drift.** When bumping any of them: read the resolved versions with `npm ls rolldown esbuild lightningcss`, re-pin every entry, run `npm install`, then confirm all platforms are still recorded —
 
 ```bash
 node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
 ```
 
-Expect `darwin`, `linux`, **and** `win32` for both families. If one is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it; `npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile. `infra/` needs the same for `@esbuild/*` (see `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`).
+Expect `darwin`, `linux`, **and** `win32` for all three families. If one is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it; `npm install --force` and the `--os`/`--cpu` flags do **not** repair an already-pruned lockfile.
+
+**Verify a Linux build locally instead of iterating through CI** — copy `package.json`, `package-lock.json`, `index.html`, the Vite/TS/Tailwind/PostCSS/Babel configs, `logo_*.png`, `src/`, and `public/` into a scratch directory, delete the `postinstall` script (viewer clones are not build inputs), then:
+
+```bash
+docker run --rm -v "$B:/app" -w /app node:22 bash -c "npm install --no-audit --no-fund && npm run build.lowmem"
+```
+
+`node:22` matches the GitHub runner. `customInstalls/` is excluded by `vite.config.ts` and is not needed.
+
+`@napi-rs/canvas`, `@parcel/watcher`, and `@unrs/resolver-binding` are also Windows-only in the lockfile and are deliberately **not** pinned — the Linux build succeeds without them (optional canvas rendering, Sass watching, and the ESLint resolver are not loaded by the production build). `infra/` needs the same treatment for `@esbuild/*` (see `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`).
 
 ### **Rule 10: React 18 (Upgraded)**
 

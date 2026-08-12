@@ -235,11 +235,13 @@ yarn install
 
 ### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
 
-`vite build` loads **rolldown's** native binding, and `vite.config.ts` imports **esbuild** in the `jsxInJs` plugin, so both need a compiled binary for the machine running the build. npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) — a lockfile written on Windows lists `@rolldown/binding-win32-x64-msvc` and nothing else, and a later `npm install` on Linux does **not** add the missing one. The build then dies with:
+`vite build` needs three compiled binaries for the machine running it: **rolldown's** binding (Vite's bundler), **esbuild** (imported directly by the `jsxInJs` plugin in `vite.config.ts`), and **lightningcss** (Vite's CSS minifier, used by `vite:css-post`). npm records only the binaries matching the platform that generated the lockfile ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) — a lockfile written on Windows lists `@rolldown/binding-win32-x64-msvc` and nothing else, and a later `npm install` on Linux does **not** add the missing one. The build then dies with one of:
 
 ```
 Error: Cannot find native binding.
   cause: Cannot find module '@rolldown/binding-linux-x64-gnu'
+
+[plugin vite:css-post] [lightningcss minify] Cannot find module '../lightningcss.linux-x64-gnu.node'
 ```
 
 `web/package.json` therefore declares the bindings for every platform VAMS is built on explicitly:
@@ -251,15 +253,18 @@ Error: Cannot find native binding.
     "@esbuild/linux-x64": "^0.28.1",
     "@rolldown/binding-darwin-arm64": "^1.1.5",
     "@rolldown/binding-darwin-x64": "^1.1.5",
-    "@rolldown/binding-linux-x64-gnu": "^1.1.5"
+    "@rolldown/binding-linux-x64-gnu": "^1.1.5",
+    "lightningcss-darwin-arm64": "^1.32.0",
+    "lightningcss-darwin-x64": "^1.32.0",
+    "lightningcss-linux-x64-gnu": "^1.32.0"
 }
 ```
 
-Each package carries its own `os`/`cpu` constraints, so a developer only ever installs their own platform's binary — declaring them costs nothing on disk and keeps the Linux CI build working. The Windows binding stays in the lockfile through the ordinary dependency graph.
+Each package carries its own `os`/`cpu` constraints, so a developer only ever installs their own platform's binary — declaring them costs nothing on disk and keeps the Linux CI build working. The Windows bindings stay in the lockfile through the ordinary dependency graph.
 
-**These versions are coupled to `vite` and `esbuild` and no test catches drift.** When bumping `vite`, `rolldown`, or `esbuild`:
+**These versions are coupled to `vite` and `esbuild` and no test catches drift.** When bumping `vite`, `rolldown`, `esbuild`, or `lightningcss`:
 
-1. Read the resolved versions: `npm ls rolldown esbuild`.
+1. Read the resolved versions: `npm ls rolldown esbuild lightningcss`.
 2. Re-pin every entry above to match, then `npm install`.
 3. Confirm all platforms are still recorded — a bump can silently prune them again:
 
@@ -267,9 +272,26 @@ Each package carries its own `os`/`cpu` constraints, so a developer only ever in
     node -e "const l=require('./package-lock.json');Object.entries(l.packages).filter(([,v])=>v.os).forEach(([k,v])=>console.log(k,v.os))"
     ```
 
-    Expect `darwin`, `linux`, **and** `win32` rows for both `@rolldown/binding-*` and `@esbuild/*`. If a platform is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it. Note `npm install --force` and `--os`/`--cpu` do **not** repair an already-pruned lockfile.
+    Expect `darwin`, `linux`, **and** `win32` rows for `@rolldown/binding-*`, `@esbuild/*`, and `lightningcss-*`. If a platform is missing, `npm install --package-lock-only --save-optional <pkg>@<version>` adds it. Note `npm install --force` and `--os`/`--cpu` do **not** repair an already-pruned lockfile.
 
-A mismatch between the pinned binding version and the version `vite` resolves is the failure mode to watch for: npm installs the stale binding, rolldown asks for the new one, and the build fails exactly as above. `infra/` carries the same `@esbuild/*` entries for the same reason — see `infra/CLAUDE.md`.
+A mismatch between the pinned binding version and the version `vite` resolves is the failure mode to watch for: npm installs the stale binding, the tool asks for the new one, and the build fails exactly as above.
+
+**Verify a Linux build without waiting for CI.** Guessing which binding breaks next costs a CI round trip each time; running the real thing does not:
+
+```bash
+# From web/. customInstalls is excluded by vite.config.ts, so the build does not need it.
+B=/tmp/linuxbuild && rm -rf $B && mkdir -p $B
+cp package.json package-lock.json index.html vite.config.ts tsconfig.json \
+   tailwind.config.js postcss.config.js babel.config.js vite-env.d.ts logo_*.png $B/
+cp -r src public $B/
+# Drop the postinstall viewer clones (git + private registry); they are not build inputs.
+node -e "const p=require('$B/package.json');delete p.scripts.postinstall;require('fs').writeFileSync('$B/package.json',JSON.stringify(p,null,4))"
+docker run --rm -v "$B:/app" -w /app node:22 bash -c "npm install --no-audit --no-fund && npm run build.lowmem"
+```
+
+`node:22` matches the GitHub runner (Node 22, glibc). Omitting `logo_*.png` produces an `UNRESOLVED_IMPORT` for `../../logo_white.png` — a gap in the copied fixture, not a real defect.
+
+`@napi-rs/canvas`, `@parcel/watcher`, and `@unrs/resolver-binding` are also Windows-only in the lockfile and are deliberately **not** pinned: the Linux build above succeeds without them (they back optional canvas rendering, Sass file watching, and the ESLint resolver, none of which the production build loads). `infra/` carries the same `@esbuild/*` entries for its own reason — see `infra/CLAUDE.md`.
 
 ### Rule 6: HashRouter URLs
 

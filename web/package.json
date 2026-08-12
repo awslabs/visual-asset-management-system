@@ -141,6 +141,9 @@
         "@esbuild/linux-x64": "^0.28.1",
         "@rolldown/binding-darwin-arm64": "^1.1.5",
         "@rolldown/binding-darwin-x64": "^1.1.5",
-        "@rolldown/binding-linux-x64-gnu": "^1.1.5"
+        "@rolldown/binding-linux-x64-gnu": "^1.1.5",
+        "lightningcss-darwin-arm64": "^1.32.0",
+        "lightningcss-darwin-x64": "^1.32.0",
+        "lightningcss-linux-x64-gnu": "^1.32.0"
     }
 }
