@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Auth** Amazon Cognito OIDC federation — VAMS now supports federated authentication via any OpenID Connect identity provider alongside existing SAML and native Cognito login. Configure `infra/config/oidc-config.ts` with your provider details (client ID, issuer URL, attribute mapping) and client secret stored in AWS Secrets Manager. The login screen shows both native username/password and a configurable SSO button. A new `defaultUserRoleName` option (`app.authProvider.authorizerOptions.defaultUserRoleName`) assigns a baseline role to federated users without explicit role assignments.
 -   **Web** Geospatial search and map view across both assets and files. New map selectors for metadata geospatial types and search filtering.
     -   The web search sidebar exposes a Geospatial filter panel, and the map view (including mini-map thumbnails) now works for both assets and files and renders polygon/multi-polygon shapes in addition to points.
     -   The asset and file OpenSearch indexes now declare a derived `geo_MD_location` field of type `geo_shape`.

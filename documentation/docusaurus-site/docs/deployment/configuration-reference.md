@@ -266,7 +266,7 @@ The default role is applied only when:
 - The user has no explicit role assignments in the UserRoles table
 - For non-MFA sessions, the default role does not itself require MFA
 
-This feature is primarily used with external identity providers (OIDC federation, external OAuth) where users authenticate successfully but are not provisioned in the VAMS user management system. See [OIDC federation](oidc-federation.md) for setup guidance.
+This feature is primarily used with external identity providers (OIDC federation, external OAuth) where users authenticate successfully but are not provisioned in the VAMS user management system.
 :::
 
 ### Amazon Cognito (`app.authProvider.useCognito`)
@@ -277,6 +277,15 @@ This feature is primarily used with external identity providers (OIDC federation
 | `app.authProvider.useCognito.useSaml`                 | boolean | `false` | Enables SAML federation with an external IdP through Amazon Cognito.                                                                                             |
 | `app.authProvider.useCognito.useUserPasswordAuthFlow` | boolean | `false` | Enables `USER_PASSWORD_AUTH` flow for non-SRP authentication. Generates a security warning. Use only when SRP libraries are unavailable for system integrations. |
 | `app.authProvider.useCognito.credTokenTimeoutSeconds` | number  | `3600`  | Authentication token timeout in seconds for Amazon Cognito issued tokens (default: 1 hour). Refresh token is fixed at 24 hours.                                  |
+
+:::info[Advanced: OIDC and SAML federation through Amazon Cognito]
+Amazon Cognito supports federating with external identity providers using SAML 2.0 or OpenID Connect (OIDC). These advanced configurations are managed through separate TypeScript files rather than `config.json`:
+
+- **SAML federation**: Configure `infra/config/saml-config.ts` and set `useCognito.useSaml` to `true`. See [Security Architecture](../architecture/security.md#saml-federation) for details.
+- **OIDC federation**: Configure `infra/config/oidc-config.ts` to connect any OIDC-compliant provider (Okta, Auth0, Azure AD, etc.). Set `useOidcFederation = true` in that file and provide your provider's client credentials, issuer URL, and attribute mappings. The client secret must be stored in AWS Secrets Manager.
+
+Both federation modes allow users to authenticate via SSO while Amazon Cognito manages the session tokens. Native username/password login remains available alongside federated login.
+:::
 
 ### External OAuth IdP (`app.authProvider.useExternalOAuthIdp`)
 
@@ -606,6 +615,7 @@ Beyond `config.json`, VAMS supports several supplementary configuration files:
 | `infra/config/policy/s3AdditionalBucketPolicyConfig.json`    | Additional IAM policy statements applied to all Amazon S3 buckets. Controls presigned URL and STS credential access restrictions.                                                                   |
 | `infra/config/csp/cspAdditionalConfig.json`                  | Additional Content Security Policy (CSP) sources for external APIs, scripts, images, media, fonts, and styles.                                                                                      |
 | `infra/config/saml-config.ts`                                | SAML identity provider settings for Amazon Cognito federation. Required when `authProvider.useCognito.useSaml` is `true`. See [Security Architecture](../architecture/security.md#saml-federation). |
+| `infra/config/oidc-config.ts`                                | OIDC identity provider settings for Amazon Cognito federation. Set `useOidcFederation = true` and configure provider details (client ID, issuer URL, attribute mapping). Client secret stored in AWS Secrets Manager. |
 | `infra/config/docker/Dockerfile-customDependencyBuildConfig` | Custom Docker build configuration for Lambda layer packaging. Useful for adding custom SSL certificates for HTTPS proxy environments.                                                               |
 | `infra/cdk.json` (`environments.common`)                     | Key-value pairs applied as tags on all stack resources.                                                                                                                                             |
 | `infra/cdk.json` (`environments.aws`)                        | `PermissionBoundaryArn` and `IamRoleNamePrefix` for IAM role customization.                                                                                                                         |

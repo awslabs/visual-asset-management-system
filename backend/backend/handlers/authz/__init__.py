@@ -37,7 +37,7 @@ CASBIN_NO_DICTIONARY_LOCKING = False
 
 # Optional role automatically granted to every authenticated user who has no
 # explicitly-assigned role. Enables baseline access (e.g. read-only) for external
-# IdP / Midway logins that are not provisioned into the UserRoles table. The role
+# IdP logins that are not provisioned into the UserRoles table. The role
 # named here must exist in the Roles table and have constraints defined. Empty
 # string (default) disables the behavior. Set via the DEFAULT_ROLE_NAME env var.
 DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
@@ -515,7 +515,7 @@ class CasbinEnforcerService:
         # Grant a configurable default role to users who have no assigned role.
         # This provides baseline access (e.g. read-only) for authenticated users
         # that are not provisioned in the UserRoles table, such as external IdP
-        # (Midway) logins. Disabled when DEFAULT_ROLE_NAME is empty. The default is
+        # logins. Disabled when DEFAULT_ROLE_NAME is empty. The default is
         # applied only when the user has no other applicable roles, so it never
         # broadens the access of users who already have explicit role assignments.
         if DEFAULT_ROLE_NAME and default_role_allowed and len(user_roles_from_table) == 0:

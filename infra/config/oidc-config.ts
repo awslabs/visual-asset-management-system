@@ -7,22 +7,24 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 
 /**
  * Settings for federating a Cognito user pool to an external OIDC identity
- * provider (Amazon Midway via Amazon Federate).
+ * provider.
  *
  * This mirrors the pattern of `saml-config.ts`: the enable flag lives here as a
  * standalone constant (like `useCognito.useSaml` does for SAML), and the settings
  * object carries the provider details. When enabled, the Cognito construct adds a
  * `UserPoolIdentityProviderOidc` to the user pool and the web UI shows a
- * "Login with Amazon Midway" button alongside the native username/password form.
+ * federated login button alongside the native username/password form.
  */
 export interface OidcSettings {
     // Provider name registered in the Cognito user pool. The web UI federates
     // against this exact name (cognitoFederatedConfig.customFederatedIdentityProviderName).
     name: string;
+    // Display name shown on the login button (e.g., "Login with <displayName>")
+    displayName: string;
     // Cognito hosted-UI domain prefix. Full domain becomes
     // https://<prefix>.auth.<region>.amazoncognito.com
     cognitoDomainPrefix: string;
-    // OIDC client credentials issued by Amazon Federate for this app.
+    // OIDC client credentials issued by your identity provider for this app.
     clientId: string;
     // Client secret is loaded from AWS Secrets Manager at deploy time.
     // The secret ARN or name is specified here, NOT the plaintext value.
@@ -41,24 +43,25 @@ export interface OidcSettings {
 }
 
 /**
- * Toggle Cognito <-> OIDC (Amazon Midway / Amazon Federate) federation.
+ * Toggle Cognito <-> OIDC federation.
  * Set to false to fall back to Cognito-only (native username/password) login.
  */
 export const useOidcFederation = true;
 
 export const oidcSettings: OidcSettings = {
-    name: "AmazonMidway",
+    name: "ExternalOIDC",
+    displayName: "SSO",
     cognitoDomainPrefix: "vams",
-    clientId: "vams-midway-client",
+    clientId: "vams-oidc-client",
     // The client secret is retrieved from AWS Secrets Manager.
     // Before deploying, create the secret:
     //   aws secretsmanager create-secret \
-    //     --name vams/oidc/midway-client-secret \
+    //     --name vams/oidc/client-secret \
     //     --secret-string "YOUR_CLIENT_SECRET_HERE" \
     //     --region YOUR_REGION
-    clientSecretArn: "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:vams/oidc/midway-client-secret",
-    // Amazon Federate INTEG environment issuer (from the .well-known endpoint you registered).
-    issuerUrl: "https://idp-integ.federate.amazon.com",
+    clientSecretArn: "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:vams/oidc/client-secret",
+    // OIDC provider issuer URL (from the .well-known endpoint you registered).
+    issuerUrl: "https://your-idp.example.com",
     scopes: ["openid", "email", "profile"],
     attributeMapping: {
         email: cognito.ProviderAttribute.other("email"),

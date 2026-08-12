@@ -21,7 +21,7 @@ Authorization: Bearer eyJraWQiOiJ...
 **Cognito supports two authentication modes:**
 
 1. **Native authentication**: Username and password validated directly by Amazon Cognito
-2. **Federated authentication (OIDC)**: Users authenticate via an external OpenID Connect identity provider (for example, Amazon Midway, Okta, Azure AD). The external provider issues tokens that Amazon Cognito exchanges for Cognito session tokens. See [OIDC federation setup](../deployment/oidc-federation.md) for configuration details.
+2. **Federated authentication (OIDC)**: Users authenticate via an external OpenID Connect identity provider (for example, Okta, Auth0, Azure AD). The external provider issues tokens that Amazon Cognito exchanges for Cognito session tokens. Configure via `infra/config/oidc-config.ts`.
 
 Both native and federated Cognito users receive the same JWT token format and follow the same authorization model.
 

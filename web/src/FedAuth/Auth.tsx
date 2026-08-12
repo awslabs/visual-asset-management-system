@@ -59,6 +59,10 @@ export interface AmplifyConfigFederatedIdentityProps {
      */
     customFederatedIdentityProviderName: string;
     /**
+     * Display name for the identity provider (shown on login button)
+     */
+    idpDisplayName?: string;
+    /**
      * The cognito auth domain
      */
     customCognitoAuthDomain: string;
@@ -133,6 +137,11 @@ interface Config {
      * External OAUTH IDP Discovery Endpoint Configuration
      */
     externalOAuthIdpDiscoveryEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Display Name Configuration
+     */
+    externalOAuthIdpDisplayName?: string;
 
     /**
      * VAMS Features that are enabled
@@ -888,7 +897,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                                         variant="primary"
                                         onClick={() => handleExternalOauthSignIn()}
                                     >
-                                        Log in with SSO
+                                        Log in with {config.externalOAuthIdpDisplayName && config.externalOAuthIdpDisplayName !== "undefined" ? config.externalOAuthIdpDisplayName : "SSO"}
                                     </Button>
                                     {config.externalOAuthIdpScopeMfa &&
                                     config.externalOAuthIdpScopeMfa !== "undefined" &&
@@ -961,7 +970,7 @@ const Auth: React.FC<AuthProps> = (props) => {
             );
         } else {
             //Federated Login — show the native username/password form AND a
-            //"Login with Amazon Midway" button together on the same screen.
+            //federated login button together on the same screen.
             return (
                 <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
                     <LoginHeader />
@@ -1006,7 +1015,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                                         })
                                     }
                                 >
-                                    Login with Amazon Midway
+                                    Login with {config.cognitoFederatedConfig?.idpDisplayName || "SSO"}
                                 </Button>
                             </SpaceBetween>
                         </div>

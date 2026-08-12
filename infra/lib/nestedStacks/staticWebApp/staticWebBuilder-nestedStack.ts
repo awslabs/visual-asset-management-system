@@ -225,7 +225,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
-             * when Cognito federation (SAML or OIDC/Midway) is enabled.
+             * when Cognito federation (SAML or OIDC) is enabled.
              */
             if (props.config.app.authProvider.useCognito.useSaml || useOidcFederation) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
@@ -324,7 +324,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
-             * when Cognito federation (SAML or OIDC/Midway) is enabled.
+             * when Cognito federation (SAML or OIDC) is enabled.
              */
             if (props.config.app.authProvider.useCognito.useSaml || useOidcFederation) {
                 const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(

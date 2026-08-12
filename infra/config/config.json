@@ -243,6 +243,7 @@
             },
             "useExternalOAuthIdp": {
                 "enabled": false,
+                "idpDisplayName": "",
                 "idpAuthProviderUrl": null,
                 "idpAuthClientId": null,
                 "idpAuthProviderScope": null,

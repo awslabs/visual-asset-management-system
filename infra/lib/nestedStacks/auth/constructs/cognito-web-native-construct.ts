@@ -182,7 +182,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             });
         }
 
-        // OIDC federation (e.g. Amazon Midway via Amazon Federate)
+        // OIDC federation
         let oidcIdentityProvider: cognito.UserPoolIdentityProviderOidc | undefined;
         if (props.oidcSettings) {
             // Retrieve the client secret from AWS Secrets Manager at deploy time

@@ -24,6 +24,10 @@ export interface AmplifyConfigFederatedIdentityProps {
      */
     customFederatedIdentityProviderName: string;
     /**
+     * Display name for the identity provider (shown on login button)
+     */
+    idpDisplayName?: string;
+    /**
      * The cognito auth domain
      */
     customCognitoAuthDomain: string;
@@ -99,6 +103,11 @@ interface InlineLambdaProps {
      * External OAUTH IDP Discovery Endpoint Configuration
      */
     externalOAuthIdpDiscoveryEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Display Name Configuration (shown on login button)
+     */
+    externalOAuthIdpDisplayName?: string;
 
     /**
      * Name of deployed stack
@@ -203,6 +212,9 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpDiscoveryEndpoint:
                         props.config.app.authProvider.useExternalOAuthIdp
                             .idpAuthProviderDiscoveryEndpoint || "undefined",
+                    externalOAuthIdpDisplayName:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpDisplayName ||
+                        "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",

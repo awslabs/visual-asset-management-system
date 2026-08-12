@@ -76,7 +76,7 @@ export class AuthBuilderNestedStack extends NestedStack {
                 cognitoProps.samlSettings = samlSettings;
             }
 
-            // Cognito <-> OIDC federation (Amazon Midway via Amazon Federate)
+            // Cognito <-> OIDC federation
             if (useOidcFederation) {
                 cognitoProps.oidcSettings = oidcSettings;
             }

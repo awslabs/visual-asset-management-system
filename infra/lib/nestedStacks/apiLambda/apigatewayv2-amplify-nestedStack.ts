@@ -215,6 +215,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             amplifyConfigProps.cognitoFederatedConfig = {
                 customCognitoAuthDomain: authDomain,
                 customFederatedIdentityProviderName: samlSettings.name,
+                idpDisplayName: samlSettings.displayName,
                 // if necessary, the callback urls can be determined here and passed to the UI through the config endpoint
                 // redirectSignIn: callbackUrls[0],
                 // redirectSignOut: callbackUrls[0],
@@ -223,6 +224,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             amplifyConfigProps.cognitoFederatedConfig = {
                 customCognitoAuthDomain: authDomain,
                 customFederatedIdentityProviderName: oidcSettings.name,
+                idpDisplayName: oidcSettings.displayName,
             };
         }
 
